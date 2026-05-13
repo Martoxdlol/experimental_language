@@ -50,11 +50,24 @@ Indexing out of range is a compile-time error.
 ```
 var (a, b, c) = (1, 2, 3)
 
-var (id, name, _) = row    // ignore third element
-var (id, ..) = row         // ignore the rest
+var (id, name, _) = row     // ignore third element
+var (id, ..) = row          // ignore the rest
+var (id, ..rest) = row      // bind the rest to a sub-tuple
 ```
 
-The wildcard `_` ignores a single position. The rest token `..` ignores any number of trailing positions; it must appear last.
+The wildcard `_` ignores a single position. The rest token `..` ignores any number of positions; with a binding name (`..rest`), it captures them as a sub-tuple whose type is the sequence of unmatched positional types.
+
+```
+var data: (i64, str, bool, f64) = (1, "hi", true, 3.14)
+var (id, ..rest) = data     // rest: (str, bool, f64)
+var (a, b, ..tail) = data   // tail: (bool, f64)
+```
+
+`..` (with or without a binding) may appear **at most once** per pattern. It may be in the middle of the pattern:
+
+```
+var (first, ..middle, last) = data    // middle: (str, bool)
+```
 
 Patterns (e.g. inside `match`) follow the same rules and additionally allow literal patterns:
 

@@ -32,6 +32,20 @@ var alice = Person {
 
 All fields must be initialized (no defaults). If any field is private to another module, construction from outside the module is rejected by the compiler.
 
+For "smart constructors" — initialization that may fail, normalize input, or fetch from a pool — define a `new` static method via `extend`, then use the type-as-constructor shorthand:
+
+```
+extend Person {
+  function new(name: str, age: i32): Person | InvalidAge {
+    if age < 0 { InvalidAge } else { Person { name, age } }
+  }
+}
+
+var alice = Person("Alice", 30)?    // same as Person.new("Alice", 30)?
+```
+
+The shorthand `T(args)` is purely syntactic sugar for `T.new(args)` — see [09-functions.md §9.10](./09-functions.md#910-type-as-constructor-shorthand). It does not constrain what `new` returns.
+
 ### Field init shorthand
 
 When a local variable's name matches a field name, the field name may stand alone:

@@ -52,12 +52,34 @@ Construction: string literals (see [01-lexical.md](./01-lexical.md)). Concatenat
 
 Dynamic array. Heap-allocated; element type any.
 
-Construction: list literal `[...]` or `List.new<T>()`.
+Construction: list literal `[...]`, `List.new<T>()`, or the type-as-constructor shorthand `List<T>()` (see [09-functions.md §9.10](./09-functions.md#910-type-as-constructor-shorthand)).
 
 ```
 var a: List<i64> = [1, 2, 3]
 var b = List.new<i64>()
+var c = List<i64>()          // shorthand — same as List.new<i64>()
 ```
+
+### Spread in list literals
+
+A list literal may embed `..<expr>` to splice another `List<T>` (or any `Iterator<T>`) into the new list at that position:
+
+```
+var head = [1, 2]
+var tail = [4, 5]
+var combined = [..head, 3, ..tail]      // [1, 2, 3, 4, 5]
+
+var prefixed = [0, ..combined]          // [0, 1, 2, 3, 4, 5]
+var doubled  = [..head, ..head]         // [1, 2, 1, 2]
+```
+
+Rules:
+
+- `..<expr>` evaluates `<expr>` and copies its elements into the new list. Every element type must unify with the list's element type `T`.
+- `<expr>` may be any value implementing `Iterator<T>` (so generators and ranges work, not just `List<T>`).
+- A list literal may contain any number of `..` spreads, freely mixed with literal elements.
+- The result is always a **new** `List<T>` — the source(s) are not modified.
+- For `Clone`-only-when-needed semantics: spreading a `List<T>` walks its iterator (no per-element clone unless the element type's storage requires it; primitives copy, references increment refcount). See [16-memory.md](./16-memory.md).
 
 | Method | Returns | Notes |
 |---|---|---|
@@ -86,11 +108,12 @@ var b = List.new<i64>()
 
 Hash map with `K: Eq + Hash`.
 
-Construction: map literal `{ "key": value, ... }` or `Map.new<K, V>()`.
+Construction: map literal `{ "key": value, ... }`, `Map.new<K, V>()`, or the type-as-constructor shorthand `Map<K, V>()` (see [09-functions.md §9.10](./09-functions.md#910-type-as-constructor-shorthand)).
 
 ```
 var a: Map<str, i64> = { "x": 1, "y": 2 }
 var b = Map.new<str, i64>()
+var c = Map<str, i64>()         // shorthand — same as Map.new<str, i64>()
 ```
 
 ### Map literal vs block
@@ -109,6 +132,26 @@ The decision is local to the `{ ... }` token: the parser attempts a map-literal 
 Inside function-call argument position the disambiguation is the same: argument `{ "x": 1 }` parses as a map literal.
 
 If a block legitimately needs to start with a value followed by `:`, the user has hit an ambiguous parse and must use explicit `Map.new(...)` or a typed annotation.
+
+### Spread in map literals
+
+A map literal may embed `..<expr>` to merge another `Map<K, V>` (or `Iterator<Entry<K, V>>`) into the new map:
+
+```
+var defaults = { "host": "localhost", "port": 8080 }
+var override = { "port": 9090 }
+var final    = { ..defaults, ..override }   // { "host": "localhost", "port": 9090 }
+
+var with_extras = { ..defaults, "tls": true, ..override }
+// { "host": "localhost", "port": 9090, "tls": true }
+```
+
+Rules:
+
+- Spreads and explicit entries are evaluated left-to-right. Later writes override earlier writes on key collision — the rightmost occurrence of a key wins.
+- `<expr>` must produce a `Map<K, V>` or an `Iterator<Entry<K, V>>` whose `K` and `V` unify with the new map's parameters.
+- A map literal may contain any number of `..` spreads, freely mixed with `"key": value` entries.
+- The result is always a **new** `Map<K, V>` — the source(s) are not modified.
 
 | Method | Returns | Notes |
 |---|---|---|

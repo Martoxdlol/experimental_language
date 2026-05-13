@@ -148,13 +148,14 @@ For expression-vs-statement rules, see [07-expressions.md](./07-expressions.md).
 
 ```
 var (x, y) = point
+var (a, ..rest) = quad             // tuple rest binding — rest is a sub-tuple
 var Person { name, age } = alice
 var Pair(a, b) = pair
 ```
 
 In each case the names introduced are normal `var` bindings, individually mutable.
 
-A pattern in `var` must be **irrefutable** — it must always match. To match conditionally, use `match` or an `if v is T` guard.
+A pattern in `var` must be **irrefutable** — it must always match. To match conditionally, use `match` or an `if v is T` guard. **List patterns** like `[head, ..tail] = list` are *refutable* (an empty list doesn't match `[head, ..tail]`), so they are not valid in `var` — use `match` for those.
 
 ## 6.8 Reference semantics — what assignment does
 

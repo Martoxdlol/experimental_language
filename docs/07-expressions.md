@@ -141,8 +141,26 @@ Supported pattern forms:
 | `(a, b)` | A tuple, destructuring positionally |
 | `(0, y)` | A tuple with a literal component |
 | `(a, ..)` | A tuple, ignoring trailing positions |
+| `(a, ..rest)` | A tuple, binding the trailing positions to `rest` as a sub-tuple |
+| `[a, b, c]` | A list of exactly three elements |
+| `[]` | An empty list |
+| `[head, ..tail]` | A non-empty list; `head` is element 0, `tail` is a `List<T>` of the rest |
+| `[a, b, ..]` | A list of length ≥ 2; trailing elements ignored |
+| `[..init, last]` | A non-empty list; `init` is a `List<T>` of all but the last, `last` is the last element |
+| `[a, ..mid, z]` | A list of length ≥ 2; `a` is first, `z` is last, `mid` is a `List<T>` of the middle |
 | `T x` | The variant `T` of the scrutinee's union, bound to `x` (an irrefutable form for unions) |
 | `P1 \| P2` | Either pattern (or-pattern); both must bind the same names with the same types if any |
+
+### List and tuple rest patterns
+
+`..` in a tuple or list pattern stands for "the remaining positions." It may appear **at most once** per pattern, and may carry a binding name:
+
+- `..` (no name) — discards the rest.
+- `..rest` (with name) — binds the rest:
+  - In a **tuple** pattern, `rest` is a sub-tuple of the unmatched positions. Its type is statically determined by what the source tuple has left.
+  - In a **list** pattern, `rest` is a `List<T>` containing the unmatched elements. The compiler emits the necessary slicing.
+
+List patterns work with any value of type `List<T>`. They do not work on arbitrary `Iterator<T>` — iterators don't have a known length and aren't randomly addressable.
 
 Guards:
 

@@ -194,21 +194,60 @@ The type of an async closure is `(...) -> Future<R>`.
 ```
 foo(a, b)                 // free function
 person.greet()            // method (instance)
-List.new<i64>()          // static / namespaced function
+List.new<i64>()           // static / namespaced function
+List<i64>()               // type-as-constructor shorthand for List<i64>.new() — see 9.10
 (|x| x + 1)(5)            // call a closure expression
 ```
 
 Methods and static functions share the same `function` keyword — they differ only by being inside an `extend` block and (for methods) taking `self` as their first parameter. See [10-interfaces.md](./10-interfaces.md).
 
-## 9.10 No variadics, no default arguments, no named arguments
+## 9.10 Type-as-constructor shorthand
+
+For any type `T` that exposes a `new` static method, the expression `T(args)` is a **parse-time rewrite** for `T.new(args)`:
+
+```
+var xs = List<i64>()              // → List<i64>.new()
+var m  = Map<str, i64>()          // → Map<str, i64>.new()
+var c  = Pool<Conn>(size = 16)    // → Pool<Conn>.new(size = 16)
+```
+
+### Rules
+
+- The rewrite is **purely syntactic**. The compiler does not require `new` to return `T` — its return type is whatever the method declares. A `new` that returns `T | Error`, `T | null`, `Future<T>`, or any other type works the same way: `T(args)` evaluates to whatever `T.new(args)` evaluates to.
+
+  ```
+  extend MyCache: ... {
+    function new(size: i64): MyCache | InvalidSize {
+      if size <= 0 { InvalidSize } else { MyCache { ... } }
+    }
+  }
+
+  var c = MyCache(16)?      // c: MyCache, after `?` propagates InvalidSize
+  ```
+
+- If `T` does not have a `new` static method, `T(args)` is a compile error: `"type T is not callable: no 'new' static method"`.
+- The rewrite applies only when `T` is used as a value-position expression. `T(args)` in a pattern, in a type annotation, or as a generic argument is not a constructor call.
+- Generic arguments work as usual. `List<i64>()` rewrites to `List<i64>.new()`; the type arguments are part of the receiver and flow into `new`.
+
+### Tuple structs are not rewritten
+
+Tuple structs (`pub struct Pair(i64, i64)`) already use `Pair(1, 2)` as their literal constructor. The rewrite does **not** apply to them — `Pair(1, 2)` is direct construction regardless of whether anyone defined `Pair.new`. The compiler distinguishes the two cases by the declared kind of `T`.
+
+If you want both literal construction and a smart-constructor on the same type, expose the smart form under a different name (`Pair.make(...)`) or use a record struct instead of a tuple struct.
+
+### Why it's just sugar
+
+Because the rewrite is purely syntactic, there is no `New` / `Constructor` interface in the language and nothing to implement. Defining a `new` static method on a type is the only thing that "opts in." This keeps the type system unchanged and means generic code over "things that can be `T(...)`-constructed" must still go through `T.new` explicitly (no generic bound like `T: New<Args, Out>` is available — design intentional, deferred to a future revision if it becomes needed).
+
+## 9.11 No variadics, no default arguments, no named arguments
 
 The function call grammar is fixed: positional, exact arity. To approximate optional parameters, accept a struct argument with a spread default; to approximate variadic input, accept a `List<T>`.
 
-## 9.11 Recursion
+## 9.12 Recursion
 
 Direct and mutual recursion are supported. Functions are visible throughout their declaring module regardless of declaration order — there is no top-down restriction.
 
-## 9.12 Diverging functions
+## 9.13 Diverging functions
 
 A function that never returns (always panics, always loops) has an unreachable end-of-body. The compiler infers the return type as the never type in that case:
 
