@@ -385,19 +385,28 @@ people
 <!-- =========================================================== -->
 <h2 id="async">8. Async functions and async closures</h2>
 
-<p><code>async function f(...): T</code> returns a <code>Future&lt;T&gt;</code> rather than executing
-immediately. Bodies may use <code>await</code>. See <a href="21-async.html">21-async</a>.</p>
+<p><code>async</code> is a <strong>postfix body modifier</strong>: it sits between the signature
+and the body opener. The return type is written explicitly as <code>Future&lt;T&gt;</code>.
+Bodies may use <code>await</code>. See <a href="21-async.html">21-async</a>.</p>
 
-<pre><code>var fut  = async function(x: i64): str { var d = await fetch(x); d.body }
-var fut2 = async (x) =&gt; { var d = await fetch(x); d.body }
+<pre><code>function fetch_data(url: str): Future&lt;str&gt; async {
+  var d = await fetch(url)
+  d.body
+}
+
+var fut  = function(x: i64): Future&lt;str&gt; async { var d = await fetch(x); d.body }
+var fut2 = (x) async =&gt; { var d = await fetch(x); d.body }
 
 // As a trailing closure to a launcher:
 spawn { await fetch(it) }              // implicit it inside the trailing block</code></pre>
 
-<p>The type of an async closure is <code>(...) =&gt; Future&lt;R&gt;</code>. The <code>async</code> modifier
-attaches to a function expression — either <code>function(...)</code> or <code>(...) =&gt; ...</code>.
-There is no bare <code>async { ... }</code> expression form; for that, pass a trailing closure to a
-launcher (e.g. <code>spawn</code>, <code>Task.run</code>).</p>
+<p>One rule across every form: <code>async</code> goes after the signature and before the body
+opener — before <code>{</code> on a <code>function(...)</code>, before <code>=&gt;</code> on an arrow
+closure. The type of an async closure is <code>(...) =&gt; Future&lt;R&gt;</code>.</p>
+
+<p>The one exception is the bare <code>async { ... }</code> block — a zero-arg inline future
+literal kept for launcher ergonomics (<code>block_on(async { ... })</code>). See
+<a href="21-async.html#exec">21-async §6</a>.</p>
 
 <!-- =========================================================== -->
 <h2 id="call">9. Calling syntax recap</h2>

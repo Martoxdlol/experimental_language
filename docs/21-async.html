@@ -67,7 +67,7 @@
   <ol>
     <li><a href="#future"><code>Future&lt;T&gt;</code></a></li>
     <li><a href="#ctx"><code>Context</code> and wakers</a></li>
-    <li><a href="#asyncfn"><code>async function</code></a></li>
+    <li><a href="#asyncfn"><code>async</code> functions</a></li>
     <li><a href="#await"><code>await</code></a></li>
     <li><a href="#forgot">"Forgot to await" lint</a></li>
     <li><a href="#exec">Executor</a></li>
@@ -189,27 +189,31 @@ for fallible async.</p>
 </div>
 
 <!-- =========================================================== -->
-<h2 id="asyncfn">3. <code>async function</code></h2>
+<h2 id="asyncfn">3. <code>async</code> functions</h2>
 
-<pre><code>async function fetch_data(url: str): str {
+<pre><code>function fetch_data(url: str): Future&lt;str&gt; async {
   var response = await http_get(url)
   response.body
 }</code></pre>
 
 <div class="callout">
-  <strong>Source vs elaborated type</strong>
-  The declared return <code>T</code> becomes <code>Future&lt;T&gt;</code> in the elaborated signature.
+  <strong>Postfix <code>async</code> is a body modifier</strong>
+  The <code>async</code> keyword sits between the signature and the body. The return type is
+  written explicitly as <code>Future&lt;T&gt;</code> — there is no auto-wrapping.
   Calling <code>fetch_data(url)</code> does NOT execute the body — it returns a fresh
   <code>Future&lt;str&gt;</code>. The compiler turns code between <code>await</code>s into states.
 </div>
 
-<div class="callout warn">
-  <strong>Async interface methods use explicit <code>Future&lt;...&gt;</code></strong>
+<div class="callout good">
+  <strong>Interface and impl signatures line up</strong>
 <pre style="background: transparent; border: none; padding: 0;"><code>interface Fetcher {
-  function fetch(self, url: str): Future&lt;str&gt;     // not `async function fetch...`
+  function fetch(self, url: str): Future&lt;str&gt;                  // interface — no body
+}
+
+extend MyFetcher: Fetcher {
+  function fetch(self, url: str): Future&lt;str&gt; async { ... }    // impl
 }</code></pre>
-  Keeps trait-object representation predictable. Implementors may use the <code>async</code>
-  keyword on the implementing body — the interface-level type is still <code>Future&lt;str&gt;</code>.
+  The contract type is identical on both sides; <code>async</code> only annotates the body.
 </div>
 
 <!-- =========================================================== -->
@@ -219,12 +223,12 @@ for fallible async.</p>
 
 <ul>
   <li><code>poll</code> returns <code>Ready&lt;T&gt;</code> → <code>await</code> evaluates to <code>value</code>.</li>
-  <li><code>poll</code> returns <code>Pending</code> → current async function suspends, returning <code>Pending</code> from its own <code>poll</code> after recording the inner future's waker.</li>
+  <li><code>poll</code> returns <code>Pending</code> → current <code>async</code> body suspends, returning <code>Pending</code> from its own <code>poll</code> after recording the inner future's waker.</li>
 </ul>
 
 <div class="callout warn">
   <strong>Where <code>await</code> is allowed</strong>
-  Only inside an <code>async function</code> or async closure. NOT at module level
+  Only inside an <code>async</code> body (function, closure, or a bare <code>async { ... }</code> block). NOT at module level
   (only compile-time constants there).
   <br>
   <strong style="margin-top: 0.4rem;">No automatic error propagation</strong>
@@ -239,7 +243,7 @@ for fallible async.</p>
 <p>A <code>Future&lt;T&gt;</code> created but never <code>await</code>ed, never <code>spawn</code>ed,
 and never returned is suspicious. The compiler errors by default on silently-discarded futures.</p>
 
-<pre><code>async function fetch_data(): str { "data" }
+<pre><code>function fetch_data(): Future&lt;str&gt; async { "data" }
 
 function main() {
   fetch_data()             // ERROR — Future created but unused
@@ -267,6 +271,18 @@ function main() {
 <p>The default executor is a work-stealing thread pool with one worker per logical core.
 <code>JoinHandle&lt;T&gt;</code> is the same type from <a href="20-concurrency.html">20-concurrency</a>.</p>
 
+<div class="callout">
+  <strong>The bare <code>async { ... }</code> block</strong>
+  This is the one place <code>async</code> appears without a signature in front of it.
+  It is a <em>zero-arg inline future literal</em>: the block becomes a
+  <code>Future&lt;T&gt;</code> whose <code>T</code> is the type of the trailing expression.
+  Kept as a deliberate exception so launchers like <code>block_on</code> and
+  <code>spawn</code> don't force <code>(() async =&gt; { ... })()</code> ceremony.
+<pre style="background: transparent; border: none; padding: 0; margin-top: 0.5rem;"><code>block_on(async { await work() })            // OK — inline future literal
+spawn(async { await tick() })               // OK
+var fut: Future&lt;i64&gt; = async { 42 }         // OK — value form</code></pre>
+</div>
+
 <div class="callout warn">
   <strong>Don't block the worker thread</strong>
   A future polled by an executor runs on the executor's worker. The <code>poll</code> body must
@@ -278,12 +294,12 @@ function main() {
 <!-- =========================================================== -->
 <h2 id="closures">7. Async closures</h2>
 
-<pre><code>var f1 = async function(x: i64): str {
+<pre><code>var f1 = function(x: i64): Future&lt;str&gt; async {
   await sleep(100)
   x as str
 }
 
-var f2 = async (x) =&gt; {
+var f2 = (x) async =&gt; {
   await sleep(100)
   x as str
 }
@@ -292,9 +308,10 @@ var f2 = async (x) =&gt; {
 // to a launcher like spawn:
 spawn { await fetch(it) }              // it: the argument the launcher passes in</code></pre>
 
-<p>The <code>async</code> modifier attaches to a function expression — either
-<code>function(...)</code> or <code>(...) =&gt; ...</code>. There is no bare <code>async { ... }</code>
-expression form; use a launcher's trailing closure when you want implicit <code>it</code>.</p>
+<p>The <code>async</code> modifier sits between the signature and the body opener:
+before <code>{</code> on a <code>function(...)</code>, before <code>=&gt;</code> on an arrow closure.
+The bare <code>async { ... }</code> block (see §6) is the one exception — a zero-arg
+inline future literal kept for ergonomics with launchers like <code>block_on</code>.</p>
 
 <p>Captures follow ordinary closure rules. When passed to <code>spawn</code>, the captured set is
 subject to cross-thread isolation (<a href="20-concurrency.html#threads">20 §1</a>) — captured
@@ -329,7 +346,7 @@ pub struct TimedOut;</code></pre>
   function next_async(self): Future&lt;Item&lt;T&gt; | Done&gt;
 }
 
-async function process(stream: AsyncIterator&lt;i64&gt;) {
+function process(stream: AsyncIterator&lt;i64&gt;): Future&lt;null&gt; async {
   for await n in stream {
     println(n as str)
   }
@@ -405,12 +422,12 @@ additions, not core language. The minimum guarantees:</p>
 <div class="callout good">
   <ul>
     <li><code>Future&lt;T&gt;</code> is an inert state machine.</li>
-    <li><code>async function</code> produces one; <code>await</code> drives one inside another.</li>
+    <li>Postfix <code>async</code> on a function body produces one; <code>await</code> drives one inside another. The return type is written explicitly as <code>Future&lt;T&gt;</code>.</li>
     <li>Futures must be <code>spawn</code>ed or <code>await</code>ed; ignoring them is a compile error.</li>
     <li>The default executor is a work-stealing pool; <code>block_on</code> runs a top-level future.</li>
     <li><code>AsyncIterator&lt;T&gt;</code> + <code>for await</code> for async streams. No generator syntax.</li>
     <li>Cancellation by drop; timeouts via <code>timeout(...)</code>.</li>
-    <li>Async closures with <code>async</code> prefix, including the <code>it</code>-shorthand form.</li>
+    <li>Async closures use postfix <code>async</code> too; bare <code>async { ... }</code> is a zero-arg inline future literal.</li>
   </ul>
 </div>
 
