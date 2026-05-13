@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FFI v2 — Proposal</title>
+<style>
+  :root {
+    --fg: #1b1b1d;
+    --muted: #5a5a60;
+    --bg: #fdfdfc;
+    --accent: #1a4a8a;
+    --code-bg: #f4f2ee;
+    --code-fg: #1b1b1d;
+    --border: #e4e1dc;
+    --table-stripe: #f8f7f4;
+    --tag-syntax: #b54708;
+    --tag-stdlib: #1a4a8a;
+    --tag-manifest: #5a5a60;
+    --tag-tool: #2a6f4d;
+  }
+  html { box-sizing: border-box; }
+  *, *::before, *::after { box-sizing: inherit; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color: var(--fg);
+    background: var(--bg);
+    line-height: 1.55;
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 2.5rem 1.5rem 6rem;
+  }
+  h1, h2, h3, h4 {
+    color: var(--fg);
+    line-height: 1.25;
+    margin-top: 2.2rem;
+    margin-bottom: 0.6rem;
+  }
+  h1 { font-size: 2rem; border-bottom: 2px solid var(--border); padding-bottom: 0.4rem; }
+  h2 { font-size: 1.45rem; margin-top: 2.6rem; }
+  h3 { font-size: 1.15rem; color: var(--accent); }
+  h4 { font-size: 1rem; color: var(--muted); }
+  p { margin: 0.7rem 0; }
+  ul, ol { margin: 0.7rem 0; padding-left: 1.6rem; }
+  li { margin: 0.25rem 0; }
+  code {
+    font-family: "SF Mono", Menlo, Consolas, "Courier New", monospace;
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 0.1em 0.35em;
+    border-radius: 3px;
+    font-size: 0.92em;
+  }
+  pre {
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 0.9rem 1rem;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 0.88rem;
+    line-height: 1.5;
+    border: 1px solid var(--border);
+  }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1rem 0;
+    font-size: 0.94rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.5rem 0.7rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th { background: var(--code-bg); font-weight: 600; }
+  tbody tr:nth-child(even) { background: var(--table-stripe); }
+  blockquote {
+    margin: 1rem 0;
+    padding: 0.6rem 1rem;
+    border-left: 3px solid var(--accent);
+    background: var(--code-bg);
+    color: var(--muted);
+  }
+  .lead {
+    font-size: 1.05rem;
+    color: var(--muted);
+    margin-bottom: 1.6rem;
+  }
+  .toc {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1rem 1.2rem;
+    margin: 1.6rem 0 2rem;
+    font-size: 0.94rem;
+  }
+  .toc ol { margin: 0.2rem 0 0; padding-left: 1.3rem; }
+  .toc a { color: var(--accent); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+  hr { border: 0; border-top: 1px solid var(--border); margin: 2.5rem 0; }
+  .tag {
+    display: inline-block;
+    color: white;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 0.1em 0.55em;
+    border-radius: 3px;
+    margin-left: 0.5em;
+    vertical-align: 2px;
+  }
+  .tag-syntax    { background: var(--tag-syntax); }
+  .tag-stdlib    { background: var(--tag-stdlib); }
+  .tag-manifest  { background: var(--tag-manifest); }
+  .tag-tool      { background: var(--tag-tool); }
+  .legend { display: flex; gap: 0.8rem; flex-wrap: wrap; font-size: 0.9rem; margin: 0.5rem 0 1.5rem; }
+  .footer {
+    color: var(--muted);
+    font-size: 0.88rem;
+    margin-top: 3rem;
+    border-top: 1px solid var(--border);
+    padding-top: 1rem;
+  }
+</style>
+</head>
+<body>
+
+<h1>FFI v2 — Proposal</h1>
+<p class="lead">
+A re-shape of the Foreign Function Interface that adds the smallest possible amount of new syntax, and instead does the heavy lifting through new core types, decorators on existing item shapes, manifest entries, and tooling.
+</p>
+
+<p><strong>Design constraint:</strong> avoid new syntax where stdlib and decorators can do the job. The only new syntax in this proposal is:</p>
+<ul>
+  <li><code>&amp;expr</code> — address-of operator.</li>
+  <li><code>*ptr</code> — pointer dereference (prefix) and <code>(*ptr).field</code> field access.</li>
+  <li><code>[T; N]</code> — fixed-size array type, valid only inside <code>extern struct</code> fields and extern function signatures.</li>
+  <li><code>extern type T</code> — opaque foreign type declaration (extends the existing <code>extern</code> keyword family).</li>
+  <li><code>extern var name: T</code> — foreign global declaration (extends the existing <code>extern</code> keyword family).</li>
+  <li><code>as</code> extends to pointer-to-pointer reinterpretation.</li>
+</ul>
+<p>Nothing else is new keyword/operator/block syntax. No <code>unsafe</code> block, no <code>defer</code>, no <code>union</code> keyword, no <code>const</code> keyword, no field-level decorators, no trailing-lambda call syntax, no <code>@Repr(C)</code> on regular structs. <code>extern struct</code> stays as the C-layout form, exactly as it is today.</p>
+
+<div class="legend">
+  <span><span class="tag tag-syntax">SYNTAX</span> new language form</span>
+  <span><span class="tag tag-stdlib">STDLIB</span> new core type / function</span>
+  <span><span class="tag tag-manifest">MANIFEST</span> new manifest field</span>
+  <span><span class="tag tag-tool">TOOL</span> new CLI subcommand</span>
+</div>
+
+<div class="toc">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#pointers">Pointers — <code>*T</code>, <code>&amp;expr</code>, <code>*ptr</code></a></li>
+    <li><a href="#layouts">Layout decorators on <code>extern struct</code></a></li>
+    <li><a href="#foreign-types"><code>extern type</code> and fixed-size arrays</a></li>
+    <li><a href="#ctypes">C-width aliases — <code>core:ffi</code></a></li>
+    <li><a href="#allocation">Foreign allocation — <code>Foreign</code></a></li>
+    <li><a href="#strings">Strings — <code>CStr</code>, <code>CString</code></a></li>
+    <li><a href="#functions">Extern functions and decorators</a></li>
+    <li><a href="#globals"><code>extern var</code> and constants</a></li>
+    <li><a href="#pinning">Pinning v2 — scoped and long-lived</a></li>
+    <li><a href="#runtime">Runtime semantics</a></li>
+    <li><a href="#manifest">Linkage and manifest</a></li>
+    <li><a href="#tools">Tooling — <code>lang ffi</code></a></li>
+    <li><a href="#migration">Migration from today's spec</a></li>
+    <li><a href="#nonadditions">Things deliberately not added</a></li>
+  </ol>
+</div>
+
+<h2 id="pointers">1. Pointers — <code>*T</code>, <code>&amp;expr</code>, <code>*ptr</code></h2>
+
+<p><code>*T</code> already exists in the current spec as a type form. This proposal adds two operators:</p>
+
+<h3>1.1 <code>&amp;expr</code> — address-of <span class="tag tag-syntax">SYNTAX</span></h3>
+<pre><code>extern function getrusage(who: i32, out: *Rusage): i32
+
+function snapshot(): Rusage | i32 {
+  var ru = Rusage { ... }
+  var rc = getrusage(0i32, &amp;ru)
+  if rc != 0i32 { return rc }
+  ru
+}</code></pre>
+<p><code>&amp;expr</code> produces a <code>*T</code> from a value of type <code>T</code>. Restrictions:</p>
+<ul>
+  <li>The expression must be a place-expression (a local variable, struct field, or array element) — not a temporary.</li>
+  <li>If the operand lives on the managed heap, <code>&amp;</code> auto-pins for the duration of the enclosing extern call and auto-unpins on return. This is the <em>only</em> implicit pin in the language.</li>
+  <li>If the operand is an <code>extern struct</code> on the stack (the common case), no pin is needed.</li>
+  <li>The resulting pointer cannot be stored in a longer-lived location than the call site. Returning it, capturing it in a closure, or assigning it to a struct field is a compile error.</li>
+</ul>
+
+<h3>1.2 <code>*ptr</code> — dereference <span class="tag tag-syntax">SYNTAX</span></h3>
+<pre><code>var p: *Counter = ...
+var n = (*p).value           // read
+(*p).value = (*p).value + 1  // write</code></pre>
+<p><code>*ptr</code> is a prefix operator on a pointer value. Combined with field access, <code>(*ptr).field</code> reads/writes through the pointer. Rules:</p>
+<ul>
+  <li>Dereferencing a <code>*T | null</code> whose value is <code>null</code> panics with <code>null pointer dereference</code>.</li>
+  <li>Dereferencing a pointer to a managed-heap object that is not currently pinned is undefined behavior.</li>
+  <li>The language does not introduce an <code>unsafe</code> block. Holding a <code>*T</code> is the marker. If you wrote <code>*T</code> in your code, you've left the language's safety guarantees and the responsibility is yours.</li>
+</ul>
+
+<h3>1.3 <code>as</code> on pointers <span class="tag tag-syntax">SYNTAX</span></h3>
+<p><code>as</code> already covers union narrowing, primitive conversion, and interface widening/narrowing. This proposal extends it to <strong>pointer-to-pointer reinterpretation</strong>:</p>
+<pre><code>var p: *c_void = ...
+var q: *MyStruct = p as *MyStruct    // no-op at runtime; type reinterpretation</code></pre>
+<p>Both source and destination must be pointer types. The cast is a no-op at runtime — the user vouches for the layout. No other <code>as</code> behavior changes.</p>
+
+<h3>1.4 Nullable pointers — <code>*T | null</code></h3>
+<p>Unchanged. <code>*T | null</code> lays out as a single word, with <code>null</code> represented as <code>0x0</code>. This is the existing rule, generalized: any union <code>null | P</code> where <code>P</code>'s representation cannot legitimately be all-zero qualifies for null-pointer optimization. Applies to <code>*T</code>, extern function pointers, and <code>extern type</code> opaque handles.</p>
+
+<h2 id="layouts">2. Layout decorators on <code>extern struct</code></h2>
+
+<p><code>extern struct</code> stays as the C-layout opt-in (no GC header, foreign heap or stack). Four decorators cover everything else; each is a compiler-known proc-macro, blessed the same way <code>@Derive</code> is in <a href="22-macros.md">22-macros.md §22.11</a>. All sit at the item level, exactly where <a href="22-macros.md">22-macros.md §22.2</a> already permits decorators.</p>
+
+<pre><code>@Packed(1)
+extern struct DiskHeader {
+  pub magic:   u32,
+  pub version: u16,
+  pub flags:   u8,
+}
+
+@Align(64)
+extern struct CacheLine {
+  pub bytes: [u8; 64],
+}
+
+@Transparent
+struct Handle(i32)
+
+@Union
+extern struct FloatBits {
+  pub f: f32,
+  pub i: u32,
+}</code></pre>
+
+<table>
+  <thead><tr><th>Decorator</th><th>Effect</th></tr></thead>
+  <tbody>
+    <tr><td><code>@Packed(N)</code> <span class="tag tag-syntax">SYNTAX</span></td><td>Fields not aligned beyond <code>N</code> bytes. <code>@Packed</code> alone means packing 1.</td></tr>
+    <tr><td><code>@Align(N)</code> <span class="tag tag-syntax">SYNTAX</span></td><td>Minimum alignment <code>N</code> on the struct.</td></tr>
+    <tr><td><code>@Transparent</code> <span class="tag tag-syntax">SYNTAX</span></td><td>Applied to a tuple struct with exactly one non-zero-sized field. The wrapper has the same ABI as the inner type, including NPO. Works on regular and extern structs.</td></tr>
+    <tr><td><code>@Union</code> <span class="tag tag-syntax">SYNTAX</span></td><td>Applied only to <code>extern struct</code>. All fields share offset 0; size is the max field size; reads return whatever bits are there. The user is responsible for tracking which field is "active."</td></tr>
+  </tbody>
+</table>
+
+<p>What's <strong>not</strong> added: <code>@Repr(C)</code>, <code>@Repr(Lang)</code>, <code>@Bitfield</code>, <code>@FlexArray</code>. <code>extern struct</code> already conveys "C layout, no GC header"; a separate <code>@Repr</code> would be redundant. Bitfields and flexible array members are handled by stdlib idioms (§5.4, §5.5) — no field-level decorators are needed.</p>
+
+<h3>2.1 C enums — no special construct</h3>
+<p>A C enum is an integer with named constants. Express it as a type alias plus module-level values:</p>
+<pre><code>pub type FileMode = i32
+
+pub var MODE_READ:  FileMode = 0i32
+pub var MODE_WRITE: FileMode = 1i32
+pub var MODE_RW:    FileMode = 2i32</code></pre>
+<p>If exhaustive matching matters, write a language-side discriminated union on top and translate at the boundary:</p>
+<pre><code>pub type ParsedMode = Read | Write | ReadWrite | UnknownMode
+
+function parse(m: FileMode): ParsedMode {
+  if m == MODE_READ  { Read }
+  else if m == MODE_WRITE { Write }
+  else if m == MODE_RW    { ReadWrite }
+  else { UnknownMode }
+}</code></pre>
+<p>No new syntax for C enums; <code>bindgen</code> (§12) emits this pattern automatically.</p>
+
+<h2 id="foreign-types">3. <code>extern type</code> and fixed-size arrays</h2>
+
+<h3>3.1 Opaque foreign types — <code>extern type</code> <span class="tag tag-syntax">SYNTAX</span></h3>
+<pre><code>extern type Sqlite3
+extern type Sqlite3Stmt
+
+extern function sqlite3_open(path: *u8, db: **Sqlite3): i32
+extern function sqlite3_prepare_v2(
+  db: *Sqlite3, sql: *u8, n: i32, stmt: **Sqlite3Stmt, tail: **u8,
+): i32</code></pre>
+<p>An <code>extern type T</code> is a foreign-only nominal type with unknown size and alignment. Values of type <code>T</code> cannot be constructed, copied, or destructured in this language; only <code>*T</code> and <code>*T | null</code> are usable forms. Pattern matches the <code>FILE*</code>, <code>sqlite3*</code> idiom in C.</p>
+
+<h3>3.2 Fixed-size arrays — <code>[T; N]</code> <span class="tag tag-syntax">SYNTAX</span></h3>
+<pre><code>extern struct InAddr {
+  pub bytes: [u8; 4],
+}
+
+extern struct Sockaddr {
+  pub family: u16,
+  pub data:   [u8; 14],
+}
+
+extern function read_into(buf: *[u8; 256], n: usize): isize</code></pre>
+<p><code>[T; N]</code> is a fixed-size array, <code>N</code> resolved at compile time, <code>T</code> any extern-compatible type. <strong>Scope of the type form is narrow:</strong></p>
+<ul>
+  <li>Allowed as an <code>extern struct</code> field type.</li>
+  <li>Allowed as an <code>extern function</code> parameter or return type (typically via <code>*[T; N]</code>).</li>
+  <li>Not allowed in regular language types (no <code>var x: [i32; 4]</code> at function-local positions outside extern contexts).</li>
+</ul>
+<p>This is the minimum addition that lets <code>extern struct</code>s mirror C structs without bringing const-generics or a general array type into the language.</p>
+
+<h2 id="ctypes">4. C-width aliases — <code>core:ffi</code> <span class="tag tag-stdlib">STDLIB</span></h2>
+
+<pre><code>import {
+  c_int, c_uint, c_long, c_ulong, c_longlong, c_ulonglong,
+  c_short, c_ushort, c_char, c_schar, c_uchar,
+  c_float, c_double,
+  c_size_t, c_ptrdiff_t, c_intptr_t, c_uintptr_t,
+  c_void, c_va_list,
+} from "core:ffi"</code></pre>
+
+<p>Widths are resolved at compile time per target.</p>
+<ul>
+  <li>Numeric aliases (<code>c_int</code>, <code>c_long</code>, etc.) lower to the appropriate fixed-width type for the target ABI.</li>
+  <li><code>c_void</code> is declared as <code>extern type c_void</code> — opaque, no value form. Only <code>*c_void</code> is usable.</li>
+  <li><code>c_va_list</code> is declared as <code>extern type c_va_list</code> — for wrapping variadic libc functions via the va_list interface.</li>
+</ul>
+<p><code>core:ffi</code> is part of <code>core:</code>, so freestanding targets get it without an OS.</p>
+
+<h2 id="allocation">5. Foreign allocation — <code>Foreign</code> <span class="tag tag-stdlib">STDLIB</span></h2>
+
+<p><code>Foreign</code> is a namespace struct with the foreign-heap allocator API:</p>
+<pre><code>pub struct Foreign;
+
+extend Foreign {
+  function alloc&lt;T&gt;():                                  *T | null
+  function alloc_zeroed&lt;T&gt;():                           *T | null
+  function alloc_flex&lt;T, E&gt;(extra_count: usize):        *T | null
+  function realloc&lt;T&gt;(p: *T, new_size: usize):          *T | null
+  function free&lt;T&gt;(p: *T)
+}</code></pre>
+<p>All methods are static (no <code>self</code> parameter — see <a href="10-interfaces.md">10-interfaces.md §10.1</a>). All return <code>null</code> on failure; foreign allocation is fallible, unlike managed allocation.</p>
+<p><code>Buffer.alloc(size)</code> (already in <code>core:prelude</code>) is reimplemented on top of <code>Foreign.alloc</code>; no behavior change for existing code.</p>
+
+<h3>5.1 Flexible array members</h3>
+<p>The C idiom <code>struct foo { int n; char data[]; }</code> is expressed by declaring the trailing pointer field as a regular pointer and using <code>alloc_flex</code> to obtain a single allocation:</p>
+<pre><code>extern struct Message {
+  pub kind:   u32,
+  pub length: u32,
+  pub data:   *u8,        // points into the same allocation
+}
+
+function make_message(kind: u32, payload: List&lt;u8&gt;): *Message | null {
+  var p = Foreign.alloc_flex&lt;Message, u8&gt;(payload.size() as usize)
+  if p is null { return null }
+  // initialize header; copy payload bytes after the header; set data pointer
+  ...
+  p
+}</code></pre>
+<p>No <code>@FlexArray</code> decorator and no new field marker. The allocator helper is the only addition.</p>
+
+<h3>5.2 Bitfields</h3>
+<p>Not directly supported. C bitfield layouts are platform-dependent and rarely used in interop. Treat the underlying integer as a regular field and mask/shift in user code:</p>
+<pre><code>extern struct Flags {
+  pub raw: u32,
+}
+
+extend Flags {
+  function kind(self):   u32 { self.raw &amp; 0x07u32 }
+  function dirty(self):  bool { (self.raw &amp; 0x08u32) != 0u32 }
+  function serial(self): u32 { (self.raw &gt;&gt; 4) }
+}</code></pre>
+<p>If a C library forces bitfield interop, <code>bindgen</code> (§12) emits the accessor methods above and warns that the underlying layout is platform-dependent.</p>
+
+<h2 id="strings">6. Strings — <code>CStr</code>, <code>CString</code> <span class="tag tag-stdlib">STDLIB</span></h2>
+
+<p><code>str</code> is not C-compatible (managed-heap, UTF-8 with a length header, not NUL-terminated). <code>core:ffi</code> ships two boundary types.</p>
+
+<pre><code>extern struct CStr {
+  pub ptr: *u8,    // NUL-terminated UTF-8 byte sequence; lifetime unspecified
+}
+
+pub struct CString { ... }   // owned NUL-terminated foreign-heap buffer</code></pre>
+
+<table>
+  <thead><tr><th>Method</th><th>Returns</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td><code>CStr.from_ptr(p: *u8)</code></td><td><code>CStr</code></td><td>Borrowed view; no copy, no validation.</td></tr>
+    <tr><td><code>CStr.to_str(self)</code></td><td><code>str | InvalidUtf8</code></td><td>Copies into the managed heap, validates UTF-8.</td></tr>
+    <tr><td><code>CStr.byte_len(self)</code></td><td><code>usize</code></td><td>Walks to NUL terminator.</td></tr>
+    <tr><td><code>CString.from_str(s: str)</code></td><td><code>CString | null</code></td><td>Foreign-heap copy with appended NUL. <code>null</code> if <code>s</code> contains an interior NUL or allocation fails.</td></tr>
+    <tr><td><code>CString.as_cstr(self)</code></td><td><code>CStr</code></td><td>Borrow.</td></tr>
+    <tr><td><code>CString.free(self)</code></td><td><code>null</code></td><td>Also runs on <code>Drop</code>.</td></tr>
+  </tbody>
+</table>
+
+<p><code>Buffer</code> (already in <code>core:prelude</code>) covers the <code>(ptr, size)</code> case when length matters separately. Both <code>CStr</code> and <code>Buffer</code> are <code>extern struct</code>s, so they pass to C by value with no shim.</p>
+
+<h2 id="functions">7. Extern functions and decorators</h2>
+
+<p><code>extern function</code> stays as it is (import without body / export with body). Six decorators compose on top, all top-level item decorators in the existing macro system:</p>
+
+<pre><code>@Link(lib = "z", kind = "dynamic", version = "&gt;=1.2")
+@Symbol("inflateInit_")
+extern function zlib_inflate_init(strm: *ZStream, ver: *u8, sz: i32): i32
+
+@CallConv("system")
+extern function WinMain(...): i32
+
+@Variadic
+extern function printf(fmt: *u8): c_int
+
+@Reentrant("any")
+@OnPanic("abort")
+extern function on_tick(data: *c_void) {
+  ...
+}</code></pre>
+
+<table>
+  <thead><tr><th>Decorator</th><th>On</th><th>Effect</th></tr></thead>
+  <tbody>
+    <tr><td><code>@Link(lib, kind, version?, path?)</code> <span class="tag tag-syntax">SYNTAX</span></td><td>imports</td><td>Reference to a <code>[package.links]</code> entry. If absent, symbol resolves from the host process.</td></tr>
+    <tr><td><code>@Symbol("name")</code> <span class="tag tag-syntax">SYNTAX</span></td><td>imports &amp; exports</td><td>Override symbol name; default is the function name.</td></tr>
+    <tr><td><code>@CallConv("c" | "system" | "stdcall" | "fastcall")</code> <span class="tag tag-syntax">SYNTAX</span></td><td>imports &amp; exports</td><td>Calling convention. Default <code>"c"</code>.</td></tr>
+    <tr><td><code>@Variadic</code> <span class="tag tag-syntax">SYNTAX</span></td><td>imports</td><td>Function takes additional arguments at call sites; C default argument promotions apply (<code>i8</code>/<code>i16</code> → <code>c_int</code>, <code>f32</code> → <code>f64</code>). No <code>...</code> token in the signature; the decorator carries the meaning.</td></tr>
+    <tr><td><code>@Reentrant("managed-only" | "any")</code> <span class="tag tag-syntax">SYNTAX</span></td><td>exports</td><td>Whether foreign threads may invoke this. <code>"any"</code> emits auto-attach/detach. See §10.</td></tr>
+    <tr><td><code>@OnPanic("abort" | value)</code> <span class="tag tag-syntax">SYNTAX</span></td><td>exports</td><td>Behavior on panic in the body. Default <code>"abort"</code>; <code>value</code> must type-match the return type.</td></tr>
+  </tbody>
+</table>
+
+<h3>7.1 Calling a variadic import</h3>
+<pre><code>import { c_int } from "core:ffi"
+
+@Variadic
+extern function printf(fmt: *u8): c_int
+
+var fmt = (CString.from_str("%d + %d = %d\n") as CString).as_cstr()
+printf(fmt.ptr, 1i32, 2i32, 3i32)</code></pre>
+<p>The compiler applies C default argument promotions to each variadic argument at the call site. The fixed prefix in the signature is checked normally.</p>
+
+<h3>7.2 Function pointers and callbacks</h3>
+<p>The function-type syntax <code>extern (T1, T2) -&gt; R</code> already exists (<a href="09-functions.md">09-functions.md §9.3</a>). Closures cannot be passed as C function pointers — no environment slot. For callbacks with state, <code>core:ffi</code> provides a generic bundle:</p>
+<pre><code>extern struct Callback&lt;C, R&gt; {
+  pub fn:   extern (*c_void, C) -&gt; R,
+  pub data: *c_void,
+}</code></pre>
+<p>Many C APIs already accept <code>(callback, userdata)</code> as separate parameters — pass them separately. <code>Callback&lt;C, R&gt;</code> is for APIs that expect them bundled in a struct.</p>
+
+<h2 id="globals">8. <code>extern var</code> and constants <span class="tag tag-syntax">SYNTAX</span></h2>
+
+<pre><code>@Link(lib = "c")
+extern var errno: i32           // thread-local on most platforms; binding handles TLS
+
+@Link(lib = "c")
+extern var environ: **u8
+
+// For build-time numeric constants from a header, the binding generator
+// emits a module-level `pub var`:
+pub var PATH_MAX: usize = 4096usize</code></pre>
+
+<ul>
+  <li><code>extern var name: T</code> declares a foreign global. Reads and writes are direct. The compiler emits the platform-appropriate load (TLS on thread-local symbols).</li>
+  <li>Constants from a C header are emitted as <code>pub var</code> values — no new <code>const</code> keyword is needed; module-level <code>var</code> initializers are already compile-time constants per <a href="17-modules.md">17-modules.md §17.6</a>.</li>
+</ul>
+
+<h2 id="pinning">9. Pinning v2 — scoped and long-lived <span class="tag tag-stdlib">STDLIB</span></h2>
+
+<p>Today's manual <code>pin</code>/<code>unpin</code> is leak-prone. Replace with two complementary APIs in <code>core:ffi</code>.</p>
+
+<h3>9.1 Scoped pin — <code>with_pin</code></h3>
+<pre><code>import { with_pin } from "core:ffi"
+
+with_pin(state, |ptr| {
+  call_native_op(ptr)
+})</code></pre>
+<pre><code>pub function with_pin&lt;T, R&gt;(value: T, body: (*T) -&gt; R): R</code></pre>
+<ul>
+  <li>Pins <code>value</code> before invoking <code>body</code>.</li>
+  <li>Unpins on every exit path, including panic-unwind.</li>
+  <li>The pointer is valid only inside <code>body</code>; the compiler enforces this with the same rule that gates <code>&amp;expr</code> (§1.1).</li>
+</ul>
+<p>Closure passing is the existing in-paren form (<a href="09-functions.md">09-functions.md §9.5</a>) — no trailing-lambda syntax is introduced.</p>
+
+<h3>9.2 Long-lived pin — <code>Pin.acquire</code> and <code>PinHandle&lt;T&gt;</code></h3>
+<pre><code>import { Pin, PinHandle } from "core:ffi"
+
+var handle = Pin.acquire(state)
+register_callback(on_tick, handle.ptr() as *c_void)
+// later...
+unregister_callback(handle.ptr() as *c_void)
+handle.release()</code></pre>
+<pre><code>pub struct Pin;
+extend Pin {
+  function acquire&lt;T&gt;(value: T): PinHandle&lt;T&gt;
+}
+
+pub struct PinHandle&lt;T&gt; { ... }
+extend&lt;T&gt; PinHandle&lt;T&gt; {
+  function ptr(self):     *T
+  function release(self): null
+}
+extend&lt;T&gt; PinHandle&lt;T&gt;: Drop {
+  function drop(self) { /* releases if not already released */ }
+}</code></pre>
+<p><code>PinHandle&lt;T&gt;</code> implements <code>Drop</code>. If <code>release()</code> is never called, the handle's <code>Drop</code> impl releases the pin and (in debug builds) emits a warning. The resource is owned by the handle — there is no manual <code>pin</code>/<code>unpin</code> user-API anymore.</p>
+
+<h3>9.3 Auto-pin via <code>&amp;</code></h3>
+<p><code>&amp;managed_local</code> at an extern call site pins for the duration of that call only (§1.1). This is the most common pin pattern; <code>with_pin</code> is for cases where the foreign function uses the pointer for the lifetime of a closure body that does additional work, and <code>Pin.acquire</code> is for callback registrations that outlive any single call.</p>
+
+<h2 id="runtime">10. Runtime semantics</h2>
+
+<p>The previous spec was silent on threading, panics, and GC safe-points across the FFI boundary. Specify them.</p>
+
+<h3>10.1 Safe-points around imports</h3>
+<p>Every call to an imported <code>extern function</code> is compiled with a thread-blocked transition on either side:</p>
+<ul>
+  <li>Before the call: the thread's stack is snapshotted; the thread declares itself blocked. Other threads can run GC without waiting for this thread to reach a safe-point.</li>
+  <li>During the call: pinned values remain rooted. Nothing else on the calling thread's stack is reachable for tracing.</li>
+  <li>After the call: the thread re-acquires its mutator state. If GC ran during the call, the thread re-checks its roots.</li>
+</ul>
+<p>This is the JNI / Cgo / .NET pinvoke model. It's not exposed at the source level; the compiler emits the transitions automatically. Long-running C calls do not stall the rest of the program.</p>
+
+<h3>10.2 Foreign threads calling exports</h3>
+<p>A thread the runtime did not spawn must <strong>attach</strong> before invoking an exported extern function. Two ways:</p>
+
+<h4>Manual</h4>
+<pre><code>import { attach_thread, detach_thread } from "core:ffi"
+
+extern function on_tick(data: *c_void) {
+  attach_thread()
+  do_work(data)
+  detach_thread()
+}</code></pre>
+
+<h4>Automatic via <code>@Reentrant("any")</code></h4>
+<pre><code>@Reentrant("any")
+extern function on_tick(data: *c_void) {
+  do_work(data)
+}</code></pre>
+
+<table>
+  <thead><tr><th><code>@Reentrant</code> value</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><code>"managed-only"</code> (default)</td><td>Only threads the runtime created may call this. Calling from an unattached thread panic-aborts in debug, is UB in release.</td></tr>
+    <tr><td><code>"any"</code></td><td>Compiler emits attach/detach automatically. Safe to call from any thread; small per-call cost.</td></tr>
+  </tbody>
+</table>
+
+<p>Attach behavior:</p>
+<ul>
+  <li>Registers the thread with the runtime so the GC can scan its stack.</li>
+  <li>Refcount operations on objects this thread touches become atomic (matches the cross-thread rule in <a href="16-memory.md">16-memory.md §16.4</a>).</li>
+  <li>Detach removes the thread from the GC root set.</li>
+</ul>
+<p>The manual form intentionally has no <code>defer</code>-style scope marker — that would require new syntax. Users who want lexical cleanup either wrap with <code>@Reentrant("any")</code> (recommended) or pair the calls themselves.</p>
+
+<h3>10.3 Panics across the boundary — <code>@OnPanic</code></h3>
+<p>Exported extern functions never unwind through C frames. The decorator picks the policy:</p>
+<table>
+  <thead><tr><th>Value</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><code>@OnPanic("abort")</code> (default)</td><td>Panic in body → process abort at the FFI boundary. Log message to stderr.</td></tr>
+    <tr><td><code>@OnPanic(value)</code></td><td>Panic in body → log message; return <code>value</code> (must type-match the declared return type).</td></tr>
+  </tbody>
+</table>
+<pre><code>@OnPanic(-1i32)
+extern function process_chunk(buf: *u8, n: usize): i32 {
+  if n &gt; MAX { panic("chunk too large") }   // → returns -1
+  ...
+}</code></pre>
+<p>Imports have no in-language panic policy; if the C function aborts or longjmps, the platform's rules apply.</p>
+
+<h3>10.4 GC interaction with foreign memory</h3>
+<ul>
+  <li>The GC ignores foreign-heap addresses (already in <a href="16-memory.md">16-memory.md</a>).</li>
+  <li>Managed pointers inside an <code>extern struct</code> are <strong>not</strong> traced. The user keeps the target pinned for the struct's lifetime.</li>
+  <li>The cycle collector assumes every mutator thread is at a safe-point or blocked. Threads inside an FFI call (auto-blocked per §10.1) do not stall collection.</li>
+</ul>
+
+<h3>10.5 Signal handlers</h3>
+<p>Running language code from a POSIX signal handler is UB unless the handler is <code>@Reentrant("any")</code> at minimum — and even then, the usual signal-safety rules (no allocation, no locks held by the interrupted thread) apply. Practical advice: don't.</p>
+
+<h2 id="manifest">11. Linkage and manifest <span class="tag tag-manifest">MANIFEST</span></h2>
+
+<pre><code>[package.links]
+zlib    = { lib = "z",      kind = "dynamic", version = "&gt;=1.2" }
+mylib   = { lib = "mylib",  kind = "static",  path = "vendor/libmylib.a" }
+crypto  = { lib = "crypto", kind = "dynamic" }
+
+[package.ffi]
+# Bindings auto-generated from C headers, regenerated when the header changes.
+bindings = [
+  { header    = "vendor/zlib.h",
+    output    = "src/bindings/zlib.lang",
+    allowlist = ["inflate*", "deflate*"] },
+  { header = "vendor/mylib.h",
+    output = "src/bindings/mylib.lang" },
+]
+
+# Headers auto-generated from this crate's pub extern functions.
+exports = [
+  { module = "lib", output = "target/include/mylib.h" },
+]</code></pre>
+
+<p><code>@Link(lib = "name")</code> in source refers to a <code>[package.links]</code> entry. A function with only <code>@Symbol("...")</code> and no <code>@Link</code> resolves from the host process — useful for libc and platform symbols.</p>
+
+<p><code>lang build</code> runs <code>bindgen</code> automatically for any <code>[package.ffi.bindings]</code> entry whose header is newer than its output, and <code>cbindgen</code> for <code>[package.ffi.exports]</code>.</p>
+
+<h2 id="tools">12. Tooling — <code>lang ffi</code> <span class="tag tag-tool">TOOL</span></h2>
+
+<pre><code>lang ffi bindgen &lt;header&gt; [--output &lt;file&gt;] [--allowlist &lt;pat&gt;] [--blocklist &lt;pat&gt;]
+                          [--types-only]
+        Generate extern struct, extern type, extern function, extern var declarations,
+        and pub var constants from a C header. Powered by libclang. Output is
+        deterministic — safe to commit.
+
+lang ffi cbindgen [--module &lt;path&gt;] [--output &lt;file&gt;] [--lang &lt;c|c++&gt;]
+                  [--header-guard &lt;name&gt;]
+        Emit a C header declaring every pub extern function and pub extern struct
+        reachable from &lt;module&gt;. Round-trips with bindgen.
+
+lang ffi check [--against &lt;header&gt;] [--strict]
+        Verify this crate's extern signatures still match the named C header.
+        Reports missing symbols, changed argument types, struct layout diffs.
+        Exit 0 if clean, 1 on drift. CI gate.
+
+lang ffi layout [&lt;type&gt;] [--target &lt;triple&gt;] [--format &lt;human|json&gt;]
+        Print size, alignment, and field offsets for one or all extern struct types
+        in the current crate, for the named target. Debugging ABI mismatches.</code></pre>
+
+<p>Examples:</p>
+<pre><code>lang ffi bindgen vendor/zlib.h --output src/bindings/zlib.lang --allowlist "inflate*"
+lang ffi cbindgen --module lib --output target/include/mylib.h
+lang ffi check --against vendor/zlib.h
+lang ffi layout Sockaddr --target aarch64-apple-darwin</code></pre>
+
+<p>Add <code>lang ffi</code> to the subcommand map at <a href="23-cli.md">23-cli.md §23.2</a>.</p>
+
+<h2 id="migration">13. Migration from today's spec</h2>
+
+<table>
+  <thead><tr><th>Today</th><th>Tomorrow</th></tr></thead>
+  <tbody>
+    <tr><td><code>extern struct Foo { ... }</code></td><td>Unchanged. <code>@Packed</code>, <code>@Align</code>, <code>@Union</code>, <code>@Transparent</code> are optional decorators.</td></tr>
+    <tr><td><code>*T | null</code> (declared "special case")</td><td>Same form; reframed as the general NPO rule for any union of <code>null</code> with a non-zero-representation type.</td></tr>
+    <tr><td><code>*u8</code> for opaque handles</td><td><code>extern type Sqlite3; *Sqlite3</code></td></tr>
+    <tr><td><code>pin(x)</code> / <code>unpin(p)</code></td><td><code>&amp;x</code> at extern call sites, or <code>with_pin(x, |p| { ... })</code>, or <code>Pin.acquire(x) → PinHandle</code>. Manual <code>pin</code>/<code>unpin</code> removed from user API.</td></tr>
+    <tr><td><code>*u8</code>-for-everything</td><td><code>*c_void</code> for type-erased pointers; <code>extern type</code> for nominal opaques.</td></tr>
+    <tr><td>(no story)</td><td><code>c_int</code>, <code>c_long</code>, … from <code>core:ffi</code>.</td></tr>
+    <tr><td><code>Buffer.alloc(size)</code></td><td>Unchanged; reimplemented on <code>Foreign.alloc</code>.</td></tr>
+    <tr><td>Variadics (no story)</td><td><code>@Variadic</code> on imports; C promotion rules applied at call sites.</td></tr>
+    <tr><td>Globals (no story)</td><td><code>extern var name: T</code> with <code>@Link</code>.</td></tr>
+    <tr><td>C struct out-params (<code>*T</code> only)</td><td><code>&amp;local</code> at extern call sites; auto-pin for managed values.</td></tr>
+    <tr><td>Exported callback panics (no story)</td><td><code>@OnPanic("abort")</code> default; <code>@OnPanic(value)</code> opt-in.</td></tr>
+    <tr><td>Foreign threads (no story)</td><td><code>@Reentrant("managed-only" | "any")</code>; manual <code>attach_thread</code>/<code>detach_thread</code>.</td></tr>
+    <tr><td>GC during foreign call (no story)</td><td>Auto thread-blocked transition around every import call.</td></tr>
+    <tr><td><code>*u8</code> for strings</td><td><code>CStr</code> (borrow), <code>CString</code> (owned).</td></tr>
+    <tr><td>C union (no story)</td><td><code>@Union extern struct ...</code></td></tr>
+    <tr><td>C enum (no story)</td><td><code>type X = i32</code> + <code>pub var</code> constants; <code>bindgen</code> emits this.</td></tr>
+    <tr><td>Bindings written by hand</td><td><code>lang ffi bindgen</code> + <code>[package.ffi.bindings]</code>.</td></tr>
+    <tr><td>Header generation (no story)</td><td><code>lang ffi cbindgen</code> + <code>[package.ffi.exports]</code>.</td></tr>
+  </tbody>
+</table>
+
+<p>A <code>lang fix</code> rule can mechanically rewrite <code>pin(x)</code>/<code>unpin(p)</code> pairs into <code>Pin.acquire</code>/<code>handle.release()</code> for existing code.</p>
+
+<h2 id="nonadditions">14. Things deliberately not added</h2>
+
+<table>
+  <thead><tr><th>Not added</th><th>Why</th></tr></thead>
+  <tbody>
+    <tr><td><code>unsafe { ... }</code> block</td><td>The presence of a <code>*T</code> value in code is already the marker that the language's safety guarantees do not apply. A separate lexical block would be a second marker for the same fact.</td></tr>
+    <tr><td><code>defer</code> keyword</td><td>Not a keyword. <code>Drop</code> covers RAII via <code>PinHandle</code> and <code>CString</code>. Where automatic scope cleanup is genuinely needed (thread attach/detach), use <code>@Reentrant("any")</code> to make the compiler emit it.</td></tr>
+    <tr><td><code>union</code> keyword for C unions</td><td>Decorator <code>@Union</code> on <code>extern struct</code> does the same job without a new keyword.</td></tr>
+    <tr><td><code>const</code> keyword</td><td>Module-level <code>var</code> initializers are already compile-time constants (<a href="17-modules.md">17-modules.md §17.6</a>). <code>bindgen</code> emits <code>pub var FOO: T = expr</code>.</td></tr>
+    <tr><td><code>static</code> keyword on methods</td><td>Static methods are functions without <code>self</code> (<a href="10-interfaces.md">10-interfaces.md §10.1</a>). No prefix needed.</td></tr>
+    <tr><td><code>@Repr(C)</code> / <code>@Repr(Lang)</code> on regular structs</td><td><code>struct</code> vs <code>extern struct</code> already conveys this. <code>@Repr</code> would be redundant.</td></tr>
+    <tr><td>Field-level decorators (<code>@Bitfield</code>, <code>@FlexArray</code>)</td><td>The macro system permits decorators on items, not fields (<a href="22-macros.md">22-macros.md §22.2</a>). Bitfields via mask/shift methods; flexible arrays via <code>Foreign.alloc_flex</code>.</td></tr>
+    <tr><td>Trailing-lambda call syntax</td><td>The language consistently passes closures inside parens (<a href="20-concurrency.md">20-concurrency.md</a>, <a href="18-stdlib.md">18-stdlib.md</a>). <code>with_pin(value, |p| { ... })</code> uses the existing form.</td></tr>
+    <tr><td>Variadic <code>...</code> token in signatures</td><td><code>@Variadic</code> decorator carries the meaning; no new token. Aligns with <a href="09-functions.md">09-functions.md §9.11</a>'s "no variadics" general rule.</td></tr>
+    <tr><td>Const generics for arrays</td><td><code>[T; N]</code> exists only inside <code>extern struct</code> fields and extern function signatures. Const generics in the broader language is out of scope.</td></tr>
+    <tr><td>C++ interop</td><td>Out of scope. Use <code>extern "C"</code> shims on the C++ side.</td></tr>
+  </tbody>
+</table>
+
+<hr>
+
+<h2>Summary</h2>
+
+<p>This proposal adds: two operators (<code>&amp;</code>, <code>*</code> prefix), one narrow type form (<code>[T; N]</code> in extern positions), two <code>extern</code> family declarations (<code>extern type</code>, <code>extern var</code>), an <code>as</code> extension for pointer reinterpretation, and a set of decorators on existing item shapes. Everything else — C unions, C enums, opaque types, foreign allocation, pinning lifecycle, threading semantics, panic policy, callbacks, strings — lives in stdlib types and decorators on existing items.</p>
+
+<p>The bigger ABI story (decoupling layout from allocation, threading model, panic policy, tooling) is identical to the previous proposal. The difference is doing it without inventing new keywords, blocks, or syntactic positions where the existing language already has the right pieces.</p>
+
+<p class="footer">FFI v2 proposal — companion to <code>docs/19-ffi.md</code>.</p>
+
+</body>
+</html>

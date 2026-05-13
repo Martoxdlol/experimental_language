@@ -321,7 +321,9 @@ The chapter sections above all describe `core:prelude` contents:
 - `Buffer` extern struct (§18.7).
 - Numeric helper namespaces (§18.8).
 
-Plus everything documented in their own chapters: operator and lifecycle interfaces ([15-operators.md](./15-operators.md)), `Future<T>`/`Ready<T>`/`Pending`/`Context` ([21-async.md](./21-async.md)), `Try`/`FromResidual` ([13-error-handling.md](./13-error-handling.md)), `panic`/`panic_with` ([14-panics.md](./14-panics.md)), `pin`/`unpin` and `ReprC` ([19-ffi.md](./19-ffi.md)).
+Plus everything documented in their own chapters: operator and lifecycle interfaces ([15-operators.md](./15-operators.md)), `Future<T>`/`Ready<T>`/`Pending`/`Context` ([21-async.md](./21-async.md)), `Try`/`FromResidual` ([13-error-handling.md](./13-error-handling.md)), `panic`/`panic_with` ([14-panics.md](./14-panics.md)), and `ReprC` ([19-ffi.md](./19-ffi.md)).
+
+The FFI's pinning machinery (`with_pin`, `Pin`, `PinHandle<T>`), the C-width type aliases (`c_int`, `c_long`, …), and the `Foreign` allocator namespace live in **`core:ffi`** rather than `core:prelude` — see [19-ffi.md](./19-ffi.md). `core:ffi` is part of the `core:` tier and works on freestanding (no-OS) targets, but it is **not** auto-imported; an `import { ... } from "core:ffi"` is required.
 
 None of these requires an OS. `core:prelude` works on any target that supplies an allocator.
 

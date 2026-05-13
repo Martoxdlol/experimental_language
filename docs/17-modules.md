@@ -225,7 +225,7 @@ Two cautions:
 
 Two reserved prefixes identify modules supplied by the toolchain:
 
-- **`core:`** — assumes an allocator, **no OS**. Always available wherever the language runs (including bare metal with a heap). The single module `core:prelude` is auto-imported into every user module.
+- **`core:`** — assumes an allocator, **no OS**. Always available wherever the language runs (including bare metal with a heap). `core:prelude` is auto-imported into every user module; other `core:*` modules (currently `core:ffi`) require explicit imports.
 - **`std:`** — assumes an OS. Sub-modules under `std:` provide IO, threading, synchronization, async runtime, time, filesystem, networking. Must be explicitly imported. Not available on freestanding targets.
 
 The name distinction reflects the realistic minimum the language can run on: an allocator is mandatory (structs are RC-managed on the heap, `str` is heap-allocated, closures box their environments), but an OS is not.
@@ -247,12 +247,27 @@ Contains everything that the language's syntax desugars into, plus the heap-usin
 - **Error propagation** — `Try<O, R>`, `FromResidual<R>`.
 - **Lifecycle** — `Clone`, `Drop`.
 - **Stringification** — `ToStr` (used by string interpolation; see [01-lexical.md §1.9](./01-lexical.md#19-string-literals-and-interpolation) and [15-operators.md §15.10](./15-operators.md#1510-stringification--tostr)).
-- **FFI** — `ReprC`, `pin<T>`, `unpin<T>`, the `Buffer` extern struct.
+- **FFI** — `ReprC`, the `Buffer` extern struct. (The rest of the FFI surface — `with_pin`, `Pin`, `PinHandle<T>`, `Foreign`, `CStr`, `CString`, `Callback<C, R>`, the C-width aliases, `c_void`, `c_va_list`, `attach_thread`, `detach_thread` — lives in `core:ffi` and is explicitly imported. See [19-ffi.md](./19-ffi.md).)
 - **Panic** — `panic(msg: str)`, `panic_with(value: T)`.
 - **Heap collections** — `List<T>`, `Map<K, V>`, `Entry<K, V>`. (These use the allocator, which is always available.)
 - **Methods on primitive `str`** — `str` is heap-allocated and its methods are part of the language.
 
 Numeric helper namespaces (`i32.wrapping_add` etc.) are reachable without import: numeric primitives are keywords, and their static methods come along for free.
+
+### `core:ffi` — explicit-import FFI module
+
+The FFI surface beyond `ReprC` and `Buffer` lives in `core:ffi`. It is `core:`-tier (no OS dependency, works on freestanding targets) but is **not** auto-imported:
+
+```
+import {
+  c_int, c_uint, c_long, c_ulong, c_size_t, c_void, c_va_list,
+  Foreign, CStr, CString, Callback,
+  Pin, PinHandle, with_pin,
+  attach_thread, detach_thread,
+} from "core:ffi"
+```
+
+See [19-ffi.md](./19-ffi.md) for the full contents.
 
 ### `std:*` — explicit-import modules
 

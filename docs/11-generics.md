@@ -202,7 +202,7 @@ Most code never hits overlap. When overlap is intentional (e.g. specialized fast
 
 ## 11.10 Lifetimes
 
-There are no lifetimes. The garbage collector handles managed memory; FFI pointers are managed by manual `pin`/`unpin` (see [19-ffi.md](./19-ffi.md)).
+There are no lifetimes. The garbage collector handles managed memory; FFI pointers are managed through the pinning APIs (`&`, `with_pin`, `Pin.acquire`) — see [19-ffi.md §19.15](./19-ffi.md#1915-pinning).
 
 ## 11.11 Variance
 

@@ -1,0 +1,839 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Modules, Imports & Visibility</title>
+<style>
+  :root {
+    --fg: #1b1b1d;
+    --muted: #5a5a60;
+    --bg: #fdfdfc;
+    --accent: #1a4a8a;
+    --accent-2: #2a6f4d;
+    --warn: #b54708;
+    --code-bg: #f4f2ee;
+    --code-fg: #1b1b1d;
+    --border: #e4e1dc;
+    --table-stripe: #f8f7f4;
+    --pub: #2a6f4d;
+    --priv: #b54708;
+    --pkg: #1a4a8a;
+    --core: #6b4ba8;
+  }
+  html { box-sizing: border-box; }
+  *, *::before, *::after { box-sizing: inherit; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color: var(--fg);
+    background: var(--bg);
+    line-height: 1.55;
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 2.5rem 1.5rem 6rem;
+  }
+  h1, h2, h3, h4 {
+    color: var(--fg);
+    line-height: 1.25;
+    margin-top: 2.2rem;
+    margin-bottom: 0.6rem;
+  }
+  h1 { font-size: 2rem; border-bottom: 2px solid var(--border); padding-bottom: 0.4rem; }
+  h2 { font-size: 1.45rem; margin-top: 2.6rem; }
+  h3 { font-size: 1.15rem; color: var(--accent); }
+  h4 { font-size: 1rem; color: var(--muted); }
+  p { margin: 0.7rem 0; }
+  ul, ol { margin: 0.7rem 0; padding-left: 1.6rem; }
+  li { margin: 0.3rem 0; }
+  code {
+    font-family: "SF Mono", Menlo, Consolas, "Courier New", monospace;
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 0.1em 0.35em;
+    border-radius: 3px;
+    font-size: 0.92em;
+  }
+  pre {
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 0.9rem 1rem;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 0.88rem;
+    line-height: 1.5;
+    border: 1px solid var(--border);
+  }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1rem 0;
+    font-size: 0.94rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.5rem 0.7rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th { background: var(--code-bg); font-weight: 600; }
+  tbody tr:nth-child(even) { background: var(--table-stripe); }
+  .lead {
+    font-size: 1.05rem;
+    color: var(--muted);
+    margin-bottom: 1.6rem;
+  }
+  .toc {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1rem 1.2rem;
+    margin: 1.6rem 0 2rem;
+    font-size: 0.94rem;
+  }
+  .toc ol { margin: 0.2rem 0 0; padding-left: 1.3rem; }
+  .toc a { color: var(--accent); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+
+  .diagram {
+    background: #ffffff;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.4rem;
+    margin: 1.4rem 0;
+    overflow-x: auto;
+  }
+  .diagram-caption {
+    font-size: 0.85rem;
+    color: var(--muted);
+    text-align: center;
+    margin-top: 0.6rem;
+    font-style: italic;
+  }
+  svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+  svg text { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; fill: var(--fg); }
+  svg .label { font-family: -apple-system, system-ui, sans-serif; font-size: 12px; }
+  svg .small { font-size: 10px; fill: var(--muted); }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    justify-content: center;
+    margin-top: 0.8rem;
+    font-size: 0.85rem;
+  }
+  .legend-item { display: flex; align-items: center; gap: 0.4rem; }
+  .legend-swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    border: 1px solid rgba(0,0,0,0.15);
+  }
+
+  .tag {
+    display: inline-block;
+    padding: 0.1em 0.55em;
+    border-radius: 3px;
+    font-size: 0.78em;
+    font-weight: 600;
+    font-family: "SF Mono", Menlo, monospace;
+    color: white;
+    vertical-align: middle;
+  }
+  .tag.pub  { background: var(--pub); }
+  .tag.priv { background: var(--priv); }
+  .tag.pkg  { background: var(--pkg); }
+  .tag.core { background: var(--core); }
+  .tag.warn { background: var(--warn); }
+
+  .callout {
+    border-left: 4px solid var(--accent);
+    background: #f0f4fa;
+    padding: 0.8rem 1rem;
+    margin: 1.2rem 0;
+    border-radius: 0 6px 6px 0;
+  }
+  .callout.warn { border-color: var(--warn); background: #fbf3ec; }
+  .callout.good { border-color: var(--accent-2); background: #eef6f1; }
+  .callout strong { display: block; margin-bottom: 0.3rem; }
+
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin: 1.2rem 0;
+  }
+  @media (max-width: 720px) {
+    .two-col { grid-template-columns: 1fr; }
+  }
+
+  .file-tree {
+    font-family: "SF Mono", Menlo, monospace;
+    font-size: 0.88rem;
+    line-height: 1.55;
+    background: var(--code-bg);
+    padding: 1rem 1.2rem;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    white-space: pre;
+    overflow-x: auto;
+  }
+  .file-tree .pub  { color: var(--pub); font-weight: 600; }
+  .file-tree .priv { color: var(--priv); }
+  .file-tree .note { color: var(--muted); font-style: italic; }
+</style>
+</head>
+<body>
+
+<h1>Modules, Imports &amp; Visibility</h1>
+<p class="lead">
+  A visual reference for how source files map to modules, how <code>pub</code> chains travel through the
+  tree, and how the four import path prefixes resolve. Companion to
+  <a href="17-modules.md">17-modules.md</a>.
+</p>
+
+<div class="toc">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#layout">Project layout</a></li>
+    <li><a href="#tree">Module tree &amp; file resolution</a></li>
+    <li><a href="#paths">The four path forms</a></li>
+    <li><a href="#pub">The <code>pub</code> chain</a></li>
+    <li><a href="#reexport"><code>pub import</code> — re-exports</a></li>
+    <li><a href="#builtin">Built-in modules — <code>core:</code> / <code>std:</code></a></li>
+    <li><a href="#escape">Package escape boundary</a></li>
+    <li><a href="#cheatsheet">Cheat sheet</a></li>
+  </ol>
+</div>
+
+<!-- =========================================================== -->
+<h2 id="layout">1. Project layout</h2>
+
+<p>Every project has a <strong>manifest</strong> at the root and a <strong>source root</strong>
+(<code>src/</code>). The manifest's <code>kind</code> picks one of three shapes:</p>
+
+<div class="diagram">
+  <svg viewBox="0 0 920 280" role="img" aria-label="Three project kinds">
+    <!-- binary -->
+    <g transform="translate(20, 20)">
+      <rect x="0" y="0" width="270" height="240" rx="8" fill="#fafafa" stroke="#d6d3cd"/>
+      <text x="135" y="24" class="label" text-anchor="middle" font-weight="700" font-size="13">kind = "binary"</text>
+      <text x="135" y="44" class="small" text-anchor="middle">produces an executable</text>
+
+      <rect x="20" y="60" width="230" height="32" rx="4" fill="#fff" stroke="#d6d3cd"/>
+      <text x="35" y="80">project.toml</text>
+
+      <rect x="20" y="100" width="230" height="32" rx="4" fill="#fff" stroke="#d6d3cd"/>
+      <text x="35" y="120">src/</text>
+
+      <rect x="40" y="140" width="210" height="32" rx="4" fill="#eef6f1" stroke="#2a6f4d"/>
+      <text x="55" y="160">main.lang</text>
+      <text x="240" y="160" text-anchor="end" class="small" fill="#2a6f4d">entry</text>
+
+      <text x="135" y="200" class="small" text-anchor="middle">function main()</text>
+      <text x="135" y="218" class="small" text-anchor="middle">NOT consumable via pkg:</text>
+    </g>
+
+    <!-- library -->
+    <g transform="translate(325, 20)">
+      <rect x="0" y="0" width="270" height="240" rx="8" fill="#fafafa" stroke="#d6d3cd"/>
+      <text x="135" y="24" class="label" text-anchor="middle" font-weight="700" font-size="13">kind = "library"</text>
+      <text x="135" y="44" class="small" text-anchor="middle">public API = pub in lib.lang</text>
+
+      <rect x="20" y="60" width="230" height="32" rx="4" fill="#fff" stroke="#d6d3cd"/>
+      <text x="35" y="80">project.toml</text>
+
+      <rect x="20" y="100" width="230" height="32" rx="4" fill="#fff" stroke="#d6d3cd"/>
+      <text x="35" y="120">src/</text>
+
+      <rect x="40" y="140" width="210" height="32" rx="4" fill="#eef6f1" stroke="#2a6f4d"/>
+      <text x="55" y="160">lib.lang</text>
+      <text x="240" y="160" text-anchor="end" class="small" fill="#2a6f4d">entry</text>
+
+      <text x="135" y="200" class="small" text-anchor="middle">consumers:</text>
+      <text x="135" y="218" class="small" text-anchor="middle">import { … } from "pkg:&lt;name&gt;"</text>
+    </g>
+
+    <!-- library+bins -->
+    <g transform="translate(630, 20)">
+      <rect x="0" y="0" width="270" height="240" rx="8" fill="#fafafa" stroke="#d6d3cd"/>
+      <text x="135" y="24" class="label" text-anchor="middle" font-weight="700" font-size="13">kind = "library+bins"</text>
+      <text x="135" y="44" class="small" text-anchor="middle">lib + extra executables</text>
+
+      <rect x="20" y="60" width="230" height="32" rx="4" fill="#fff" stroke="#d6d3cd"/>
+      <text x="35" y="80">project.toml</text>
+
+      <rect x="20" y="100" width="230" height="32" rx="4" fill="#fff" stroke="#d6d3cd"/>
+      <text x="35" y="120">src/</text>
+
+      <rect x="40" y="140" width="210" height="22" rx="4" fill="#eef6f1" stroke="#2a6f4d"/>
+      <text x="55" y="156">lib.lang</text>
+
+      <rect x="40" y="170" width="210" height="22" rx="4" fill="#eef6f1" stroke="#2a6f4d"/>
+      <text x="55" y="186">bin/foo.lang</text>
+
+      <rect x="40" y="200" width="210" height="22" rx="4" fill="#eef6f1" stroke="#2a6f4d"/>
+      <text x="55" y="216">bin/bar.lang</text>
+    </g>
+  </svg>
+  <div class="diagram-caption">Three project kinds. The compiler walks the <code>mod</code> tree starting at each entry.</div>
+</div>
+
+<!-- =========================================================== -->
+<h2 id="tree">2. Module tree &amp; file resolution</h2>
+
+<p>One source file = one module. Children are declared with <code>mod</code>. A <code>mod foo</code> in
+<code>parent.lang</code> resolves to <code>parent/foo.lang</code> &mdash; the directory shares the parent's
+basename.</p>
+
+<p><strong>Top-level exception:</strong> <code>mod foo</code> in the entry file
+(<code>src/lib.lang</code> / <code>src/main.lang</code> / each <code>bins</code>) resolves to
+<code>src/foo.lang</code> &mdash; flat, not nested under <code>src/lib/</code>.</p>
+
+<div class="diagram">
+  <svg viewBox="0 0 920 480" role="img" aria-label="Module tree resolution">
+    <!-- Declarations (left) -->
+    <g transform="translate(20, 20)">
+      <rect x="0" y="0" width="380" height="440" rx="8" fill="#fafafa" stroke="#d6d3cd"/>
+      <text x="190" y="24" class="label" text-anchor="middle" font-weight="700" font-size="13">Declarations</text>
+
+      <!-- lib.lang -->
+      <g transform="translate(20, 50)">
+        <rect width="340" height="100" rx="6" fill="#fff" stroke="#1a4a8a"/>
+        <text x="12" y="20" font-weight="700">src/lib.lang</text>
+        <text x="12" y="42" fill="#2a6f4d">pub mod util</text>
+        <text x="12" y="60" fill="#2a6f4d">pub mod db</text>
+        <text x="12" y="78" fill="#b54708">mod internals</text>
+        <text x="12" y="96" class="small">(top-level: siblings live in src/)</text>
+      </g>
+
+      <!-- util.lang -->
+      <g transform="translate(20, 170)">
+        <rect width="340" height="60" rx="6" fill="#fff" stroke="#1a4a8a"/>
+        <text x="12" y="20" font-weight="700">src/util.lang</text>
+        <text x="12" y="42" fill="#b54708">mod helpers</text>
+        <text x="12" y="56" class="small">child: src/util/helpers.lang</text>
+      </g>
+
+      <!-- helpers.lang -->
+      <g transform="translate(20, 250)">
+        <rect width="340" height="60" rx="6" fill="#fff" stroke="#1a4a8a"/>
+        <text x="12" y="20" font-weight="700">src/util/helpers.lang</text>
+        <text x="12" y="42" fill="#b54708">mod text</text>
+        <text x="12" y="56" class="small">child: src/util/helpers/text.lang</text>
+      </g>
+
+      <!-- db.lang -->
+      <g transform="translate(20, 330)">
+        <rect width="340" height="50" rx="6" fill="#fff" stroke="#1a4a8a"/>
+        <text x="12" y="20" font-weight="700">src/db.lang</text>
+        <text x="12" y="40" fill="#2a6f4d">pub mod query</text>
+      </g>
+
+      <g transform="translate(20, 390)">
+        <rect width="340" height="36" rx="6" fill="#fff" stroke="#1a4a8a"/>
+        <text x="12" y="22" font-weight="700">src/internals.lang</text>
+      </g>
+    </g>
+
+    <!-- Arrow -->
+    <g transform="translate(410, 230)">
+      <path d="M 0 0 L 70 0" stroke="#5a5a60" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+      <text x="35" y="-8" class="small" text-anchor="middle">resolves to</text>
+    </g>
+
+    <!-- Filesystem (right) -->
+    <g transform="translate(510, 20)">
+      <rect x="0" y="0" width="390" height="440" rx="8" fill="#fafafa" stroke="#d6d3cd"/>
+      <text x="195" y="24" class="label" text-anchor="middle" font-weight="700" font-size="13">Filesystem</text>
+
+      <g transform="translate(20, 50)" font-family="SF Mono, Menlo, monospace" font-size="12">
+        <text y="14">src/</text>
+        <text x="20" y="34">├── lib.lang</text>
+        <text x="20" y="54" fill="#2a6f4d">├── util.lang</text>
+        <text x="40" y="74" fill="#2a6f4d">└── util/</text>
+        <text x="60" y="94" fill="#b54708">    ├── helpers.lang</text>
+        <text x="80" y="114" fill="#b54708">    │   └── helpers/</text>
+        <text x="100" y="134" fill="#b54708">    │       └── text.lang</text>
+        <text x="60" y="154">    └── parser.lang</text>
+        <text x="20" y="184" fill="#2a6f4d">├── db.lang</text>
+        <text x="40" y="204" fill="#2a6f4d">└── db/</text>
+        <text x="60" y="224" fill="#2a6f4d">    └── query.lang</text>
+        <text x="20" y="254" fill="#b54708">└── internals.lang</text>
+
+        <text y="304" fill="#5a5a60" font-style="italic">No mod.lang index files.</text>
+        <text y="324" fill="#5a5a60" font-style="italic">Every module's file is named</text>
+        <text y="344" fill="#5a5a60" font-style="italic">after itself.</text>
+      </g>
+    </g>
+
+    <defs>
+      <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+        <path d="M 0 0 L 9 3 L 0 6 z" fill="#5a5a60"/>
+      </marker>
+    </defs>
+  </svg>
+  <div class="diagram-caption">
+    <span class="tag pub">pub mod</span> external, <span class="tag priv">mod</span> private.
+    The compiler errors on any <code>.lang</code> file not reachable from an entry's <code>mod</code> chain.
+  </div>
+</div>
+
+<!-- =========================================================== -->
+<h2 id="paths">3. The four path forms</h2>
+
+<p>Every <code>import</code> path begins with one of four shapes. The prefix (or its absence) makes
+the kind unambiguous from a glance:</p>
+
+<div class="diagram">
+  <svg viewBox="0 0 920 320" role="img" aria-label="Path resolution">
+    <!-- Source file in center -->
+    <g transform="translate(360, 130)">
+      <rect width="200" height="60" rx="8" fill="#fff" stroke="#1a4a8a" stroke-width="2"/>
+      <text x="100" y="26" text-anchor="middle" font-weight="700">src/app/main.lang</text>
+      <text x="100" y="46" text-anchor="middle" class="small">this importing file</text>
+    </g>
+
+    <!-- core/std (top) -->
+    <g transform="translate(60, 20)">
+      <rect width="220" height="78" rx="8" fill="#f3eefa" stroke="#6b4ba8" stroke-width="2"/>
+      <text x="110" y="22" text-anchor="middle" font-weight="700" fill="#6b4ba8">core: / std:</text>
+      <text x="12" y="42" font-size="11">"core:prelude" (auto)</text>
+      <text x="12" y="58" font-size="11">"core:ffi", "std:io",</text>
+      <text x="12" y="74" font-size="11">"std:thread", …</text>
+    </g>
+
+    <!-- pkg (top right) -->
+    <g transform="translate(640, 20)">
+      <rect width="220" height="78" rx="8" fill="#eaf0f8" stroke="#1a4a8a" stroke-width="2"/>
+      <text x="110" y="22" text-anchor="middle" font-weight="700" fill="#1a4a8a">pkg:&lt;name&gt;</text>
+      <text x="12" y="42" font-size="11">"pkg:json"</text>
+      <text x="12" y="58" font-size="11">"pkg:json/parse"</text>
+      <text x="12" y="74" font-size="11" class="small">external deps</text>
+    </g>
+
+    <!-- absolute (bottom left) -->
+    <g transform="translate(60, 220)">
+      <rect width="220" height="78" rx="8" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
+      <text x="110" y="22" text-anchor="middle" font-weight="700" fill="#2a6f4d">absolute</text>
+      <text x="12" y="42" font-size="11">"util/log"</text>
+      <text x="12" y="58" font-size="11">"db/query"</text>
+      <text x="12" y="74" font-size="11" class="small">from current package root</text>
+    </g>
+
+    <!-- relative (bottom right) -->
+    <g transform="translate(640, 220)">
+      <rect width="220" height="78" rx="8" fill="#fbf3ec" stroke="#b54708" stroke-width="2"/>
+      <text x="110" y="22" text-anchor="middle" font-weight="700" fill="#b54708">relative</text>
+      <text x="12" y="42" font-size="11">"./helper"</text>
+      <text x="12" y="58" font-size="11">"../shared/util"</text>
+      <text x="12" y="74" font-size="11" class="small">from importing file's dir</text>
+    </g>
+
+    <!-- Arrows -->
+    <path d="M 280 70 Q 350 100 380 130" stroke="#6b4ba8" stroke-width="2" fill="none" marker-end="url(#a2)"/>
+    <path d="M 640 70 Q 580 100 540 130" stroke="#1a4a8a" stroke-width="2" fill="none" marker-end="url(#a2)"/>
+    <path d="M 280 250 Q 350 220 380 190" stroke="#2a6f4d" stroke-width="2" fill="none" marker-end="url(#a2)"/>
+    <path d="M 640 250 Q 580 220 540 190" stroke="#b54708" stroke-width="2" fill="none" marker-end="url(#a2)"/>
+
+    <defs>
+      <marker id="a2" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+        <path d="M 0 0 L 9 3 L 0 6 z" fill="#5a5a60"/>
+      </marker>
+    </defs>
+  </svg>
+  <div class="diagram-caption">Four prefix kinds. The shape of the first segment tells you where the path resolves.</div>
+</div>
+
+<table>
+  <thead><tr><th>Form</th><th>Where it resolves</th><th>Example</th></tr></thead>
+  <tbody>
+    <tr><td><code>"core:…"</code>, <code>"std:…"</code></td><td>Toolchain sysroot</td><td><code>"std:io"</code></td></tr>
+    <tr><td><code>"pkg:&lt;name&gt;[/sub]"</code></td><td>External dependency from manifest</td><td><code>"pkg:json/parse"</code></td></tr>
+    <tr><td><code>"seg/seg/…"</code></td><td>Absolute inside current package</td><td><code>"util/log"</code></td></tr>
+    <tr><td><code>"./x"</code>, <code>"../x"</code></td><td>Relative to importing file's dir</td><td><code>"../shared/util"</code></td></tr>
+  </tbody>
+</table>
+
+<h3>Import syntax</h3>
+<pre><code>import "util/helpers"                              <span style="color:#5a5a60">// glob — every pub name</span>
+import { Foo, bar } from "util/helpers"            <span style="color:#5a5a60">// named</span>
+import { Foo as Bar } from "util/helpers"          <span style="color:#5a5a60">// aliased</span>
+import { Foo, bar as baz, Qux } from "util/helpers" <span style="color:#5a5a60">// mixed</span></code></pre>
+
+<!-- =========================================================== -->
+<h2 id="pub">4. The <code>pub</code> chain</h2>
+
+<p>There are <strong>two</strong> visibility knobs &mdash; no <code>pub(crate)</code>,
+no <code>pub(super)</code>, no <code>pub(in path)</code>:</p>
+
+<ul>
+  <li><span class="tag pub">pub item</span> &mdash; visible to importers of <em>this module</em>.</li>
+  <li><span class="tag pub">pub mod</span> &mdash; submodule visible to importers of <em>its parent</em>.</li>
+</ul>
+
+<p>For an item to be reachable from outside the package, <strong>every <code>mod</code> on the chain
+must be <code>pub mod</code></strong> AND the leaf item itself must be <code>pub</code>. One missing
+link breaks the chain.</p>
+
+<div class="diagram">
+  <svg viewBox="0 0 920 340" role="img" aria-label="The pub chain">
+    <!-- Reachable chain (top) -->
+    <g transform="translate(20, 20)">
+      <text x="0" y="14" font-weight="700" font-size="13" fill="#2a6f4d">✓ Reachable from outside</text>
+
+      <rect x="0" y="30" width="170" height="60" rx="6" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
+      <text x="85" y="50" text-anchor="middle" font-weight="700">lib.lang</text>
+      <text x="85" y="70" text-anchor="middle" fill="#2a6f4d">pub mod util</text>
+
+      <path d="M 175 60 L 215 60" stroke="#2a6f4d" stroke-width="2" marker-end="url(#chk)"/>
+
+      <rect x="220" y="30" width="170" height="60" rx="6" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
+      <text x="305" y="50" text-anchor="middle" font-weight="700">util.lang</text>
+      <text x="305" y="70" text-anchor="middle" fill="#2a6f4d">pub mod log</text>
+
+      <path d="M 395 60 L 435 60" stroke="#2a6f4d" stroke-width="2" marker-end="url(#chk)"/>
+
+      <rect x="440" y="30" width="170" height="60" rx="6" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
+      <text x="525" y="50" text-anchor="middle" font-weight="700">util/log.lang</text>
+      <text x="525" y="70" text-anchor="middle" fill="#2a6f4d">pub struct Logger</text>
+
+      <path d="M 615 60 L 655 60" stroke="#2a6f4d" stroke-width="2" marker-end="url(#chk)"/>
+
+      <rect x="660" y="30" width="200" height="60" rx="6" fill="#fff" stroke="#1a4a8a" stroke-width="2"/>
+      <text x="760" y="50" text-anchor="middle" font-weight="700">external consumer</text>
+      <text x="760" y="70" text-anchor="middle" font-size="11">import { Logger } from</text>
+    </g>
+
+    <!-- Broken chain (middle) -->
+    <g transform="translate(20, 140)">
+      <text x="0" y="14" font-weight="700" font-size="13" fill="#b54708">✗ Broken — one missing pub on the chain</text>
+
+      <rect x="0" y="30" width="170" height="60" rx="6" fill="#fbf3ec" stroke="#b54708" stroke-width="2"/>
+      <text x="85" y="50" text-anchor="middle" font-weight="700">lib.lang</text>
+      <text x="85" y="70" text-anchor="middle" fill="#b54708">mod util</text>
+
+      <path d="M 175 60 L 215 60" stroke="#b54708" stroke-width="2" stroke-dasharray="4 3" marker-end="url(#x)"/>
+
+      <rect x="220" y="30" width="170" height="60" rx="6" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
+      <text x="305" y="50" text-anchor="middle" font-weight="700">util.lang</text>
+      <text x="305" y="70" text-anchor="middle" fill="#2a6f4d">pub mod log</text>
+
+      <path d="M 395 60 L 435 60" stroke="#2a6f4d" stroke-width="2" marker-end="url(#chk)"/>
+
+      <rect x="440" y="30" width="170" height="60" rx="6" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
+      <text x="525" y="50" text-anchor="middle" font-weight="700">util/log.lang</text>
+      <text x="525" y="70" text-anchor="middle" fill="#2a6f4d">pub struct Logger</text>
+
+      <path d="M 615 60 L 655 60" stroke="#b54708" stroke-width="2" stroke-dasharray="4 3"/>
+      <text x="635" y="55" text-anchor="middle" font-size="14" fill="#b54708" font-weight="700">✗</text>
+
+      <rect x="660" y="30" width="200" height="60" rx="6" fill="#fbf3ec" stroke="#b54708" stroke-width="2" stroke-dasharray="4 3"/>
+      <text x="760" y="50" text-anchor="middle" font-weight="700" fill="#b54708">blocked</text>
+      <text x="760" y="70" text-anchor="middle" font-size="11">package-internal only</text>
+    </g>
+
+    <!-- Three reachable scopes (bottom) -->
+    <g transform="translate(20, 260)">
+      <text x="0" y="14" font-weight="700" font-size="13">Three reachable scopes</text>
+
+      <rect x="0" y="30" width="280" height="60" rx="6" fill="#fff" stroke="#d6d3cd"/>
+      <text x="140" y="48" text-anchor="middle" font-weight="700">File-only</text>
+      <text x="140" y="68" text-anchor="middle" font-size="11">leave the item private</text>
+
+      <rect x="300" y="30" width="280" height="60" rx="6" fill="#fff" stroke="#d6d3cd"/>
+      <text x="440" y="48" text-anchor="middle" font-weight="700">Package-only</text>
+      <text x="440" y="68" text-anchor="middle" font-size="11">pub item + one non-pub mod on chain</text>
+
+      <rect x="600" y="30" width="280" height="60" rx="6" fill="#fff" stroke="#d6d3cd"/>
+      <text x="740" y="48" text-anchor="middle" font-weight="700">External</text>
+      <text x="740" y="68" text-anchor="middle" font-size="11">pub everything on the chain</text>
+    </g>
+
+    <defs>
+      <marker id="chk" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+        <path d="M 0 0 L 9 3 L 0 6 z" fill="#2a6f4d"/>
+      </marker>
+      <marker id="x" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+        <path d="M 0 0 L 9 3 L 0 6 z" fill="#b54708"/>
+      </marker>
+    </defs>
+  </svg>
+  <div class="diagram-caption">A single non-<code>pub</code> link in the chain seals off everything below it from outside consumers.</div>
+</div>
+
+<h3>Where <code>pub</code> goes</h3>
+<table>
+  <thead><tr><th>Declaration</th><th>What <code>pub</code> exposes</th></tr></thead>
+  <tbody>
+    <tr><td><code>pub mod foo</code></td><td>Submodule visible to importers</td></tr>
+    <tr><td><code>pub struct Foo</code></td><td>The struct type</td></tr>
+    <tr><td><code>pub field</code> inside a struct</td><td>That field (each field is independent)</td></tr>
+    <tr><td><code>pub interface I</code></td><td>The interface</td></tr>
+    <tr><td><code>pub function f</code></td><td>The function</td></tr>
+    <tr><td><code>pub type T = …</code></td><td>The alias</td></tr>
+    <tr><td><code>pub var X</code></td><td>The module var (read <em>and</em> write — no read-only modifier)</td></tr>
+    <tr><td><code>pub extern function</code></td><td>Exported via the C ABI for FFI</td></tr>
+    <tr><td><code>pub function … @ProcMacro</code></td><td>Macro invokable from other modules</td></tr>
+    <tr><td><code>pub import { … }</code></td><td>Re-export — see §5</td></tr>
+  </tbody>
+</table>
+
+<div class="callout">
+  <strong>No <code>pub</code> on <code>extend</code> blocks</strong>
+  Methods added by <code>extend</code> inherit visibility from the type and interface they touch.
+  <code>extend Foo: Pub</code> is reachable wherever both <code>Foo</code> and <code>Pub</code> are.
+</div>
+
+<!-- =========================================================== -->
+<h2 id="reexport">5. <code>pub import</code> — re-exports</h2>
+
+<p>Use <code>pub import</code> to lift <em>individual</em> names out of a private subtree and into your
+module's public surface. The internal directory tree can be as deep as you like; consumers see a flat
+public API.</p>
+
+<div class="diagram">
+  <svg viewBox="0 0 920 340" role="img" aria-label="pub import re-export">
+    <!-- Internal tree (left) -->
+    <g transform="translate(20, 20)">
+      <rect width="300" height="300" rx="8" fill="#fafafa" stroke="#d6d3cd"/>
+      <text x="150" y="22" text-anchor="middle" font-weight="700" font-size="13">Internal (deep) tree</text>
+
+      <rect x="20" y="50" width="260" height="46" rx="6" fill="#fbf3ec" stroke="#b54708"/>
+      <text x="32" y="70" font-weight="700">lib.lang</text>
+      <text x="32" y="88" fill="#b54708">mod internals</text>
+
+      <path d="M 150 96 L 150 116" stroke="#5a5a60" stroke-width="1.5" marker-end="url(#a3)"/>
+
+      <rect x="20" y="120" width="260" height="46" rx="6" fill="#fbf3ec" stroke="#b54708"/>
+      <text x="32" y="140" font-weight="700">internals/</text>
+      <text x="32" y="158" fill="#b54708">log.lang, db.lang</text>
+
+      <path d="M 150 166 L 150 186" stroke="#5a5a60" stroke-width="1.5" marker-end="url(#a3)"/>
+
+      <rect x="20" y="190" width="260" height="60" rx="6" fill="#fff" stroke="#1a4a8a"/>
+      <text x="32" y="210" font-weight="700">internals/log.lang</text>
+      <text x="32" y="228" fill="#2a6f4d">pub struct Logger</text>
+      <text x="32" y="244" class="small">(pub but not externally reachable)</text>
+    </g>
+
+    <!-- pub import bridge -->
+    <g transform="translate(340, 130)">
+      <rect width="240" height="80" rx="8" fill="#f3eefa" stroke="#6b4ba8" stroke-width="2"/>
+      <text x="120" y="22" text-anchor="middle" font-weight="700" font-size="13" fill="#6b4ba8">pub import</text>
+      <text x="120" y="44" text-anchor="middle" font-size="11">in lib.lang:</text>
+      <text x="14" y="64" font-family="SF Mono, Menlo, monospace" font-size="11">pub import { Logger }</text>
+      <text x="14" y="78" font-family="SF Mono, Menlo, monospace" font-size="11">  from "internals/log"</text>
+    </g>
+
+    <path d="M 320 170 L 340 170" stroke="#6b4ba8" stroke-width="2" marker-end="url(#a3)"/>
+    <path d="M 580 170 L 600 170" stroke="#2a6f4d" stroke-width="2" marker-end="url(#a3)"/>
+
+    <!-- External view (right) -->
+    <g transform="translate(600, 20)">
+      <rect width="300" height="300" rx="8" fill="#fafafa" stroke="#d6d3cd"/>
+      <text x="150" y="22" text-anchor="middle" font-weight="700" font-size="13">External consumer sees</text>
+
+      <rect x="20" y="60" width="260" height="60" rx="6" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
+      <text x="150" y="84" text-anchor="middle" font-weight="700">pkg:&lt;name&gt;</text>
+      <text x="150" y="104" text-anchor="middle" fill="#2a6f4d">Logger</text>
+
+      <text x="150" y="148" text-anchor="middle" font-size="11" class="small">no idea about internals/</text>
+
+      <rect x="20" y="170" width="260" height="100" rx="6" fill="#fff" stroke="#d6d3cd"/>
+      <text x="32" y="190" font-family="SF Mono, Menlo, monospace" font-size="11">import { Logger }</text>
+      <text x="32" y="208" font-family="SF Mono, Menlo, monospace" font-size="11">  from "pkg:mylib"</text>
+      <text x="32" y="232" font-family="SF Mono, Menlo, monospace" font-size="11">var l = Logger.new()</text>
+      <text x="32" y="258" font-size="11" class="small">same definition, new path</text>
+    </g>
+
+    <defs>
+      <marker id="a3" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+        <path d="M 0 0 L 9 3 L 0 6 z" fill="#5a5a60"/>
+      </marker>
+    </defs>
+  </svg>
+  <div class="diagram-caption"><code>pub import</code> lifts individual names without exposing their containing submodule.</div>
+</div>
+
+<pre><code><span style="color:#5a5a60">// src/lib.lang</span>
+mod internals                                       <span style="color:#5a5a60">// private — consumers can't reach internals/*</span>
+pub import { Logger } from "internals/log"          <span style="color:#5a5a60">// Logger lifted to pkg API</span>
+pub import { Db, open } from "internals/db"
+pub import "util/helpers"                           <span style="color:#5a5a60">// glob re-export</span>
+pub import { Foo as Bar } from "util/helpers"       <span style="color:#5a5a60">// aliased re-export</span></code></pre>
+
+<ul>
+  <li>Simultaneously imports into the current module <em>and</em> re-exports it.</li>
+  <li>Same definition &mdash; not a new type, just reachable under a new path.</li>
+  <li>The declaring module itself must still be on a <code>pub mod</code> chain for external reach.</li>
+  <li>Collision rules apply &mdash; alias one side with <code>as</code> if needed.</li>
+</ul>
+
+<!-- =========================================================== -->
+<h2 id="builtin">6. Built-in modules</h2>
+
+<p>Two reserved prefixes identify modules supplied by the toolchain. The name distinction reflects
+the realistic minimum the language can run on: an allocator is mandatory, but an OS is not.</p>
+
+<div class="diagram">
+  <svg viewBox="0 0 920 360" role="img" aria-label="core: and std: layers">
+    <!-- Hardware/runtime layers -->
+    <g transform="translate(20, 20)">
+      <rect width="880" height="320" rx="8" fill="#fafafa" stroke="#d6d3cd"/>
+
+      <!-- Base layer -->
+      <rect x="40" y="270" width="800" height="36" rx="4" fill="#fff" stroke="#d6d3cd"/>
+      <text x="440" y="292" text-anchor="middle" font-weight="700">Hardware / allocator (always assumed)</text>
+
+      <!-- core layer -->
+      <rect x="40" y="170" width="800" height="86" rx="6" fill="#f3eefa" stroke="#6b4ba8" stroke-width="2"/>
+      <text x="60" y="194" font-weight="700" fill="#6b4ba8">core:  &nbsp;— no OS required</text>
+
+      <rect x="60" y="208" width="240" height="36" rx="4" fill="#fff" stroke="#6b4ba8"/>
+      <text x="180" y="230" text-anchor="middle" font-size="11">core:prelude  (auto-imported)</text>
+
+      <rect x="312" y="208" width="200" height="36" rx="4" fill="#fff" stroke="#6b4ba8"/>
+      <text x="412" y="230" text-anchor="middle" font-size="11">core:ffi  (FFI types)</text>
+
+      <rect x="524" y="208" width="250" height="36" rx="4" fill="#fff" stroke="#6b4ba8"/>
+      <text x="649" y="230" text-anchor="middle" font-size="11">core:compiler  (macros only)</text>
+
+      <!-- OS layer (assumed) -->
+      <rect x="40" y="130" width="800" height="32" rx="4" fill="#fff" stroke="#d6d3cd" stroke-dasharray="3 3"/>
+      <text x="440" y="151" text-anchor="middle" font-style="italic" fill="#5a5a60">OS (only for std: targets)</text>
+
+      <!-- std layer -->
+      <rect x="40" y="30" width="800" height="92" rx="6" fill="#eaf0f8" stroke="#1a4a8a" stroke-width="2"/>
+      <text x="60" y="54" font-weight="700" fill="#1a4a8a">std:  &nbsp;— OS required, explicit import</text>
+
+      <g transform="translate(60, 66)" font-size="10.5">
+        <rect width="100" height="22" rx="3" fill="#fff" stroke="#1a4a8a"/><text x="50" y="16" text-anchor="middle">std:io</text>
+        <rect x="110" width="110" height="22" rx="3" fill="#fff" stroke="#1a4a8a"/><text x="165" y="16" text-anchor="middle">std:thread</text>
+        <rect x="230" width="100" height="22" rx="3" fill="#fff" stroke="#1a4a8a"/><text x="280" y="16" text-anchor="middle">std:sync</text>
+        <rect x="340" width="110" height="22" rx="3" fill="#fff" stroke="#1a4a8a"/><text x="395" y="16" text-anchor="middle">std:async</text>
+        <rect x="460" width="100" height="22" rx="3" fill="#fff" stroke="#1a4a8a"/><text x="510" y="16" text-anchor="middle">std:time</text>
+        <rect x="570" width="100" height="22" rx="3" fill="#fff" stroke="#1a4a8a"/><text x="620" y="16" text-anchor="middle">std:fs</text>
+        <rect x="680" width="100" height="22" rx="3" fill="#fff" stroke="#1a4a8a"/><text x="730" y="16" text-anchor="middle">std:net</text>
+      </g>
+      <text x="440" y="116" text-anchor="middle" font-size="11" fill="#5a5a60" font-style="italic">
+        freestanding (no-OS) targets compile fine without these
+      </text>
+    </g>
+  </svg>
+  <div class="diagram-caption">
+    <code>core:prelude</code> is the only built-in implicitly available; everything else needs an explicit <code>import</code>.
+  </div>
+</div>
+
+<div class="two-col">
+  <div>
+    <h3 style="color: #6b4ba8;">core: (always)</h3>
+    <ul>
+      <li><strong>core:prelude</strong> &mdash; operators, iterators, futures, <code>Try</code>, <code>Clone</code>, <code>Drop</code>, <code>ToStr</code>, <code>panic</code>, <code>List</code>, <code>Map</code>, <code>str</code> methods. Auto-imported.</li>
+      <li><strong>core:ffi</strong> &mdash; <code>c_int</code>, <code>c_void</code>, <code>Foreign.alloc</code>, <code>CStr</code>, <code>with_pin</code>.</li>
+      <li><strong>core:compiler</strong> &mdash; <code>MacroContext</code>, <code>ASTNode</code> (only in <code>@ProcMacro</code> functions).</li>
+    </ul>
+  </div>
+  <div>
+    <h3 style="color: #1a4a8a;">std: (needs OS)</h3>
+    <ul>
+      <li><strong>std:io</strong> &mdash; <code>print</code>, <code>println</code>, files.</li>
+      <li><strong>std:thread</strong> &mdash; <code>Thread.spawn</code>, <code>JoinHandle</code>.</li>
+      <li><strong>std:sync</strong> &mdash; <code>Shared&lt;T&gt;</code>, channels.</li>
+      <li><strong>std:async</strong> &mdash; <code>spawn</code>, <code>block_on</code>, <code>timeout</code>.</li>
+      <li><strong>std:time</strong>, <strong>std:fs</strong>, <strong>std:net</strong>.</li>
+    </ul>
+  </div>
+</div>
+
+<div class="callout warn">
+  <strong>You cannot</strong>
+  Create a module whose path starts with <code>core:</code> or <code>std:</code>, or shadow names from those prefixes.
+  A <code>no-std = true</code> package makes any <code>std:*</code> import a hard error.
+</div>
+
+<!-- =========================================================== -->
+<h2 id="escape">7. The package escape boundary</h2>
+
+<p>Relative paths (<code>./</code>, <code>../</code>) are convenient for "next to me" references,
+<strong>but they cannot escape the package</strong>. The package boundary is the source root.</p>
+
+<div class="diagram">
+  <svg viewBox="0 0 920 320" role="img" aria-label="Escape boundary">
+    <!-- Package boundary -->
+    <rect x="40" y="40" width="700" height="240" rx="12" fill="#eef6f1" stroke="#2a6f4d" stroke-width="3" stroke-dasharray="6 4"/>
+    <text x="390" y="64" text-anchor="middle" font-weight="700" font-size="13" fill="#2a6f4d">src/ — package boundary</text>
+
+    <!-- Inside files -->
+    <g transform="translate(70, 90)">
+      <rect width="180" height="160" rx="6" fill="#fff" stroke="#d6d3cd"/>
+      <text x="90" y="22" text-anchor="middle" font-weight="700" font-size="12">src/util/</text>
+      <rect x="14" y="36" width="152" height="30" rx="4" fill="#fafafa" stroke="#d6d3cd"/>
+      <text x="90" y="56" text-anchor="middle" font-size="11">log.lang</text>
+    </g>
+
+    <g transform="translate(280, 90)">
+      <rect width="220" height="160" rx="6" fill="#fff" stroke="#d6d3cd"/>
+      <text x="110" y="22" text-anchor="middle" font-weight="700" font-size="12">src/app/db/</text>
+      <rect x="14" y="36" width="192" height="30" rx="4" fill="#fafafa" stroke="#d6d3cd"/>
+      <text x="110" y="56" text-anchor="middle" font-size="11">query.lang</text>
+      <text x="110" y="92" text-anchor="middle" font-size="11" fill="#2a6f4d">import "../../util/log" ✓</text>
+      <text x="110" y="112" text-anchor="middle" font-size="11" fill="#2a6f4d">import "util/log" ✓</text>
+      <text x="110" y="138" text-anchor="middle" font-size="10" class="small">(absolute always works)</text>
+    </g>
+
+    <g transform="translate(530, 90)">
+      <rect width="190" height="160" rx="6" fill="#fbf3ec" stroke="#b54708"/>
+      <text x="95" y="22" text-anchor="middle" font-weight="700" font-size="12" fill="#b54708">illegal escape</text>
+      <text x="95" y="60" text-anchor="middle" font-size="11" fill="#b54708">import "../../../etc"</text>
+      <text x="95" y="82" text-anchor="middle" font-size="14" fill="#b54708">✗</text>
+      <text x="95" y="118" text-anchor="middle" font-size="10" class="small">"escapes package myapp"</text>
+      <text x="95" y="138" text-anchor="middle" font-size="10" class="small">compile error</text>
+    </g>
+
+    <!-- Outside package -->
+    <g transform="translate(770, 90)">
+      <rect width="120" height="160" rx="6" fill="#fafafa" stroke="#d6d3cd" stroke-dasharray="3 3"/>
+      <text x="60" y="22" text-anchor="middle" font-weight="700" font-size="12" fill="#5a5a60">outside</text>
+      <text x="60" y="80" text-anchor="middle" font-size="11" class="small">other pkgs</text>
+      <text x="60" y="100" text-anchor="middle" font-size="11" class="small">use pkg:</text>
+    </g>
+  </svg>
+  <div class="diagram-caption">Each package is its own escape boundary. The only way to reach another package is its <code>pkg:</code> prefix.</div>
+</div>
+
+<!-- =========================================================== -->
+<h2 id="cheatsheet">8. Cheat sheet</h2>
+
+<div class="file-tree">src/
+├── <span class="pub">lib.lang</span>              <span class="note"># entry; pub mod util, mod internals</span>
+├── <span class="pub">util.lang</span>             <span class="note"># pub mod (in lib.lang) → external surface</span>
+├── util/
+│   └── <span class="pub">log.lang</span>          <span class="note"># pub struct Logger reachable as pkg:&lt;name&gt;/util/log</span>
+├── <span class="priv">internals.lang</span>        <span class="note"># mod (no pub) → package-internal only</span>
+└── internals/
+    └── <span class="priv">db.lang</span>           <span class="note"># its pub items are package-internal …</span>
+                          <span class="note">#   unless lifted via `pub import { … } from "internals/db"` in lib.lang</span></div>
+
+<table>
+  <thead><tr><th>You want…</th><th>Write</th></tr></thead>
+  <tbody>
+    <tr><td>File-only item</td><td>Leave it private (no <code>pub</code>)</td></tr>
+    <tr><td>Package-only item</td><td><code>pub</code> the item; one <code>mod</code> (no <code>pub</code>) somewhere on the chain</td></tr>
+    <tr><td>External item</td><td><code>pub</code> the item; <code>pub mod</code> every link in the chain</td></tr>
+    <tr><td>Flat public API from a deep tree</td><td><code>pub import { X } from "internal/path"</code> in <code>lib.lang</code></td></tr>
+    <tr><td>Two siblings share internals</td><td>Put both under a common <code>mod parent</code> (no <code>pub</code>)</td></tr>
+    <tr><td>Read-only-from-outside state</td><td>Private <code>var</code> + <code>pub function getter()</code></td></tr>
+    <tr><td>Reach another package</td><td>Always via <code>pkg:&lt;name&gt;/…</code> &mdash; relative paths can't cross</td></tr>
+  </tbody>
+</table>
+
+<div class="callout good">
+  <strong>Style guidance (lint, not error)</strong>
+  Prefer <strong>absolute</strong> project paths for cross-cutting modules (logging, types, constants) &mdash; the path stays meaningful in error messages and grep results.
+  Prefer <strong>relative</strong> for tightly-coupled siblings or children &mdash; the path stays valid if the subtree moves.
+</div>
+
+</body>
+</html>

@@ -107,7 +107,7 @@ The set of GC roots includes:
 - Local variables on every thread's stack at every safe point.
 - Module-level `var` storage.
 - Captured environments of live closures.
-- Pinned objects (`pin` adds a root entry; `unpin` removes it).
+- Pinned objects — pins add a strong root entry; releasing the pin removes it. See [19-ffi.md §19.15](./19-ffi.md#1915-pinning) for the user-facing pinning APIs (`&` auto-pin, `with_pin`, `Pin.acquire` / `PinHandle<T>`).
 
 ## 16.6 Determinism of drop
 
@@ -148,9 +148,11 @@ Cross-thread reads and writes of struct fields are **not synchronized** by the l
 
 ## 16.11 Pinning
 
-See [19-ffi.md](./19-ffi.md). Pinning a managed object adds a strong root that prevents the cycle collector from moving (if a moving collector is in use) or reclaiming the object until `unpin`.
+See [19-ffi.md §19.15](./19-ffi.md#1915-pinning) for the user-facing API. Pinning a managed object adds a strong root that prevents the cycle collector from moving (if a moving collector is in use) or reclaiming the object until the pin is released.
 
-Pinning is **refcounted per object**: nested `pin`/`unpin` pairs on the same value compose correctly. `pin` on a foreign value is a no-op (foreign memory is not managed; pinning is unnecessary).
+Pinning is **refcounted per object**: nested pins on the same value compose correctly. Pinning a value that already lives on the foreign heap (or on the stack as an `extern struct`) is a no-op — the value is already non-moving.
+
+The user-facing entry points are `&expr` at extern call sites (auto-pin for the call's duration), `with_pin(value, |ptr| ...)` (scoped pin across a closure body), and `Pin.acquire(value)` returning a `PinHandle<T>` (long-lived pin released explicitly or on `Drop`). There is no direct `pin` / `unpin` user API.
 
 ## 16.12 Summary
 

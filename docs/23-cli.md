@@ -76,6 +76,7 @@ lang audit                                        check deps against vulnerabili
 lang toolchain  list|install|default|remove|run   manage toolchain versions (§23.13)
 lang target     list|add|remove                   manage installed cross-targets
 lang sysroot    show|build                        inspect / rebuild the stdlib (§23.6)
+lang ffi        bindgen|cbindgen|check|layout     FFI binding generation & validation (§23.12)
 
 lang script     <file>                            run a single .lang file shebang-style
 lang completions <shell>                          emit shell completion script
@@ -446,15 +447,77 @@ Per-target manifest section (`[target.<triple>]`) sets linker, link args, runner
 
 Freestanding / no-OS targets (e.g. `thumbv7em-none-eabi`) imply `no-std = true` automatically; importing `std:*` fails at resolve time with a target-specific diagnostic.
 
-## 23.12 FFI and linking flags
+## 23.12 FFI and linking
 
-[19-ffi.md](./19-ffi.md) means the build has to pass through native-linker concerns:
+[19-ffi.md](./19-ffi.md) defines the source-level FFI surface. The CLI layer covers three concerns: declaring which native libraries to link, generating bindings from C headers, and emitting C headers for exported functions.
+
+### Manifest — `[package.links]` and `[package.ffi]`
+
+```toml
+[package.links]
+zlib    = { lib = "z",      kind = "dynamic", version = ">=1.2" }
+mylib   = { lib = "mylib",  kind = "static",  path = "vendor/libmylib.a" }
+crypto  = { lib = "crypto", kind = "dynamic" }
+
+[package.ffi]
+# Bindings auto-generated from C headers, regenerated when the header changes.
+bindings = [
+  { header    = "vendor/zlib.h",
+    output    = "src/bindings/zlib.lang",
+    allowlist = ["inflate*", "deflate*"] },
+  { header = "vendor/mylib.h",
+    output = "src/bindings/mylib.lang" },
+]
+
+# Headers auto-generated from this crate's pub extern functions.
+exports = [
+  { module = "lib", output = "target/include/mylib.h" },
+]
+```
+
+`@Link(lib = "name")` in source refers to a `[package.links]` entry by name. A function declaring only `@Symbol("...")` with no `@Link` resolves from the host process (libc, platform symbols).
+
+`lang build` runs `bindgen` automatically for any `[package.ffi.bindings]` entry whose header is newer than its output. Likewise for `[package.ffi.exports]` and `cbindgen`.
+
+### `lang ffi` subcommands
 
 ```
-[package.links]
-zlib = { kind = "dynamic", name = "z" }
-mylib = { kind = "static", path = "vendor/libmylib.a" }
+lang ffi bindgen <header> [--output <file>] [--allowlist <pat>] [--blocklist <pat>]
+                          [--types-only] [--lang-edition <year>]
+        Generate extern struct, extern type, extern function, and extern var
+        declarations plus pub var constants from a C header. C enums lower to a
+        type alias + pub var constants; C unions lower to @Union extern struct.
+        Powered by libclang. Output is deterministic — safe to commit.
 
+lang ffi cbindgen [--module <path>] [--output <file>] [--lang <c|c++>]
+                  [--header-guard <name>]
+        Emit a C header declaring every pub extern function and pub extern struct
+        reachable from <module>. Round-trips with bindgen.
+
+lang ffi check [--against <header>] [--strict]
+        Verify this crate's extern signatures match the named C header.
+        Reports missing symbols, changed argument types, struct layout diffs.
+        Exit 0 if clean, 1 on drift. CI gate.
+
+lang ffi layout [<type>] [--target <triple>] [--format <human|json>]
+        Print size, alignment, and field offsets for one or all extern struct types
+        in the current crate, computed for the named target. Debugging ABI mismatches.
+```
+
+Examples:
+
+```
+lang ffi bindgen vendor/zlib.h --output src/bindings/zlib.lang --allowlist "inflate*"
+lang ffi cbindgen --module lib --output target/include/mylib.h
+lang ffi check --against vendor/zlib.h
+lang ffi layout Sockaddr --target aarch64-apple-darwin
+```
+
+### Build scripts
+
+For native libraries whose build process must run before the main build (autoconf, cmake, generated headers), declare a build script:
+
+```toml
 [build-script]
 file = "build.lang"           # compiled and run before the main build, emits link directives
 ```
@@ -466,13 +529,14 @@ lang:link-lib=dylib=z
 lang:link-search=native=/opt/lib
 lang:rerun-if-changed=vendor/libmylib.a
 lang:emit-cfg=has_openssl
+lang:ffi-bindgen=vendor/generated.h:src/bindings/generated.lang
 ```
 
-Same model as Cargo build scripts, with the same security caveat: build scripts are arbitrary code. The driver should:
+Same model as Cargo build scripts, with the same security caveat: build scripts are arbitrary code. The driver:
 
-- Not run build scripts under `lang check`.
-- Sandbox them when possible (filesystem read-only outside `OUT_DIR`).
-- Print a clear "running build script for <pkg>" line so it is never silent.
+- Does not run build scripts under `lang check`.
+- Sandboxes them when possible (filesystem read-only outside `OUT_DIR`).
+- Prints a clear "running build script for <pkg>" line so they are never silent.
 
 ## 23.13 Toolchain management
 
