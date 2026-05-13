@@ -5,432 +5,315 @@
 <title>19. Foreign Function Interface</title>
 <style>
   :root {
-    --fg: #1b1b1d;
-    --muted: #5a5a60;
-    --bg: #fdfdfc;
-    --accent: #1a4a8a;
-    --accent-2: #2a6f4d;
-    --warn: #b54708;
-    --code-bg: #f4f2ee;
-    --code-fg: #1b1b1d;
-    --border: #e4e1dc;
-    --table-stripe: #f8f7f4;
-    --pub: #2a6f4d;
-    --priv: #b54708;
-    --pkg: #1a4a8a;
-    --core: #6b4ba8;
+    --fg: #1b1b1d; --muted: #5a5a60; --bg: #fdfdfc;
+    --accent: #1a4a8a; --accent-2: #2a6f4d; --warn: #b54708;
+    --code-bg: #f4f2ee; --code-fg: #1b1b1d; --border: #e4e1dc;
+    --table-stripe: #f8f7f4; --pub: #2a6f4d; --priv: #b54708;
+    --pkg: #1a4a8a; --core: #6b4ba8;
   }
-  html { box-sizing: border-box; }
-  *, *::before, *::after { box-sizing: inherit; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-    color: var(--fg);
-    background: var(--bg);
-    line-height: 1.55;
-    max-width: 980px;
-    margin: 0 auto;
-    padding: 2.5rem 1.5rem 6rem;
-  }
-  h1, h2, h3, h4 {
-    color: var(--fg);
-    line-height: 1.25;
-    margin-top: 2.2rem;
-    margin-bottom: 0.6rem;
-  }
+  html { box-sizing: border-box; } *, *::before, *::after { box-sizing: inherit; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color: var(--fg); background: var(--bg); line-height: 1.55;
+    max-width: 980px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem; }
+  h1, h2, h3, h4 { color: var(--fg); line-height: 1.25; margin-top: 2.2rem; margin-bottom: 0.6rem; }
   h1 { font-size: 2rem; border-bottom: 2px solid var(--border); padding-bottom: 0.4rem; }
   h2 { font-size: 1.45rem; margin-top: 2.6rem; }
   h3 { font-size: 1.15rem; color: var(--accent); }
   h4 { font-size: 1rem; color: var(--muted); }
-  p { margin: 0.7rem 0; }
-  ul, ol { margin: 0.7rem 0; padding-left: 1.6rem; }
-  li { margin: 0.3rem 0; }
-  code {
-    font-family: "SF Mono", Menlo, Consolas, "Courier New", monospace;
-    background: var(--code-bg);
-    color: var(--code-fg);
-    padding: 0.1em 0.35em;
-    border-radius: 3px;
-    font-size: 0.92em;
-  }
-  pre {
-    background: var(--code-bg);
-    color: var(--code-fg);
-    padding: 0.9rem 1rem;
-    border-radius: 6px;
-    overflow-x: auto;
-    font-size: 0.88rem;
-    line-height: 1.5;
-    border: 1px solid var(--border);
-  }
+  p { margin: 0.7rem 0; } ul, ol { margin: 0.7rem 0; padding-left: 1.6rem; } li { margin: 0.3rem 0; }
+  code { font-family: "SF Mono", Menlo, Consolas, "Courier New", monospace;
+    background: var(--code-bg); color: var(--code-fg); padding: 0.1em 0.35em;
+    border-radius: 3px; font-size: 0.92em; }
+  pre { background: var(--code-bg); color: var(--code-fg); padding: 0.9rem 1rem;
+    border-radius: 6px; overflow-x: auto; font-size: 0.88rem; line-height: 1.5;
+    border: 1px solid var(--border); }
   pre code { background: none; padding: 0; font-size: inherit; }
-  table {
-    border-collapse: collapse;
-    width: 100%;
-    margin: 1rem 0;
-    font-size: 0.94rem;
-  }
-  th, td {
-    text-align: left;
-    padding: 0.5rem 0.7rem;
-    border-bottom: 1px solid var(--border);
-    vertical-align: top;
-  }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: 0.94rem; }
+  th, td { text-align: left; padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--border); vertical-align: top; }
   th { background: var(--code-bg); font-weight: 600; }
   tbody tr:nth-child(even) { background: var(--table-stripe); }
-  .lead {
-    font-size: 1.05rem;
-    color: var(--muted);
-    margin-bottom: 1.6rem;
-  }
-  .toc {
-    background: var(--code-bg);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 1rem 1.2rem;
-    margin: 1.6rem 0 2rem;
-    font-size: 0.94rem;
-  }
+  .lead { font-size: 1.05rem; color: var(--muted); margin-bottom: 1.6rem; }
+  .toc { background: var(--code-bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 1rem 1.2rem; margin: 1.6rem 0 2rem; font-size: 0.94rem; }
   .toc ol { margin: 0.2rem 0 0; padding-left: 1.3rem; }
-  .toc a { color: var(--accent); text-decoration: none; }
-  .toc a:hover { text-decoration: underline; }
-
-  .diagram {
-    background: #ffffff;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 1.4rem;
-    margin: 1.4rem 0;
-    overflow-x: auto;
-  }
-  .diagram-caption {
-    font-size: 0.85rem;
-    color: var(--muted);
-    text-align: center;
-    margin-top: 0.6rem;
-    font-style: italic;
-  }
+  .toc a { color: var(--accent); text-decoration: none; } .toc a:hover { text-decoration: underline; }
+  .diagram { background: #ffffff; border: 1px solid var(--border);
+    border-radius: 8px; padding: 1.4rem; margin: 1.4rem 0; overflow-x: auto; }
+  .diagram-caption { font-size: 0.85rem; color: var(--muted); text-align: center;
+    margin-top: 0.6rem; font-style: italic; }
   svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
   svg text { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; fill: var(--fg); }
   svg .label { font-family: -apple-system, system-ui, sans-serif; font-size: 12px; }
   svg .small { font-size: 10px; fill: var(--muted); }
-
-  .legend {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 1rem;
-    justify-content: center;
-    margin-top: 0.8rem;
-    font-size: 0.85rem;
-  }
-  .legend-item { display: flex; align-items: center; gap: 0.4rem; }
-  .legend-swatch {
-    width: 14px;
-    height: 14px;
-    border-radius: 3px;
-    border: 1px solid rgba(0,0,0,0.15);
-  }
-
-  .tag {
-    display: inline-block;
-    padding: 0.1em 0.55em;
-    border-radius: 3px;
-    font-size: 0.78em;
-    font-weight: 600;
-    font-family: "SF Mono", Menlo, monospace;
-    color: white;
-    vertical-align: middle;
-  }
-  .tag.pub  { background: var(--pub); }
-  .tag.priv { background: var(--priv); }
-  .tag.pkg  { background: var(--pkg); }
-  .tag.core { background: var(--core); }
-  .tag.warn { background: var(--warn); }
-
-  .callout {
-    border-left: 4px solid var(--accent);
-    background: #f0f4fa;
-    padding: 0.8rem 1rem;
-    margin: 1.2rem 0;
-    border-radius: 0 6px 6px 0;
-  }
+  .callout { border-left: 4px solid var(--accent); background: #f0f4fa;
+    padding: 0.8rem 1rem; margin: 1.2rem 0; border-radius: 0 6px 6px 0; }
   .callout.warn { border-color: var(--warn); background: #fbf3ec; }
   .callout.good { border-color: var(--accent-2); background: #eef6f1; }
   .callout strong { display: block; margin-bottom: 0.3rem; }
-
-  .two-col {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 1rem;
-    margin: 1.2rem 0;
-  }
-  @media (max-width: 720px) {
-    .two-col { grid-template-columns: 1fr; }
-  }
-
-  .file-tree {
-    font-family: "SF Mono", Menlo, monospace;
-    font-size: 0.88rem;
-    line-height: 1.55;
-    background: var(--code-bg);
-    padding: 1rem 1.2rem;
-    border-radius: 6px;
-    border: 1px solid var(--border);
-    white-space: pre;
-    overflow-x: auto;
-  }
-  .file-tree .pub  { color: var(--pub); font-weight: 600; }
-  .file-tree .priv { color: var(--priv); }
-  .file-tree .note { color: var(--muted); font-style: italic; }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 1.2rem 0; }
+  @media (max-width: 720px) { .two-col { grid-template-columns: 1fr; } }
+  .three-col { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; margin: 1.2rem 0; }
+  @media (max-width: 720px) { .three-col { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
 
 <h1>19. Foreign Function Interface</h1>
+<p class="lead">
+  Cross the C ABI boundary. Three concerns kept separate — <strong>layout</strong> via
+  <code>extern struct</code>, <strong>ABI</strong> via <code>extern function</code>,
+  <strong>allocation</strong> via <code>Foreign.alloc</code>.
+</p>
 
-<p>The FFI crosses the C ABI boundary. It separates three concerns:</p>
+<div class="toc">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#heaps">Two heaps recap</a></li>
+    <li><a href="#ptr">Pointers</a></li>
+    <li><a href="#extern">Extern structs &amp; layout decorators</a></li>
+    <li><a href="#opaque">Opaque foreign types · extern var · arrays · widths</a></li>
+    <li><a href="#alloc">Foreign allocation</a></li>
+    <li><a href="#strings">Strings — <code>CStr</code> / <code>CString</code> / <code>Buffer</code></a></li>
+    <li><a href="#fn">Extern functions &amp; decorators</a></li>
+    <li><a href="#cb">Function pointers and callbacks</a></li>
+    <li><a href="#patterns">C patterns without new syntax</a></li>
+    <li><a href="#pin">Pinning</a></li>
+    <li><a href="#runtime">Runtime semantics</a></li>
+    <li><a href="#manifest">Linkage &amp; the manifest</a></li>
+    <li><a href="#tools">Tooling — <code>lang ffi</code></a></li>
+    <li><a href="#restr">Restrictions on extern signatures</a></li>
+    <li><a href="#summary">Summary</a></li>
+  </ol>
+</div>
 
-<ul>
-<li><strong>Layout</strong> — how a type is arranged in memory. Controlled by <code>extern struct</code> plus optional layout decorators.</li>
-<li><strong>ABI</strong> — how a function is called. Controlled by <code>extern function</code> plus optional ABI decorators.</li>
-<li><strong>Allocation</strong> — which heap a value lives on. Controlled by <code>Foreign.alloc</code> (foreign heap) versus normal construction (managed heap or stack).</li>
-</ul>
+<!-- =========================================================== -->
+<h2 id="overview">The three concerns</h2>
 
-<p><code>extern struct</code> is the only structural-layout form; there is no separate <code>@Repr</code>. Any function can be marked <code>extern</code> to opt into the C ABI.</p>
+<div class="diagram">
+  <svg viewBox="0 0 920 220" role="img" aria-label="Three FFI concerns">
+    <g transform="translate(20, 30)">
+      <rect width="280" height="170" rx="8" fill="#eaf0f8" stroke="#1a4a8a" stroke-width="2"/>
+      <text x="140" y="22" text-anchor="middle" font-weight="700" fill="#1a4a8a">Layout</text>
+      <text x="140" y="40" text-anchor="middle" class="small">how a type sits in memory</text>
 
-<h2 id="19-1-the-two-heaps-recap">19.1 The two heaps (recap)</h2>
+      <g transform="translate(20, 60)" font-size="11">
+        <text y="0">extern struct Foo { ... }</text>
+        <text y="22">@Packed(N) · @Align(N)</text>
+        <text y="40">@Transparent · @Union</text>
+      </g>
 
-<ul>
-<li><strong>Managed heap</strong> — GC-traced. Holds normal structs, lists, maps, strings, closures.</li>
-<li><strong>Foreign heap</strong> — allocated by extern code (<code>malloc</code>, <code>mmap</code>, library allocators) or by <code>Foreign.alloc</code>. Opaque to the GC; manual lifetime.</li>
-</ul>
+      <text x="20" y="148" font-size="11" class="small">controls field offsets,</text>
+      <text x="20" y="164" font-size="11" class="small">alignment, GC header presence</text>
+    </g>
 
-<p><code>*T</code> is a raw pointer into either region — the GC inspects the address range at runtime to decide whether to trace it. <code>extern struct</code> types <strong>have no GC header</strong> and can live on either heap (or on the stack).</p>
+    <g transform="translate(320, 30)">
+      <rect width="280" height="170" rx="8" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
+      <text x="140" y="22" text-anchor="middle" font-weight="700" fill="#2a6f4d">ABI</text>
+      <text x="140" y="40" text-anchor="middle" class="small">how a function is called</text>
 
-<p>See <a href="16-memory.html">16-memory.html</a>.</p>
+      <g transform="translate(20, 60)" font-size="11">
+        <text y="0">extern function f(args): R</text>
+        <text y="22">@CallConv("c"|"system"|...)</text>
+        <text y="40">@Variadic · @Reentrant · @OnPanic</text>
+      </g>
 
-<h2 id="19-2-pointers">19.2 Pointers</h2>
+      <text x="20" y="148" font-size="11" class="small">controls calling convention,</text>
+      <text x="20" y="164" font-size="11" class="small">variadics, thread-safety</text>
+    </g>
 
-<h3>19.2.1 The pointer type <code>*T</code></h3>
+    <g transform="translate(620, 30)">
+      <rect width="280" height="170" rx="8" fill="#f3eefa" stroke="#6b4ba8" stroke-width="2"/>
+      <text x="140" y="22" text-anchor="middle" font-weight="700" fill="#6b4ba8">Allocation</text>
+      <text x="140" y="40" text-anchor="middle" class="small">which heap a value lives on</text>
 
-<p><code>*T</code> is a raw machine pointer. It is a single machine word with no length, alignment, or ownership tag.</p>
+      <g transform="translate(20, 60)" font-size="11">
+        <text y="0">Foreign.alloc&lt;T&gt;()</text>
+        <text y="22">Foreign.alloc_flex / realloc / free</text>
+        <text y="40">CString.from_str · Buffer.alloc</text>
+      </g>
 
-<ul>
-<li>A <code>*T</code> value is obtained from an extern function return, from <code>&expr</code> (§19.2.2), from <code>Foreign.alloc</code> (§19.8), or from pointer reinterpretation via <code>as</code> (§19.2.5).</li>
-<li>Holding a <code>*T</code> is the language's marker that you have stepped outside the normal safety guarantees. There is no separate <code>unsafe</code> block; the presence of <code>*T</code> is itself the marker.</li>
-<li>The compiler does not insert pin/unpin around pointer values; managing managed-heap lifetimes through a <code>*T</code> is the user's responsibility (§19.15).</li>
-</ul>
+      <text x="20" y="148" font-size="11" class="small">foreign heap · fallible</text>
+      <text x="20" y="164" font-size="11" class="small">vs managed heap (16-memory)</text>
+    </g>
+  </svg>
+  <div class="diagram-caption">Each concern has its own opt-in syntax — no global <code>unsafe</code> block.</div>
+</div>
 
-<h3>19.2.2 <code>&expr</code> — address-of</h3>
+<!-- =========================================================== -->
+<h2 id="heaps">1. Two heaps recap</h2>
 
-<p><code>&expr</code> produces a <code>*T</code> from a place-expression of type <code>T</code>.</p>
+<div class="callout">
+  <strong>Managed vs foreign</strong>
+  Managed heap: GC-traced. Holds normal structs, lists, maps, strings, closures.
+  Foreign heap: opaque to the GC; manual lifetime. <code>*T</code> is a raw pointer into either
+  region; the GC inspects the address range at runtime to decide whether to trace.
+  See <a href="16-memory.html">16-memory</a>.
+</div>
+
+<!-- =========================================================== -->
+<h2 id="ptr">2. Pointers</h2>
+
+<div class="diagram">
+  <svg viewBox="0 0 920 320" role="img" aria-label="Pointer operations">
+    <g transform="translate(20, 20)">
+      <rect width="280" height="290" rx="8" fill="#fafafa" stroke="#d6d3cd"/>
+      <text x="14" y="22" font-weight="700">The <tspan font-family="SF Mono, Menlo, monospace">*T</tspan> type</text>
+      <text x="14" y="44" font-size="11">Raw machine pointer.</text>
+      <text x="14" y="62" font-size="11">Single word. No length, no</text>
+      <text x="14" y="80" font-size="11">alignment, no ownership tag.</text>
+
+      <text x="14" y="120" font-size="11" font-weight="700">Sources of a *T</text>
+      <text x="14" y="138" font-size="11">— extern function return</text>
+      <text x="14" y="156" font-size="11">— &amp;expr (auto-pin)</text>
+      <text x="14" y="174" font-size="11">— Foreign.alloc</text>
+      <text x="14" y="192" font-size="11">— pointer reinterp via <tspan font-family="SF Mono, Menlo, monospace">as</tspan></text>
+
+      <text x="14" y="232" font-size="11" font-weight="700">Marker for "unsafe"</text>
+      <text x="14" y="250" font-size="11">No separate unsafe block;</text>
+      <text x="14" y="268" font-size="11">the presence of *T is the marker.</text>
+    </g>
+
+    <g transform="translate(320, 20)">
+      <rect width="280" height="290" rx="8" fill="#eaf0f8" stroke="#1a4a8a" stroke-width="2"/>
+      <text x="14" y="22" font-weight="700" fill="#1a4a8a">&amp;expr — address-of</text>
+
+      <text x="14" y="50" font-size="11">Place-expression → *T.</text>
+      <text x="14" y="68" font-size="11">Auto-pins managed objects</text>
+      <text x="14" y="86" font-size="11">for the duration of the call.</text>
+
+      <text x="14" y="120" font-size="11" font-weight="700">Restrictions</text>
+      <text x="14" y="138" font-size="11">— temporaries: ✗</text>
+      <text x="14" y="156" font-size="11">— stored beyond call: ✗</text>
+      <text x="14" y="174" font-size="11">— extern stack values: no pin needed</text>
+
+      <text x="14" y="216" font-size="11" font-weight="700">*ptr — dereference</text>
+      <text x="14" y="234" font-size="11">(*ptr).field reads/writes</text>
+      <text x="14" y="252" font-size="11">— *T | null with null → panic</text>
+      <text x="14" y="270" font-size="11">— unpinned managed → UB</text>
+    </g>
+
+    <g transform="translate(620, 20)">
+      <rect width="280" height="290" rx="8" fill="#f3eefa" stroke="#6b4ba8" stroke-width="2"/>
+      <text x="14" y="22" font-weight="700" fill="#6b4ba8">*T | null + NPO</text>
+
+      <text x="14" y="50" font-size="11">Laid out as a single raw</text>
+      <text x="14" y="68" font-size="11">pointer; null = 0x0.</text>
+
+      <rect x="14" y="84" width="252" height="40" rx="4" fill="#fff" stroke="#6b4ba8"/>
+      <text x="140" y="100" text-anchor="middle" font-size="11">malloc(): *c_void | null</text>
+      <text x="140" y="116" text-anchor="middle" font-size="11">find_user(): *User | null</text>
+
+      <text x="14" y="146" font-size="11">Applies to:</text>
+      <text x="14" y="164" font-size="11">— *T for any T</text>
+      <text x="14" y="182" font-size="11">— extern (...)-&gt;R fn pointers</text>
+      <text x="14" y="200" font-size="11">— extern type T handles as *T</text>
+      <text x="14" y="218" font-size="11">— @Transparent newtypes around those</text>
+
+      <text x="14" y="252" font-size="11" font-weight="700">as between pointer types</text>
+      <text x="14" y="270" font-size="11">no-op at runtime — user vouches.</text>
+    </g>
+  </svg>
+  <div class="diagram-caption">Three pointer surfaces. <code>&amp;</code> is the only implicit pin in the language.</div>
+</div>
 
 <pre><code>extern function getrusage(who: i32, out: *Rusage): i32
 
 function snapshot(): Rusage | i32 {
-  var ru = Rusage {
-    ru_utime: Timeval { tv_sec: 0i64, tv_usec: 0i64 },
-    ru_stime: Timeval { tv_sec: 0i64, tv_usec: 0i64 },
-  }
-  var rc = getrusage(0i32, &ru)
+  var ru = Rusage { ru_utime: Timeval { ... }, ru_stime: Timeval { ... } }
+  var rc = getrusage(0i32, &amp;ru)        // & auto-pins ru for the call
   if rc != 0i32 { return rc }
   ru
-}
-</code></pre>
+}</code></pre>
 
-<p>Rules:</p>
+<!-- =========================================================== -->
+<h2 id="extern">3. Extern structs &amp; layout decorators</h2>
 
-<ul>
-<li>The operand must be a place-expression (a local, a struct field, or an array element). Taking <code>&</code> of a temporary is a compile error.</li>
-<li>The resulting pointer is valid only for the enclosing extern call site. Storing it in a longer-lived location (return value, struct field, captured closure, channel send) is a compile error.</li>
-<li>If the operand lives on the managed heap, <code>&</code> auto-pins for the duration of the call and auto-unpins on return. This is the <strong>only</strong> implicit pin in the language.</li>
-<li>If the operand is an <code>extern struct</code> on the stack, no pin is needed.</li>
-</ul>
+<pre><code>extern struct Buffer { pub data: *u8, pub size: u64 }
+extern struct Timeval { pub tv_sec: i64, pub tv_usec: i64 }</code></pre>
 
-<h3>19.2.3 <code>*ptr</code> — dereference</h3>
+<p>Consequences: no GC header; can't be a generic argument to managed collections;
+all field types must be extern-compatible; may live on the foreign heap, on the stack,
+or as a by-value parameter/return.</p>
 
-<p><code>*ptr</code> is a prefix operator that dereferences a pointer. Combined with field access, <code>(*ptr).field</code> reads or writes through the pointer.</p>
+<h3>Layout decorators</h3>
 
-<pre><code>var p: *Counter = ...
-var n = (*p).value
-(*p).value = (*p).value + 1
-</code></pre>
+<div class="diagram">
+  <svg viewBox="0 0 920 260" role="img" aria-label="Layout decorators">
+    <g transform="translate(20, 30)">
+      <rect width="430" height="100" rx="8" fill="#eaf0f8" stroke="#1a4a8a" stroke-width="2"/>
+      <text x="14" y="22" font-weight="700" fill="#1a4a8a">@Packed(N)</text>
+      <text x="14" y="42" font-size="11">fields not aligned beyond N bytes</text>
+      <text x="14" y="60" font-size="11" class="small">@Packed alone = 1</text>
+      <text x="14" y="84" font-size="11">extern struct DiskHeader { magic: u32, version: u16, flags: u8 }</text>
+    </g>
 
-<ul>
-<li>Dereferencing a <code>*T | null</code> whose value is <code>null</code> panics with the message <code>null pointer dereference</code>.</li>
-<li>Dereferencing a pointer to a managed-heap object that is not currently pinned is undefined behavior.</li>
-<li>Dereferencing a wrongly-typed pointer is undefined behavior.</li>
-</ul>
+    <g transform="translate(470, 30)">
+      <rect width="430" height="100" rx="8" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
+      <text x="14" y="22" font-weight="700" fill="#2a6f4d">@Align(N)</text>
+      <text x="14" y="42" font-size="11">minimum alignment N on the struct</text>
+      <text x="14" y="60" font-size="11" class="small">cache-line padding etc.</text>
+      <text x="14" y="84" font-size="11">@Align(64)  extern struct CacheLine { bytes: [u8; 64] }</text>
+    </g>
 
-<h3>19.2.4 <code>*T | null</code> and null-pointer optimization</h3>
+    <g transform="translate(20, 150)">
+      <rect width="430" height="100" rx="8" fill="#f3eefa" stroke="#6b4ba8" stroke-width="2"/>
+      <text x="14" y="22" font-weight="700" fill="#6b4ba8">@Transparent</text>
+      <text x="14" y="42" font-size="11">tuple struct with exactly one non-zero field</text>
+      <text x="14" y="60" font-size="11" class="small">wrapper ABI = inner ABI; preserves NPO</text>
+      <text x="14" y="84" font-size="11">@Transparent  struct Handle(i32)</text>
+    </g>
 
-<p>The union <code>*T | null</code> is laid out as a single raw pointer where <code>null</code> is the bit pattern <code>0x0</code>. This is a <strong>general rule</strong>: any union <code>null | P</code> where <code>P</code>'s representation cannot legitimately be all-zero qualifies for null-pointer optimization (NPO).</p>
+    <g transform="translate(470, 150)">
+      <rect width="430" height="100" rx="8" fill="#fbf3ec" stroke="#b54708" stroke-width="2"/>
+      <text x="14" y="22" font-weight="700" fill="#b54708">@Union</text>
+      <text x="14" y="42" font-size="11">all fields share offset 0; size = max field</text>
+      <text x="14" y="60" font-size="11" class="small">reads return whatever bits are there; user tracks which is active</text>
+      <text x="14" y="84" font-size="11">@Union  extern struct FloatBits { f: f32, i: u32 }</text>
+    </g>
+  </svg>
+  <div class="diagram-caption">Four compiler-blessed proc-macros, registered like <code>@Derive</code>. Placement: above the item, before <code>pub</code>.</div>
+</div>
 
-<p>NPO applies to:</p>
+<div class="callout">
+  <strong><code>ReprC</code> auto-impl</strong>
+  Auto-implemented for every <code>extern struct</code>, every numeric primitive, every pointer
+  type, and every <code>@Transparent</code> wrapper. It's the constraint used by generic FFI helpers
+  like <code>Foreign.alloc&lt;T: ReprC&gt;()</code>.
+</div>
 
-<ul>
-<li><code>*T</code> for any <code>T</code>.</li>
-<li>Extern function pointer types (<code>extern (...) -&gt; R</code>).</li>
-<li><code>extern type T</code> opaque handles passed as <code>*T</code>.</li>
-<li><code>@Transparent</code> newtypes wrapping any of the above.</li>
-</ul>
-
-<pre><code>extern function malloc(size: c_size_t): *c_void | null
-extern function find_user(id: u32): *User | null
-</code></pre>
-
-<p>If a return is declared as <code>*T</code> (non-nullable) but the foreign code returns <code>0x0</code> at runtime, dereferencing panics. Use <code>*T | null</code> for any pointer that can be null.</p>
-
-<h3>19.2.5 <code>as</code> between pointer types</h3>
-
-<p><code>as</code> already covers union narrowing, primitive conversion, and interface widening/narrowing (see <a href="12-type-logic.html">12-type-logic.html</a>). This chapter extends it to <strong>pointer-to-pointer reinterpretation</strong>:</p>
-
-<pre><code>var p: *c_void = ...
-var q: *MyStruct = p as *MyStruct
-</code></pre>
-
-<p>Both source and destination must be pointer types. The cast is a no-op at runtime; the user vouches for the layout. No other <code>as</code> behavior changes.</p>
-
-<h2 id="19-3-extern-structs-and-layout-decorators">19.3 Extern structs and layout decorators</h2>
-
-<p><code>extern struct</code> declares a C-layout struct: fields in declared order, native alignment, no GC header.</p>
-
-<pre><code>extern struct Buffer {
-  pub data: *u8,
-  pub size: u64,
-}
-
-extern struct Timeval {
-  pub tv_sec:  i64,
-  pub tv_usec: i64,
-}
-</code></pre>
-
-<p>Consequences (unchanged from the prior spec):</p>
-
-<ul>
-<li>No GC header. Cannot implement interfaces that require dynamic dispatch (an <code>extend X: SomeInterface</code> block is fine; using <code>X</code> as an interface object type is not).</li>
-<li>Cannot be a generic type argument to managed-heap collections (<code>List&lt;X&gt;</code>, <code>Map&lt;K, X&gt;</code>).</li>
-<li>All field types must themselves be extern-compatible.</li>
-<li>May live on the foreign heap (<code>Foreign.alloc</code>), on the stack (a local), or as a by-value parameter or return.</li>
-</ul>
-
-<p>Field visibility follows the same <code>pub</code>/private rules as regular structs (see <a href="04-structs.html">04-structs.html</a>).</p>
-
-<h3>19.3.1 Layout decorators</h3>
-
-<p>Four blessed proc-macros (registered the same way <code>@Derive</code> is in <a href="22-macros.html">22-macros.md §22.11</a>) modify the layout of an <code>extern struct</code>:</p>
-
-<pre><code>@Packed(1)
-extern struct DiskHeader {
-  pub magic:   u32,
-  pub version: u16,
-  pub flags:   u8,
-}
-
-@Align(64)
-extern struct CacheLine {
-  pub bytes: [u8; 64],
-}
-
-@Transparent
-struct Handle(i32)
-
-@Union
-extern struct FloatBits {
-  pub f: f32,
-  pub i: u32,
-}
-</code></pre>
-
-<table>
-<thead><tr><th>Decorator</th><th>Applies to</th><th>Effect</th></tr></thead>
-<tbody>
-<tr><td><code>@Packed(N)</code></td><td><code>extern struct</code></td><td>Fields not aligned beyond <code>N</code> bytes. <code>@Packed</code> alone means packing 1.</td></tr>
-<tr><td><code>@Align(N)</code></td><td><code>extern struct</code></td><td>Minimum alignment <code>N</code> on the struct.</td></tr>
-<tr><td><code>@Transparent</code></td><td>tuple struct with exactly one non-zero-sized field</td><td>Wrapper has the same ABI as the inner type, including NPO. Applies to both regular and extern structs.</td></tr>
-<tr><td><code>@Union</code></td><td><code>extern struct</code></td><td>All fields share offset 0; size is the max field size; reads return whatever bits are there. The user tracks which field is "active."</td></tr>
-</tbody>
-</table>
-
-<p>Decorator placement follows <a href="22-macros.html">22-macros.md §22.2</a>: above the item, before any <code>pub</code>.</p>
-
-<h3>19.3.2 <code>ReprC</code></h3>
-
-<p><code>ReprC</code> is a marker interface in <code>core:ffi</code>. It is auto-implemented for every <code>extern struct</code> type, every numeric primitive, every pointer type, and every <code>@Transparent</code> wrapper around such a type. It is the constraint used by generic FFI helpers that need a known-layout type — most notably <code>Foreign.alloc&lt;T: ReprC&gt;()</code>.</p>
-
-<h2 id="19-4-opaque-foreign-types--extern-type">19.4 Opaque foreign types — <code>extern type</code></h2>
+<!-- =========================================================== -->
+<h2 id="opaque">4. Opaque types, globals, arrays, widths</h2>
 
 <pre><code>extern type Sqlite3
 extern type Sqlite3Stmt
 
 extern function sqlite3_open(path: *u8, db: **Sqlite3): i32
-extern function sqlite3_prepare_v2(
-  db: *Sqlite3, sql: *u8, n: i32, stmt: **Sqlite3Stmt, tail: **u8,
-): i32
-</code></pre>
-
-<p><code>extern type T</code> declares a foreign-only nominal type with unknown size and alignment. Values of type <code>T</code> cannot be constructed, copied, or destructured in this language; only <code>*T</code> and <code>*T | null</code> are usable forms. Matches the <code>FILE*</code>, <code>sqlite3*</code> idiom in C.</p>
-
-<h2 id="19-5-foreign-globals--extern-var">19.5 Foreign globals — <code>extern var</code></h2>
-
-<pre><code>@Link(lib = "c")
-extern var errno: i32
 
 @Link(lib = "c")
-extern var environ: **u8
-</code></pre>
+extern var errno: i32
 
-<p><code>extern var name: T</code> declares a foreign global. Reads and writes are direct. The compiler emits the platform-appropriate load (TLS on thread-local symbols).</p>
-
-<p>There is no new <code>const</code> keyword: a constant from a C header is emitted by <code>bindgen</code> as a module-level <code>pub var</code>, whose initializer is a compile-time constant per <a href="17-modules.html#176-no-top-level-runtime">17-modules.md §17.6</a>.</p>
-
-<pre><code>pub var PATH_MAX: usize = 4096usize
-pub var O_RDONLY: i32   = 0i32
-pub var O_WRONLY: i32   = 1i32
-</code></pre>
-
-<h2 id="19-6-fixed-size-arrays--t-n">19.6 Fixed-size arrays — <code>[T; N]</code></h2>
-
-<p><code>[T; N]</code> is a fixed-size array type with <code>N</code> resolved at compile time. <strong>Its scope is narrow</strong>: it is allowed only as an <code>extern struct</code> field type and as an extern function parameter or return type (typically via <code>*[T; N]</code>).</p>
-
-<pre><code>extern struct InAddr {
-  pub bytes: [u8; 4],
-}
-
-extern struct Sockaddr {
-  pub family: u16,
-  pub data:   [u8; 14],
-}
-
+// Fixed-size arrays — only in extern positions
+extern struct Sockaddr { pub family: u16, pub data: [u8; 14] }
 extern function read_into(buf: *[u8; 256], n: usize): isize
-</code></pre>
 
-<p>This is the minimum addition needed for <code>extern struct</code>s to mirror C structs; no general-purpose array type or const-generics is introduced into the language.</p>
-
-<h2 id="19-7-c-width-aliases--coreffi">19.7 C-width aliases — <code>core:ffi</code></h2>
-
-<p>C's <code>int</code>, <code>long</code>, <code>char</code> are platform-dependent. The C-width aliases live in <code>core:ffi</code>:</p>
-
-<pre><code>import {
+// C-width aliases — core:ffi
+import {
   c_int, c_uint, c_long, c_ulong, c_longlong, c_ulonglong,
   c_short, c_ushort, c_char, c_schar, c_uchar,
-  c_float, c_double,
-  c_size_t, c_ptrdiff_t, c_intptr_t, c_uintptr_t,
+  c_float, c_double, c_size_t, c_ptrdiff_t,
+  c_intptr_t, c_uintptr_t,
   c_void, c_va_list,
-} from "core:ffi"
-</code></pre>
+} from "core:ffi"</code></pre>
 
-<ul>
-<li>Numeric aliases lower to the appropriate fixed-width type for the target ABI.</li>
-<li><code>c_void</code> is declared as <code>extern type c_void</code>; only <code>*c_void</code> is a valid value form. Replaces <code>*u8</code>-for-everything as the "type-erased pointer."</li>
-<li><code>c_va_list</code> is declared as <code>extern type c_va_list</code>; used to wrap C variadic functions through the va_list interface.</li>
-</ul>
+<div class="callout warn">
+  <strong>Scope of <code>[T; N]</code> is narrow</strong>
+  Fixed-size arrays are allowed <em>only</em> as <code>extern struct</code> field types and as
+  extern function parameter/return types (typically via <code>*[T; N]</code>). No general-purpose
+  arrays in non-extern code.
+</div>
 
-<p><code>core:ffi</code> is part of <code>core:</code> (no OS dependency); freestanding targets get it without an OS.</p>
-
-<h2 id="19-8-foreign-allocation--foreign">19.8 Foreign allocation — <code>Foreign</code></h2>
-
-<p><code>Foreign</code> is a namespace struct in <code>core:ffi</code> whose static methods are the foreign-heap allocator API:</p>
+<!-- =========================================================== -->
+<h2 id="alloc">5. Foreign allocation — <code>Foreign</code></h2>
 
 <pre><code>pub struct Foreign;
 
@@ -440,16 +323,15 @@ extend Foreign {
   function alloc_flex&lt;T: ReprC, E: ReprC&gt;(extra_count: usize): *T | null
   function realloc&lt;T: ReprC&gt;(p: *T, new_size: usize):          *T | null
   function free&lt;T: ReprC&gt;(p: *T)
-}
-</code></pre>
+}</code></pre>
 
-<p>All methods are static (no <code>self</code> parameter, per <a href="10-interfaces.html#101-interface-declaration">10-interfaces.md §10.1</a>). All allocating methods return <code>null</code> on failure — foreign allocation is fallible, unlike managed allocation (see <a href="16-memory.html#169-allocation-failure">16-memory.md §16.9</a>).</p>
+<div class="callout warn">
+  <strong>Foreign allocation is fallible</strong>
+  Returns <code>null</code> on OOM — unlike managed allocation, which panics
+  (see <a href="16-memory.html#oom">16-memory §9</a>).
+</div>
 
-<p><code>Buffer.alloc(size)</code> is reimplemented on top of <code>Foreign.alloc</code>; existing code that uses <code>Buffer.alloc</code> does not change.</p>
-
-<h3>19.8.1 Flexible array members</h3>
-
-<p>The C idiom <code>struct foo { int n; char data[]; }</code> is expressed by giving the trailing field a regular pointer type and using <code>Foreign.alloc_flex</code> for a single allocation:</p>
+<h3>Flexible array members</h3>
 
 <pre><code>extern struct Message {
   pub kind:   u32,
@@ -460,115 +342,72 @@ extend Foreign {
 function make_message(kind: u32, payload: Buffer): *Message | null {
   var p = Foreign.alloc_flex&lt;Message, u8&gt;(payload.size as usize)
   if p is null { return null }
-  // initialize header fields and copy payload bytes after the header
   ...
   p
-}
-</code></pre>
+}</code></pre>
 
-<p>No field-level decorator and no new field marker.</p>
+<!-- =========================================================== -->
+<h2 id="strings">6. Strings — <code>CStr</code> / <code>CString</code> / <code>Buffer</code></h2>
 
-<h3>19.8.2 Bitfields</h3>
+<p><code>str</code> is <strong>not</strong> ABI-compatible with C strings (managed-heap UTF-8 with a length header, not NUL-terminated). <code>core:ffi</code> ships boundary types.</p>
 
-<p>C bitfields are not supported directly. Treat the underlying integer as a regular field and mask/shift in user code:</p>
-
-<pre><code>extern struct Flags {
-  pub raw: u32,
-}
-
-extend Flags {
-  function kind(self):   u32  { self.raw & 0x07u32 }
-  function dirty(self):  bool { (self.raw & 0x08u32) != 0u32 }
-  function serial(self): u32  { self.raw &gt;&gt; 4 }
-}
-</code></pre>
-
-<p>If a C library forces bitfield interop, <code>bindgen</code> (§19.18) emits accessor methods like the above and notes that the underlying layout is platform-dependent.</p>
-
-<h2 id="19-9-strings--cstr-cstring-buffer">19.9 Strings — <code>CStr</code>, <code>CString</code>, <code>Buffer</code></h2>
-
-<p><code>str</code> is <strong>not</strong> ABI-compatible with C strings (it is a managed-heap UTF-8 buffer with a length header, not NUL-terminated). <code>core:ffi</code> ships the boundary types.</p>
-
-<h3>19.9.1 <code>CStr</code> — borrowed NUL-terminated pointer</h3>
-
-<pre><code>extern struct CStr {
+<div class="three-col">
+  <div>
+    <h3>CStr — borrowed</h3>
+    <pre><code>extern struct CStr {
   pub ptr: *u8,
-}
-</code></pre>
-
-<p>A borrowed view of a NUL-terminated UTF-8 byte sequence. Lifetime is unspecified; the caller is responsible for keeping the underlying buffer alive.</p>
-
-<table>
-<thead><tr><th>Method</th><th>Returns</th><th>Notes</th></tr></thead>
-<tbody>
-<tr><td><code>CStr.from_ptr(p: *u8)</code></td><td><code>CStr</code></td><td>Wraps a raw pointer; no copy, no validation.</td></tr>
-<tr><td><code>CStr.byte_len(self)</code></td><td><code>usize</code></td><td>Walks to the NUL terminator.</td></tr>
-<tr><td><code>CStr.to_str(self)</code></td><td><code>str | InvalidUtf8</code></td><td>Copies into the managed heap and validates UTF-8.</td></tr>
-</tbody>
-</table>
-
-<h3>19.9.2 <code>CString</code> — owned NUL-terminated buffer</h3>
-
-<pre><code>pub struct CString { ... }
-</code></pre>
-
-<table>
-<thead><tr><th>Method</th><th>Returns</th><th>Notes</th></tr></thead>
-<tbody>
-<tr><td><code>CString.from_str(s: str)</code></td><td><code>CString | null</code></td><td>Foreign-heap copy with appended NUL. <code>null</code> if <code>s</code> contains an interior NUL or allocation fails.</td></tr>
-<tr><td><code>CString.as_cstr(self)</code></td><td><code>CStr</code></td><td>Borrow.</td></tr>
-<tr><td><code>CString.free(self)</code></td><td><code>null</code></td><td>Releases the foreign-heap buffer. Also runs on <code>Drop</code>.</td></tr>
-</tbody>
-</table>
-
-<p><code>CString</code> implements <code>Drop</code>, so a value going out of scope frees the underlying buffer automatically.</p>
-
-<h3>19.9.3 <code>Buffer</code> — <code>(ptr, size)</code> pair</h3>
-
-<p><code>Buffer</code> (in <code>core:prelude</code>) covers the case where length matters separately from a NUL terminator:</p>
-
-<pre><code>extern struct Buffer {
+}</code></pre>
+    <p style="font-size:0.85rem">NUL-terminated UTF-8 view. Caller keeps the buffer alive. <code>from_ptr</code>, <code>byte_len</code>, <code>to_str</code>.</p>
+  </div>
+  <div>
+    <h3>CString — owned</h3>
+    <pre><code>pub struct CString { ... }</code></pre>
+    <p style="font-size:0.85rem"><code>from_str(s)</code> → foreign-heap copy with NUL. Implements <code>Drop</code> — frees on scope exit.</p>
+  </div>
+  <div>
+    <h3>Buffer — ptr + size</h3>
+    <pre><code>extern struct Buffer {
   pub data: *u8,
   pub size: u64,
-}
-</code></pre>
+}</code></pre>
+    <p style="font-size:0.85rem">Length matters separately from NUL. See <a href="18-stdlib.html#buffer">18-stdlib §8</a>.</p>
+  </div>
+</div>
 
-<p>See <a href="18-stdlib.html#187-buffer-extern-struct">18-stdlib.md §18.7</a> for the full API. Both <code>CStr</code> and <code>Buffer</code> are <code>extern struct</code>s, so they pass to C by value with no shim.</p>
+<!-- =========================================================== -->
+<h2 id="fn">7. Extern functions &amp; decorators</h2>
 
-<h2 id="19-10-extern-functions">19.10 Extern functions</h2>
+<pre><code>// Import (no body)
+extern function malloc(size: c_size_t): *c_void | null
 
-<pre><code>extern function name(args): R          // import (no body)
-extern function name(args): R { ... }  // export (with body)
-</code></pre>
-
-<h3>19.10.1 Imports</h3>
-
-<pre><code>extern function malloc(size: c_size_t): *c_void | null
-extern function free(p: *c_void)
-extern function strlen(s: *u8): usize
-</code></pre>
-
-<p>The implementation is provided by foreign code linked at build time. Calling an imported extern function compiles to a C call. The compiler wraps the call in a thread-blocked transition (§19.16.1).</p>
-
-<h3>19.10.2 Exports</h3>
-
-<pre><code>extern function on_tick(d: *MyStruct) {
+// Export (with body) — emitted with C calling convention
+extern function on_tick(d: *MyStruct) {
   (*d).counter = (*d).counter + 1
-}
-</code></pre>
+}</code></pre>
 
-<p>The compiler emits the function with C calling convention so foreign code can call it. Exported extern functions are <strong>always top-level</strong> and <strong>cannot capture variables</strong> — a C function pointer has no environment slot. C callbacks conventionally pass user state through a <code>void*</code> parameter; in this language that role is filled by <code>*c_void</code> (or <code>*T</code>).</p>
+<div class="callout warn">
+  <strong>Exported externs are top-level and cannot capture</strong>
+  A C function pointer has no environment slot. For state, take a <code>*c_void</code> (or
+  <code>*T</code>) user-data parameter — the conventional C callback pattern.
+</div>
 
-<h2 id="19-11-function-decorators">19.11 Function decorators</h2>
+<h3>Six function decorators</h3>
 
-<p>Six decorators compose on top of <code>extern function</code>. Each is a compiler-blessed proc-macro; placement follows <a href="22-macros.html">22-macros.md §22.2</a> (above the item, before <code>pub</code>).</p>
+<table>
+  <thead><tr><th>Decorator</th><th>Applies to</th><th>Effect</th></tr></thead>
+  <tbody>
+    <tr><td><code>@Link(lib, kind, version?, path?)</code></td><td>imports</td><td>References a <code>[package.links]</code> entry. Absent → host process.</td></tr>
+    <tr><td><code>@Symbol("name")</code></td><td>imports, exports</td><td>Override symbol name.</td></tr>
+    <tr><td><code>@CallConv("c"|"system"|"stdcall"|"fastcall")</code></td><td>imports, exports</td><td>Default <code>"c"</code>.</td></tr>
+    <tr><td><code>@Variadic</code></td><td>imports</td><td>Additional args after fixed prefix; C default promotions apply.</td></tr>
+    <tr><td><code>@Reentrant("managed-only"|"any")</code></td><td>exports</td><td>Whether foreign threads may invoke.</td></tr>
+    <tr><td><code>@OnPanic("abort"|value)</code></td><td>exports</td><td>Behavior on panic in the body.</td></tr>
+  </tbody>
+</table>
 
 <pre><code>@Link(lib = "z", kind = "dynamic", version = "&gt;=1.2")
 @Symbol("inflateInit_")
 extern function zlib_inflate_init(strm: *ZStream, ver: *u8, sz: i32): i32
-
-@CallConv("system")
-extern function WinMain(hInst: *c_void, hPrev: *c_void, cmd: *u8, show: i32): i32
 
 @Variadic
 extern function printf(fmt: *u8): c_int
@@ -577,250 +416,184 @@ extern function printf(fmt: *u8): c_int
 @OnPanic("abort")
 extern function on_tick(data: *c_void) {
   ...
-}
-</code></pre>
+}</code></pre>
 
-<table>
-<thead><tr><th>Decorator</th><th>Applies to</th><th>Effect</th></tr></thead>
-<tbody>
-<tr><td><code>@Link(lib, kind, version?, path?)</code></td><td>imports</td><td>References a <code>[package.links]</code> entry by name. If absent, the symbol resolves from the host process.</td></tr>
-<tr><td><code>@Symbol("name")</code></td><td>imports, exports</td><td>Override the symbol name; default is the function name.</td></tr>
-<tr><td><code>@CallConv("c" | "system" | "stdcall" | "fastcall")</code></td><td>imports, exports</td><td>Calling convention. Default <code>"c"</code>.</td></tr>
-<tr><td><code>@Variadic</code></td><td>imports</td><td>Function takes additional arguments at call sites; C default argument promotions apply. See §19.12.</td></tr>
-<tr><td><code>@Reentrant("managed-only" | "any")</code></td><td>exports</td><td>Whether foreign threads may invoke this. See §19.16.2.</td></tr>
-<tr><td><code>@OnPanic("abort" | value)</code></td><td>exports</td><td>Behavior on panic in the body. See §19.16.3.</td></tr>
-</tbody>
-</table>
+<!-- =========================================================== -->
+<h2 id="cb">8. Function pointers and callbacks</h2>
 
-<h2 id="19-12-variadic-imports">19.12 Variadic imports</h2>
-
-<p><code>@Variadic</code> declares an import that takes additional unspecified arguments after the fixed prefix. There is no <code>...</code> token in the signature — the decorator alone carries the meaning. This is the one exception to "no variadics" (<a href="09-functions.html#911-no-variadics-no-default-arguments-no-named-arguments">09-functions.md §9.11</a>), and it exists only for FFI interop.</p>
-
-<pre><code>@Variadic
-extern function printf(fmt: *u8): c_int
-
-function example() {
-  var fmt = (CString.from_str("%d + %d = %d\n") as CString).as_cstr()
-  printf(fmt.ptr, 1i32, 2i32, 3i32)
-}
-</code></pre>
-
-<p>The compiler applies C default argument promotions to each variadic argument at the call site: <code>i8</code>/<code>i16</code> → <code>c_int</code>, <code>u8</code>/<code>u16</code> → <code>c_uint</code>, <code>f32</code> → <code>f64</code>. Other types pass unchanged.</p>
-
-<p>Defining a variadic body in this language is not supported. To wrap a C variadic, take a <code>*c_va_list</code> parameter and pass it to libc's <code>vprintf</code> family.</p>
-
-<h2 id="19-13-function-pointers-and-callbacks">19.13 Function pointers and callbacks</h2>
-
-<p>The extern function-type form <code>extern (T1, T2, ...) -&gt; R</code> is already part of the language (<a href="09-functions.html#93-function-type-syntax">09-functions.md §9.3</a>). Closures cannot be passed across the C ABI (they carry an environment a C function pointer has no slot for); only top-level <code>extern function</code> symbols are callable as <code>extern (...) -&gt; R</code> values.</p>
-
-<p>For callbacks with state, <code>core:ffi</code> provides a generic bundle:</p>
+<p><code>extern (T1, T2, ...) -&gt; R</code> is the function-pointer type form
+(see <a href="09-functions.html#ftype">09-functions §3</a>). Closures cannot cross the C ABI —
+only top-level <code>extern function</code> symbols are callable as <code>extern (...) -&gt; R</code>
+values.</p>
 
 <pre><code>extern struct Callback&lt;C, R&gt; {
   pub fn:   extern (*c_void, C) -&gt; R,
   pub data: *c_void,
-}
-</code></pre>
+}</code></pre>
 
-<p>Many C APIs accept <code>(callback, userdata)</code> as two separate parameters — pass them separately. <code>Callback&lt;C, R&gt;</code> is for the APIs that expect them bundled in a struct.</p>
+<!-- =========================================================== -->
+<h2 id="patterns">9. C patterns without new syntax</h2>
 
-<h2 id="19-14-c-patterns-expressed-without-new-syntax">19.14 C patterns expressed without new syntax</h2>
+<table>
+  <thead><tr><th>C idiom</th><th>This language</th></tr></thead>
+  <tbody>
+    <tr><td>C enum</td><td><code>type FileMode = i32</code> + module-level <code>pub var MODE_*</code></td></tr>
+    <tr><td>C union</td><td><code>@Union extern struct</code></td></tr>
+    <tr><td>Flexible array member</td><td><code>Foreign.alloc_flex&lt;T, E&gt;(n)</code></td></tr>
+    <tr><td>Bitfields</td><td>Plain integer field + accessor methods (mask/shift)</td></tr>
+    <tr><td>Opaque <code>FILE*</code> / <code>sqlite3*</code></td><td><code>extern type T</code>; use only as <code>*T</code></td></tr>
+  </tbody>
+</table>
 
-<h3>19.14.1 C enums</h3>
+<!-- =========================================================== -->
+<h2 id="pin">10. Pinning</h2>
 
-<p>A C enum is an integer with named constants. Express it as a type alias plus module-level <code>pub var</code> values:</p>
+<p>The GC may move or reclaim managed objects at any time. Whenever a <code>*T</code> pointing
+into the managed heap is handed to foreign code, the object must be <strong>pinned</strong>.</p>
 
-<pre><code>pub type FileMode = i32
+<div class="diagram">
+  <svg viewBox="0 0 920 290" role="img" aria-label="Three pinning APIs">
+    <g transform="translate(20, 30)">
+      <rect width="280" height="240" rx="8" fill="#eaf0f8" stroke="#1a4a8a" stroke-width="2"/>
+      <text x="140" y="22" text-anchor="middle" font-weight="700" fill="#1a4a8a">&amp;expr</text>
+      <text x="140" y="40" text-anchor="middle" class="small">auto-pin for single call</text>
 
-pub var MODE_READ:  FileMode = 0i32
-pub var MODE_WRITE: FileMode = 1i32
-pub var MODE_RW:    FileMode = 2i32
-</code></pre>
+      <g transform="translate(14, 60)" font-size="11">
+        <text y="0">var ru = Rusage { ... }</text>
+        <text y="18">getrusage(0i32, &amp;ru)</text>
+      </g>
 
-<p>If exhaustive matching matters, write a language-side discriminated union on top and translate at the boundary:</p>
+      <text x="14" y="120" font-size="11" class="small">— pinned for the call duration only</text>
+      <text x="14" y="138" font-size="11" class="small">— compiler enforces pointer can't leak</text>
+      <text x="14" y="156" font-size="11" class="small">— the ONLY implicit pin in the language</text>
 
-<pre><code>pub type ParsedMode = Read | Write | ReadWrite | UnknownMode
+      <text x="14" y="200" font-size="11" font-weight="700">When to use</text>
+      <text x="14" y="218" font-size="11">Output parameters, scalar handoff —</text>
+      <text x="14" y="234" font-size="11">the common case.</text>
+    </g>
 
-function parse_mode(m: FileMode): ParsedMode {
-  if m == MODE_READ       { Read }
-  else if m == MODE_WRITE { Write }
-  else if m == MODE_RW    { ReadWrite }
-  else                    { UnknownMode }
-}
-</code></pre>
+    <g transform="translate(320, 30)">
+      <rect width="280" height="240" rx="8" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
+      <text x="140" y="22" text-anchor="middle" font-weight="700" fill="#2a6f4d">with_pin</text>
+      <text x="140" y="40" text-anchor="middle" class="small">scoped pin across a closure body</text>
 
-<p><code>bindgen</code> (§19.18) emits this pattern automatically from a C <code>enum</code>.</p>
+      <g transform="translate(14, 60)" font-size="11">
+        <text y="0">with_pin(state, |ptr| {</text>
+        <text y="18">  call_native_op(ptr)</text>
+        <text y="36">})</text>
+      </g>
 
-<h3>19.14.2 C unions</h3>
+      <text x="14" y="138" font-size="11" class="small">— pin held for body's lifetime</text>
+      <text x="14" y="156" font-size="11" class="small">— unpins on every exit (incl. panic)</text>
 
-<p>Use <code>@Union extern struct</code> (§19.3.1).</p>
+      <text x="14" y="200" font-size="11" font-weight="700">When to use</text>
+      <text x="14" y="218" font-size="11">Passing managed state into a closure</text>
+      <text x="14" y="234" font-size="11">that does extra work.</text>
+    </g>
 
-<h3>19.14.3 Flexible array members</h3>
+    <g transform="translate(620, 30)">
+      <rect width="280" height="240" rx="8" fill="#f3eefa" stroke="#6b4ba8" stroke-width="2"/>
+      <text x="140" y="22" text-anchor="middle" font-weight="700" fill="#6b4ba8">Pin.acquire / PinHandle&lt;T&gt;</text>
+      <text x="140" y="40" text-anchor="middle" class="small">long-lived pin</text>
 
-<p>Use <code>Foreign.alloc_flex</code> (§19.8.1).</p>
+      <g transform="translate(14, 60)" font-size="11">
+        <text y="0">var h = Pin.acquire(state)</text>
+        <text y="18">register_cb(on_tick, h.ptr())</text>
+        <text y="36">// later:</text>
+        <text y="54">h.release()</text>
+      </g>
 
-<h3>19.14.4 Bitfields</h3>
+      <text x="14" y="138" font-size="11" class="small">— Drop releases if unused</text>
+      <text x="14" y="156" font-size="11" class="small">— debug build warns on leak</text>
 
-<p>Use mask/shift methods (§19.8.2).</p>
+      <text x="14" y="200" font-size="11" font-weight="700">When to use</text>
+      <text x="14" y="218" font-size="11">Callback registrations that outlive</text>
+      <text x="14" y="234" font-size="11">any single call.</text>
+    </g>
+  </svg>
+  <div class="diagram-caption">Pinning is refcounted per object — nesting composes correctly.</div>
+</div>
 
-<h2 id="19-15-pinning">19.15 Pinning</h2>
+<!-- =========================================================== -->
+<h2 id="runtime">11. Runtime semantics</h2>
 
-<p>The GC may move or reclaim managed objects at any time. Whenever a <code>*T</code> pointing into the managed heap is handed to foreign code, the object must be <strong>pinned</strong> so the GC neither moves nor collects it.</p>
+<div class="diagram">
+  <svg viewBox="0 0 920 240" role="img" aria-label="Safe points around imports">
+    <defs>
+      <marker id="arr" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+        <path d="M 0 0 L 9 3 L 0 6 z" fill="#5a5a60"/>
+      </marker>
+    </defs>
 
-<p>Three complementary APIs cover the cases.</p>
+    <g transform="translate(40, 30)">
+      <rect width="180" height="50" rx="6" fill="#eaf0f8" stroke="#1a4a8a"/>
+      <text x="90" y="32" text-anchor="middle" font-size="11">snapshot stack</text>
+      <text x="90" y="48" text-anchor="middle" class="small">declare blocked</text>
+    </g>
 
-<h3>19.15.1 <code>&expr</code> — auto-pin for a single call</h3>
+    <path d="M 220 55 L 270 55" stroke="#5a5a60" stroke-width="2" marker-end="url(#arr)"/>
 
-<p><code>&expr</code> (§19.2.2) pins automatically for the duration of the enclosing extern call. This is the most common pattern (output parameters, scalar handoff) and requires no extra API.</p>
+    <g transform="translate(270, 30)">
+      <rect width="240" height="50" rx="6" fill="#fbf3ec" stroke="#b54708"/>
+      <text x="120" y="32" text-anchor="middle" font-size="11">imported extern call</text>
+      <text x="120" y="48" text-anchor="middle" class="small">pinned values rooted</text>
+    </g>
 
-<h3>19.15.2 <code>with_pin</code> — scoped pin</h3>
+    <path d="M 510 55 L 560 55" stroke="#5a5a60" stroke-width="2" marker-end="url(#arr)"/>
 
-<p>For passing a managed value into a closure body that does extra work:</p>
+    <g transform="translate(560, 30)">
+      <rect width="200" height="50" rx="6" fill="#eef6f1" stroke="#2a6f4d"/>
+      <text x="100" y="32" text-anchor="middle" font-size="11">re-acquire mutator state</text>
+      <text x="100" y="48" text-anchor="middle" class="small">recheck roots if GC ran</text>
+    </g>
 
-<pre><code>import { with_pin } from "core:ffi"
+    <g transform="translate(40, 110)">
+      <rect width="840" height="40" rx="8" fill="#fafafa" stroke="#d6d3cd"/>
+      <text x="14" y="22" font-size="11" font-weight="700">JNI / Cgo / pinvoke model — compiler-emitted, not user-visible</text>
+      <text x="14" y="36" font-size="11" class="small">Long-running C calls do not stall the rest of the program.</text>
+    </g>
 
-with_pin(state, |ptr| {
-  call_native_op(ptr)
-})
-</code></pre>
+    <g transform="translate(40, 170)">
+      <rect width="430" height="60" rx="8" fill="#eaf0f8" stroke="#1a4a8a"/>
+      <text x="14" y="22" font-weight="700" fill="#1a4a8a">@Reentrant — foreign threads</text>
+      <text x="14" y="42" font-size="11">"managed-only" (default) · "any" auto-attach</text>
+    </g>
 
-<pre><code>pub function with_pin&lt;T, R&gt;(value: T, body: (*T) -&gt; R): R
-</code></pre>
+    <g transform="translate(490, 170)">
+      <rect width="390" height="60" rx="8" fill="#fbf3ec" stroke="#b54708"/>
+      <text x="14" y="22" font-weight="700" fill="#b54708">@OnPanic — export panic policy</text>
+      <text x="14" y="42" font-size="11">"abort" (default) · or a value to return</text>
+    </g>
+  </svg>
+  <div class="diagram-caption">Imports get a transparent safe-point wrapper; exports declare their threading and panic policy.</div>
+</div>
 
-<ul>
-<li>Pins <code>value</code> before invoking <code>body</code>.</li>
-<li>Unpins on every exit path, including panic-unwind.</li>
-<li>The pointer is valid only inside <code>body</code>; the compiler enforces this with the same rule that gates <code>&expr</code>.</li>
-</ul>
+<h3>Foreign threads calling exports</h3>
 
-<p>The closure is passed inside the call parentheses — there is no trailing-lambda syntax in the language (<a href="09-functions.html#95-closures--short-form">09-functions.md §9.5</a>).</p>
-
-<h3>19.15.3 <code>Pin.acquire</code> and <code>PinHandle&lt;T&gt;</code> — long-lived pin</h3>
-
-<p>For callback registrations that outlive any single call:</p>
-
-<pre><code>import { Pin, PinHandle } from "core:ffi"
-
-var handle = Pin.acquire(state)
-register_callback(on_tick, handle.ptr() as *c_void)
-// ... later ...
-unregister_callback(handle.ptr() as *c_void)
-handle.release()
-</code></pre>
-
-<pre><code>pub struct Pin;
-extend Pin {
-  function acquire&lt;T&gt;(value: T): PinHandle&lt;T&gt;
-}
-
-pub struct PinHandle&lt;T&gt; { ... }
-extend&lt;T&gt; PinHandle&lt;T&gt; {
-  function ptr(self):     *T
-  function release(self): null
-}
-extend&lt;T&gt; PinHandle&lt;T&gt;: Drop {
-  function drop(self) { /* releases the pin if not already released */ }
-}
-</code></pre>
-
-<p><code>PinHandle&lt;T&gt;</code> implements <code>Drop</code>. If <code>release()</code> is never called explicitly, the handle's <code>Drop</code> impl releases the pin and (in debug builds) emits a warning. The resource is owned by the handle — there is no manual <code>pin</code> / <code>unpin</code> user-facing API.</p>
-
-<h3>19.15.4 Pinning rules</h3>
-
-<ul>
-<li>Pinning is refcounted per object: nested <code>with_pin</code> calls or multiple <code>PinHandle</code>s on the same value compose correctly.</li>
-<li>Pinning a value that already lives on the foreign heap (an <code>extern struct</code> constructed via <code>Foreign.alloc</code>, or a stack-local <code>extern struct</code>) is a no-op — the value is already non-moving.</li>
-<li>The <code>&</code> auto-pin and <code>with_pin</code> borrows do not require explicit release; the compiler emits the unpin.</li>
-</ul>
-
-<h2 id="19-16-runtime-semantics">19.16 Runtime semantics</h2>
-
-<h3>19.16.1 Safe-points around imports</h3>
-
-<p>Every call to an imported extern function is compiled with a thread-blocked transition on either side:</p>
-
-<ul>
-<li>Before the call: the thread's stack is snapshotted; the thread declares itself blocked. Other threads can run GC without waiting for this thread to reach a safe-point.</li>
-<li>During the call: pinned values remain rooted. Nothing else on the calling thread's stack is reachable for tracing.</li>
-<li>After the call: the thread re-acquires its mutator state. If GC ran during the call, the thread re-checks its roots.</li>
-</ul>
-
-<p>This is the JNI / Cgo / .NET pinvoke model. It is not exposed at the source level; the compiler emits the transitions automatically. Long-running C calls do not stall the rest of the program.</p>
-
-<h3>19.16.2 Foreign threads calling exports</h3>
-
-<p>A thread the runtime did not spawn must <strong>attach</strong> before invoking an exported extern function. Two ways.</p>
-
-<h4>Manual</h4>
-
-<pre><code>import { attach_thread, detach_thread } from "core:ffi"
+<pre><code>// Manual attach/detach
+import { attach_thread, detach_thread } from "core:ffi"
 
 extern function on_tick(data: *c_void) {
   attach_thread()
   do_work(data)
   detach_thread()
 }
-</code></pre>
 
-<h4>Automatic via <code>@Reentrant("any")</code></h4>
-
-<pre><code>@Reentrant("any")
+// Or @Reentrant("any") — compiler emits attach/detach automatically
+@Reentrant("any")
 extern function on_tick(data: *c_void) {
   do_work(data)
-}
-</code></pre>
+}</code></pre>
 
-<table>
-<thead><tr><th><code>@Reentrant</code> value</th><th>Meaning</th></tr></thead>
-<tbody>
-<tr><td><code>"managed-only"</code> (default)</td><td>Only threads the runtime created may call this. Calling from an unattached thread panic-aborts in debug, is UB in release.</td></tr>
-<tr><td><code>"any"</code></td><td>Compiler emits attach/detach automatically. Safe to call from any thread; small per-call cost.</td></tr>
-</tbody>
-</table>
+<div class="callout warn">
+  <strong>Signal handlers</strong>
+  Running language code from a POSIX signal handler is UB unless the handler is on a currently-attached
+  thread and the body is <code>@Reentrant("any")</code> — and even then, the usual signal-safety rules
+  (no allocation, no locks) apply. Practical advice: <strong>don't</strong>.
+</div>
 
-<p>Attach behavior:</p>
-
-<ul>
-<li>Registers the thread with the runtime so the GC can scan its stack.</li>
-<li>Refcount operations on objects reachable from the thread become atomic (matches the cross-thread rule in <a href="16-memory.html#164-refcount-semantics">16-memory.md §16.4</a>).</li>
-<li>Detach removes the thread from the GC root set.</li>
-</ul>
-
-<p>There is no <code>defer</code>-style scope marker; users who want lexical cleanup either wrap with <code>@Reentrant("any")</code> (recommended) or pair the calls themselves.</p>
-
-<h3>19.16.3 Panics across the boundary</h3>
-
-<p>Exported extern functions never unwind through C frames. <code>@OnPanic</code> picks the policy:</p>
-
-<table>
-<thead><tr><th>Value</th><th>Meaning</th></tr></thead>
-<tbody>
-<tr><td><code>@OnPanic("abort")</code> (default)</td><td>Panic in body → process abort at the FFI boundary. Message goes to stderr.</td></tr>
-<tr><td><code>@OnPanic(value)</code></td><td>Panic in body → log the message; return <code>value</code> (must type-match the declared return type).</td></tr>
-</tbody>
-</table>
-
-<pre><code>@OnPanic(-1i32)
-extern function process_chunk(buf: *u8, n: usize): i32 {
-  if n &gt; MAX { panic("chunk too large") }
-  ...
-}
-</code></pre>
-
-<p>Imports have no in-language panic policy; if a C function aborts or longjmps, the platform's rules apply.</p>
-
-<h3>19.16.4 GC interaction with foreign memory</h3>
-
-<ul>
-<li>The GC ignores foreign-heap addresses (already in <a href="16-memory.html">16-memory.html</a>).</li>
-<li>Managed pointers inside an <code>extern struct</code> are <strong>not</strong> traced. The user keeps the target pinned for the struct's lifetime.</li>
-<li>The cycle collector assumes every mutator thread is at a safe-point or blocked. Threads inside an FFI call (auto-blocked per §19.16.1) do not stall collection.</li>
-</ul>
-
-<h3>19.16.5 Signal handlers</h3>
-
-<p>Running language code from a POSIX signal handler is undefined behavior unless the handler is on a thread that is currently attached and the body is <code>@Reentrant("any")</code> — and even then, the usual signal-safety rules (no allocation, no locks held by the interrupted thread) apply. Practical advice: don't.</p>
-
-<h2 id="19-17-linkage-and-the-manifest">19.17 Linkage and the manifest</h2>
+<!-- =========================================================== -->
+<h2 id="manifest">12. Linkage &amp; the manifest</h2>
 
 <pre><code>[package.links]
 zlib    = { lib = "z",      kind = "dynamic", version = "&gt;=1.2" }
@@ -832,193 +605,69 @@ bindings = [
   { header    = "vendor/zlib.h",
     output    = "src/bindings/zlib.lang",
     allowlist = ["inflate*", "deflate*"] },
-  { header = "vendor/mylib.h",
-    output = "src/bindings/mylib.lang" },
 ]
-
 exports = [
   { module = "lib", output = "target/include/mylib.h" },
-]
-</code></pre>
+]</code></pre>
 
-<p><code>@Link(lib = "name")</code> in source refers to a <code>[package.links]</code> entry. A function with only <code>@Symbol("...")</code> and no <code>@Link</code> resolves from the host process — useful for libc and platform symbols.</p>
+<!-- =========================================================== -->
+<h2 id="tools">13. Tooling — <code>lang ffi</code></h2>
 
-<p><code>lang build</code> runs <code>bindgen</code> automatically for any <code>[package.ffi.bindings]</code> entry whose header is newer than its output, and <code>cbindgen</code> for <code>[package.ffi.exports]</code>. See <a href="23-cli.html#2312-ffi-and-linking">23-cli.md §23.12</a>.</p>
+<table>
+  <thead><tr><th>Command</th><th>Purpose</th></tr></thead>
+  <tbody>
+    <tr><td><code>lang ffi bindgen &lt;header&gt;</code></td><td>Generate extern declarations from a C header (libclang).</td></tr>
+    <tr><td><code>lang ffi cbindgen</code></td><td>Emit a C header for <code>pub extern</code> items. Round-trips with bindgen.</td></tr>
+    <tr><td><code>lang ffi check</code></td><td>Verify extern signatures still match a named C header. CI gate.</td></tr>
+    <tr><td><code>lang ffi layout</code></td><td>Print size/alignment/field offsets for extern structs.</td></tr>
+  </tbody>
+</table>
 
-<h2 id="19-18-tooling--lang-ffi">19.18 Tooling — <code>lang ffi</code></h2>
+<!-- =========================================================== -->
+<h2 id="restr">14. Restrictions on extern signatures</h2>
 
-<pre><code>lang ffi bindgen &lt;header&gt;      Generate extern struct, extern type, extern function,
-                               extern var declarations, and pub var constants from a C
-                               header. Powered by libclang. Output is deterministic.
+<div class="two-col">
+  <div>
+    <h3 style="color:#2a6f4d;">✓ Allowed</h3>
+    <ul>
+      <li>Numeric primitives, <code>bool</code>, <code>char</code>, <code>isize</code>, <code>usize</code>.</li>
+      <li>C-width aliases (<code>c_int</code>, …).</li>
+      <li><code>*T</code> and <code>*T | null</code> (NPO).</li>
+      <li><code>extern struct</code> by value.</li>
+      <li><code>@Union extern struct</code> by value.</li>
+      <li><code>@Transparent</code> wrappers.</li>
+      <li><code>[T; N]</code>, typically via <code>*[T; N]</code>.</li>
+      <li><code>extern (...) -&gt; R</code> function pointers.</li>
+      <li><code>extern type T</code> via <code>*T</code>.</li>
+      <li>Generic <code>T</code> in pointer position only.</li>
+    </ul>
+  </div>
+  <div>
+    <h3 style="color:#b54708;">✗ Not allowed</h3>
+    <ul>
+      <li>Non-extern structs, <code>str</code>, <code>List</code>, <code>Map</code>, interface objects — by value.</li>
+      <li>Discriminated unions other than NPO-eligible <code>null | P</code> forms. Wrap in a pointer.</li>
+      <li>Closures (no environment slot). Use <code>extern (...) -&gt; R</code> or <code>Callback&lt;C, R&gt;</code>.</li>
+    </ul>
+  </div>
+</div>
 
-lang ffi cbindgen              Emit a C header declaring every pub extern function and
-                               pub extern struct in the given module. Round-trips with
-                               bindgen.
+<!-- =========================================================== -->
+<h2 id="summary">15. Summary</h2>
 
-lang ffi check                 Verify that this crate's extern signatures still match a
-                               named C header. CI gate.
-
-lang ffi layout                Print size, alignment, and field offsets for one or all
-                               extern struct types in the current crate, for a target.
-                               Debugging ABI mismatches.
-</code></pre>
-
-<p>See <a href="23-cli.html#2312-ffi-and-linking">23-cli.md §23.12</a> for the full CLI reference.</p>
-
-<h2 id="19-19-restrictions-on-extern-signatures">19.19 Restrictions on extern signatures</h2>
-
-<p>Extern function signatures must be expressible in the C ABI.</p>
-
-<h3>Allowed parameter / return types</h3>
-
-<ul>
-<li>Numeric primitives (<code>i8</code>..<code>i64</code>, <code>u8</code>..<code>u64</code>, <code>f32</code>, <code>f64</code>, <code>bool</code>, <code>char</code>, <code>isize</code>, <code>usize</code>).</li>
-<li>C-width aliases from <code>core:ffi</code> (<code>c_int</code>, <code>c_long</code>, etc.).</li>
-<li><code>*T</code> for any <code>T</code>, and <code>*T | null</code> (NPO).</li>
-<li><code>extern struct</code> types passed by value.</li>
-<li><code>@Union extern struct</code> types passed by value (rare; alignment can be subtle).</li>
-<li><code>@Transparent</code> wrappers around any of the above.</li>
-<li><code>[T; N]</code> (typically through <code>*[T; N]</code>).</li>
-<li><code>extern (...) -&gt; R</code> function pointer types.</li>
-<li><code>extern type T</code> opaque handles, only through <code>*T</code>.</li>
-<li>Generic type parameters constrained to pointer position (see §19.20).</li>
-</ul>
-
-<h3>Not allowed</h3>
-
-<ul>
-<li>Non-extern struct types, <code>str</code>, <code>List&lt;T&gt;</code>, <code>Map&lt;K, V&gt;</code>, interface objects — by value.</li>
-<li>Discriminated unions other than NPO-eligible <code>null | P</code> forms. To pass a discriminated union to C, take a pointer: <code>*(A | B)</code>.</li>
-<li>Closures — use <code>extern (...) -&gt; R</code> function pointers or <code>Callback&lt;C, R&gt;</code>.</li>
-</ul>
-
-<p>A discriminated union other than NPO-eligible forms is rejected at the boundary; the runtime tag has no defined C ABI representation.</p>
-
-<h3>Return type omission</h3>
-
-<p>A function with no declared return type returns <code>null</code> (see <a href="09-functions.html#91-function-declaration">09-functions.md §9.1</a>). At the extern boundary, an omitted return type lowers to C <code>void</code>.</p>
-
-<h2 id="19-20-generics-across-ffi">19.20 Generics across FFI</h2>
-
-<p>Generic type parameters appear in extern signatures <strong>only as pointers</strong>:</p>
-
-<pre><code>extern function hashmap_set&lt;T&gt;(key: *str, value: *T)
-extern function alloc_array&lt;T: ReprC&gt;(n: u64): *T | null
-</code></pre>
-
-<p>The C ABI fixes the size of every argument at the call site; an unknown <code>T</code> has unknown size. Restricting to <code>*T</code> keeps every call site a known pointer-sized argument.</p>
-
-<p><code>T: ReprC</code> is the common constraint when the function intends the pointee to be C-layout-compatible.</p>
-
-<h2 id="19-21-worked-examples">19.21 Worked examples</h2>
-
-<h3>19.21.1 Round-trip with libc</h3>
-
-<pre><code>import { c_size_t, c_void } from "core:ffi"
-
-extern function malloc(size: c_size_t): *c_void | null
-extern function free(p: *c_void)
-extern function memcpy(dst: *c_void, src: *c_void, n: c_size_t): *c_void
-
-function copy_to_foreign(src: Buffer): Buffer | null {
-  var p = malloc(src.size as c_size_t)
-  if p is null { return null }
-  memcpy(p as *c_void, src.data as *c_void, src.size as c_size_t)
-  Buffer { data: p as *u8, size: src.size }
-}
-</code></pre>
-
-<h3>19.21.2 Output parameter via <code>&</code></h3>
-
-<pre><code>extern struct Timeval {
-  pub tv_sec:  i64,
-  pub tv_usec: i64,
-}
-
-extern struct Rusage {
-  pub ru_utime: Timeval,
-  pub ru_stime: Timeval,
-}
-
-extern function getrusage(who: i32, out: *Rusage): i32
-
-function snapshot(): Rusage | i32 {
-  var ru = Rusage {
-    ru_utime: Timeval { tv_sec: 0i64, tv_usec: 0i64 },
-    ru_stime: Timeval { tv_sec: 0i64, tv_usec: 0i64 },
-  }
-  var rc = getrusage(0i32, &ru)
-  if rc != 0i32 { return rc }
-  ru
-}
-</code></pre>
-
-<h3>19.21.3 Callback registration with a long-lived pin</h3>
-
-<pre><code>import { Pin, PinHandle, c_void } from "core:ffi"
-
-extern function register_callback(cb: extern (*c_void) -&gt; null, data: *c_void)
-extern function unregister_callback(data: *c_void)
-
-struct MyState {
-  pub counter: i64,
-}
-
-@Reentrant("any")
-@OnPanic("abort")
-extern function on_tick(data: *c_void) {
-  var state = data as *MyState
-  (*state).counter = (*state).counter + 1
-}
-
-function install(): PinHandle&lt;MyState&gt; {
-  var s = MyState { counter: 0i64 }
-  var handle = Pin.acquire(s)
-  register_callback(on_tick, handle.ptr() as *c_void)
-  handle
-}
-
-function uninstall(handle: PinHandle&lt;MyState&gt;) {
-  unregister_callback(handle.ptr() as *c_void)
-  handle.release()
-}
-</code></pre>
-
-<h3>19.21.4 Scoped pin via <code>with_pin</code></h3>
-
-<pre><code>import { with_pin, c_size_t, c_void } from "core:ffi"
-
-extern function call_native_op(input: *u8, len: c_size_t, ctx: *c_void): i32
-
-struct Workload {
-  pub items: i64,
-}
-
-function run(input: Buffer, w: Workload): i32 {
-  with_pin(w, |w_ptr| {
-    call_native_op(input.data, input.size as c_size_t, w_ptr as *c_void)
-  })
-}
-</code></pre>
-
-<h2 id="19-22-summary">19.22 Summary</h2>
-
-<ul>
-<li><strong>Layout</strong> — <code>extern struct</code> declares C layout. <code>@Packed(N)</code>, <code>@Align(N)</code>, <code>@Transparent</code>, <code>@Union</code> are layout decorators.</li>
-<li><strong>Pointers</strong> — <code>*T</code> raw pointer. <code>*T | null</code> via NPO. <code>&expr</code> for address-of at extern call sites (auto-pins managed values for the call). <code>*ptr</code> and <code>(*ptr).field</code> for read/write through a pointer. <code>as</code> for pointer-to-pointer reinterpretation.</li>
-<li><strong>Foreign types</strong> — <code>extern type T</code> for opaque handles. <code>[T; N]</code> for fixed-size arrays in extern positions.</li>
-<li><strong>Foreign globals</strong> — <code>extern var name: T</code> with optional <code>@Link</code>.</li>
-<li><strong>Allocation</strong> — <code>Foreign.alloc</code> family from <code>core:ffi</code>. <code>Buffer</code>, <code>CStr</code>, <code>CString</code> are the boundary types.</li>
-<li><strong>C-width aliases</strong> — <code>c_int</code>, <code>c_long</code>, ..., <code>c_void</code>, <code>c_va_list</code> from <code>core:ffi</code>.</li>
-<li><strong>Functions</strong> — <code>extern function</code> for imports and exports. Decorators <code>@Link</code>, <code>@Symbol</code>, <code>@CallConv</code>, <code>@Variadic</code>, <code>@Reentrant</code>, <code>@OnPanic</code>.</li>
-<li><strong>C patterns without new syntax</strong> — C enums via <code>type</code> alias + <code>pub var</code> constants. C unions via <code>@Union extern struct</code>. Flexible arrays via <code>Foreign.alloc_flex</code>. Bitfields via mask/shift methods.</li>
-<li><strong>Pinning</strong> — <code>&</code> auto-pin for the call, <code>with_pin</code> for scoped, <code>Pin.acquire</code>/<code>PinHandle&lt;T&gt;</code> for long-lived.</li>
-<li><strong>Runtime</strong> — auto safe-point on imports, manual or <code>@Reentrant</code> attach for foreign threads, <code>@OnPanic</code> for export panic policy.</li>
-<li><strong>Manifest</strong> — <code>[package.links]</code> and <code>[package.ffi]</code> drive linkage and tooling.</li>
-<li><strong>Tooling</strong> — <code>lang ffi bindgen</code> / <code>cbindgen</code> / <code>check</code> / <code>layout</code>.</li>
-</ul>
-
-<p>Net-new syntax: <code>&expr</code>, <code>*ptr</code>, <code>(*ptr).field</code>, <code>[T; N]</code> (extern positions only), <code>extern type T</code>, <code>extern var name: T</code>, <code>as</code> extended to pointer-to-pointer reinterpretation. Everything else uses existing language forms.</p>
+<div class="callout good">
+  <ul>
+    <li><strong>Layout</strong> — <code>extern struct</code> declares C layout. <code>@Packed(N)</code>, <code>@Align(N)</code>, <code>@Transparent</code>, <code>@Union</code> modify it.</li>
+    <li><strong>Pointers</strong> — <code>*T</code> raw pointer. <code>*T | null</code> via NPO. <code>&amp;expr</code> address-of (auto-pin). <code>*ptr</code> dereference. <code>as</code> for pointer reinterpretation.</li>
+    <li><strong>Foreign types</strong> — <code>extern type T</code> opaque handles. <code>[T; N]</code> in extern positions only.</li>
+    <li><strong>Globals</strong> — <code>extern var name: T</code> with optional <code>@Link</code>.</li>
+    <li><strong>Allocation</strong> — <code>Foreign.alloc</code> family. <code>Buffer</code>, <code>CStr</code>, <code>CString</code> are the boundary types.</li>
+    <li><strong>Functions</strong> — <code>extern function</code> for imports and exports. Six decorators: <code>@Link</code>, <code>@Symbol</code>, <code>@CallConv</code>, <code>@Variadic</code>, <code>@Reentrant</code>, <code>@OnPanic</code>.</li>
+    <li><strong>Pinning</strong> — <code>&amp;</code> auto-pin · <code>with_pin</code> scoped · <code>Pin.acquire</code>/<code>PinHandle&lt;T&gt;</code> long-lived.</li>
+    <li><strong>Runtime</strong> — auto safe-point around imports; <code>@Reentrant</code> for foreign threads; <code>@OnPanic</code> for export panic policy.</li>
+    <li><strong>Tooling</strong> — <code>lang ffi bindgen</code>/<code>cbindgen</code>/<code>check</code>/<code>layout</code>.</li>
+  </ul>
+</div>
 
 </body>
 </html>

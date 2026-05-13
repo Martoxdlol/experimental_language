@@ -5,244 +5,204 @@
 <title>5. Tuples</title>
 <style>
   :root {
-    --fg: #1b1b1d;
-    --muted: #5a5a60;
-    --bg: #fdfdfc;
-    --accent: #1a4a8a;
-    --accent-2: #2a6f4d;
-    --warn: #b54708;
-    --code-bg: #f4f2ee;
-    --code-fg: #1b1b1d;
-    --border: #e4e1dc;
-    --table-stripe: #f8f7f4;
-    --pub: #2a6f4d;
-    --priv: #b54708;
-    --pkg: #1a4a8a;
-    --core: #6b4ba8;
+    --fg: #1b1b1d; --muted: #5a5a60; --bg: #fdfdfc;
+    --accent: #1a4a8a; --accent-2: #2a6f4d; --warn: #b54708;
+    --code-bg: #f4f2ee; --code-fg: #1b1b1d; --border: #e4e1dc;
+    --table-stripe: #f8f7f4; --pub: #2a6f4d; --priv: #b54708;
+    --pkg: #1a4a8a; --core: #6b4ba8;
   }
-  html { box-sizing: border-box; }
-  *, *::before, *::after { box-sizing: inherit; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-    color: var(--fg);
-    background: var(--bg);
-    line-height: 1.55;
-    max-width: 980px;
-    margin: 0 auto;
-    padding: 2.5rem 1.5rem 6rem;
-  }
-  h1, h2, h3, h4 {
-    color: var(--fg);
-    line-height: 1.25;
-    margin-top: 2.2rem;
-    margin-bottom: 0.6rem;
-  }
+  html { box-sizing: border-box; } *, *::before, *::after { box-sizing: inherit; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color: var(--fg); background: var(--bg); line-height: 1.55;
+    max-width: 980px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem; }
+  h1, h2, h3, h4 { color: var(--fg); line-height: 1.25; margin-top: 2.2rem; margin-bottom: 0.6rem; }
   h1 { font-size: 2rem; border-bottom: 2px solid var(--border); padding-bottom: 0.4rem; }
   h2 { font-size: 1.45rem; margin-top: 2.6rem; }
   h3 { font-size: 1.15rem; color: var(--accent); }
   h4 { font-size: 1rem; color: var(--muted); }
-  p { margin: 0.7rem 0; }
-  ul, ol { margin: 0.7rem 0; padding-left: 1.6rem; }
-  li { margin: 0.3rem 0; }
-  code {
-    font-family: "SF Mono", Menlo, Consolas, "Courier New", monospace;
-    background: var(--code-bg);
-    color: var(--code-fg);
-    padding: 0.1em 0.35em;
-    border-radius: 3px;
-    font-size: 0.92em;
-  }
-  pre {
-    background: var(--code-bg);
-    color: var(--code-fg);
-    padding: 0.9rem 1rem;
-    border-radius: 6px;
-    overflow-x: auto;
-    font-size: 0.88rem;
-    line-height: 1.5;
-    border: 1px solid var(--border);
-  }
+  p { margin: 0.7rem 0; } ul, ol { margin: 0.7rem 0; padding-left: 1.6rem; } li { margin: 0.3rem 0; }
+  code { font-family: "SF Mono", Menlo, Consolas, "Courier New", monospace;
+    background: var(--code-bg); color: var(--code-fg); padding: 0.1em 0.35em;
+    border-radius: 3px; font-size: 0.92em; }
+  pre { background: var(--code-bg); color: var(--code-fg); padding: 0.9rem 1rem;
+    border-radius: 6px; overflow-x: auto; font-size: 0.88rem; line-height: 1.5;
+    border: 1px solid var(--border); }
   pre code { background: none; padding: 0; font-size: inherit; }
-  table {
-    border-collapse: collapse;
-    width: 100%;
-    margin: 1rem 0;
-    font-size: 0.94rem;
-  }
-  th, td {
-    text-align: left;
-    padding: 0.5rem 0.7rem;
-    border-bottom: 1px solid var(--border);
-    vertical-align: top;
-  }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: 0.94rem; }
+  th, td { text-align: left; padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--border); vertical-align: top; }
   th { background: var(--code-bg); font-weight: 600; }
   tbody tr:nth-child(even) { background: var(--table-stripe); }
-  .lead {
-    font-size: 1.05rem;
-    color: var(--muted);
-    margin-bottom: 1.6rem;
-  }
-  .toc {
-    background: var(--code-bg);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 1rem 1.2rem;
-    margin: 1.6rem 0 2rem;
-    font-size: 0.94rem;
-  }
+  .lead { font-size: 1.05rem; color: var(--muted); margin-bottom: 1.6rem; }
+  .toc { background: var(--code-bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 1rem 1.2rem; margin: 1.6rem 0 2rem; font-size: 0.94rem; }
   .toc ol { margin: 0.2rem 0 0; padding-left: 1.3rem; }
-  .toc a { color: var(--accent); text-decoration: none; }
-  .toc a:hover { text-decoration: underline; }
-
-  .diagram {
-    background: #ffffff;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 1.4rem;
-    margin: 1.4rem 0;
-    overflow-x: auto;
-  }
-  .diagram-caption {
-    font-size: 0.85rem;
-    color: var(--muted);
-    text-align: center;
-    margin-top: 0.6rem;
-    font-style: italic;
-  }
+  .toc a { color: var(--accent); text-decoration: none; } .toc a:hover { text-decoration: underline; }
+  .diagram { background: #ffffff; border: 1px solid var(--border);
+    border-radius: 8px; padding: 1.4rem; margin: 1.4rem 0; overflow-x: auto; }
+  .diagram-caption { font-size: 0.85rem; color: var(--muted); text-align: center;
+    margin-top: 0.6rem; font-style: italic; }
   svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
   svg text { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; fill: var(--fg); }
   svg .label { font-family: -apple-system, system-ui, sans-serif; font-size: 12px; }
   svg .small { font-size: 10px; fill: var(--muted); }
-
-  .legend {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 1rem;
-    justify-content: center;
-    margin-top: 0.8rem;
-    font-size: 0.85rem;
-  }
-  .legend-item { display: flex; align-items: center; gap: 0.4rem; }
-  .legend-swatch {
-    width: 14px;
-    height: 14px;
-    border-radius: 3px;
-    border: 1px solid rgba(0,0,0,0.15);
-  }
-
-  .tag {
-    display: inline-block;
-    padding: 0.1em 0.55em;
-    border-radius: 3px;
-    font-size: 0.78em;
-    font-weight: 600;
-    font-family: "SF Mono", Menlo, monospace;
-    color: white;
-    vertical-align: middle;
-  }
-  .tag.pub  { background: var(--pub); }
-  .tag.priv { background: var(--priv); }
-  .tag.pkg  { background: var(--pkg); }
-  .tag.core { background: var(--core); }
-  .tag.warn { background: var(--warn); }
-
-  .callout {
-    border-left: 4px solid var(--accent);
-    background: #f0f4fa;
-    padding: 0.8rem 1rem;
-    margin: 1.2rem 0;
-    border-radius: 0 6px 6px 0;
-  }
+  .callout { border-left: 4px solid var(--accent); background: #f0f4fa;
+    padding: 0.8rem 1rem; margin: 1.2rem 0; border-radius: 0 6px 6px 0; }
   .callout.warn { border-color: var(--warn); background: #fbf3ec; }
   .callout.good { border-color: var(--accent-2); background: #eef6f1; }
   .callout strong { display: block; margin-bottom: 0.3rem; }
-
-  .two-col {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 1rem;
-    margin: 1.2rem 0;
-  }
-  @media (max-width: 720px) {
-    .two-col { grid-template-columns: 1fr; }
-  }
-
-  .file-tree {
-    font-family: "SF Mono", Menlo, monospace;
-    font-size: 0.88rem;
-    line-height: 1.55;
-    background: var(--code-bg);
-    padding: 1rem 1.2rem;
-    border-radius: 6px;
-    border: 1px solid var(--border);
-    white-space: pre;
-    overflow-x: auto;
-  }
-  .file-tree .pub  { color: var(--pub); font-weight: 600; }
-  .file-tree .priv { color: var(--priv); }
-  .file-tree .note { color: var(--muted); font-style: italic; }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 1.2rem 0; }
+  @media (max-width: 720px) { .two-col { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
 
 <h1>5. Tuples</h1>
+<p class="lead">
+  Anonymous, structurally-typed groupings of values. Same shape = same type, anywhere.
+</p>
 
-<p>Tuples are anonymous, structurally typed groupings of values.</p>
+<div class="toc">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#struct">Structural typing</a></li>
+    <li><a href="#access">Positional access</a></li>
+    <li><a href="#destr">Destructuring &amp; rest</a></li>
+    <li><a href="#empty">The 0- and 1-element cases</a></li>
+    <li><a href="#mem">Memory layout</a></li>
+    <li><a href="#gen">Tuples in generics</a></li>
+    <li><a href="#ext">Extending tuples</a></li>
+  </ol>
+</div>
+
+<!-- =========================================================== -->
+<h2 id="struct">1. Structural typing</h2>
+
+<p>Two tuple types with the same sequence of element types are the <strong>same type</strong>,
+regardless of where they appear or what they're aliased to.</p>
+
+<div class="diagram">
+  <svg viewBox="0 0 920 230" role="img" aria-label="Structural vs nominal">
+    <g transform="translate(20, 20)">
+      <rect width="430" height="190" rx="8" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
+      <text x="14" y="22" font-weight="700" fill="#2a6f4d">Tuple — structural</text>
+
+      <rect x="14" y="40" width="200" height="40" rx="4" fill="#fff" stroke="#2a6f4d"/>
+      <text x="114" y="64" text-anchor="middle" font-size="11">(i64, i64)</text>
+
+      <text x="225" y="64" text-anchor="middle" font-size="14" font-weight="700">≡</text>
+
+      <rect x="240" y="40" width="170" height="40" rx="4" fill="#fff" stroke="#2a6f4d"/>
+      <text x="325" y="64" text-anchor="middle" font-size="11">type Point = (i64,i64)</text>
+
+      <text x="14" y="110" font-size="11">function origin(): (i64, i64) { (0, 0) }</text>
+      <text x="14" y="128" font-size="11">function shift(p: Point): Point { … }</text>
+
+      <rect x="14" y="142" width="402" height="36" rx="4" fill="#eef6f1" stroke="#2a6f4d"/>
+      <text x="215" y="164" text-anchor="middle" font-size="11" fill="#2a6f4d">shift(origin()) ✓ — same type</text>
+    </g>
+
+    <g transform="translate(470, 20)">
+      <rect width="430" height="190" rx="8" fill="#fbf3ec" stroke="#b54708" stroke-width="2"/>
+      <text x="14" y="22" font-weight="700" fill="#b54708">Struct — nominal</text>
+
+      <rect x="14" y="40" width="200" height="40" rx="4" fill="#fff" stroke="#b54708"/>
+      <text x="114" y="64" text-anchor="middle" font-size="11">struct Pair(i64,i64)</text>
+
+      <text x="225" y="64" text-anchor="middle" font-size="14" font-weight="700" fill="#b54708">≠</text>
+
+      <rect x="240" y="40" width="170" height="40" rx="4" fill="#fff" stroke="#b54708"/>
+      <text x="325" y="64" text-anchor="middle" font-size="11">struct Coord(i64,i64)</text>
+
+      <text x="14" y="110" font-size="11">function shift(p: Pair): Pair { … }</text>
+      <text x="14" y="128" font-size="11">var c: Coord = Coord(1, 2)</text>
+
+      <rect x="14" y="142" width="402" height="36" rx="4" fill="#fbf3ec" stroke="#b54708"/>
+      <text x="215" y="164" text-anchor="middle" font-size="11" fill="#b54708">shift(c) ✗ — different types</text>
+    </g>
+  </svg>
+  <div class="diagram-caption">Use a tuple when the shape matters; use a struct when the name matters.</div>
+</div>
 
 <pre><code>var point: (i64, i64) = (3, 4)
-var row:   (i64, str, bool) = (1, "Alice", true)</code></pre>
+var row:   (i64, str, bool) = (1, "Alice", true)
 
-<h2 id="5-1-structural-typing">5.1 Structural typing</h2>
-
-<p>Two tuple types with the same sequence of element types are the <strong>same type</strong>, regardless of where they appear:</p>
-
-<pre><code>function origin(): (i64, i64) { (0, 0) }
-function shift(p: (i64, i64)): (i64, i64) { (p.0 + 1, p.1 + 1) }
-
-shift(origin())   // OK — same type</code></pre>
-
-<p>Aliases for tuples are fully interchangeable with the underlying shape:</p>
-
-<pre><code>type Point = (i64, i64)
+type Point = (i64, i64)
 type Z = Point | null
 // Z is exactly the same as (i64, i64) | null</code></pre>
 
-<p>There is no distinction between <code>Point</code> and <code>(i64, i64)</code> in the type system. They are the same type, just spelled differently. Methods extended onto one apply to the other.</p>
+<p>Methods extended onto a tuple alias apply to the underlying shape — they're the same type.</p>
 
-<p>This is intentional: tuples are <em>anonymous shapes</em>. Use a <code>struct</code> (record or tuple struct) when you want a distinct nominal type.</p>
+<!-- =========================================================== -->
+<h2 id="access">2. Positional access</h2>
 
-<h2 id="5-2-positional-access">5.2 Positional access</h2>
+<div class="diagram">
+  <svg viewBox="0 0 920 180" role="img" aria-label="Tuple positional access">
+    <g transform="translate(60, 30)">
+      <rect width="800" height="60" rx="6" fill="#fff" stroke="#1a4a8a" stroke-width="2"/>
+      <rect x="0"   y="0" width="266" height="60" fill="#eaf0f8" stroke="#1a4a8a"/>
+      <rect x="266" y="0" width="266" height="60" fill="#eef6f1" stroke="#2a6f4d"/>
+      <rect x="532" y="0" width="268" height="60" fill="#f3eefa" stroke="#6b4ba8"/>
 
-<p>Fields are accessed by integer literal after <code>.</code>:</p>
+      <text x="133" y="28" text-anchor="middle" font-size="13" font-weight="700">10</text>
+      <text x="133" y="48" text-anchor="middle" font-size="11" class="small">.0  →  i64</text>
 
-<pre><code>var p = (10, "hi", true)
-p.0    // 10
-p.1    // "hi"
-p.2    // true</code></pre>
+      <text x="399" y="28" text-anchor="middle" font-size="13" font-weight="700">"hi"</text>
+      <text x="399" y="48" text-anchor="middle" font-size="11" class="small">.1  →  str</text>
 
-<p>The index must be a literal integer at compile time — <code>p.i</code> for a variable <code>i</code> is not supported (a tuple's element types may differ, so the index must be statically known).</p>
+      <text x="666" y="28" text-anchor="middle" font-size="13" font-weight="700">true</text>
+      <text x="666" y="48" text-anchor="middle" font-size="11" class="small">.2  →  bool</text>
+    </g>
 
-<p>Indexing out of range is a compile-time error.</p>
+    <g transform="translate(60, 110)">
+      <rect width="800" height="50" rx="6" fill="#fbf3ec" stroke="#b54708"/>
+      <text x="14" y="22" font-size="11" font-weight="700" fill="#b54708">Index must be a literal integer at compile time</text>
+      <text x="14" y="40" font-size="11" fill="#5a5a60">p.0 ✓     p.1 ✓     p.i (runtime i) ✗     p.3 (out of range) → compile error</text>
+    </g>
+  </svg>
+  <div class="diagram-caption">Each position can have a different type, so the index must be statically known.</div>
+</div>
 
-<h2 id="5-3-destructuring">5.3 Destructuring</h2>
+<!-- =========================================================== -->
+<h2 id="destr">3. Destructuring &amp; rest</h2>
 
-<pre><code>var (a, b, c) = (1, 2, 3)
+<div class="diagram">
+  <svg viewBox="0 0 920 280" role="img" aria-label="Destructuring forms">
+    <g transform="translate(20, 20)">
+      <text x="0" y="14" font-weight="700">Source: (i64, str, bool, f64)</text>
+      <g transform="translate(0, 22)">
+        <rect width="80"  height="32" rx="3" fill="#eaf0f8" stroke="#1a4a8a"/>
+        <text x="40" y="20" text-anchor="middle" font-size="11">1</text>
+        <rect x="80" width="80" height="32" rx="3" fill="#eef6f1" stroke="#2a6f4d"/>
+        <text x="120" y="20" text-anchor="middle" font-size="11">"hi"</text>
+        <rect x="160" width="80" height="32" rx="3" fill="#f3eefa" stroke="#6b4ba8"/>
+        <text x="200" y="20" text-anchor="middle" font-size="11">true</text>
+        <rect x="240" width="80" height="32" rx="3" fill="#fbf3ec" stroke="#b54708"/>
+        <text x="280" y="20" text-anchor="middle" font-size="11">3.14</text>
+      </g>
+    </g>
 
-var (id, name, _) = row     // ignore third element
-var (id, ..) = row          // ignore the rest
-var (id, ..rest) = row      // bind the rest to a sub-tuple</code></pre>
+    <g transform="translate(380, 20)" font-size="11.5">
+      <rect width="500" height="240" rx="8" fill="#fafafa" stroke="#d6d3cd"/>
+      <text x="14" y="22" font-weight="700">Patterns</text>
 
-<p>The wildcard <code>_</code> ignores a single position. The rest token <code>..</code> ignores any number of positions; with a binding name (<code>..rest</code>), it captures them as a sub-tuple whose type is the sequence of unmatched positional types.</p>
+      <text x="14" y="50">var (a, b, c, d) = data</text>
+      <text x="14" y="66" class="small">— exact</text>
 
-<pre><code>var data: (i64, str, bool, f64) = (1, "hi", true, 3.14)
-var (id, ..rest) = data     // rest: (str, bool, f64)
-var (a, b, ..tail) = data   // tail: (bool, f64)</code></pre>
+      <text x="14" y="92">var (id, _, _, _) = data</text>
+      <text x="14" y="108" class="small">— wildcard ignores one position</text>
 
-<p><code>..</code> (with or without a binding) may appear <strong>at most once</strong> per pattern. It may be in the middle of the pattern:</p>
+      <text x="14" y="134">var (id, ..) = data</text>
+      <text x="14" y="150" class="small">— rest ignores any number</text>
 
-<pre><code>var (first, ..middle, last) = data    // middle: (str, bool)</code></pre>
+      <text x="14" y="176">var (id, ..rest) = data        // rest: (str, bool, f64)</text>
+      <text x="14" y="192" class="small">— rest bound to sub-tuple</text>
 
-<p>Patterns (e.g. inside <code>match</code>) follow the same rules and additionally allow literal patterns:</p>
+      <text x="14" y="218">var (first, ..middle, last) = data    // middle: (str, bool)</text>
+      <text x="14" y="234" class="small">— rest can be in the middle (once per pattern)</text>
+    </g>
+  </svg>
+  <div class="diagram-caption">Same rules apply inside <code>match</code>, plus literal patterns: <code>(0, 0)</code>, <code>(x, 0)</code>, etc.</div>
+</div>
 
 <pre><code>match point {
   (0, 0)   =&gt; "origin",
@@ -251,34 +211,99 @@ var (a, b, ..tail) = data   // tail: (bool, f64)</code></pre>
   (x, y)   =&gt; "elsewhere",
 }</code></pre>
 
-<h2 id="5-4-the-empty-and-single-element-cases">5.4 The empty and single-element cases</h2>
+<!-- =========================================================== -->
+<h2 id="empty">4. The 0- and 1-element cases</h2>
 
-<ul>
-  <li>Zero-element: not a distinct tuple type — use <code>null</code> (see <a href="02-types.html">02-types.html</a>).</li>
-  <li>Single-element: parentheses around a single expression always denote grouping, not a tuple. There is no one-element tuple type. If you actually want a "one-element tuple" use a tuple struct or a single-field struct.</li>
-</ul>
+<div class="two-col">
+  <div>
+    <h3 style="color:#b54708;">Zero-element</h3>
+    <p>Not a distinct tuple type. Use <code>null</code> — see <a href="02-types.html#null">02-types §6</a>.</p>
+  </div>
+  <div>
+    <h3 style="color:#b54708;">Single-element</h3>
+    <p>Parentheses around a single expression always denote <strong>grouping</strong>,
+    not a tuple. There is no one-element tuple type.</p>
+    <p>If you actually want a "one-element tuple", use a tuple struct or a single-field struct.</p>
+  </div>
+</div>
 
-<h2 id="5-5-memory-layout">5.5 Memory layout</h2>
+<!-- =========================================================== -->
+<h2 id="mem">5. Memory layout</h2>
 
-<p>A tuple is laid out as an anonymous record with positional fields. There is no GC header on a tuple by itself; tuples live wherever they are stored:</p>
+<p>A tuple is laid out as an anonymous record with positional fields. Where it lives depends
+on escape analysis:</p>
 
-<ul>
-  <li><strong>Stack / inline</strong>: when used as a local variable that does not escape, the compiler may lay the tuple out inline with sequential fields. Primitive elements are stored directly; reference-type elements take a pointer slot.</li>
-  <li><strong>Heap</strong>: when a tuple escapes (returned out of its frame into a generic position, captured by a closure that escapes, stored in a <code>List&lt;T&gt;</code> or <code>Map&lt;K, V&gt;</code>), it is boxed into a managed-heap allocation with the standard heap layout (GC header + type id + fields).</li>
-  <li><strong>FFI</strong>: tuples cannot be passed across an <code>extern</code> boundary directly. To pass tuple-like data to C, wrap it in an <code>extern struct</code> (see <a href="19-ffi.html">19-ffi.html</a>).</li>
-</ul>
+<div class="diagram">
+  <svg viewBox="0 0 920 290" role="img" aria-label="Tuple memory">
+    <g transform="translate(20, 20)">
+      <rect width="280" height="250" rx="8" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
+      <text x="140" y="22" text-anchor="middle" font-weight="700" fill="#2a6f4d">Stack / inline</text>
+      <text x="140" y="40" text-anchor="middle" class="small">does not escape</text>
 
-<p>Whether a tuple is stack-inline or heap-boxed is a compiler decision based on escape analysis and is not user-visible at the language level. Semantics are the same either way.</p>
+      <rect x="20" y="60" width="240" height="22" rx="3" fill="#fff" stroke="#2a6f4d"/>
+      <text x="140" y="76" text-anchor="middle" font-size="11">.0  primitive</text>
+      <rect x="20" y="86" width="240" height="22" rx="3" fill="#fff" stroke="#2a6f4d"/>
+      <text x="140" y="102" text-anchor="middle" font-size="11">.1  primitive</text>
+      <rect x="20" y="112" width="240" height="22" rx="3" fill="#fff" stroke="#2a6f4d"/>
+      <text x="140" y="128" text-anchor="middle" font-size="11">.2  ptr to heap</text>
 
-<h2 id="5-6-tuples-in-generics">5.6 Tuples in generics</h2>
+      <text x="20" y="170" font-size="11" class="small">No GC header.</text>
+      <text x="20" y="188" font-size="11" class="small">Sequential field layout.</text>
+      <text x="20" y="206" font-size="11" class="small">Primitives stored directly;</text>
+      <text x="20" y="222" font-size="11" class="small">references take a pointer slot.</text>
+    </g>
 
-<p>A tuple shape can be used as a type argument like any other type:</p>
+    <g transform="translate(320, 20)">
+      <rect width="280" height="250" rx="8" fill="#eaf0f8" stroke="#1a4a8a" stroke-width="2"/>
+      <text x="140" y="22" text-anchor="middle" font-weight="700" fill="#1a4a8a">Heap-boxed</text>
+      <text x="140" y="40" text-anchor="middle" class="small">escapes its frame</text>
+
+      <rect x="20" y="60" width="240" height="26" rx="3" fill="#fbf3ec" stroke="#b54708"/>
+      <text x="140" y="78" text-anchor="middle" font-size="11" fill="#b54708">GC header + type id</text>
+
+      <rect x="20" y="92" width="240" height="22" rx="3" fill="#fff" stroke="#1a4a8a"/>
+      <text x="140" y="108" text-anchor="middle" font-size="11">.0</text>
+      <rect x="20" y="118" width="240" height="22" rx="3" fill="#fff" stroke="#1a4a8a"/>
+      <text x="140" y="134" text-anchor="middle" font-size="11">.1</text>
+      <rect x="20" y="144" width="240" height="22" rx="3" fill="#fff" stroke="#1a4a8a"/>
+      <text x="140" y="160" text-anchor="middle" font-size="11">.2</text>
+
+      <text x="20" y="194" font-size="11" class="small">Returned generically?</text>
+      <text x="20" y="212" font-size="11" class="small">Captured by escaping closure?</text>
+      <text x="20" y="230" font-size="11" class="small">Stored in List/Map? → heap.</text>
+    </g>
+
+    <g transform="translate(620, 20)">
+      <rect width="280" height="250" rx="8" fill="#fbf3ec" stroke="#b54708" stroke-width="2"/>
+      <text x="140" y="22" text-anchor="middle" font-weight="700" fill="#b54708">FFI</text>
+      <text x="140" y="40" text-anchor="middle" class="small">no direct crossing</text>
+
+      <text x="20" y="76" font-size="11">Tuples cannot be passed</text>
+      <text x="20" y="94" font-size="11">across an extern boundary.</text>
+
+      <text x="20" y="130" font-size="11">Wrap in an extern struct:</text>
+      <rect x="20" y="142" width="240" height="80" rx="3" fill="#fff" stroke="#b54708"/>
+      <text x="32" y="162" font-size="11">extern struct Point {</text>
+      <text x="32" y="178" font-size="11">  x: c_int,</text>
+      <text x="32" y="194" font-size="11">  y: c_int,</text>
+      <text x="32" y="210" font-size="11">}</text>
+    </g>
+  </svg>
+  <div class="diagram-caption">Stack vs heap is a compiler decision based on escape analysis — semantics are identical either way.</div>
+</div>
+
+<!-- =========================================================== -->
+<h2 id="gen">6. Tuples in generics</h2>
 
 <pre><code>var pairs: List&lt;(i64, str)&gt; = [(1, "a"), (2, "b")]</code></pre>
 
-<h2 id="5-7-extension-on-tuples">5.7 Extension on tuples</h2>
+<p>A tuple shape can be used as a type argument like any other type.</p>
 
-<p>You can <code>extend</code> a tuple type or one of its aliases (because they are the same type, both extensions add methods to the same shape):</p>
+<!-- =========================================================== -->
+<h2 id="ext">7. Extending tuples</h2>
+
+<p>You can <code>extend</code> a tuple type or one of its aliases (they're the same type, so both
+extensions add methods to the same shape):</p>
 
 <pre><code>type Point = (i64, i64)
 
@@ -288,9 +313,18 @@ extend (i64, i64) {
     var y = self.1 as f64
     sqrt(x * x + y * y)
   }
-}</code></pre>
+}
 
-<p>Calling <code>(3, 4).magnitude()</code> works regardless of whether the value's static type is written as <code>(i64, i64)</code> or <code>Point</code>.</p>
+// Works regardless of how the value's static type is spelled:
+(3, 4).magnitude()
+var p: Point = (3, 4)
+p.magnitude()</code></pre>
+
+<div class="callout good">
+  <strong>One shape, one method table</strong>
+  Because <code>Point</code> and <code>(i64, i64)</code> are the same type, an extension on either
+  applies to both. The orphan rule still applies — see <a href="10-interfaces.html">10-interfaces</a>.
+</div>
 
 </body>
 </html>

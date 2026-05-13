@@ -5,208 +5,161 @@
 <title>4. Structs</title>
 <style>
   :root {
-    --fg: #1b1b1d;
-    --muted: #5a5a60;
-    --bg: #fdfdfc;
-    --accent: #1a4a8a;
-    --accent-2: #2a6f4d;
-    --warn: #b54708;
-    --code-bg: #f4f2ee;
-    --code-fg: #1b1b1d;
-    --border: #e4e1dc;
-    --table-stripe: #f8f7f4;
-    --pub: #2a6f4d;
-    --priv: #b54708;
-    --pkg: #1a4a8a;
-    --core: #6b4ba8;
+    --fg: #1b1b1d; --muted: #5a5a60; --bg: #fdfdfc;
+    --accent: #1a4a8a; --accent-2: #2a6f4d; --warn: #b54708;
+    --code-bg: #f4f2ee; --code-fg: #1b1b1d; --border: #e4e1dc;
+    --table-stripe: #f8f7f4; --pub: #2a6f4d; --priv: #b54708;
+    --pkg: #1a4a8a; --core: #6b4ba8;
   }
-  html { box-sizing: border-box; }
-  *, *::before, *::after { box-sizing: inherit; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-    color: var(--fg);
-    background: var(--bg);
-    line-height: 1.55;
-    max-width: 980px;
-    margin: 0 auto;
-    padding: 2.5rem 1.5rem 6rem;
-  }
-  h1, h2, h3, h4 {
-    color: var(--fg);
-    line-height: 1.25;
-    margin-top: 2.2rem;
-    margin-bottom: 0.6rem;
-  }
+  html { box-sizing: border-box; } *, *::before, *::after { box-sizing: inherit; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color: var(--fg); background: var(--bg); line-height: 1.55;
+    max-width: 980px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem; }
+  h1, h2, h3, h4 { color: var(--fg); line-height: 1.25; margin-top: 2.2rem; margin-bottom: 0.6rem; }
   h1 { font-size: 2rem; border-bottom: 2px solid var(--border); padding-bottom: 0.4rem; }
   h2 { font-size: 1.45rem; margin-top: 2.6rem; }
   h3 { font-size: 1.15rem; color: var(--accent); }
   h4 { font-size: 1rem; color: var(--muted); }
-  p { margin: 0.7rem 0; }
-  ul, ol { margin: 0.7rem 0; padding-left: 1.6rem; }
-  li { margin: 0.3rem 0; }
-  code {
-    font-family: "SF Mono", Menlo, Consolas, "Courier New", monospace;
-    background: var(--code-bg);
-    color: var(--code-fg);
-    padding: 0.1em 0.35em;
-    border-radius: 3px;
-    font-size: 0.92em;
-  }
-  pre {
-    background: var(--code-bg);
-    color: var(--code-fg);
-    padding: 0.9rem 1rem;
-    border-radius: 6px;
-    overflow-x: auto;
-    font-size: 0.88rem;
-    line-height: 1.5;
-    border: 1px solid var(--border);
-  }
+  p { margin: 0.7rem 0; } ul, ol { margin: 0.7rem 0; padding-left: 1.6rem; } li { margin: 0.3rem 0; }
+  code { font-family: "SF Mono", Menlo, Consolas, "Courier New", monospace;
+    background: var(--code-bg); color: var(--code-fg); padding: 0.1em 0.35em;
+    border-radius: 3px; font-size: 0.92em; }
+  pre { background: var(--code-bg); color: var(--code-fg); padding: 0.9rem 1rem;
+    border-radius: 6px; overflow-x: auto; font-size: 0.88rem; line-height: 1.5;
+    border: 1px solid var(--border); }
   pre code { background: none; padding: 0; font-size: inherit; }
-  table {
-    border-collapse: collapse;
-    width: 100%;
-    margin: 1rem 0;
-    font-size: 0.94rem;
-  }
-  th, td {
-    text-align: left;
-    padding: 0.5rem 0.7rem;
-    border-bottom: 1px solid var(--border);
-    vertical-align: top;
-  }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: 0.94rem; }
+  th, td { text-align: left; padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--border); vertical-align: top; }
   th { background: var(--code-bg); font-weight: 600; }
   tbody tr:nth-child(even) { background: var(--table-stripe); }
-  .lead {
-    font-size: 1.05rem;
-    color: var(--muted);
-    margin-bottom: 1.6rem;
-  }
-  .toc {
-    background: var(--code-bg);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 1rem 1.2rem;
-    margin: 1.6rem 0 2rem;
-    font-size: 0.94rem;
-  }
+  .lead { font-size: 1.05rem; color: var(--muted); margin-bottom: 1.6rem; }
+  .toc { background: var(--code-bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 1rem 1.2rem; margin: 1.6rem 0 2rem; font-size: 0.94rem; }
   .toc ol { margin: 0.2rem 0 0; padding-left: 1.3rem; }
-  .toc a { color: var(--accent); text-decoration: none; }
-  .toc a:hover { text-decoration: underline; }
-
-  .diagram {
-    background: #ffffff;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 1.4rem;
-    margin: 1.4rem 0;
-    overflow-x: auto;
-  }
-  .diagram-caption {
-    font-size: 0.85rem;
-    color: var(--muted);
-    text-align: center;
-    margin-top: 0.6rem;
-    font-style: italic;
-  }
+  .toc a { color: var(--accent); text-decoration: none; } .toc a:hover { text-decoration: underline; }
+  .diagram { background: #ffffff; border: 1px solid var(--border);
+    border-radius: 8px; padding: 1.4rem; margin: 1.4rem 0; overflow-x: auto; }
+  .diagram-caption { font-size: 0.85rem; color: var(--muted); text-align: center;
+    margin-top: 0.6rem; font-style: italic; }
   svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
   svg text { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; fill: var(--fg); }
   svg .label { font-family: -apple-system, system-ui, sans-serif; font-size: 12px; }
   svg .small { font-size: 10px; fill: var(--muted); }
-
-  .legend {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 1rem;
-    justify-content: center;
-    margin-top: 0.8rem;
-    font-size: 0.85rem;
-  }
-  .legend-item { display: flex; align-items: center; gap: 0.4rem; }
-  .legend-swatch {
-    width: 14px;
-    height: 14px;
-    border-radius: 3px;
-    border: 1px solid rgba(0,0,0,0.15);
-  }
-
-  .tag {
-    display: inline-block;
-    padding: 0.1em 0.55em;
-    border-radius: 3px;
-    font-size: 0.78em;
-    font-weight: 600;
-    font-family: "SF Mono", Menlo, monospace;
-    color: white;
-    vertical-align: middle;
-  }
+  .tag { display: inline-block; padding: 0.1em 0.55em; border-radius: 3px;
+    font-size: 0.78em; font-weight: 600; font-family: "SF Mono", Menlo, monospace;
+    color: white; vertical-align: middle; }
   .tag.pub  { background: var(--pub); }
   .tag.priv { background: var(--priv); }
-  .tag.pkg  { background: var(--pkg); }
-  .tag.core { background: var(--core); }
-  .tag.warn { background: var(--warn); }
-
-  .callout {
-    border-left: 4px solid var(--accent);
-    background: #f0f4fa;
-    padding: 0.8rem 1rem;
-    margin: 1.2rem 0;
-    border-radius: 0 6px 6px 0;
-  }
+  .callout { border-left: 4px solid var(--accent); background: #f0f4fa;
+    padding: 0.8rem 1rem; margin: 1.2rem 0; border-radius: 0 6px 6px 0; }
   .callout.warn { border-color: var(--warn); background: #fbf3ec; }
   .callout.good { border-color: var(--accent-2); background: #eef6f1; }
   .callout strong { display: block; margin-bottom: 0.3rem; }
-
-  .two-col {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 1rem;
-    margin: 1.2rem 0;
-  }
-  @media (max-width: 720px) {
-    .two-col { grid-template-columns: 1fr; }
-  }
-
-  .file-tree {
-    font-family: "SF Mono", Menlo, monospace;
-    font-size: 0.88rem;
-    line-height: 1.55;
-    background: var(--code-bg);
-    padding: 1rem 1.2rem;
-    border-radius: 6px;
-    border: 1px solid var(--border);
-    white-space: pre;
-    overflow-x: auto;
-  }
-  .file-tree .pub  { color: var(--pub); font-weight: 600; }
-  .file-tree .priv { color: var(--priv); }
-  .file-tree .note { color: var(--muted); font-style: italic; }
+  .three-col { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; margin: 1.2rem 0; }
+  @media (max-width: 720px) { .three-col { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
 
 <h1>4. Structs</h1>
+<p class="lead">
+  Nominal types that group fields. Three forms — <strong>record</strong>, <strong>tuple</strong>,
+  <strong>unit</strong> — sharing construction, visibility, and destructuring rules.
+</p>
 
-<p>Structs are nominal types that group named (or positional) fields.</p>
+<div class="toc">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#forms">Three forms at a glance</a></li>
+    <li><a href="#record">Record structs</a></li>
+    <li><a href="#tuple">Tuple structs</a></li>
+    <li><a href="#unit">Unit structs</a></li>
+    <li><a href="#gen">Generic structs</a></li>
+    <li><a href="#vis">Visibility recap</a></li>
+    <li><a href="#methods">Methods, equality, memory</a></li>
+    <li><a href="#destr">Destructuring</a></li>
+  </ol>
+</div>
 
-<p>There are three forms:</p>
+<!-- =========================================================== -->
+<h2 id="forms">1. Three forms at a glance</h2>
 
-<ul>
-<li><strong>Record structs</strong> — named fields.</li>
-<li><strong>Tuple structs</strong> — positional fields.</li>
-<li><strong>Unit structs</strong> — no fields.</li>
-</ul>
+<div class="diagram">
+  <svg viewBox="0 0 920 260" role="img" aria-label="Three struct forms">
+    <!-- Record -->
+    <g transform="translate(20, 20)">
+      <rect width="280" height="220" rx="8" fill="#eaf0f8" stroke="#1a4a8a" stroke-width="2"/>
+      <text x="140" y="24" text-anchor="middle" font-weight="700" fill="#1a4a8a">Record struct</text>
+      <text x="140" y="42" text-anchor="middle" class="small">named fields</text>
 
-<h2 id="4-1-record-structs">4.1 Record structs</h2>
+      <g transform="translate(20, 58)" font-size="11.5">
+        <rect width="240" height="22" rx="3" fill="#fff" stroke="#1a4a8a"/>
+        <text x="10" y="16">pub struct Person {</text>
+        <rect y="26" width="240" height="22" rx="3" fill="#fff" stroke="#1a4a8a"/>
+        <text x="10" y="42">  pub name: str,</text>
+        <rect y="52" width="240" height="22" rx="3" fill="#fff" stroke="#1a4a8a"/>
+        <text x="10" y="68">  age: i32,</text>
+        <rect y="78" width="240" height="22" rx="3" fill="#fff" stroke="#1a4a8a"/>
+        <text x="10" y="94">}</text>
+      </g>
+
+      <text x="20" y="180" font-size="11">Person { name: "Alice", age: 30 }</text>
+      <text x="20" y="200" font-size="11">alice.name      // access</text>
+    </g>
+
+    <!-- Tuple -->
+    <g transform="translate(320, 20)">
+      <rect width="280" height="220" rx="8" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
+      <text x="140" y="24" text-anchor="middle" font-weight="700" fill="#2a6f4d">Tuple struct</text>
+      <text x="140" y="42" text-anchor="middle" class="small">positional fields · nominal</text>
+
+      <g transform="translate(20, 58)" font-size="11.5">
+        <rect width="240" height="22" rx="3" fill="#fff" stroke="#2a6f4d"/>
+        <text x="10" y="16">pub struct Pair(</text>
+        <rect y="26" width="240" height="22" rx="3" fill="#fff" stroke="#2a6f4d"/>
+        <text x="10" y="42">  pub i64,</text>
+        <rect y="52" width="240" height="22" rx="3" fill="#fff" stroke="#2a6f4d"/>
+        <text x="10" y="68">  pub i64,</text>
+        <rect y="78" width="240" height="22" rx="3" fill="#fff" stroke="#2a6f4d"/>
+        <text x="10" y="94">)</text>
+      </g>
+
+      <text x="20" y="180" font-size="11">Pair(3, 4)            // construct</text>
+      <text x="20" y="200" font-size="11">p.0       p.1         // access</text>
+    </g>
+
+    <!-- Unit -->
+    <g transform="translate(620, 20)">
+      <rect width="280" height="220" rx="8" fill="#f3eefa" stroke="#6b4ba8" stroke-width="2"/>
+      <text x="140" y="24" text-anchor="middle" font-weight="700" fill="#6b4ba8">Unit struct</text>
+      <text x="140" y="42" text-anchor="middle" class="small">no fields · singleton</text>
+
+      <g transform="translate(20, 58)" font-size="11.5">
+        <rect width="240" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/>
+        <text x="10" y="16">pub struct Red;</text>
+        <rect y="26" width="240" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/>
+        <text x="10" y="42">pub struct Green;</text>
+        <rect y="52" width="240" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/>
+        <text x="10" y="68">pub struct Blue;</text>
+      </g>
+
+      <text x="20" y="180" font-size="11">var c = Red           // bare name</text>
+      <text x="20" y="200" font-size="11">type Color = Red|Green|Blue</text>
+    </g>
+  </svg>
+  <div class="diagram-caption">All three are nominal — two structs with identical layouts are still different types.</div>
+</div>
+
+<!-- =========================================================== -->
+<h2 id="record">2. Record structs</h2>
 
 <pre><code>pub struct Person {
   pub name: str,
   age: i32,             // private to the defining module
 }</code></pre>
 
-<p>Every field has its own visibility. Fields default to private; <code>pub</code> exposes them.</p>
-
-<p>Field separators: comma. Trailing comma is allowed.</p>
+<p>Every field has its own visibility. Fields default to private; <code>pub</code> exposes them.
+Field separator is comma — trailing comma allowed.</p>
 
 <h3>Construction</h3>
 
@@ -215,9 +168,13 @@
   age:  30,
 }</code></pre>
 
-<p>All fields must be initialized (no defaults). If any field is private to another module, construction from outside the module is rejected by the compiler.</p>
+<p>All fields must be initialized — there are no defaults. If any field is private
+to another module, construction from outside that module is rejected.</p>
 
-<p>For "smart constructors" — initialization that may fail, normalize input, or fetch from a pool — define a <code>new</code> static method via <code>extend</code>, then use the type-as-constructor shorthand:</p>
+<h3>Smart constructors via <code>extend</code></h3>
+
+<p>For initialization that may fail, normalize input, or fetch from a pool — define a
+<code>new</code> static method via <code>extend</code>, then use the type-as-constructor shorthand:</p>
 
 <pre><code>extend Person {
   function new(name: str, age: i32): Person | InvalidAge {
@@ -227,69 +184,86 @@
 
 var alice = Person("Alice", 30)?    // same as Person.new("Alice", 30)?</code></pre>
 
-<p>The shorthand <code>T(args)</code> is purely syntactic sugar for <code>T.new(args)</code> — see <a href="09-functions.html#910-type-as-constructor-shorthand">09-functions.md §9.10</a>. It does not constrain what <code>new</code> returns.</p>
+<div class="callout">
+  <strong>Type-as-constructor shorthand</strong>
+  <code>T(args)</code> is purely syntactic sugar for <code>T.new(args)</code>
+  (see <a href="09-functions.html#ctor">09-functions §10</a>). It does not constrain what
+  <code>new</code> returns.
+</div>
 
-<h3>Field init shorthand</h3>
+<h3>Field init shorthand &amp; spread</h3>
 
-<p>When a local variable's name matches a field name, the field name may stand alone:</p>
+<div class="diagram">
+  <svg viewBox="0 0 920 220" role="img" aria-label="Shorthand and spread">
+    <!-- Shorthand -->
+    <g transform="translate(20, 20)">
+      <rect width="430" height="180" rx="8" fill="#fafafa" stroke="#d6d3cd"/>
+      <text x="14" y="22" font-weight="700">Field init shorthand</text>
+      <text x="14" y="40" class="small">When the local name matches a field name</text>
 
-<pre><code>var name = "Alice"
-var age  = 30
-var alice = Person { name, age }   // shorthand for { name: name, age: age }</code></pre>
+      <g transform="translate(20, 58)" font-size="11.5">
+        <text y="0">var name = "Alice"</text>
+        <text y="18">var age  = 30</text>
+        <rect x="0" y="34" width="380" height="32" rx="4" fill="#eef6f1" stroke="#2a6f4d"/>
+        <text x="14" y="54" fill="#2a6f4d">var alice = Person { name, age }</text>
+        <text y="84" class="small">equivalent to { name: name, age: age }</text>
+      </g>
+    </g>
 
-<h3>Spread (functional update)</h3>
+    <!-- Spread -->
+    <g transform="translate(470, 20)">
+      <rect width="430" height="180" rx="8" fill="#fafafa" stroke="#d6d3cd"/>
+      <text x="14" y="22" font-weight="700">Spread — functional update</text>
+      <text x="14" y="40" class="small">..source copies fields; explicit overrides win</text>
 
-<pre><code>var older = Person { ..alice, age: 31 }</code></pre>
+      <g transform="translate(20, 58)" font-size="11.5">
+        <text y="0">var alice = Person { name: "Alice", age: 30 }</text>
+        <rect x="0" y="14" width="380" height="32" rx="4" fill="#f3eefa" stroke="#6b4ba8"/>
+        <text x="14" y="34" fill="#6b4ba8">var older = Person { ..alice, age: 31 }</text>
+        <text y="62" class="small">refs are copied (RC++), source is unchanged</text>
+        <text y="82" class="small">trailing position recommended for clarity</text>
+      </g>
+    </g>
+  </svg>
+  <div class="diagram-caption">Both forms are pure construction — they do not move the source.</div>
+</div>
 
-<p><code>..expr</code> copies all fields from <code>expr</code> (which must be of the same struct type). Explicit fields override the spread. The spread must appear at the end (or interleaved with overrides; trailing position is recommended for clarity).</p>
-
-<p>A spread does not move or invalidate the source — it copies field values. For reference-type fields, the copy is a reference copy (refcount increment).</p>
-
-<h3>Field access</h3>
-
-<pre><code>alice.name
-alice.age = 31    // mutation; see [06-variables.md]</code></pre>
-
-<p>External access to private fields is rejected by the compiler.</p>
-
-<h2 id="4-2-tuple-structs">4.2 Tuple structs</h2>
+<!-- =========================================================== -->
+<h2 id="tuple">3. Tuple structs</h2>
 
 <p>A nominal type whose fields are positional:</p>
 
 <pre><code>pub struct Pair(pub i64, pub i64)
-pub struct Wrapper&lt;T&gt;(T)</code></pre>
+pub struct Wrapper&lt;T&gt;(T)
 
-<p>Constructed by name, like a function call:</p>
+var p = Pair(3, 4)
+var w = Wrapper(42)
 
-<pre><code>var p = Pair(3, 4)
-var w = Wrapper(42)</code></pre>
-
-<p>Accessed positionally with <code>.0</code>, <code>.1</code>, ...</p>
-
-<pre><code>print(p.0 as str)
+print(p.0 as str)
 print(p.1 as str)</code></pre>
 
-<p>Tuple structs are useful when you want a distinct nominal type but no meaningful field names. They are <em>not</em> the same as anonymous tuples (see <a href="05-tuples.html">05-tuples.html</a>): tuple structs are nominal, anonymous tuples are structural.</p>
+<div class="callout">
+  <strong>Tuple struct ≠ anonymous tuple</strong>
+  Tuple structs are <strong>nominal</strong> — distinct from any other tuple struct with the
+  same shape. Anonymous tuples (<a href="05-tuples.html">05-tuples</a>) are
+  <strong>structural</strong>. Use tuple structs when the name matters; tuples when only the shape does.
+</div>
 
-<h2 id="4-3-unit-structs">4.3 Unit structs</h2>
-
-<p>A struct with no fields:</p>
+<!-- =========================================================== -->
+<h2 id="unit">4. Unit structs</h2>
 
 <pre><code>pub struct Red;
 pub struct Green;
-pub struct Blue;</code></pre>
+pub struct Blue;
 
-<p>Constructed by name without parentheses:</p>
+var c: Red | Green | Blue = Red    // mentioning the name constructs the value
+pub type Color = Red | Green | Blue</code></pre>
 
-<pre><code>var c: Red | Green | Blue = Red</code></pre>
+<p>Unit structs are the standard way to enumerate distinguishable variants.
+The bare name in expression context constructs the unique value.</p>
 
-<p>(Mentioning the name in an expression context constructs the unique value.)</p>
-
-<p>Unit structs are the standard way to enumerate distinguishable variants:</p>
-
-<pre><code>pub type Color = Red | Green | Blue</code></pre>
-
-<h2 id="4-4-generic-structs">4.4 Generic structs</h2>
+<!-- =========================================================== -->
+<h2 id="gen">5. Generic structs</h2>
 
 <pre><code>pub struct Box&lt;T&gt; {
   pub value: T,
@@ -298,66 +272,123 @@ pub struct Blue;</code></pre>
 pub struct Pair&lt;A, B&gt; {
   pub first:  A,
   pub second: B,
-}</code></pre>
+}
 
-<p>Construction infers type parameters from the field values when possible:</p>
+var b = Box { value: 42 }                  // Box&lt;i64&gt;        — inferred
+var p = Pair { first: 1, second: "x" }     // Pair&lt;i64, str&gt; — inferred
+var b2 = Box&lt;i64&gt; { value: 42 }            // explicit</code></pre>
 
-<pre><code>var b = Box { value: 42 }       // Box&lt;i64&gt;
-var p = Pair { first: 1, second: "x" }   // Pair&lt;i64, str&gt;</code></pre>
+<!-- =========================================================== -->
+<h2 id="vis">6. Visibility recap</h2>
 
-<p>Explicit form:</p>
+<div class="three-col">
+  <div>
+    <h3>Struct definition</h3>
+    <p><span class="tag priv">(none)</span> Only visible to the defining module.</p>
+    <p><span class="tag pub">pub</span> Visible to importers of the module.</p>
+  </div>
+  <div>
+    <h3>Per-field</h3>
+    <p><span class="tag priv">(none)</span> Read/write only from the defining module.</p>
+    <p><span class="tag pub">pub</span> Read/write from anywhere the struct is visible.</p>
+  </div>
+  <div>
+    <h3>Edge cases</h3>
+    <p>A <code>pub struct</code> with all-private fields can be <em>returned</em> and held by
+    reference, but not constructed or destructured outside its module.</p>
+  </div>
+</div>
 
-<pre><code>var b = Box&lt;i64&gt; { value: 42 }</code></pre>
+<!-- =========================================================== -->
+<h2 id="methods">7. Methods, equality, memory</h2>
 
-<h2 id="4-5-visibility-recap">4.5 Visibility recap</h2>
+<div class="diagram">
+  <svg viewBox="0 0 920 270" role="img" aria-label="Memory and methods">
+    <!-- Memory: managed -->
+    <g transform="translate(20, 20)">
+      <rect width="430" height="240" rx="8" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
+      <text x="14" y="22" font-weight="700" fill="#2a6f4d">Managed struct on the heap</text>
 
-<table>
-<thead><tr><th>Modifier</th><th>Effect</th></tr></thead>
-<tbody>
-<tr><td>(none) on struct</td><td>Struct visible only to its defining module</td></tr>
-<tr><td><code>pub</code> on struct</td><td>Struct visible to importers</td></tr>
-<tr><td>(none) on field</td><td>Field readable/writable only from defining module</td></tr>
-<tr><td><code>pub</code> on field</td><td>Field readable/writable from anywhere the struct is visible</td></tr>
-</tbody>
-</table>
+      <rect x="20" y="40" width="120" height="60" rx="4" fill="#fff" stroke="#2a6f4d"/>
+      <text x="80" y="60" text-anchor="middle" font-size="11">handle (ptr)</text>
+      <text x="80" y="78" text-anchor="middle" class="small">field / var</text>
 
-<p>A <code>pub struct</code> with all-private fields can be returned from functions and held by reference, but not constructed or destructured outside its module.</p>
+      <path d="M 140 70 L 200 70" stroke="#5a5a60" stroke-width="2" marker-end="url(#a)"/>
 
-<h2 id="4-6-methods">4.6 Methods</h2>
+      <rect x="200" y="40" width="210" height="160" rx="4" fill="#fff" stroke="#2a6f4d"/>
+      <text x="305" y="60" text-anchor="middle" font-weight="700">heap object</text>
 
-<p>Methods are added with <code>extend</code> blocks; see <a href="10-interfaces.html">10-interfaces.html</a>. A struct definition does <strong>not</strong> contain its own method bodies — they live in <code>extend</code> blocks. (The original prototype allowed methods inline in <code>struct</code> definitions; the current spec requires <code>extend</code>.)</p>
+      <rect x="216" y="74" width="180" height="26" rx="3" fill="#fbf3ec" stroke="#b54708"/>
+      <text x="306" y="92" text-anchor="middle" font-size="11" fill="#b54708">GC header (negative offset)</text>
 
-<h2 id="4-7-equality-hashing-comparison">4.7 Equality, hashing, comparison</h2>
+      <rect x="216" y="108" width="180" height="22" rx="3" fill="#fafafa" stroke="#d6d3cd"/>
+      <text x="306" y="124" text-anchor="middle" font-size="11">name: str ref →</text>
 
-<p>Structs are not automatically <code>Eq</code>, <code>Hash</code>, or <code>Ord</code>. Implement the corresponding interface (see <a href="15-operators.html">15-operators.html</a>) to enable <code>==</code>, hashing, and ordering.</p>
+      <rect x="216" y="134" width="180" height="22" rx="3" fill="#fafafa" stroke="#d6d3cd"/>
+      <text x="306" y="150" text-anchor="middle" font-size="11">age: i32 = 30</text>
 
-<p>Two struct values of the same type with the same field values are not implicitly equal — equality is whatever <code>Eq</code> says it is, or <code>==</code> is a compile error.</p>
+      <rect x="216" y="160" width="180" height="22" rx="3" fill="#fafafa" stroke="#d6d3cd"/>
+      <text x="306" y="176" text-anchor="middle" font-size="11">↑ field block</text>
 
-<h2 id="4-8-memory-representation">4.8 Memory representation</h2>
+      <text x="14" y="226" font-size="11" class="small">handle points at the field block;</text>
+      <text x="14" y="240" font-size="11" class="small">GC header sits just before it.</text>
+    </g>
 
-<p>Non-extern structs live on the managed heap with a GC header (see <a href="16-memory.html">16-memory.html</a>). A struct value is referenced by a pointer to the object's fields; the GC header sits at a negative offset.</p>
+    <!-- Methods -->
+    <g transform="translate(470, 20)">
+      <rect width="430" height="240" rx="8" fill="#fafafa" stroke="#d6d3cd"/>
+      <text x="14" y="22" font-weight="700">Where methods live</text>
 
-<p><code>extern struct</code> is laid out as a C struct, lives on the foreign heap, has no GC header. See <a href="19-ffi.html">19-ffi.html</a>.</p>
+      <rect x="14" y="40" width="402" height="40" rx="4" fill="#fff" stroke="#1a4a8a"/>
+      <text x="215" y="64" text-anchor="middle" font-size="11">struct Person { name: str, age: i32 }   ← fields only</text>
 
-<h2 id="4-9-destructuring">4.9 Destructuring</h2>
+      <rect x="14" y="90" width="402" height="80" rx="4" fill="#eaf0f8" stroke="#1a4a8a"/>
+      <text x="215" y="110" text-anchor="middle" font-weight="700" fill="#1a4a8a">extend Person {</text>
+      <text x="28" y="128" font-size="11">  function greet(self): str { … }</text>
+      <text x="28" y="146" font-size="11">  function new(name: str, age: i32): Person { … }</text>
+      <text x="215" y="164" text-anchor="middle">}</text>
 
-<p>Record structs are destructurable in <code>var</code> bindings and patterns:</p>
+      <text x="14" y="194" font-size="11">Equality requires <tspan font-family="SF Mono, Menlo, monospace">Eq</tspan>;</text>
+      <text x="14" y="212" font-size="11">no automatic structural equality.</text>
+      <text x="14" y="230" font-size="11">See 10-interfaces and 15-operators.</text>
+    </g>
 
-<pre><code>var Person { name, age } = alice</code></pre>
+    <defs>
+      <marker id="a" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+        <path d="M 0 0 L 9 3 L 0 6 z" fill="#5a5a60"/>
+      </marker>
+    </defs>
+  </svg>
+  <div class="diagram-caption">Method bodies do <em>not</em> live in the struct definition. They live in <code>extend</code> blocks.</div>
+</div>
 
-<p>In patterns (e.g. inside <code>match</code>), the <code>..</code> rest token can ignore remaining fields:</p>
+<div class="callout warn">
+  <strong>No structural equality</strong>
+  Two struct values with the same field values are <strong>not</strong> implicitly equal —
+  equality is whatever <code>Eq</code> says it is, or <code>==</code> is a compile error.
+  Same goes for <code>Hash</code> (no auto-derived) and <code>Ord</code>. See
+  <a href="15-operators.html">15-operators</a>.
+</div>
 
-<pre><code>match alice {
+<p><code>extern struct</code> is laid out as a C struct, lives on the foreign heap, and has
+<strong>no</strong> GC header — see <a href="19-ffi.html">19-ffi</a>.</p>
+
+<!-- =========================================================== -->
+<h2 id="destr">8. Destructuring</h2>
+
+<pre><code>// Record — destructure by name
+var Person { name, age } = alice
+
+// In patterns — `..` ignores remaining fields
+match alice {
   Person { name, .. } =&gt; print(name),
-}</code></pre>
+}
 
-<p>Tuple structs destructure positionally:</p>
+// Tuple — destructure positionally
+var Pair(x, y) = p
 
-<pre><code>var Pair(x, y) = p</code></pre>
-
-<p>Unit structs destructure by name only and bind nothing:</p>
-
-<pre><code>match c {
+// Unit — by name, binds nothing
+match c {
   Red   =&gt; "red",
   Green =&gt; "green",
   Blue  =&gt; "blue",

@@ -5,351 +5,459 @@
 <title>2. Primitive Types</title>
 <style>
   :root {
-    --fg: #1b1b1d;
-    --muted: #5a5a60;
-    --bg: #fdfdfc;
-    --accent: #1a4a8a;
-    --accent-2: #2a6f4d;
-    --warn: #b54708;
-    --code-bg: #f4f2ee;
-    --code-fg: #1b1b1d;
-    --border: #e4e1dc;
-    --table-stripe: #f8f7f4;
-    --pub: #2a6f4d;
-    --priv: #b54708;
-    --pkg: #1a4a8a;
-    --core: #6b4ba8;
+    --fg: #1b1b1d; --muted: #5a5a60; --bg: #fdfdfc;
+    --accent: #1a4a8a; --accent-2: #2a6f4d; --warn: #b54708;
+    --code-bg: #f4f2ee; --code-fg: #1b1b1d; --border: #e4e1dc;
+    --table-stripe: #f8f7f4; --pub: #2a6f4d; --priv: #b54708;
+    --pkg: #1a4a8a; --core: #6b4ba8;
   }
-  html { box-sizing: border-box; }
-  *, *::before, *::after { box-sizing: inherit; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-    color: var(--fg);
-    background: var(--bg);
-    line-height: 1.55;
-    max-width: 980px;
-    margin: 0 auto;
-    padding: 2.5rem 1.5rem 6rem;
-  }
-  h1, h2, h3, h4 {
-    color: var(--fg);
-    line-height: 1.25;
-    margin-top: 2.2rem;
-    margin-bottom: 0.6rem;
-  }
+  html { box-sizing: border-box; } *, *::before, *::after { box-sizing: inherit; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color: var(--fg); background: var(--bg); line-height: 1.55;
+    max-width: 980px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem; }
+  h1, h2, h3, h4 { color: var(--fg); line-height: 1.25; margin-top: 2.2rem; margin-bottom: 0.6rem; }
   h1 { font-size: 2rem; border-bottom: 2px solid var(--border); padding-bottom: 0.4rem; }
   h2 { font-size: 1.45rem; margin-top: 2.6rem; }
   h3 { font-size: 1.15rem; color: var(--accent); }
   h4 { font-size: 1rem; color: var(--muted); }
-  p { margin: 0.7rem 0; }
-  ul, ol { margin: 0.7rem 0; padding-left: 1.6rem; }
-  li { margin: 0.3rem 0; }
-  code {
-    font-family: "SF Mono", Menlo, Consolas, "Courier New", monospace;
-    background: var(--code-bg);
-    color: var(--code-fg);
-    padding: 0.1em 0.35em;
-    border-radius: 3px;
-    font-size: 0.92em;
-  }
-  pre {
-    background: var(--code-bg);
-    color: var(--code-fg);
-    padding: 0.9rem 1rem;
-    border-radius: 6px;
-    overflow-x: auto;
-    font-size: 0.88rem;
-    line-height: 1.5;
-    border: 1px solid var(--border);
-  }
+  p { margin: 0.7rem 0; } ul, ol { margin: 0.7rem 0; padding-left: 1.6rem; } li { margin: 0.3rem 0; }
+  code { font-family: "SF Mono", Menlo, Consolas, "Courier New", monospace;
+    background: var(--code-bg); color: var(--code-fg); padding: 0.1em 0.35em;
+    border-radius: 3px; font-size: 0.92em; }
+  pre { background: var(--code-bg); color: var(--code-fg); padding: 0.9rem 1rem;
+    border-radius: 6px; overflow-x: auto; font-size: 0.88rem; line-height: 1.5;
+    border: 1px solid var(--border); }
   pre code { background: none; padding: 0; font-size: inherit; }
-  table {
-    border-collapse: collapse;
-    width: 100%;
-    margin: 1rem 0;
-    font-size: 0.94rem;
-  }
-  th, td {
-    text-align: left;
-    padding: 0.5rem 0.7rem;
-    border-bottom: 1px solid var(--border);
-    vertical-align: top;
-  }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: 0.94rem; }
+  th, td { text-align: left; padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--border); vertical-align: top; }
   th { background: var(--code-bg); font-weight: 600; }
   tbody tr:nth-child(even) { background: var(--table-stripe); }
-  .lead {
-    font-size: 1.05rem;
-    color: var(--muted);
-    margin-bottom: 1.6rem;
-  }
-  .toc {
-    background: var(--code-bg);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 1rem 1.2rem;
-    margin: 1.6rem 0 2rem;
-    font-size: 0.94rem;
-  }
+  .lead { font-size: 1.05rem; color: var(--muted); margin-bottom: 1.6rem; }
+  .toc { background: var(--code-bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 1rem 1.2rem; margin: 1.6rem 0 2rem; font-size: 0.94rem; }
   .toc ol { margin: 0.2rem 0 0; padding-left: 1.3rem; }
-  .toc a { color: var(--accent); text-decoration: none; }
-  .toc a:hover { text-decoration: underline; }
-
-  .diagram {
-    background: #ffffff;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 1.4rem;
-    margin: 1.4rem 0;
-    overflow-x: auto;
-  }
-  .diagram-caption {
-    font-size: 0.85rem;
-    color: var(--muted);
-    text-align: center;
-    margin-top: 0.6rem;
-    font-style: italic;
-  }
+  .toc a { color: var(--accent); text-decoration: none; } .toc a:hover { text-decoration: underline; }
+  .diagram { background: #ffffff; border: 1px solid var(--border);
+    border-radius: 8px; padding: 1.4rem; margin: 1.4rem 0; overflow-x: auto; }
+  .diagram-caption { font-size: 0.85rem; color: var(--muted); text-align: center;
+    margin-top: 0.6rem; font-style: italic; }
   svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
   svg text { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; fill: var(--fg); }
   svg .label { font-family: -apple-system, system-ui, sans-serif; font-size: 12px; }
   svg .small { font-size: 10px; fill: var(--muted); }
-
-  .legend {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 1rem;
-    justify-content: center;
-    margin-top: 0.8rem;
-    font-size: 0.85rem;
-  }
-  .legend-item { display: flex; align-items: center; gap: 0.4rem; }
-  .legend-swatch {
-    width: 14px;
-    height: 14px;
-    border-radius: 3px;
-    border: 1px solid rgba(0,0,0,0.15);
-  }
-
-  .tag {
-    display: inline-block;
-    padding: 0.1em 0.55em;
-    border-radius: 3px;
-    font-size: 0.78em;
-    font-weight: 600;
-    font-family: "SF Mono", Menlo, monospace;
-    color: white;
-    vertical-align: middle;
-  }
-  .tag.pub  { background: var(--pub); }
-  .tag.priv { background: var(--priv); }
-  .tag.pkg  { background: var(--pkg); }
-  .tag.core { background: var(--core); }
-  .tag.warn { background: var(--warn); }
-
-  .callout {
-    border-left: 4px solid var(--accent);
-    background: #f0f4fa;
-    padding: 0.8rem 1rem;
-    margin: 1.2rem 0;
-    border-radius: 0 6px 6px 0;
-  }
+  .callout { border-left: 4px solid var(--accent); background: #f0f4fa;
+    padding: 0.8rem 1rem; margin: 1.2rem 0; border-radius: 0 6px 6px 0; }
   .callout.warn { border-color: var(--warn); background: #fbf3ec; }
   .callout.good { border-color: var(--accent-2); background: #eef6f1; }
   .callout strong { display: block; margin-bottom: 0.3rem; }
-
-  .two-col {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 1rem;
-    margin: 1.2rem 0;
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 1.2rem 0; }
+  @media (max-width: 720px) { .two-col { grid-template-columns: 1fr; } }
+  .prim-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 0.6rem; margin: 1rem 0; }
+  .prim {
+    background: #fff; border: 1px solid var(--border); border-radius: 6px;
+    padding: 0.55rem 0.7rem; font-family: "SF Mono", Menlo, monospace; font-size: 0.85rem;
   }
-  @media (max-width: 720px) {
-    .two-col { grid-template-columns: 1fr; }
-  }
-
-  .file-tree {
-    font-family: "SF Mono", Menlo, monospace;
-    font-size: 0.88rem;
-    line-height: 1.55;
-    background: var(--code-bg);
-    padding: 1rem 1.2rem;
-    border-radius: 6px;
-    border: 1px solid var(--border);
-    white-space: pre;
-    overflow-x: auto;
-  }
-  .file-tree .pub  { color: var(--pub); font-weight: 600; }
-  .file-tree .priv { color: var(--priv); }
-  .file-tree .note { color: var(--muted); font-style: italic; }
+  .prim .name { font-weight: 700; font-size: 0.95rem; display: block; }
+  .prim .meta { color: var(--muted); font-size: 0.78rem; display: block; margin-top: 0.15rem; }
+  .prim.int  { border-left: 4px solid var(--accent); }
 </style>
 </head>
 <body>
 
 <h1>2. Primitive Types</h1>
+<p class="lead">
+  The seven primitives — integers, floats, <code>bool</code>, <code>char</code>, <code>str</code>,
+  and <code>null</code> — plus rules for arithmetic, conversions, equality, and storage.
+</p>
 
-<h2 id="2-1-integers">2.1 Integers</h2>
+<div class="toc">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#int">Integers</a></li>
+    <li><a href="#float">Floats</a></li>
+    <li><a href="#bool">Booleans</a></li>
+    <li><a href="#char">Characters</a></li>
+    <li><a href="#str">Strings</a></li>
+    <li><a href="#null">The empty type — <code>null</code></a></li>
+    <li><a href="#cmp">Equality &amp; ordering</a></li>
+    <li><a href="#size">Sizes &amp; alignment</a></li>
+  </ol>
+</div>
 
-<p>Sizes are always explicit. There is no architecture-dependent default integer type.</p>
+<!-- =========================================================== -->
+<h2 id="overview">At a glance</h2>
 
-<table>
-<thead><tr><th>Type</th><th>Width</th><th>Range</th></tr></thead>
-<tbody>
-<tr><td><code>i8</code></td><td>8 bits</td><td>−128 .. 127</td></tr>
-<tr><td><code>i16</code></td><td>16 bits</td><td>−32_768 .. 32_767</td></tr>
-<tr><td><code>i32</code></td><td>32 bits</td><td>−2_147_483_648 .. 2_147_483_647</td></tr>
-<tr><td><code>i64</code></td><td>64 bits</td><td>−2⁶³ .. 2⁶³−1</td></tr>
-<tr><td><code>u8</code></td><td>8 bits</td><td>0 .. 255</td></tr>
-<tr><td><code>u16</code></td><td>16 bits</td><td>0 .. 65_535</td></tr>
-<tr><td><code>u32</code></td><td>32 bits</td><td>0 .. 4_294_967_295</td></tr>
-<tr><td><code>u64</code></td><td>64 bits</td><td>0 .. 2⁶⁴−1</td></tr>
-<tr><td><code>isize</code></td><td>pointer-sized</td><td>platform's signed pointer size</td></tr>
-<tr><td><code>usize</code></td><td>pointer-sized</td><td>platform's unsigned pointer size</td></tr>
-</tbody>
-</table>
+<div class="diagram">
+  <svg viewBox="0 0 920 230" role="img" aria-label="Primitive families">
+    <g transform="translate(20, 20)">
+      <rect width="200" height="190" rx="8" fill="#eaf0f8" stroke="#1a4a8a"/>
+      <text x="100" y="22" text-anchor="middle" font-weight="700" fill="#1a4a8a">Integers</text>
+      <text x="100" y="40" text-anchor="middle" class="small">explicit width</text>
+      <text x="14" y="68" font-size="11.5">i8  i16  i32  i64</text>
+      <text x="14" y="86" font-size="11.5">u8  u16  u32  u64</text>
+      <text x="14" y="104" font-size="11.5">isize  usize</text>
+      <text x="14" y="138" font-size="11" class="small">default literal: i64</text>
+      <text x="14" y="156" font-size="11" class="small">debug: overflow → panic</text>
+      <text x="14" y="172" font-size="11" class="small">release: overflow → wrap</text>
+    </g>
 
-<p><code>isize</code> / <code>usize</code> are the only types whose width depends on the target. They are intended for memory offsets, sizes, and collection indices. They are not interchangeable with the fixed-size integers without explicit <code>as</code> casts.</p>
+    <g transform="translate(230, 20)">
+      <rect width="160" height="190" rx="8" fill="#f3eefa" stroke="#6b4ba8"/>
+      <text x="80" y="22" text-anchor="middle" font-weight="700" fill="#6b4ba8">Floats</text>
+      <text x="80" y="40" text-anchor="middle" class="small">IEEE 754</text>
+      <text x="14" y="68" font-size="11.5">f32   f64</text>
+      <text x="14" y="102" font-size="11" class="small">default literal: f64</text>
+      <text x="14" y="120" font-size="11" class="small">÷0 → ±∞</text>
+      <text x="14" y="138" font-size="11" class="small">0/0 → NaN</text>
+      <text x="14" y="156" font-size="11" class="small">no implicit f32↔f64</text>
+      <text x="14" y="174" font-size="11" class="small">no panic</text>
+    </g>
 
-<p>Default integer literal type is <code>i64</code> (see <a href="01-lexical.html">01-lexical.html</a>).</p>
+    <g transform="translate(400, 20)">
+      <rect width="120" height="190" rx="8" fill="#eef6f1" stroke="#2a6f4d"/>
+      <text x="60" y="22" text-anchor="middle" font-weight="700" fill="#2a6f4d">bool</text>
+      <text x="60" y="40" text-anchor="middle" class="small">primitive</text>
+      <text x="14" y="68" font-size="11.5">true</text>
+      <text x="14" y="86" font-size="11.5">false</text>
+      <text x="14" y="120" font-size="11" class="small">&amp;&amp; || !</text>
+      <text x="14" y="138" font-size="11" class="small">short-circuit</text>
+      <text x="14" y="156" font-size="11" class="small">no ordering</text>
+    </g>
+
+    <g transform="translate(530, 20)">
+      <rect width="140" height="190" rx="8" fill="#fbf3ec" stroke="#b54708"/>
+      <text x="70" y="22" text-anchor="middle" font-weight="700" fill="#b54708">char</text>
+      <text x="70" y="40" text-anchor="middle" class="small">32-bit USV</text>
+      <text x="14" y="70" font-size="11.5">'a' '\n'</text>
+      <text x="14" y="88" font-size="11.5">'\u{1F600}'</text>
+      <text x="14" y="118" font-size="11" class="small">range:</text>
+      <text x="14" y="134" font-size="11" class="small">0..=0x10FFFF</text>
+      <text x="14" y="150" font-size="11" class="small">no surrogates</text>
+      <text x="14" y="172" font-size="11" class="small">↔ u32 via as</text>
+    </g>
+
+    <g transform="translate(680, 20)">
+      <rect width="160" height="190" rx="8" fill="#fff" stroke="#6b6b70"/>
+      <text x="80" y="22" text-anchor="middle" font-weight="700" fill="#6b6b70">str · null</text>
+      <text x="80" y="40" text-anchor="middle" class="small">heap · empty</text>
+      <text x="14" y="68" font-size="11.5">str — UTF-8, immut.</text>
+      <text x="14" y="86" font-size="11.5">null — unit type</text>
+      <text x="14" y="118" font-size="11" class="small">str = managed heap</text>
+      <text x="14" y="136" font-size="11" class="small">interpolation: $x</text>
+      <text x="14" y="160" font-size="11" class="small">null also typed as null</text>
+      <text x="14" y="176" font-size="11" class="small">no void · no unit</text>
+    </g>
+  </svg>
+  <div class="diagram-caption">Five families. <code>isize</code>/<code>usize</code> are the only platform-dependent widths.</div>
+</div>
+
+<!-- =========================================================== -->
+<h2 id="int">1. Integers</h2>
+
+<p>Widths are always explicit; there is no architecture-default integer type.</p>
+
+<div class="prim-grid">
+  <div class="prim int"><span class="name">i8</span><span class="meta">8 bits · −128..127</span></div>
+  <div class="prim int"><span class="name">i16</span><span class="meta">16 bits · ±32K</span></div>
+  <div class="prim int"><span class="name">i32</span><span class="meta">32 bits · ±2.1B</span></div>
+  <div class="prim int"><span class="name">i64</span><span class="meta">64 bits · ±9.2E18</span></div>
+  <div class="prim int"><span class="name">u8</span><span class="meta">8 bits · 0..255</span></div>
+  <div class="prim int"><span class="name">u16</span><span class="meta">16 bits · 0..65K</span></div>
+  <div class="prim int"><span class="name">u32</span><span class="meta">32 bits · 0..4.3B</span></div>
+  <div class="prim int"><span class="name">u64</span><span class="meta">64 bits · 0..1.8E19</span></div>
+  <div class="prim int"><span class="name">isize</span><span class="meta">ptr size · signed</span></div>
+  <div class="prim int"><span class="name">usize</span><span class="meta">ptr size · unsigned</span></div>
+</div>
+
+<p><code>isize</code>/<code>usize</code> are intended for memory offsets, sizes, and collection indices.
+They are <strong>not</strong> interchangeable with fixed-width integers — explicit <code>as</code> required.</p>
 
 <h3>Arithmetic, overflow, division by zero</h3>
 
-<ul>
-<li>Integer overflow:
-<ul>
-<li><strong>Debug builds</strong>: panics (see <a href="14-panics.html">14-panics.html</a>).</li>
-<li><strong>Release builds</strong>: wraps (two's complement for signed, modular for unsigned).</li>
-</ul>
-</li>
-<li>Integer division by zero: panics in both debug and release.</li>
-<li>Modulo by zero: panics in both debug and release.</li>
-</ul>
+<div class="diagram">
+  <svg viewBox="0 0 920 290" role="img" aria-label="Overflow behavior">
+    <defs>
+      <marker id="arr" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+        <path d="M 0 0 L 9 3 L 0 6 z" fill="#5a5a60"/>
+      </marker>
+    </defs>
 
-<p>Explicit non-default overflow behavior is provided by stdlib functions on each numeric type:</p>
+    <g transform="translate(20, 20)">
+      <text x="0" y="14" font-weight="700">Integer overflow</text>
 
-<pre><code>i32.wrapping_add(a, b)
-i32.checked_add(a, b)   // returns i32 | null
-i32.saturating_add(a, b)
-i32.overflowing_add(a, b) // returns (i32, bool)</code></pre>
+      <rect x="0" y="30" width="180" height="50" rx="6" fill="#fbf3ec" stroke="#b54708"/>
+      <text x="90" y="50" text-anchor="middle" font-weight="700">Debug</text>
+      <text x="90" y="68" text-anchor="middle" font-size="11">panic</text>
 
-<p>Same families exist for <code>sub</code>, <code>mul</code>, <code>div</code>, <code>rem</code>, <code>neg</code>, <code>shl</code>, <code>shr</code>.</p>
+      <rect x="0" y="100" width="180" height="50" rx="6" fill="#eef6f1" stroke="#2a6f4d"/>
+      <text x="90" y="120" text-anchor="middle" font-weight="700">Release</text>
+      <text x="90" y="138" text-anchor="middle" font-size="11">wrap (mod 2ⁿ)</text>
 
-<h3>Conversions</h3>
+      <path d="M 180 55 L 240 55" stroke="#5a5a60" stroke-width="1.5" marker-end="url(#arr)"/>
+      <path d="M 180 125 L 240 125" stroke="#5a5a60" stroke-width="1.5" marker-end="url(#arr)"/>
 
-<p>All numeric conversions are explicit, via <code>as</code>:</p>
+      <rect x="240" y="30" width="220" height="120" rx="6" fill="#fff" stroke="#d6d3cd"/>
+      <text x="350" y="50" text-anchor="middle" font-weight="700">Override at the call site</text>
+      <text x="252" y="74" font-size="11">i32.wrapping_add(a, b)</text>
+      <text x="252" y="92" font-size="11">i32.checked_add(a, b) → i32 | null</text>
+      <text x="252" y="110" font-size="11">i32.saturating_add(a, b)</text>
+      <text x="252" y="128" font-size="11">i32.overflowing_add(a, b) → (i32, bool)</text>
+      <text x="350" y="144" text-anchor="middle" class="small">same for sub/mul/div/rem/neg/shl/shr</text>
+    </g>
+
+    <g transform="translate(490, 20)">
+      <text x="0" y="14" font-weight="700">Division &amp; modulo by zero</text>
+
+      <rect x="0" y="30" width="400" height="40" rx="6" fill="#fbf3ec" stroke="#b54708"/>
+      <text x="200" y="55" text-anchor="middle">always panic (debug AND release)</text>
+
+      <text x="0" y="100" font-weight="700">Numeric conversion via <tspan font-family="SF Mono, Menlo, monospace">as</tspan></text>
+
+      <rect x="0" y="116" width="400" height="34" rx="4" fill="#eef6f1" stroke="#2a6f4d"/>
+      <text x="200" y="138" text-anchor="middle" font-size="11">int → int : truncates · never panics</text>
+
+      <rect x="0" y="156" width="400" height="34" rx="4" fill="#eef6f1" stroke="#2a6f4d"/>
+      <text x="200" y="178" text-anchor="middle" font-size="11">f → i : truncate toward 0  ·  NaN → panic  ·  oor → panic</text>
+
+      <rect x="0" y="196" width="400" height="34" rx="4" fill="#eef6f1" stroke="#2a6f4d"/>
+      <text x="200" y="218" text-anchor="middle" font-size="11">i → f : exact if representable</text>
+    </g>
+
+    <g transform="translate(20, 240)">
+      <rect width="880" height="34" rx="6" fill="#fff" stroke="#d6d3cd"/>
+      <text x="14" y="22" font-size="11" class="small">All numeric conversions are explicit. There is no implicit int→float coercion anywhere in the language.</text>
+    </g>
+  </svg>
+  <div class="diagram-caption">Default arithmetic panics on bad behavior in debug; release wraps. Reach for an explicit family when you want any other rule.</div>
+</div>
 
 <pre><code>var a: i64 = 1000
-var b: i8  = a as i8   // truncates, never panics
-var c: f64 = a as f64  // exact for small-enough values
-var d: i32 = 3.7 as i32 // truncates toward zero</code></pre>
+var b: i8  = a as i8     // truncates, never panics
+var c: f64 = a as f64    // exact for small-enough values
+var d: i32 = 3.7 as i32  // truncates toward zero</code></pre>
 
-<p>Truncating <code>as</code> between integer types never panics. <code>f → i</code> truncates toward zero; <code>NaN as i*</code> panics; out-of-range <code>f → i</code> panics.</p>
+<!-- =========================================================== -->
+<h2 id="float">2. Floating point</h2>
 
-<h2 id="2-2-floating-point">2.2 Floating point</h2>
+<p><code>f32</code> and <code>f64</code>, both IEEE 754. Default float literal is <code>f64</code>.
+No implicit promotion — use <code>as</code>.</p>
 
-<p><code>f32</code> and <code>f64</code>, both IEEE 754. Default float literal type is <code>f64</code>.</p>
+<div class="callout good">
+  <strong>Float operations never panic</strong>
+  ÷0 → ±∞ · 0/0 → NaN · comparisons with NaN return <code>false</code>. This is straight IEEE 754;
+  if you need a panicking variant, check the value first.
+</div>
 
-<p>There is no implicit promotion between <code>f32</code> and <code>f64</code>; use <code>as</code>.</p>
+<!-- =========================================================== -->
+<h2 id="bool">3. Booleans</h2>
 
-<p>Float operations follow IEEE 754: division by zero produces ±∞, <code>0.0/0.0</code> produces NaN, comparisons with NaN return false. None of these panic.</p>
+<p><code>bool</code> is a primitive type with two values: <code>true</code> and <code>false</code>.
+It is <strong>not</strong> a union of singleton structs.</p>
 
-<h2 id="2-3-booleans">2.3 Booleans</h2>
+<p>Operations: <code>&amp;&amp;</code>, <code>||</code>, <code>!</code>, <code>==</code>, <code>!=</code>.
+<code>&amp;&amp;</code> and <code>||</code> short-circuit. <code>bool</code> has no ordering.</p>
 
-<pre><code>bool   // primitive, two values: true and false</code></pre>
+<!-- =========================================================== -->
+<h2 id="char">4. Characters</h2>
 
-<p><code>bool</code> is a primitive type. It is <strong>not</strong> a union of singleton structs. Literals are lowercase <code>true</code> and <code>false</code>.</p>
-
-<p>The only operations on <code>bool</code> are logical: <code>&amp;&amp;</code>, <code>||</code>, <code>!</code>, <code>==</code>, <code>!=</code>. <code>&amp;&amp;</code> and <code>||</code> short-circuit.</p>
-
-<h2 id="2-4-characters">2.4 Characters</h2>
-
-<pre><code>char   // 32-bit Unicode scalar value</code></pre>
-
-<p>A <code>char</code> is exactly one Unicode scalar value, encoded as a 32-bit value. Surrogate code points are not valid <code>char</code> values.</p>
-
-<p><code>char</code> literals use <strong>single quotes</strong> (<code>'a'</code>, <code>'\n'</code>, <code>'\u{1F600}'</code>) and must contain exactly one Unicode scalar value. <code>''</code> (empty) or <code>'ab'</code> (more than one) is a compile error. <code>char</code> and <code>str</code> literals are not interchangeable: <code>"a"</code> is always <code>str</code>, <code>'a'</code> is always <code>char</code>. See <a href="01-lexical.html">01-lexical.html</a>.</p>
-
-<p><code>char</code> does not auto-convert to or from integers; use <code>as</code>:</p>
+<p>A <code>char</code> is exactly one Unicode scalar value, encoded as a 32-bit value.
+Surrogate code points are not valid <code>char</code> values. Literals use single quotes;
+see <a href="01-lexical.html#char">01-lexical §7</a>.</p>
 
 <pre><code>var ch = 'A'
-var n  = ch as u32  // 65
-var c2 = 65u32 as char  // 'A' (panics if value is not a valid Unicode scalar)</code></pre>
+var n  = ch as u32          // 65
+var c2 = 65u32 as char      // 'A' — panics if value is not a valid Unicode scalar</code></pre>
 
-<h2 id="2-5-strings">2.5 Strings</h2>
+<!-- =========================================================== -->
+<h2 id="str">5. Strings</h2>
 
-<pre><code>str   // heap-allocated, immutable, UTF-8</code></pre>
+<p><code>str</code> is a managed-heap object containing a UTF-8 byte buffer. Immutable: every
+operation that <em>appears</em> to mutate produces a new <code>str</code>.</p>
 
-<p><code>str</code> is a managed-heap object containing a UTF-8-encoded byte buffer. It is immutable: all string operations that appear to mutate produce a new <code>str</code>.</p>
+<div class="diagram">
+  <svg viewBox="0 0 920 220" role="img" aria-label="str layout">
+    <g transform="translate(20, 30)">
+      <rect width="200" height="60" rx="6" fill="#fff" stroke="#1a4a8a"/>
+      <text x="100" y="26" text-anchor="middle" font-weight="700">struct field: str</text>
+      <text x="100" y="46" text-anchor="middle" class="small">8-byte heap reference</text>
 
-<p>String length is conceptually defined two ways:</p>
+      <rect x="0" y="100" width="200" height="60" rx="6" fill="#fff" stroke="#1a4a8a"/>
+      <text x="100" y="125" text-anchor="middle" font-weight="700">var s: str</text>
+      <text x="100" y="144" text-anchor="middle" class="small">handle on stack</text>
+    </g>
+
+    <g transform="translate(240, 75)">
+      <path d="M 0 35 L 50 35" stroke="#5a5a60" stroke-width="2" fill="none" marker-end="url(#a)"/>
+      <text x="25" y="25" text-anchor="middle" class="small">points to</text>
+    </g>
+
+    <g transform="translate(310, 30)">
+      <rect width="370" height="160" rx="8" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
+      <text x="185" y="22" text-anchor="middle" font-weight="700" fill="#2a6f4d">managed heap object</text>
+      <text x="185" y="40" text-anchor="middle" class="small">refcount + UTF-8 buffer</text>
+
+      <rect x="20" y="62" width="80" height="36" rx="4" fill="#fff" stroke="#2a6f4d"/>
+      <text x="60" y="84" text-anchor="middle" font-size="11">RC: 1</text>
+      <rect x="110" y="62" width="240" height="36" rx="4" fill="#fff" stroke="#2a6f4d"/>
+      <text x="230" y="84" text-anchor="middle" font-size="11">"héllo" → 68 c3 a9 6c 6c 6f</text>
+
+      <text x="20" y="124" font-size="11" fill="#2a6f4d">byte_size() → 6     // bytes</text>
+      <text x="20" y="142" font-size="11" fill="#2a6f4d">size()      → 5     // scalars (scans)</text>
+      <text x="20" y="160" font-size="11" class="small">no s[i] — UTF-8 is ambiguous; use s.get(i) / s.substring(a,b)</text>
+    </g>
+
+    <g transform="translate(700, 30)">
+      <rect width="200" height="160" rx="8" fill="#fafafa" stroke="#d6d3cd"/>
+      <text x="100" y="22" text-anchor="middle" font-weight="700">Operations</text>
+      <text x="14" y="48" font-size="11">a + b      → concat</text>
+      <text x="14" y="66" font-size="11">a == b     → byte-wise</text>
+      <text x="14" y="84" font-size="11">a &lt; b      → lex by USV</text>
+      <text x="14" y="106" font-size="11">"$x"       → ToStr</text>
+      <text x="14" y="124" font-size="11">"${expr}"  → ToStr</text>
+      <text x="14" y="148" class="small">see 15-operators §ToStr</text>
+    </g>
+
+    <defs>
+      <marker id="a" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+        <path d="M 0 0 L 9 3 L 0 6 z" fill="#5a5a60"/>
+      </marker>
+    </defs>
+  </svg>
+  <div class="diagram-caption">A <code>str</code> binding is a heap reference; the buffer is owned and reference-counted.</div>
+</div>
 
 <ul>
-<li><code>s.byte_size()</code> returns the number of UTF-8 bytes (<code>i64</code>).</li>
-<li><code>s.size()</code> returns the number of Unicode characters (<code>i64</code>); this requires a scan.</li>
+  <li><code>s.byte_size()</code> → UTF-8 byte count (<code>i64</code>).</li>
+  <li><code>s.size()</code> → Unicode character count (<code>i64</code>); requires a scan.</li>
+  <li><code>s.get(i)</code> for the i-th character, <code>s.substring(start, end)</code> for slices.</li>
+  <li><code>+</code> on two <code>str</code> is shorthand for <code>concat</code>.</li>
+  <li>Interpolation lexical rules: <a href="01-lexical.html#str">01-lexical §8</a>. <code>ToStr</code> interface: <a href="15-operators.html">15-operators</a>.</li>
 </ul>
 
-<p><code>str</code> indexing is <strong>not</strong> done by integer index because UTF-8 makes that ambiguous. Use <code>s.get(i)</code> to get the <code>i</code>-th character, or <code>s.substring(start, end)</code> for slices. See <a href="18-stdlib.html">18-stdlib.html</a>.</p>
+<!-- =========================================================== -->
+<h2 id="null">6. The empty type — <code>null</code></h2>
 
-<p><code>+</code> on two <code>str</code> is a shortcut for <code>concat</code>.</p>
+<p><code>null</code> is simultaneously the type name <strong>and</strong> its only value. It is the
+language's unit type: a function that returns nothing returns <code>null</code>; a discarded
+expression evaluates to <code>null</code>.</p>
 
-<p>String literals support <strong>interpolation</strong>: <code>"Hello $name"</code> or <code>"Hello, ${user.name}, age ${user.age + 1}"</code>. Interpolated values must implement <code>ToStr</code>. See <a href="01-lexical.html#19-string-literals-and-interpolation">01-lexical.md §1.9</a> for the lexical rules and <a href="15-operators.html#1510-stringification--tostr">15-operators.md §15.10</a> for <code>ToStr</code>.</p>
-
-<h2 id="2-6-the-empty-type-null">2.6 The empty type — <code>null</code></h2>
-
-<pre><code>null</code></pre>
-
-<p><code>null</code> is simultaneously the type name and its only value. It is the language's unit type: a function that returns nothing returns <code>null</code>, and a discarded expression evaluates to <code>null</code>.</p>
-
-<pre><code>function side_effect(): null {
+<pre><code>function side_effect(): null {   // explicit
   print("hi")
-}</code></pre>
+}
 
-<p>Writing <code>(): null</code> is rarely necessary because functions without an explicit return type default to <code>null</code>:</p>
-
-<pre><code>function side_effect() {
+function side_effect() {         // implicit — equivalent
   print("hi")
-}</code></pre>
+}
 
-<p><code>null</code> appears in unions to express absence: <code>i64 | null</code> (an <code>i64</code> or nothing).</p>
+var x: i64 | null = null          // absence via union</code></pre>
 
-<p>There is no <code>void</code>. There is no <code>unit</code>. <code>null</code> covers both roles.</p>
+<div class="callout warn">
+  <strong>No <code>void</code>. No <code>unit</code>.</strong>
+  <code>null</code> covers both roles. Use it in unions to express absence: <code>T | null</code>.
+</div>
 
-<h2 id="2-7-equality-and-ordering">2.7 Equality and ordering</h2>
-
-<p>Primitives have built-in equality (<code>==</code>, <code>!=</code>).</p>
-
-<p>Numeric primitives and <code>char</code> have built-in ordering (<code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code>).</p>
-
-<p><code>bool</code> does not have an ordering operator.</p>
-
-<p><code>str</code> has both: equality is byte-wise; ordering is lexicographic by Unicode scalar values.</p>
-
-<p><code>null</code> only has equality with itself: <code>null == null</code> is <code>true</code>; <code>null != null</code> is <code>false</code>. Ordering of <code>null</code> is not defined.</p>
-
-<p>User types acquire equality and ordering by implementing the <code>Eq</code> and <code>Ord</code> interfaces (see <a href="15-operators.html">15-operators.html</a>).</p>
-
-<h2 id="2-8-default-values">2.8 Default values</h2>
-
-<p>The language does not have implicit default values for primitives — every binding must be explicitly initialized. There is no <code>var x: i32</code>; you must write <code>var x: i32 = 0</code> (or similar). See <a href="06-variables.html">06-variables.html</a>.</p>
-
-<h2 id="2-9-sizes-and-alignment">2.9 Sizes and alignment</h2>
-
-<p>All sizes and alignments below apply to non-<code>extern</code> (managed) values. For <code>extern struct</code> layout, see <a href="19-ffi.html">19-ffi.html</a>.</p>
+<!-- =========================================================== -->
+<h2 id="cmp">7. Equality &amp; ordering</h2>
 
 <table>
-<thead><tr><th>Type</th><th>Size</th><th>Alignment</th></tr></thead>
-<tbody>
-<tr><td><code>i8</code> / <code>u8</code> / <code>bool</code></td><td>1</td><td>1</td></tr>
-<tr><td><code>i16</code> / <code>u16</code></td><td>2</td><td>2</td></tr>
-<tr><td><code>i32</code> / <code>u32</code> / <code>f32</code> / <code>char</code></td><td>4</td><td>4</td></tr>
-<tr><td><code>i64</code> / <code>u64</code> / <code>f64</code></td><td>8</td><td>8</td></tr>
-<tr><td><code>isize</code> / <code>usize</code></td><td>pointer-sized</td><td>pointer-aligned</td></tr>
-<tr><td><code>null</code></td><td>0</td><td>1</td></tr>
-<tr><td><code>str</code></td><td>pointer-sized (heap reference)</td><td>pointer-aligned</td></tr>
-<tr><td>Other heap types (<code>List&lt;T&gt;</code>, <code>Map&lt;K,V&gt;</code>, structs)</td><td>pointer-sized (heap reference)</td><td>pointer-aligned</td></tr>
-</tbody>
+  <thead><tr><th>Type</th><th>== / !=</th><th>&lt; &lt;= &gt; &gt;=</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td>numeric primitives</td><td>✓</td><td>✓</td><td>natural ordering</td></tr>
+    <tr><td><code>char</code></td><td>✓</td><td>✓</td><td>by USV</td></tr>
+    <tr><td><code>bool</code></td><td>✓</td><td>—</td><td>no ordering</td></tr>
+    <tr><td><code>str</code></td><td>✓ byte-wise</td><td>✓ lexicographic</td><td>by Unicode scalar values</td></tr>
+    <tr><td><code>null</code></td><td>only with itself</td><td>—</td><td><code>null == null</code> is <code>true</code></td></tr>
+    <tr><td>user types</td><td>implement <code>Eq</code></td><td>implement <code>Ord</code></td><td>see <a href="15-operators.html">15-operators</a></td></tr>
+  </tbody>
 </table>
 
-<p>This is what an inlined field "costs" in a struct. The heap object behind a reference type has its own layout (see <a href="16-memory.html">16-memory.html</a>).</p>
+<!-- =========================================================== -->
+<h2 id="default">8. Default values</h2>
+
+<div class="callout warn">
+  <strong>No implicit zero</strong>
+  The language has <strong>no</strong> implicit defaults for primitives — every binding must be
+  explicitly initialized. There is no <code>var x: i32</code>; you must write
+  <code>var x: i32 = 0</code> (or similar). See <a href="06-variables.html">06-variables</a>.
+</div>
+
+<!-- =========================================================== -->
+<h2 id="size">9. Sizes &amp; alignment</h2>
+
+<p>What an inlined field "costs" in a struct (managed values only — for <code>extern struct</code>
+layout, see <a href="19-ffi.html">19-ffi</a>).</p>
+
+<div class="diagram">
+  <svg viewBox="0 0 920 250" role="img" aria-label="Primitive sizes">
+    <g transform="translate(20, 30)">
+      <rect width="120" height="40" rx="6" fill="#fbf3ec" stroke="#b54708"/>
+      <text x="60" y="20" text-anchor="middle" font-weight="700" fill="#b54708">1 byte</text>
+      <text x="60" y="36" text-anchor="middle" font-size="11">align 1</text>
+      <text x="14" y="60" font-size="11" class="small">i8 · u8 · bool</text>
+    </g>
+
+    <g transform="translate(165, 30)">
+      <rect width="120" height="40" rx="6" fill="#fbf3ec" stroke="#b54708"/>
+      <text x="60" y="20" text-anchor="middle" font-weight="700" fill="#b54708">2 bytes</text>
+      <text x="60" y="36" text-anchor="middle" font-size="11">align 2</text>
+      <text x="14" y="60" font-size="11" class="small">i16 · u16</text>
+    </g>
+
+    <g transform="translate(310, 30)">
+      <rect width="170" height="40" rx="6" fill="#eaf0f8" stroke="#1a4a8a"/>
+      <text x="85" y="20" text-anchor="middle" font-weight="700" fill="#1a4a8a">4 bytes</text>
+      <text x="85" y="36" text-anchor="middle" font-size="11">align 4</text>
+      <text x="14" y="60" font-size="11" class="small">i32 · u32 · f32 · char</text>
+    </g>
+
+    <g transform="translate(505, 30)">
+      <rect width="170" height="40" rx="6" fill="#f3eefa" stroke="#6b4ba8"/>
+      <text x="85" y="20" text-anchor="middle" font-weight="700" fill="#6b4ba8">8 bytes</text>
+      <text x="85" y="36" text-anchor="middle" font-size="11">align 8</text>
+      <text x="14" y="60" font-size="11" class="small">i64 · u64 · f64</text>
+    </g>
+
+    <g transform="translate(700, 30)">
+      <rect width="190" height="40" rx="6" fill="#eef6f1" stroke="#2a6f4d"/>
+      <text x="95" y="20" text-anchor="middle" font-weight="700" fill="#2a6f4d">pointer</text>
+      <text x="95" y="36" text-anchor="middle" font-size="11">align ptr</text>
+      <text x="14" y="60" font-size="11" class="small">isize · usize · str · refs</text>
+    </g>
+
+    <g transform="translate(20, 110)">
+      <rect width="220" height="40" rx="6" fill="#fff" stroke="#6b6b70"/>
+      <text x="14" y="26" font-weight="700">null</text>
+      <text x="110" y="26" text-anchor="middle">size 0 · align 1</text>
+    </g>
+
+    <g transform="translate(280, 110)">
+      <text x="0" y="14" font-weight="700">8-byte slot demo (field layout)</text>
+      <g transform="translate(0, 22)">
+        <rect width="32" height="34" fill="#fbf3ec" stroke="#b54708"/>
+        <text x="16" y="22" text-anchor="middle" font-size="10">u8</text>
+        <rect x="32" width="32" height="34" fill="#fafafa" stroke="#d6d3cd"/>
+        <rect x="64" width="32" height="34" fill="#fafafa" stroke="#d6d3cd"/>
+        <rect x="96" width="32" height="34" fill="#fafafa" stroke="#d6d3cd"/>
+        <rect x="128" width="128" height="34" fill="#eaf0f8" stroke="#1a4a8a"/>
+        <text x="192" y="22" text-anchor="middle" font-size="10">i32</text>
+        <rect x="256" width="32" height="34" fill="#fafafa" stroke="#d6d3cd"/>
+        <rect x="288" width="32" height="34" fill="#fafafa" stroke="#d6d3cd"/>
+        <rect x="320" width="32" height="34" fill="#fafafa" stroke="#d6d3cd"/>
+        <rect x="352" width="32" height="34" fill="#fafafa" stroke="#d6d3cd"/>
+      </g>
+      <text x="0" y="78" class="small">struct { x: u8, y: i32 } — 3 bytes of padding to satisfy i32's alignment</text>
+    </g>
+
+    <g transform="translate(20, 200)">
+      <rect width="880" height="38" rx="6" fill="#fff" stroke="#d6d3cd"/>
+      <text x="14" y="20" font-size="11" font-weight="700">Heap types</text>
+      <text x="100" y="20" font-size="11">A struct, List&lt;T&gt;, Map&lt;K,V&gt; field stores a pointer-sized reference to a heap object;</text>
+      <text x="100" y="32" font-size="11">the object itself has its own layout — see <tspan font-style="italic">16-memory</tspan> for the full story.</text>
+    </g>
+  </svg>
+  <div class="diagram-caption">Field sizes for inlined values. Heap types contribute a pointer; the object lives elsewhere.</div>
+</div>
 
 </body>
 </html>

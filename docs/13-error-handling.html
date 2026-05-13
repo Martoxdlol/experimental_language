@@ -5,193 +5,79 @@
 <title>13. Error Handling</title>
 <style>
   :root {
-    --fg: #1b1b1d;
-    --muted: #5a5a60;
-    --bg: #fdfdfc;
-    --accent: #1a4a8a;
-    --accent-2: #2a6f4d;
-    --warn: #b54708;
-    --code-bg: #f4f2ee;
-    --code-fg: #1b1b1d;
-    --border: #e4e1dc;
-    --table-stripe: #f8f7f4;
-    --pub: #2a6f4d;
-    --priv: #b54708;
-    --pkg: #1a4a8a;
-    --core: #6b4ba8;
+    --fg: #1b1b1d; --muted: #5a5a60; --bg: #fdfdfc;
+    --accent: #1a4a8a; --accent-2: #2a6f4d; --warn: #b54708;
+    --code-bg: #f4f2ee; --code-fg: #1b1b1d; --border: #e4e1dc;
+    --table-stripe: #f8f7f4; --pub: #2a6f4d; --priv: #b54708;
+    --pkg: #1a4a8a; --core: #6b4ba8;
   }
-  html { box-sizing: border-box; }
-  *, *::before, *::after { box-sizing: inherit; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-    color: var(--fg);
-    background: var(--bg);
-    line-height: 1.55;
-    max-width: 980px;
-    margin: 0 auto;
-    padding: 2.5rem 1.5rem 6rem;
-  }
-  h1, h2, h3, h4 {
-    color: var(--fg);
-    line-height: 1.25;
-    margin-top: 2.2rem;
-    margin-bottom: 0.6rem;
-  }
+  html { box-sizing: border-box; } *, *::before, *::after { box-sizing: inherit; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color: var(--fg); background: var(--bg); line-height: 1.55;
+    max-width: 980px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem; }
+  h1, h2, h3, h4 { color: var(--fg); line-height: 1.25; margin-top: 2.2rem; margin-bottom: 0.6rem; }
   h1 { font-size: 2rem; border-bottom: 2px solid var(--border); padding-bottom: 0.4rem; }
   h2 { font-size: 1.45rem; margin-top: 2.6rem; }
   h3 { font-size: 1.15rem; color: var(--accent); }
   h4 { font-size: 1rem; color: var(--muted); }
-  p { margin: 0.7rem 0; }
-  ul, ol { margin: 0.7rem 0; padding-left: 1.6rem; }
-  li { margin: 0.3rem 0; }
-  code {
-    font-family: "SF Mono", Menlo, Consolas, "Courier New", monospace;
-    background: var(--code-bg);
-    color: var(--code-fg);
-    padding: 0.1em 0.35em;
-    border-radius: 3px;
-    font-size: 0.92em;
-  }
-  pre {
-    background: var(--code-bg);
-    color: var(--code-fg);
-    padding: 0.9rem 1rem;
-    border-radius: 6px;
-    overflow-x: auto;
-    font-size: 0.88rem;
-    line-height: 1.5;
-    border: 1px solid var(--border);
-  }
+  p { margin: 0.7rem 0; } ul, ol { margin: 0.7rem 0; padding-left: 1.6rem; } li { margin: 0.3rem 0; }
+  code { font-family: "SF Mono", Menlo, Consolas, "Courier New", monospace;
+    background: var(--code-bg); color: var(--code-fg); padding: 0.1em 0.35em;
+    border-radius: 3px; font-size: 0.92em; }
+  pre { background: var(--code-bg); color: var(--code-fg); padding: 0.9rem 1rem;
+    border-radius: 6px; overflow-x: auto; font-size: 0.88rem; line-height: 1.5;
+    border: 1px solid var(--border); }
   pre code { background: none; padding: 0; font-size: inherit; }
-  table {
-    border-collapse: collapse;
-    width: 100%;
-    margin: 1rem 0;
-    font-size: 0.94rem;
-  }
-  th, td {
-    text-align: left;
-    padding: 0.5rem 0.7rem;
-    border-bottom: 1px solid var(--border);
-    vertical-align: top;
-  }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: 0.94rem; }
+  th, td { text-align: left; padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--border); vertical-align: top; }
   th { background: var(--code-bg); font-weight: 600; }
   tbody tr:nth-child(even) { background: var(--table-stripe); }
-  .lead {
-    font-size: 1.05rem;
-    color: var(--muted);
-    margin-bottom: 1.6rem;
-  }
-  .toc {
-    background: var(--code-bg);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 1rem 1.2rem;
-    margin: 1.6rem 0 2rem;
-    font-size: 0.94rem;
-  }
+  .lead { font-size: 1.05rem; color: var(--muted); margin-bottom: 1.6rem; }
+  .toc { background: var(--code-bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 1rem 1.2rem; margin: 1.6rem 0 2rem; font-size: 0.94rem; }
   .toc ol { margin: 0.2rem 0 0; padding-left: 1.3rem; }
-  .toc a { color: var(--accent); text-decoration: none; }
-  .toc a:hover { text-decoration: underline; }
-
-  .diagram {
-    background: #ffffff;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 1.4rem;
-    margin: 1.4rem 0;
-    overflow-x: auto;
-  }
-  .diagram-caption {
-    font-size: 0.85rem;
-    color: var(--muted);
-    text-align: center;
-    margin-top: 0.6rem;
-    font-style: italic;
-  }
+  .toc a { color: var(--accent); text-decoration: none; } .toc a:hover { text-decoration: underline; }
+  .diagram { background: #ffffff; border: 1px solid var(--border);
+    border-radius: 8px; padding: 1.4rem; margin: 1.4rem 0; overflow-x: auto; }
+  .diagram-caption { font-size: 0.85rem; color: var(--muted); text-align: center;
+    margin-top: 0.6rem; font-style: italic; }
   svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
   svg text { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; fill: var(--fg); }
   svg .label { font-family: -apple-system, system-ui, sans-serif; font-size: 12px; }
   svg .small { font-size: 10px; fill: var(--muted); }
-
-  .legend {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 1rem;
-    justify-content: center;
-    margin-top: 0.8rem;
-    font-size: 0.85rem;
-  }
-  .legend-item { display: flex; align-items: center; gap: 0.4rem; }
-  .legend-swatch {
-    width: 14px;
-    height: 14px;
-    border-radius: 3px;
-    border: 1px solid rgba(0,0,0,0.15);
-  }
-
-  .tag {
-    display: inline-block;
-    padding: 0.1em 0.55em;
-    border-radius: 3px;
-    font-size: 0.78em;
-    font-weight: 600;
-    font-family: "SF Mono", Menlo, monospace;
-    color: white;
-    vertical-align: middle;
-  }
-  .tag.pub  { background: var(--pub); }
-  .tag.priv { background: var(--priv); }
-  .tag.pkg  { background: var(--pkg); }
-  .tag.core { background: var(--core); }
-  .tag.warn { background: var(--warn); }
-
-  .callout {
-    border-left: 4px solid var(--accent);
-    background: #f0f4fa;
-    padding: 0.8rem 1rem;
-    margin: 1.2rem 0;
-    border-radius: 0 6px 6px 0;
-  }
+  .callout { border-left: 4px solid var(--accent); background: #f0f4fa;
+    padding: 0.8rem 1rem; margin: 1.2rem 0; border-radius: 0 6px 6px 0; }
   .callout.warn { border-color: var(--warn); background: #fbf3ec; }
   .callout.good { border-color: var(--accent-2); background: #eef6f1; }
   .callout strong { display: block; margin-bottom: 0.3rem; }
-
-  .two-col {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 1rem;
-    margin: 1.2rem 0;
-  }
-  @media (max-width: 720px) {
-    .two-col { grid-template-columns: 1fr; }
-  }
-
-  .file-tree {
-    font-family: "SF Mono", Menlo, monospace;
-    font-size: 0.88rem;
-    line-height: 1.55;
-    background: var(--code-bg);
-    padding: 1rem 1.2rem;
-    border-radius: 6px;
-    border: 1px solid var(--border);
-    white-space: pre;
-    overflow-x: auto;
-  }
-  .file-tree .pub  { color: var(--pub); font-weight: 600; }
-  .file-tree .priv { color: var(--priv); }
-  .file-tree .note { color: var(--muted); font-style: italic; }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 1.2rem 0; }
+  @media (max-width: 720px) { .two-col { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
 
 <h1>13. Error Handling</h1>
+<p class="lead">
+  No exceptions. No <code>try</code>/<code>catch</code>. Errors are union variants;
+  the postfix <code>?</code> propagates them; <code>panic</code> handles truly unrecoverable cases.
+</p>
 
-<p>There are no exceptions and no <code>try</code>/<code>catch</code>. Errors are values, expressed as variants in a union. Propagation is done with the postfix <code>?</code> operator. Hard, unrecoverable failures use panics (see <a href="14-panics.html">14-panics.html</a>).</p>
+<div class="toc">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#vars">Errors as union variants</a></li>
+    <li><a href="#qmark">The <code>?</code> operator</a></li>
+    <li><a href="#try">The <code>Try</code> interface</a></li>
+    <li><a href="#from">Residual conversion (<code>FromResidual</code>)</a></li>
+    <li><a href="#noexc">No exceptions, no unwinding</a></li>
+    <li><a href="#panic">Panics are not catchable</a></li>
+    <li><a href="#style">Style guidance</a></li>
+    <li><a href="#ex">Examples</a></li>
+  </ol>
+</div>
 
-<h2 id="13-1-errors-as-union-variants">13.1 Errors as union variants</h2>
-
-<p>A fallible function returns a union of success and failure types:</p>
+<!-- =========================================================== -->
+<h2 id="vars">1. Errors as union variants</h2>
 
 <pre><code>struct Error {
   pub message: str,
@@ -204,43 +90,69 @@ function divide(a: f64, b: f64): f64 | Error {
   } else {
     a / b
   }
-}</code></pre>
+}
 
-<p>The caller inspects the union with <code>is</code>/<code>as</code>, <code>match</code>, or <code>?</code>:</p>
-
-<pre><code>var r = divide(10.0, 2.0)
+var r = divide(10.0, 2.0)
 match r {
   f64 v   =&gt; print("ok: " + (v as str)),
   Error e =&gt; print("err: " + e.message),
 }</code></pre>
 
-<h2 id="13-2-the-operator">13.2 The <code>?</code> operator</h2>
+<!-- =========================================================== -->
+<h2 id="qmark">2. The <code>?</code> operator</h2>
 
-<p><code>?</code> is a postfix operator for early-return propagation. Given:</p>
+<p>Postfix early-return propagation. The compiler partitions <code>expr</code>'s type into
+<strong>success</strong> and <strong>failure</strong> sets based on the enclosing function's
+return type <code>R</code>:</p>
 
-<pre><code>function caller(): R {
-  var x = expr?
-  ...
-}</code></pre>
+<div class="diagram">
+  <svg viewBox="0 0 920 360" role="img" aria-label="Question mark partition">
+    <defs>
+      <marker id="arr" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+        <path d="M 0 0 L 9 3 L 0 6 z" fill="#5a5a60"/>
+      </marker>
+    </defs>
 
-<p><code>expr?</code> is roughly:</p>
+    <!-- Top: signature -->
+    <g transform="translate(40, 30)">
+      <rect width="840" height="60" rx="8" fill="#eaf0f8" stroke="#1a4a8a" stroke-width="2"/>
+      <text x="14" y="22" font-weight="700" fill="#1a4a8a">enclosing function</text>
+      <text x="14" y="44" font-size="12">function summary(id: i64): str | NotFound | DbError</text>
+    </g>
 
-<pre><code>{
-  var __tmp = expr
-  if __tmp is &lt;FailureSet&gt; { return __tmp }
-  __tmp                            // narrowed to &lt;SuccessSet&gt;
-}</code></pre>
+    <!-- expr type -->
+    <g transform="translate(40, 110)">
+      <rect width="430" height="60" rx="8" fill="#fafafa" stroke="#d6d3cd" stroke-width="2"/>
+      <text x="14" y="22" font-weight="700">expr type</text>
+      <text x="14" y="44" font-size="12">read_user(id): User | NotFound | DbError</text>
+    </g>
 
-<p>The compiler partitions the type of <code>expr</code> into two sets, <strong>success</strong> and <strong>failure</strong>, based on the enclosing function's return type <code>R</code>:</p>
+    <path d="M 470 140 L 510 140" stroke="#5a5a60" stroke-width="2" marker-end="url(#arr)"/>
+    <text x="490" y="130" font-size="10" class="small">partition</text>
 
-<ul>
-  <li>A variant <code>V</code> of <code>expr</code>'s type goes into <strong>failure</strong> iff <code>V</code> is assignable to <code>R</code> (i.e. <code>V</code> is a variant of <code>R</code>, after union normalization).</li>
-  <li>All other variants of <code>expr</code>'s type form <strong>success</strong>.</li>
-</ul>
+    <!-- success / failure -->
+    <g transform="translate(530, 110)">
+      <rect width="350" height="60" rx="8" fill="#fff" stroke="#1a4a8a" stroke-width="2"/>
+      <text x="14" y="22" font-weight="700" fill="#2a6f4d">success set</text>
+      <text x="14" y="44" font-size="12">User       (NOT assignable to R)</text>
+    </g>
 
-<p><code>expr?</code> then evaluates to a value whose static type is the success set. If at runtime <code>expr</code> is in the failure set, the function returns that value.</p>
+    <g transform="translate(530, 180)">
+      <rect width="350" height="60" rx="8" fill="#fff" stroke="#b54708" stroke-width="2"/>
+      <text x="14" y="22" font-weight="700" fill="#b54708">failure set</text>
+      <text x="14" y="44" font-size="12">NotFound | DbError   (in R)</text>
+    </g>
 
-<h3>Examples</h3>
+    <!-- desugar -->
+    <g transform="translate(40, 260)">
+      <rect width="840" height="80" rx="8" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
+      <text x="14" y="22" font-weight="700" fill="#2a6f4d">var user = read_user(id)?</text>
+      <text x="14" y="44" font-size="11" class="small">≡ { var t = read_user(id); if t is NotFound | DbError { return t }; t as User }</text>
+      <text x="14" y="64" font-size="11">user has the narrowed type <tspan font-family="SF Mono, Menlo, monospace">User</tspan>; failures propagate via the early <tspan font-family="SF Mono, Menlo, monospace">return</tspan>.</text>
+    </g>
+  </svg>
+  <div class="diagram-caption">Partition is by static type assignability to <code>R</code> — failure variants get returned; success variants flow on.</div>
+</div>
 
 <pre><code>function read_user(id: i64): User | NotFound | DbError { ... }
 
@@ -249,24 +161,16 @@ function summary(id: i64): str | NotFound | DbError {
   user.name
 }</code></pre>
 
-<p><code>read_user</code>'s type is <code>User | NotFound | DbError</code>. <code>summary</code> returns <code>str | NotFound | DbError</code>. The partition:</p>
+<div class="callout warn">
+  <strong>When partitioning fails — three errors</strong>
+  <ul>
+    <li>Success set empty → "the expression always returns; use a direct match instead".</li>
+    <li>Failure set empty → "nothing to propagate; remove the <code>?</code>".</li>
+    <li>Some variants neither in <code>R</code> nor strictly successful → "variant X can't propagate; widen <code>R</code> or handle X".</li>
+  </ul>
+</div>
 
-<ul>
-  <li><code>NotFound</code> and <code>DbError</code> are assignable to <code>R = str | NotFound | DbError</code> → failure set.</li>
-  <li><code>User</code> is not assignable to <code>R</code> → success set.</li>
-</ul>
-
-<p>So <code>user</code> has the narrowed type <code>User</code>. If <code>read_user(id)</code> returned <code>NotFound</code>, <code>summary</code> returns <code>NotFound</code> and never evaluates <code>.name</code>.</p>
-
-<h3>When partitioning fails</h3>
-
-<p>If the success set is empty (every variant of <code>expr</code> is also a variant of <code>R</code>), <code>?</code> is meaningless — the expression always returns; the compiler reports an error and asks you to use a direct match.</p>
-
-<p>If the failure set is empty (no variant of <code>expr</code> matches <code>R</code>), <code>?</code> is meaningless — there's nothing to propagate; the compiler reports an error.</p>
-
-<p>If <code>expr</code>'s type has variants that are neither in <code>R</code> nor strictly successful (i.e. <code>expr</code> produces an error type that the caller does not list), <code>?</code> cannot type-check: the failure variant would have nowhere to go. The compiler reports the variant that fails to propagate and asks you to either widen <code>R</code> or handle the variant explicitly.</p>
-
-<h3>Worked example: chained <code>?</code></h3>
+<h3>Chained <code>?</code></h3>
 
 <pre><code>function load_config(): Config | IoError | ParseError { ... }
 function validate(c: Config): Config | ValidationError { ... }
@@ -277,80 +181,117 @@ function start(): str | IoError | ParseError | ValidationError {
   "ok: " + v.name
 }</code></pre>
 
-<p><code>start</code> returns the full set of possible failures, and each <code>?</code> propagates whichever subset its argument can produce.</p>
+<!-- =========================================================== -->
+<h2 id="try">3. The <code>Try</code> interface — custom propagation</h2>
 
-<h2 id="13-3-the-try-interface-custom-propagation">13.3 The <code>Try</code> interface (custom propagation)</h2>
-
-<p>The default <code>?</code> works on any union by partitioning against the enclosing return type. For types that are <em>not</em> unions but still want to participate in <code>?</code> (e.g. a wrapper struct), implement <code>Try</code>:</p>
+<p>For types that are <strong>not unions</strong> but want to participate in <code>?</code>
+(e.g. a wrapper struct), implement <code>Try</code>:</p>
 
 <pre><code>pub interface Try&lt;Output, Residual&gt; {
   function branch(self): Output | Residual
-}</code></pre>
+}
 
-<p>A type <code>T: Try&lt;O, R&gt;</code> can be used with <code>?</code> in any function whose return type accepts <code>R</code>:</p>
-
-<pre><code>v?     // for v: T where T: Try&lt;O, R&gt;
+// Usage on v: T where T: Try&lt;O, R&gt;:
+v?
 // desugars to:
 {
-  var __tmp = v.branch()
-  if __tmp is R { return __tmp }   // possibly with FromResidual conversion (see below)
-  __tmp as O
+  var t = v.branch()
+  if t is R { return t }       // possibly with FromResidual conversion
+  t as O
 }</code></pre>
 
-<p>For unions, the compiler provides a built-in <code>Try</code> impl that does the partitioning described in 13.2. User code does not implement <code>Try</code> for unions.</p>
+<div class="callout">
+  <strong>Built-in for unions</strong>
+  The compiler provides a built-in <code>Try</code> impl for unions that performs the
+  partitioning from §2. User code does <strong>not</strong> implement <code>Try</code> for unions.
+</div>
 
-<h3>Residual conversion (<code>FromResidual</code>)</h3>
+<!-- =========================================================== -->
+<h2 id="from">4. Residual conversion — <code>FromResidual</code></h2>
 
-<p>Sometimes a function returns an error type that is <strong>almost</strong> what a <code>?</code> would propagate, but not exactly. For instance, a wrapper:</p>
+<p>When a function returns an error type that is <em>almost</em> what <code>?</code> would
+propagate but not exactly, <code>FromResidual</code> lets the compiler insert a conversion.</p>
 
-<pre><code>struct AppError { pub source: IoError | ParseError, pub context: str }</code></pre>
+<div class="diagram">
+  <svg viewBox="0 0 920 290" role="img" aria-label="FromResidual">
+    <defs>
+      <marker id="arr2" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+        <path d="M 0 0 L 9 3 L 0 6 z" fill="#5a5a60"/>
+      </marker>
+    </defs>
 
-<p>Calling <code>load_config()?</code> from a function returning <code>Config | AppError</code> should convert <code>IoError | ParseError</code> → <code>AppError</code>. This is the role of <code>FromResidual</code>:</p>
+    <g transform="translate(20, 30)">
+      <rect width="280" height="60" rx="8" fill="#fff" stroke="#1a4a8a" stroke-width="2"/>
+      <text x="14" y="24" font-weight="700">load_config()?</text>
+      <text x="14" y="44" font-size="11">may yield IoError | ParseError</text>
+    </g>
+
+    <path d="M 300 60 L 350 60" stroke="#5a5a60" stroke-width="2" marker-end="url(#arr2)"/>
+
+    <g transform="translate(360, 30)">
+      <rect width="260" height="60" rx="8" fill="#f3eefa" stroke="#6b4ba8" stroke-width="2"/>
+      <text x="130" y="24" text-anchor="middle" font-weight="700" fill="#6b4ba8">enclosing R</text>
+      <text x="130" y="44" text-anchor="middle" font-size="11">Config | AppError</text>
+    </g>
+
+    <path d="M 480 90 L 480 120" stroke="#5a5a60" stroke-width="2" marker-end="url(#arr2)"/>
+    <text x="500" y="110" font-size="10" class="small">no direct fit?</text>
+
+    <g transform="translate(20, 130)">
+      <rect width="880" height="80" rx="8" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
+      <text x="14" y="22" font-weight="700" fill="#2a6f4d">Compiler searches FromResidual&lt;Residual&gt; on R</text>
+      <text x="14" y="44" font-size="12">extend AppError: FromResidual&lt;IoError&gt;    { function from_residual(e: IoError) { … } }</text>
+      <text x="14" y="62" font-size="12">extend AppError: FromResidual&lt;ParseError&gt; { function from_residual(e: ParseError) { … } }</text>
+    </g>
+
+    <g transform="translate(20, 230)">
+      <rect width="880" height="40" rx="6" fill="#fafafa" stroke="#d6d3cd"/>
+      <text x="14" y="22" font-size="11">Insertion at the implicit <tspan font-family="SF Mono, Menlo, monospace">return</tspan>: <tspan font-family="SF Mono, Menlo, monospace">return AppError.from_residual(io_error)</tspan> — direct propagation always wins when available.</text>
+    </g>
+  </svg>
+  <div class="diagram-caption">Direct propagation &gt; <code>FromResidual</code> &gt; compile error.</div>
+</div>
 
 <pre><code>pub interface FromResidual&lt;R&gt; {
   function from_residual(r: R): Self
 }</code></pre>
 
-<p>If <code>expr?</code>'s residual variant doesn't directly fit <code>R</code> but <code>R</code> has an implementation <code>FromResidual&lt;ResidualVariant&gt;</code>, the compiler inserts the conversion at the <code>return</code>. (Concretely: <code>return AppError.from_residual(io_error)</code> instead of <code>return io_error</code>.)</p>
+<!-- =========================================================== -->
+<h2 id="noexc">5. No exceptions, no unwinding</h2>
 
-<p>If multiple paths are possible (direct propagation and <code>FromResidual</code> conversion), direct propagation wins. If only the conversion fits, it is used. If neither, the compiler errors.</p>
+<div class="callout warn">
+  <strong>What's missing — on purpose</strong>
+  <ul>
+    <li>No exception types or <code>throw</code>.</li>
+    <li>No <code>try</code>/<code>catch</code>/<code>finally</code>.</li>
+    <li>No stack-unwinding errors that bubble through frames silently.</li>
+  </ul>
+  Every error is either returned as a value (<code>?</code> or matched) or triggered as a panic
+  (kills the thread). You can grep for <code>?</code> to see every site that may return early.
+</div>
 
-<p>This makes <code>?</code> extensible without growing the union mechanism.</p>
+<!-- =========================================================== -->
+<h2 id="panic">6. Panics are not catchable</h2>
 
-<h2 id="13-4-no-exceptions-no-unwinding-no-try-catch">13.4 No exceptions, no unwinding, no <code>try</code>/<code>catch</code></h2>
+<p><code>panic(...)</code> and panic-on-failure operations (<code>as</code> mismatch, integer
+÷ by zero, etc.) terminate the current thread. They are <strong>not</strong> catchable.
+Use them only for programming bugs and truly unrecoverable conditions; use
+<code>T | Error</code> + <code>?</code> for expected error paths. See <a href="14-panics.html">14-panics</a>.</p>
 
-<p>The language does not have:</p>
+<!-- =========================================================== -->
+<h2 id="style">7. Style guidance</h2>
 
-<ul>
-  <li>Exception types or <code>throw</code> statements.</li>
-  <li><code>try</code>/<code>catch</code>/<code>finally</code> constructs.</li>
-  <li>Stack-unwinding errors that bubble through frames silently.</li>
-</ul>
+<div class="callout good">
+  <strong>Style recommendations</strong>
+  <ul>
+    <li>Define a single error type per module boundary (e.g. <code>AppError</code>) and convert specific errors into it with <code>FromResidual</code>.</li>
+    <li>Use <code>?</code> for "if this fails I want to return now" and <code>match</code> for "I want to decide based on which failure".</li>
+    <li>Don't use union types with more than ~5 error variants in a public API; collapse them with <code>FromResidual</code>.</li>
+  </ul>
+</div>
 
-<p>Every error must be either:</p>
-
-<ul>
-  <li>Returned as a value (handled or propagated with <code>?</code>).</li>
-  <li>Triggered as a panic (terminates the thread).</li>
-</ul>
-
-<p>This is intentional: every fallible call site is visible at the type level. <code>?</code> makes propagation concise without hiding control flow — you can grep for <code>?</code> to see every place that may return early.</p>
-
-<h2 id="13-5-panics-are-not-catchable">13.5 Panics are not catchable</h2>
-
-<p><code>panic(...)</code> and panic-on-failure operations (<code>as</code>, integer division by zero, etc.) terminate the current thread. They are not catchable. Use them only for programming bugs and truly unrecoverable conditions; use <code>T | Error</code> and <code>?</code> for expected error paths.</p>
-
-<p>See <a href="14-panics.html">14-panics.html</a>.</p>
-
-<h2 id="13-6-style-recommendations">13.6 Style recommendations</h2>
-
-<ul>
-  <li>Define a single error type per module boundary (e.g. <code>AppError</code>) and convert specific errors into it using <code>FromResidual</code>. This keeps callers' return types short.</li>
-  <li>Use <code>?</code> for "if this fails I want to return now" and <code>match</code> for "I want to decide based on which failure".</li>
-  <li>Don't use union types of more than ~5 error variants in a public API; collapse them with <code>FromResidual</code>.</li>
-</ul>
-
-<h2 id="13-7-examples">13.7 Examples</h2>
+<!-- =========================================================== -->
+<h2 id="ex">8. Examples</h2>
 
 <pre><code>struct IoError    { pub kind: str }
 struct ParseError { pub at:   i64 }
@@ -365,9 +306,7 @@ function load(path: str): Config | IoError | ParseError {
 }
 
 // Wrapping into a single error type
-struct AppError {
-  pub message: str,
-}
+struct AppError { pub message: str }
 
 extend AppError: FromResidual&lt;IoError&gt; {
   function from_residual(e: IoError): AppError {

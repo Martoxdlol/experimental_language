@@ -5,300 +5,200 @@
 <title>6. Variables and Mutability</title>
 <style>
   :root {
-    --fg: #1b1b1d;
-    --muted: #5a5a60;
-    --bg: #fdfdfc;
-    --accent: #1a4a8a;
-    --accent-2: #2a6f4d;
-    --warn: #b54708;
-    --code-bg: #f4f2ee;
-    --code-fg: #1b1b1d;
-    --border: #e4e1dc;
-    --table-stripe: #f8f7f4;
-    --pub: #2a6f4d;
-    --priv: #b54708;
-    --pkg: #1a4a8a;
-    --core: #6b4ba8;
+    --fg: #1b1b1d; --muted: #5a5a60; --bg: #fdfdfc;
+    --accent: #1a4a8a; --accent-2: #2a6f4d; --warn: #b54708;
+    --code-bg: #f4f2ee; --code-fg: #1b1b1d; --border: #e4e1dc;
+    --table-stripe: #f8f7f4; --pub: #2a6f4d; --priv: #b54708;
+    --pkg: #1a4a8a; --core: #6b4ba8;
   }
-  html { box-sizing: border-box; }
-  *, *::before, *::after { box-sizing: inherit; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-    color: var(--fg);
-    background: var(--bg);
-    line-height: 1.55;
-    max-width: 980px;
-    margin: 0 auto;
-    padding: 2.5rem 1.5rem 6rem;
-  }
-  h1, h2, h3, h4 {
-    color: var(--fg);
-    line-height: 1.25;
-    margin-top: 2.2rem;
-    margin-bottom: 0.6rem;
-  }
+  html { box-sizing: border-box; } *, *::before, *::after { box-sizing: inherit; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color: var(--fg); background: var(--bg); line-height: 1.55;
+    max-width: 980px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem; }
+  h1, h2, h3, h4 { color: var(--fg); line-height: 1.25; margin-top: 2.2rem; margin-bottom: 0.6rem; }
   h1 { font-size: 2rem; border-bottom: 2px solid var(--border); padding-bottom: 0.4rem; }
   h2 { font-size: 1.45rem; margin-top: 2.6rem; }
   h3 { font-size: 1.15rem; color: var(--accent); }
   h4 { font-size: 1rem; color: var(--muted); }
-  p { margin: 0.7rem 0; }
-  ul, ol { margin: 0.7rem 0; padding-left: 1.6rem; }
-  li { margin: 0.3rem 0; }
-  code {
-    font-family: "SF Mono", Menlo, Consolas, "Courier New", monospace;
-    background: var(--code-bg);
-    color: var(--code-fg);
-    padding: 0.1em 0.35em;
-    border-radius: 3px;
-    font-size: 0.92em;
-  }
-  pre {
-    background: var(--code-bg);
-    color: var(--code-fg);
-    padding: 0.9rem 1rem;
-    border-radius: 6px;
-    overflow-x: auto;
-    font-size: 0.88rem;
-    line-height: 1.5;
-    border: 1px solid var(--border);
-  }
+  p { margin: 0.7rem 0; } ul, ol { margin: 0.7rem 0; padding-left: 1.6rem; } li { margin: 0.3rem 0; }
+  code { font-family: "SF Mono", Menlo, Consolas, "Courier New", monospace;
+    background: var(--code-bg); color: var(--code-fg); padding: 0.1em 0.35em;
+    border-radius: 3px; font-size: 0.92em; }
+  pre { background: var(--code-bg); color: var(--code-fg); padding: 0.9rem 1rem;
+    border-radius: 6px; overflow-x: auto; font-size: 0.88rem; line-height: 1.5;
+    border: 1px solid var(--border); }
   pre code { background: none; padding: 0; font-size: inherit; }
-  table {
-    border-collapse: collapse;
-    width: 100%;
-    margin: 1rem 0;
-    font-size: 0.94rem;
-  }
-  th, td {
-    text-align: left;
-    padding: 0.5rem 0.7rem;
-    border-bottom: 1px solid var(--border);
-    vertical-align: top;
-  }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: 0.94rem; }
+  th, td { text-align: left; padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--border); vertical-align: top; }
   th { background: var(--code-bg); font-weight: 600; }
   tbody tr:nth-child(even) { background: var(--table-stripe); }
-  .lead {
-    font-size: 1.05rem;
-    color: var(--muted);
-    margin-bottom: 1.6rem;
-  }
-  .toc {
-    background: var(--code-bg);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 1rem 1.2rem;
-    margin: 1.6rem 0 2rem;
-    font-size: 0.94rem;
-  }
+  .lead { font-size: 1.05rem; color: var(--muted); margin-bottom: 1.6rem; }
+  .toc { background: var(--code-bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 1rem 1.2rem; margin: 1.6rem 0 2rem; font-size: 0.94rem; }
   .toc ol { margin: 0.2rem 0 0; padding-left: 1.3rem; }
-  .toc a { color: var(--accent); text-decoration: none; }
-  .toc a:hover { text-decoration: underline; }
-
-  .diagram {
-    background: #ffffff;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 1.4rem;
-    margin: 1.4rem 0;
-    overflow-x: auto;
-  }
-  .diagram-caption {
-    font-size: 0.85rem;
-    color: var(--muted);
-    text-align: center;
-    margin-top: 0.6rem;
-    font-style: italic;
-  }
+  .toc a { color: var(--accent); text-decoration: none; } .toc a:hover { text-decoration: underline; }
+  .diagram { background: #ffffff; border: 1px solid var(--border);
+    border-radius: 8px; padding: 1.4rem; margin: 1.4rem 0; overflow-x: auto; }
+  .diagram-caption { font-size: 0.85rem; color: var(--muted); text-align: center;
+    margin-top: 0.6rem; font-style: italic; }
   svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
   svg text { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; fill: var(--fg); }
   svg .label { font-family: -apple-system, system-ui, sans-serif; font-size: 12px; }
   svg .small { font-size: 10px; fill: var(--muted); }
-
-  .legend {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 1rem;
-    justify-content: center;
-    margin-top: 0.8rem;
-    font-size: 0.85rem;
-  }
-  .legend-item { display: flex; align-items: center; gap: 0.4rem; }
-  .legend-swatch {
-    width: 14px;
-    height: 14px;
-    border-radius: 3px;
-    border: 1px solid rgba(0,0,0,0.15);
-  }
-
-  .tag {
-    display: inline-block;
-    padding: 0.1em 0.55em;
-    border-radius: 3px;
-    font-size: 0.78em;
-    font-weight: 600;
-    font-family: "SF Mono", Menlo, monospace;
-    color: white;
-    vertical-align: middle;
-  }
-  .tag.pub  { background: var(--pub); }
-  .tag.priv { background: var(--priv); }
-  .tag.pkg  { background: var(--pkg); }
-  .tag.core { background: var(--core); }
-  .tag.warn { background: var(--warn); }
-
-  .callout {
-    border-left: 4px solid var(--accent);
-    background: #f0f4fa;
-    padding: 0.8rem 1rem;
-    margin: 1.2rem 0;
-    border-radius: 0 6px 6px 0;
-  }
+  .callout { border-left: 4px solid var(--accent); background: #f0f4fa;
+    padding: 0.8rem 1rem; margin: 1.2rem 0; border-radius: 0 6px 6px 0; }
   .callout.warn { border-color: var(--warn); background: #fbf3ec; }
   .callout.good { border-color: var(--accent-2); background: #eef6f1; }
   .callout strong { display: block; margin-bottom: 0.3rem; }
-
-  .two-col {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 1rem;
-    margin: 1.2rem 0;
-  }
-  @media (max-width: 720px) {
-    .two-col { grid-template-columns: 1fr; }
-  }
-
-  .file-tree {
-    font-family: "SF Mono", Menlo, monospace;
-    font-size: 0.88rem;
-    line-height: 1.55;
-    background: var(--code-bg);
-    padding: 1rem 1.2rem;
-    border-radius: 6px;
-    border: 1px solid var(--border);
-    white-space: pre;
-    overflow-x: auto;
-  }
-  .file-tree .pub  { color: var(--pub); font-weight: 600; }
-  .file-tree .priv { color: var(--priv); }
-  .file-tree .note { color: var(--muted); font-style: italic; }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 1.2rem 0; }
+  @media (max-width: 720px) { .two-col { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
 
 <h1>6. Variables and Mutability</h1>
+<p class="lead">
+  One keyword: <code>var</code>. Every binding is mutable. Restrictions come from
+  <em>module visibility</em>, not from variable annotations.
+</p>
 
-<p>Every binding is declared with <code>var</code>. There is no <code>let</code> / <code>const</code>. Every binding is mutable.</p>
+<div class="toc">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#decl">Declaration syntax</a></li>
+    <li><a href="#mut">Mutation</a></li>
+    <li><a href="#scope">Scoping &amp; shadowing</a></li>
+    <li><a href="#mod">Module-level variables</a></li>
+    <li><a href="#stmt">Assignment is a statement</a></li>
+    <li><a href="#pat">Pattern bindings</a></li>
+    <li><a href="#ref">Reference semantics</a></li>
+  </ol>
+</div>
+
+<!-- =========================================================== -->
+<h2 id="overview">At a glance</h2>
+
+<div class="diagram">
+  <svg viewBox="0 0 920 210" role="img" aria-label="var anatomy">
+    <g transform="translate(20, 30)">
+      <text x="0" y="0" font-weight="700">Anatomy of a declaration</text>
+
+      <g transform="translate(0, 24)">
+        <rect x="0"   y="0" width="50"  height="40" rx="4" fill="#eaf0f8" stroke="#1a4a8a"/>
+        <rect x="55"  y="0" width="110" height="40" rx="4" fill="#eef6f1" stroke="#2a6f4d"/>
+        <rect x="170" y="0" width="120" height="40" rx="4" fill="#f3eefa" stroke="#6b4ba8"/>
+        <rect x="295" y="0" width="50"  height="40" rx="4" fill="#fff" stroke="#d6d3cd"/>
+        <rect x="350" y="0" width="170" height="40" rx="4" fill="#fbf3ec" stroke="#b54708"/>
+
+        <text x="25"  y="26" text-anchor="middle" font-weight="700">var</text>
+        <text x="110" y="26" text-anchor="middle" font-weight="700">price</text>
+        <text x="230" y="26" text-anchor="middle">: f32</text>
+        <text x="320" y="26" text-anchor="middle">=</text>
+        <text x="435" y="26" text-anchor="middle">19.99</text>
+
+        <text x="25"  y="60" text-anchor="middle" class="small">keyword</text>
+        <text x="110" y="60" text-anchor="middle" class="small">name</text>
+        <text x="230" y="60" text-anchor="middle" class="small">type (optional)</text>
+        <text x="320" y="60" text-anchor="middle" class="small">assign</text>
+        <text x="435" y="60" text-anchor="middle" class="small">initializer (required)</text>
+      </g>
+    </g>
+
+    <g transform="translate(20, 120)">
+      <rect width="880" height="70" rx="8" fill="#fafafa" stroke="#d6d3cd"/>
+      <text x="20" y="22" font-weight="700">Three rules</text>
+      <text x="20" y="44" font-size="11.5">1.  Every binding has an initializer — no <tspan font-family="SF Mono, Menlo, monospace">var x: i64</tspan>.</text>
+      <text x="20" y="60" font-size="11.5">2.  Every binding is mutable — there is no <tspan font-family="SF Mono, Menlo, monospace">let</tspan> / <tspan font-family="SF Mono, Menlo, monospace">const</tspan>.</text>
+      <text x="460" y="44" font-size="11.5">3.  External access control is via <tspan font-family="SF Mono, Menlo, monospace">pub</tspan> on the binding,</text>
+      <text x="460" y="60" font-size="11.5">    not via a separate immutability modifier.</text>
+    </g>
+  </svg>
+  <div class="diagram-caption">One keyword, one shape — the type annotation is the only optional piece.</div>
+</div>
 
 <pre><code>var name: str = "John Doe"
-var age = 30           // type inferred — i64 (default integer literal type)
+var age = 30           // type inferred — i64 (default literal type)
 var price: f32 = 19.99
 
 name = "Jane Doe"      // mutation</code></pre>
 
-<p>Restrictions on what an outside caller can mutate come from <strong>module visibility</strong> (see <a href="17-modules.html">17-modules.html</a>), not from variable annotations.</p>
+<!-- =========================================================== -->
+<h2 id="decl">1. Declaration syntax</h2>
 
-<h2 id="6-1-declaration-syntax">6.1 Declaration syntax</h2>
+<pre><code>var &lt;name&gt;          : &lt;type&gt; = &lt;expr&gt;     // explicit
+var &lt;name&gt;                    = &lt;expr&gt;     // inferred</code></pre>
 
-<pre><code>var &lt;name&gt;          : &lt;type&gt; = &lt;expr&gt;     // explicit type + initializer
-var &lt;name&gt;                    = &lt;expr&gt;     // inferred type</code></pre>
+<div class="callout warn">
+  <strong>No uninitialized bindings</strong>
+  Primitives have no implicit default value. <code>var x: i64</code> alone is a compile error —
+  you must write <code>var x: i64 = 0</code>. This is intentional; see <a href="02-types.html#default">02-types §8</a>.
+</div>
 
-<p>Both forms require an initializer. Uninitialized bindings (<code>var x: i64</code>) are not allowed; primitives have no implicit default value.</p>
+<!-- =========================================================== -->
+<h2 id="mut">2. Mutation</h2>
 
-<p>A <code>var</code> statement is terminated by <code>;</code> unless it is the last item in a block, where the <code>;</code> is optional but conventional.</p>
+<p>Any binding can be reassigned, including to a value of a different concrete type — as long as
+the new type fits the declared (or inferred) type.</p>
 
-<h2 id="6-2-mutation">6.2 Mutation</h2>
+<div class="diagram">
+  <svg viewBox="0 0 920 220" role="img" aria-label="Reassignment within union">
+    <g transform="translate(20, 30)">
+      <ellipse cx="180" cy="80" rx="170" ry="60" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
+      <text x="180" y="40" text-anchor="middle" font-weight="700" fill="#2a6f4d">var x: i64 | str</text>
 
-<p>Any binding can be reassigned, including across types when the new value fits the declared (or inferred) type:</p>
+      <rect x="80" y="62" width="60" height="32" rx="4" fill="#fff" stroke="#1a4a8a"/>
+      <text x="110" y="82" text-anchor="middle" font-size="11">1</text>
 
-<pre><code>var x: i64 | str = 1
-x = "hello"            // OK — fits i64 | str
-x = true               // compile error — bool not in the union</code></pre>
+      <rect x="220" y="62" width="80" height="32" rx="4" fill="#fff" stroke="#1a4a8a"/>
+      <text x="260" y="82" text-anchor="middle" font-size="11">"hello"</text>
 
-<p>Reassignment to a value of a different concrete type is fine; reassignment that escapes the declared type is rejected by the type checker.</p>
+      <text x="180" y="120" text-anchor="middle" font-size="11" fill="#2a6f4d">x = 1 ✓     x = "hello" ✓</text>
+    </g>
 
-<p>Mutating a struct field uses <code>=</code>:</p>
+    <g transform="translate(440, 30)">
+      <ellipse cx="180" cy="80" rx="170" ry="60" fill="#fbf3ec" stroke="#b54708" stroke-width="2"/>
+      <text x="180" y="40" text-anchor="middle" font-weight="700" fill="#b54708">x = true</text>
 
-<pre><code>person.age = person.age + 1</code></pre>
+      <text x="180" y="80" text-anchor="middle" font-size="11">bool is not in i64 | str</text>
+      <text x="180" y="100" text-anchor="middle" font-size="11">compile error</text>
+      <text x="180" y="125" text-anchor="middle" font-size="11" fill="#b54708">type checker rejects the reassignment</text>
+    </g>
 
-<p>For overloaded indexing, see <a href="15-operators.html">15-operators.html</a>.</p>
+    <g transform="translate(20, 170)">
+      <rect width="880" height="34" rx="6" fill="#fafafa" stroke="#d6d3cd"/>
+      <text x="14" y="22" font-size="11">Struct field mutation: <tspan font-family="SF Mono, Menlo, monospace">person.age = person.age + 1</tspan>. Indexed assignment: see 15-operators.</text>
+    </g>
+  </svg>
+  <div class="diagram-caption">Reassignment within the declared type — fine. Reassignment that escapes the type — rejected.</div>
+</div>
 
-<h2 id="6-3-scoping">6.3 Scoping</h2>
+<!-- =========================================================== -->
+<h2 id="scope">3. Scoping &amp; shadowing</h2>
 
-<p>Lexical scoping. A block <code>{ ... }</code> introduces a new scope. Bindings in an inner scope shadow same-named bindings in outer scopes.</p>
+<p>Lexical scoping. A block <code>{ ... }</code> introduces a new scope. Inner bindings shadow same-named outer bindings.</p>
 
-<pre><code>var x = 1
-{
-  var x = 2     // shadows outer
-  print(x as str)  // 2
-}
-print(x as str)     // 1</code></pre>
+<div class="diagram">
+  <svg viewBox="0 0 920 240" role="img" aria-label="Scope and shadowing">
+    <!-- Outer scope -->
+    <g transform="translate(60, 30)">
+      <rect width="800" height="190" rx="8" fill="#eaf0f8" stroke="#1a4a8a" stroke-width="2"/>
+      <text x="14" y="22" font-weight="700" fill="#1a4a8a">outer scope</text>
 
-<p>Two <code>var</code>s with the same name in the same scope are an error.</p>
+      <text x="14" y="50" font-size="12">var x = 1</text>
 
-<p>A binding is in scope from the point of declaration until the end of the enclosing block.</p>
+      <!-- Inner scope -->
+      <g transform="translate(14, 62)">
+        <rect width="770" height="100" rx="6" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
+        <text x="14" y="22" font-weight="700" fill="#2a6f4d">inner scope { }</text>
+        <text x="14" y="50" font-size="12">var x = 2        // shadows outer x</text>
+        <text x="14" y="70" font-size="12">print(x as str)  // 2</text>
+      </g>
 
-<h2 id="6-4-module-level-variables">6.4 Module-level variables</h2>
-
-<p>Variables declared at module top level are persistent storage:</p>
-
-<pre><code>pub var MAX_RETRIES: i32 = 5
-var counter: i64 = 0
-pub var DEFAULT_CONFIG = Config { debug: false, port: 8080 }</code></pre>
-
-<h3>Initializer restrictions</h3>
-
-<p>A module-level <code>var</code> must be initialized with a <strong>compile-time constant expression</strong>:</p>
-
-<ul>
-  <li>Literals (<code>42</code>, <code>"hello"</code>, <code>true</code>, <code>null</code>, <code>3.14</code>).</li>
-  <li>Struct construction whose every field is itself a compile-time constant.</li>
-  <li>Tuple construction whose every element is itself a compile-time constant.</li>
-  <li>Arithmetic, bitwise, and logical operations on the above (the compiler evaluates these).</li>
-  <li>Other module-level <code>var</code> references whose initializers are themselves constant.</li>
-</ul>
-
-<p>The following are <strong>not</strong> allowed at module level:</p>
-
-<ul>
-  <li>Function calls (even pure ones — there is no way to mark a function <code>const</code>).</li>
-  <li><code>as</code> casts that can fail (union narrowing).</li>
-  <li><code>await</code>, <code>spawn</code>, <code>pin</code>, channel construction.</li>
-  <li>Indexing into collections.</li>
-  <li><code>if</code>/<code>match</code> expressions (control flow is for function bodies).</li>
-</ul>
-
-<p>If you need lazy initialization, expose a function and call it from <code>main</code>:</p>
-
-<pre><code>var get_start_time_initialized: bool = false
-var start_time_storage: i64 = 0
-function start_time(): i64 {
-  if !get_start_time_initialized {
-    start_time_storage = clock_now()
-    get_start_time_initialized = true
-  }
-  start_time_storage
-}</code></pre>
-
-<p>(Note: <code>Shared&lt;T&gt;</code> is the right tool if multiple threads might race.)</p>
-
-<h3>Initialization order</h3>
-
-<p>Because there is no module init code (see <a href="17-modules.html">17-modules.html</a>), all module-level <code>var</code> values are computed at compile time and embedded directly into static storage. There is no runtime "load order" between modules. This makes circular imports trivially safe.</p>
-
-<h3>Visibility</h3>
-
-<ul>
-  <li><code>var FOO</code> — module-private.</li>
-  <li><code>pub var FOO</code> — visible to importers.</li>
-</ul>
-
-<p>A <code>pub var</code> is read <strong>and</strong> writeable by importers. The language does not distinguish read-only from read-write at the visibility layer. If you want read-only-from-outside semantics, expose a getter function and keep the <code>var</code> private.</p>
-
-<p>This is intentional: avoids the design complexity of <code>pub</code> / <code>pub(crate)</code> / <code>pub(read)</code> etc., and the visibility system is exclusively about access, not about mutability. Mutating shared module state is unsafe across threads unless wrapped (see <code>Shared&lt;T&gt;</code> in <a href="20-concurrency.html">20-concurrency.html</a>).</p>
-
-<h2 id="6-5-shadowing">6.5 Shadowing</h2>
-
-<p>Inner scopes may declare a same-named binding:</p>
+      <text x="14" y="184" font-size="12">print(x as str)  // 1 — outer x restored</text>
+    </g>
+  </svg>
+  <div class="diagram-caption">Shadowing only crosses block boundaries. Two <code>var</code>s with the same name in the <em>same</em> block is an error.</div>
+</div>
 
 <pre><code>function example() {
   var x: i64 = 5
@@ -309,47 +209,165 @@ function start_time(): i64 {
   // x is still i64 here
 }</code></pre>
 
-<p>Shadowing only crosses block boundaries — within a single block, redeclaring is an error.</p>
+<!-- =========================================================== -->
+<h2 id="mod">4. Module-level variables</h2>
 
-<h2 id="6-6-assignment-expressions-statements">6.6 Assignment, expressions, statements</h2>
+<p>Variables declared at module top level are persistent storage. Their initializer must be
+a <strong>compile-time constant expression</strong>.</p>
 
-<p>Assignment is a statement, not an expression. It does not produce a value. You cannot write <code>var y = (x = 5)</code> — that's a parse error.</p>
+<div class="diagram">
+  <svg viewBox="0 0 920 320" role="img" aria-label="Module-level initializer rules">
+    <g transform="translate(20, 20)">
+      <rect width="430" height="280" rx="8" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
+      <text x="14" y="22" font-weight="700" fill="#2a6f4d">✓ Allowed at module level</text>
 
-<p><code>var</code> declaration is also a statement.</p>
+      <text x="14" y="50" font-size="11">— Literals: 42, "hello", true, null, 3.14</text>
+      <text x="14" y="70" font-size="11">— Struct construction with constant fields</text>
+      <text x="14" y="90" font-size="11">— Tuple construction with constant elements</text>
+      <text x="14" y="110" font-size="11">— Arithmetic / bitwise / logical on constants</text>
+      <text x="14" y="130" font-size="11">— Other module-level constants</text>
 
-<p>For expression-vs-statement rules, see <a href="07-expressions.html">07-expressions.html</a>.</p>
+      <text x="14" y="170" font-size="11" font-weight="700">Why this restriction?</text>
+      <text x="14" y="190" font-size="11">All module-level values are embedded directly</text>
+      <text x="14" y="208" font-size="11">into static storage at compile time.</text>
 
-<h2 id="6-7-pattern-bindings">6.7 Pattern bindings</h2>
+      <text x="14" y="240" font-size="11" font-weight="700">Benefit</text>
+      <text x="14" y="258" font-size="11">There is no runtime "module init" — circular</text>
+      <text x="14" y="276" font-size="11">imports are trivially safe.</text>
+    </g>
 
-<p><code>var</code> accepts destructuring patterns:</p>
+    <g transform="translate(470, 20)">
+      <rect width="430" height="280" rx="8" fill="#fbf3ec" stroke="#b54708" stroke-width="2"/>
+      <text x="14" y="22" font-weight="700" fill="#b54708">✗ NOT allowed at module level</text>
+
+      <text x="14" y="50" font-size="11">— Function calls (no <tspan font-family="SF Mono, Menlo, monospace">const fn</tspan>)</text>
+      <text x="14" y="70" font-size="11">— Fallible <tspan font-family="SF Mono, Menlo, monospace">as</tspan> casts (union narrowing)</text>
+      <text x="14" y="90" font-size="11">— <tspan font-family="SF Mono, Menlo, monospace">await</tspan>, <tspan font-family="SF Mono, Menlo, monospace">spawn</tspan>, <tspan font-family="SF Mono, Menlo, monospace">pin</tspan>, channel construction</text>
+      <text x="14" y="110" font-size="11">— Indexing into collections</text>
+      <text x="14" y="130" font-size="11">— <tspan font-family="SF Mono, Menlo, monospace">if</tspan> / <tspan font-family="SF Mono, Menlo, monospace">match</tspan> (control flow lives in functions)</text>
+
+      <text x="14" y="170" font-size="11" font-weight="700">Need lazy init?</text>
+      <text x="14" y="190" font-size="11">Expose a function — call it from main:</text>
+      <text x="14" y="212" font-size="10.5">  var initialized: bool = false</text>
+      <text x="14" y="226" font-size="10.5">  var stored: i64 = 0</text>
+      <text x="14" y="240" font-size="10.5">  function get_value(): i64 { … }</text>
+      <text x="14" y="266" font-size="11">(For multi-thread races use <tspan font-family="SF Mono, Menlo, monospace">Shared&lt;T&gt;</tspan>.)</text>
+    </g>
+  </svg>
+  <div class="diagram-caption">Module-level values are baked into the binary — no runtime initializer races.</div>
+</div>
+
+<pre><code>pub var MAX_RETRIES: i32 = 5
+var counter: i64 = 0
+pub var DEFAULT_CONFIG = Config { debug: false, port: 8080 }</code></pre>
+
+<h3>Visibility</h3>
+<table>
+  <thead><tr><th>Form</th><th>Effect</th></tr></thead>
+  <tbody>
+    <tr><td><code>var FOO</code></td><td>Module-private.</td></tr>
+    <tr><td><code>pub var FOO</code></td><td>Visible to importers — <strong>read AND write</strong>.</td></tr>
+  </tbody>
+</table>
+
+<div class="callout warn">
+  <strong>No read-only visibility</strong>
+  A <code>pub var</code> is read <strong>and</strong> writeable by importers. The language does
+  not distinguish read-only from read-write at the visibility layer. If you want
+  read-only-from-outside semantics, expose a getter function and keep the <code>var</code> private.
+  Multi-thread writes need <code>Shared&lt;T&gt;</code> — see <a href="20-concurrency.html">20-concurrency</a>.
+</div>
+
+<!-- =========================================================== -->
+<h2 id="stmt">5. Assignment is a statement</h2>
+
+<p>Assignment does not produce a value:</p>
+
+<pre><code>var y = (x = 5)   // parse error — assignment is not an expression</code></pre>
+
+<p>For the expression-vs-statement rules, see <a href="07-expressions.html">07-expressions</a>.</p>
+
+<!-- =========================================================== -->
+<h2 id="pat">6. Pattern bindings</h2>
 
 <pre><code>var (x, y) = point
 var (a, ..rest) = quad             // tuple rest binding — rest is a sub-tuple
 var Person { name, age } = alice
 var Pair(a, b) = pair</code></pre>
 
-<p>In each case the names introduced are normal <code>var</code> bindings, individually mutable.</p>
+<p>Each name introduced is a normal <code>var</code> binding, individually mutable.</p>
 
-<p>A pattern in <code>var</code> must be <strong>irrefutable</strong> — it must always match. To match conditionally, use <code>match</code> or an <code>if v is T</code> guard. <strong>List patterns</strong> like <code>[head, ..tail] = list</code> are <em>refutable</em> (an empty list doesn't match <code>[head, ..tail]</code>), so they are not valid in <code>var</code> — use <code>match</code> for those.</p>
+<div class="callout warn">
+  <strong>Patterns in <code>var</code> must be irrefutable</strong>
+  They must always match. To match conditionally use <code>match</code> or <code>if v is T</code>.
+  <strong>List patterns</strong> like <code>[head, ..tail]</code> are <em>refutable</em> (an empty
+  list doesn't match), so they are not valid in <code>var</code> — use <code>match</code> instead.
+</div>
 
-<h2 id="6-8-reference-semantics-what-assignment-does">6.8 Reference semantics — what assignment does</h2>
+<!-- =========================================================== -->
+<h2 id="ref">7. Reference semantics — what assignment does</h2>
 
-<p>For primitive types (<code>i8</code>..<code>i64</code>, <code>u8</code>..<code>u64</code>, <code>f32</code>, <code>f64</code>, <code>bool</code>, <code>char</code>, <code>null</code>), assignment copies the value.</p>
+<div class="diagram">
+  <svg viewBox="0 0 920 290" role="img" aria-label="Value vs reference assignment">
+    <!-- Primitives (value copy) -->
+    <g transform="translate(20, 20)">
+      <rect width="430" height="250" rx="8" fill="#eaf0f8" stroke="#1a4a8a" stroke-width="2"/>
+      <text x="14" y="22" font-weight="700" fill="#1a4a8a">Primitives — value copy</text>
+      <text x="14" y="40" class="small">i8..i64 · u8..u64 · f32/f64 · bool · char · null</text>
 
-<p>For reference types (<code>str</code>, structs, <code>List&lt;T&gt;</code>, <code>Map&lt;K, V&gt;</code>, tuples that have been boxed), assignment copies the <strong>reference</strong>, incrementing the underlying object's refcount. Both bindings then refer to the same heap object. Mutation through one is visible through the other.</p>
+      <rect x="20" y="60" width="160" height="40" rx="4" fill="#fff" stroke="#1a4a8a"/>
+      <text x="100" y="84" text-anchor="middle" font-size="11">a = 5</text>
+
+      <rect x="220" y="60" width="160" height="40" rx="4" fill="#fff" stroke="#1a4a8a"/>
+      <text x="300" y="84" text-anchor="middle" font-size="11">b = a   →  b = 5</text>
+
+      <rect x="20" y="120" width="360" height="40" rx="4" fill="#eef6f1" stroke="#2a6f4d"/>
+      <text x="200" y="144" text-anchor="middle" font-size="11" fill="#2a6f4d">b = 99    a is still 5 — independent</text>
+
+      <text x="14" y="190" font-size="11">Each binding owns its own copy of the bits.</text>
+      <text x="14" y="208" font-size="11">No aliasing possible.</text>
+    </g>
+
+    <!-- References -->
+    <g transform="translate(470, 20)">
+      <rect width="430" height="250" rx="8" fill="#fbf3ec" stroke="#b54708" stroke-width="2"/>
+      <text x="14" y="22" font-weight="700" fill="#b54708">References — reference copy</text>
+      <text x="14" y="40" class="small">str · structs · List · Map · boxed tuples</text>
+
+      <rect x="20" y="60" width="80" height="40" rx="4" fill="#fff" stroke="#b54708"/>
+      <text x="60" y="84" text-anchor="middle" font-size="11">a</text>
+      <rect x="120" y="60" width="80" height="40" rx="4" fill="#fff" stroke="#b54708"/>
+      <text x="160" y="84" text-anchor="middle" font-size="11">b = a</text>
+
+      <path d="M 60 100 L 280 124" stroke="#5a5a60" stroke-width="1.5" fill="none"/>
+      <path d="M 160 100 L 280 124" stroke="#5a5a60" stroke-width="1.5" fill="none"/>
+
+      <rect x="220" y="124" width="180" height="60" rx="4" fill="#eef6f1" stroke="#2a6f4d"/>
+      <text x="310" y="146" text-anchor="middle" font-size="11" fill="#2a6f4d">heap: Person {…}</text>
+      <text x="310" y="166" text-anchor="middle" font-size="11" fill="#2a6f4d">RC: 2</text>
+
+      <text x="14" y="210" font-size="11">b.age = 31  →  a.age is 31 too</text>
+      <text x="14" y="226" font-size="11">a.clone() to get an independent copy.</text>
+    </g>
+  </svg>
+  <div class="diagram-caption">Same model as every refcounted language. Use <code>.clone()</code> to break aliasing.</div>
+</div>
 
 <pre><code>var a = Person { name: "Alice", age: 30 }
-var b = a             // b refers to the same heap object as a
+var b = a             // b refers to the same heap object as a (RC bumped)
 b.age = 31
-print(a.age as str)   // 31 — a and b alias</code></pre>
+print(a.age as str)   // 31 — a and b alias
 
-<p>To get a deep copy, call <code>.clone()</code> (requires the type to implement <code>Clone</code>; see <a href="15-operators.html">15-operators.html</a>):</p>
+var c = a.clone()     // independent copy (requires Clone)
+c.age = 32
+print(a.age as str)   // 31 — c is independent</code></pre>
 
-<pre><code>var b = a.clone()
-b.age = 31
-print(a.age as str)   // 30 — independent</code></pre>
-
-<p>This aliasing-with-mutation model is the standard one for refcounted languages and matches the memory model in <a href="16-memory.html">16-memory.html</a>.</p>
+<div class="callout">
+  <strong>Memory model</strong>
+  This aliasing-with-mutation model is the standard one for refcounted languages and matches
+  the full memory model in <a href="16-memory.html">16-memory</a>. <code>Clone</code> is defined
+  in <a href="15-operators.html">15-operators</a>.
+</div>
 
 </body>
 </html>

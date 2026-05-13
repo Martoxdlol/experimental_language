@@ -82,18 +82,6 @@
     color: var(--muted);
     margin-bottom: 1.6rem;
   }
-  .toc {
-    background: var(--code-bg);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 1rem 1.2rem;
-    margin: 1.6rem 0 2rem;
-    font-size: 0.94rem;
-  }
-  .toc ol { margin: 0.2rem 0 0; padding-left: 1.3rem; }
-  .toc a { color: var(--accent); text-decoration: none; }
-  .toc a:hover { text-decoration: underline; }
-
   .diagram {
     background: #ffffff;
     border: 1px solid var(--border);
@@ -114,38 +102,6 @@
   svg .label { font-family: -apple-system, system-ui, sans-serif; font-size: 12px; }
   svg .small { font-size: 10px; fill: var(--muted); }
 
-  .legend {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 1rem;
-    justify-content: center;
-    margin-top: 0.8rem;
-    font-size: 0.85rem;
-  }
-  .legend-item { display: flex; align-items: center; gap: 0.4rem; }
-  .legend-swatch {
-    width: 14px;
-    height: 14px;
-    border-radius: 3px;
-    border: 1px solid rgba(0,0,0,0.15);
-  }
-
-  .tag {
-    display: inline-block;
-    padding: 0.1em 0.55em;
-    border-radius: 3px;
-    font-size: 0.78em;
-    font-weight: 600;
-    font-family: "SF Mono", Menlo, monospace;
-    color: white;
-    vertical-align: middle;
-  }
-  .tag.pub  { background: var(--pub); }
-  .tag.priv { background: var(--priv); }
-  .tag.pkg  { background: var(--pkg); }
-  .tag.core { background: var(--core); }
-  .tag.warn { background: var(--warn); }
-
   .callout {
     border-left: 4px solid var(--accent);
     background: #f0f4fa;
@@ -157,86 +113,288 @@
   .callout.good { border-color: var(--accent-2); background: #eef6f1; }
   .callout strong { display: block; margin-bottom: 0.3rem; }
 
-  .two-col {
+  .chapter-grid {
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 1rem;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 0.8rem;
+    margin: 1.4rem 0;
+  }
+  .chapter-card {
+    display: block;
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.8rem 1rem;
+    text-decoration: none;
+    color: var(--fg);
+    transition: transform 0.08s ease, border-color 0.08s ease;
+  }
+  .chapter-card:hover { border-color: var(--accent); transform: translateY(-1px); }
+  .chapter-card .num {
+    font-family: "SF Mono", Menlo, monospace;
+    font-size: 0.75rem;
+    color: var(--muted);
+    display: block;
+  }
+  .chapter-card .title { font-weight: 600; display: block; margin: 0.1rem 0 0.3rem; }
+  .chapter-card .desc { font-size: 0.83rem; color: var(--muted); line-height: 1.4; }
+  .chapter-card.foundation { border-left: 4px solid var(--accent); }
+  .chapter-card.types      { border-left: 4px solid var(--accent-2); }
+  .chapter-card.flow       { border-left: 4px solid var(--core); }
+  .chapter-card.system     { border-left: 4px solid var(--warn); }
+  .chapter-card.platform   { border-left: 4px solid #6b6b70; }
+
+  .pillar-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 0.9rem;
     margin: 1.2rem 0;
   }
-  @media (max-width: 720px) {
-    .two-col { grid-template-columns: 1fr; }
-  }
-
-  .file-tree {
-    font-family: "SF Mono", Menlo, monospace;
-    font-size: 0.88rem;
-    line-height: 1.55;
-    background: var(--code-bg);
-    padding: 1rem 1.2rem;
-    border-radius: 6px;
+  .pillar {
+    background: #fff;
     border: 1px solid var(--border);
-    white-space: pre;
-    overflow-x: auto;
+    border-radius: 8px;
+    padding: 0.9rem 1rem;
+    border-top: 4px solid var(--accent);
   }
-  .file-tree .pub  { color: var(--pub); font-weight: 600; }
-  .file-tree .priv { color: var(--priv); }
-  .file-tree .note { color: var(--muted); font-style: italic; }
+  .pillar h4 { margin: 0 0 0.3rem; color: var(--accent); font-size: 0.95rem; }
+  .pillar p  { margin: 0; font-size: 0.88rem; color: var(--muted); }
+  .pillar.green  { border-top-color: var(--accent-2); } .pillar.green  h4 { color: var(--accent-2); }
+  .pillar.purple { border-top-color: var(--core); }     .pillar.purple h4 { color: var(--core); }
+  .pillar.orange { border-top-color: var(--warn); }     .pillar.orange h4 { color: var(--warn); }
 </style>
 </head>
 <body>
 
 <h1>Language Specification</h1>
+<p class="lead">
+  Full specification, split across topical chapters. Read top-to-bottom for the
+  first time; each chapter is reasonably self-contained for reference later.
+</p>
 
-<p>This is the full specification, split across topical chapters. Chapters are intended to be read in order, but each is reasonably self-contained.</p>
+<!-- =========================================================== -->
+<h2 id="map">Reading map</h2>
 
-<h2 id="index">Index</h2>
+<p>The 22 chapters cluster into five concentric layers — surface syntax at the edges,
+the runtime at the core. The arrows show the dependency direction; a later chapter
+assumes the ones it points back to.</p>
 
-<ol>
-<li><a href="01-lexical.html">Lexical structure</a> — comments (incl. <code>///</code> doc), identifiers, literals (<code>""</code> str, <code>''</code> char), literal suffixes, string interpolation, keywords.</li>
-<li><a href="02-types.html">Primitive types</a> — integers, floats, <code>bool</code>, <code>char</code>, <code>str</code>, <code>null</code>.</li>
-<li><a href="03-unions.html">Discriminated unions</a> — pipe syntax, flattening, recursion, ordering.</li>
-<li><a href="04-structs.html">Structs</a> — regular, tuple, unit; construction syntax; field shorthand; spread.</li>
-<li><a href="05-tuples.html">Tuples</a> — structural typing; positional access; destructuring.</li>
-<li><a href="06-variables.html">Variables</a> — <code>var</code>, mutability, module-level, scoping, shadowing.</li>
-<li><a href="07-expressions.html">Expressions</a> — blocks, <code>if</code>, <code>match</code>.</li>
-<li><a href="08-control-flow.html">Control flow</a> — <code>for</code>, <code>while</code>, <code>loop</code>, <code>break</code>, <code>continue</code>.</li>
-<li><a href="09-functions.html">Functions and closures</a> — <code>function</code>, lambdas, <code>|x|</code>, <code>it</code>, function types.</li>
-<li><a href="10-interfaces.html">Interfaces and extensions</a> — <code>interface</code>, <code>extend</code>, <code>Self</code>, defaults, orphan rule.</li>
-<li><a href="11-generics.html">Generics</a> — monomorphization, dynamic dispatch, overlap rules.</li>
-<li><a href="12-type-logic.html">Type logic</a> — <code>is</code>, <code>as</code>, flow typing, narrowing.</li>
-<li><a href="13-error-handling.html">Error handling</a> — <code>T | E</code>, <code>?</code>, <code>Try</code> interface.</li>
-<li><a href="14-panics.html">Panics</a> — <code>panic</code>, panic sources, integer overflow.</li>
-<li><a href="15-operators.html">Operators</a> — operator overloading; built-in interfaces; <code>ToStr</code> for string interpolation.</li>
-<li><a href="16-memory.html">Memory model</a> — GC, reference counting, layout, drop semantics.</li>
-<li><a href="17-modules.html">Modules and imports</a> — project layout, <code>mod</code> / <code>pub mod</code> tree, <code>import</code> paths (<code>core:</code> / <code>std:</code> / <code>pkg:</code> / project / relative), package-escape rule, visibility chain, <code>pub import</code> re-exports.</li>
-<li><a href="18-stdlib.html">Standard library</a> — <code>core:prelude</code> (<code>str</code>, <code>List</code>, <code>Map</code>, <code>Item</code>, <code>Iterator</code>, <code>Buffer</code>) + index of <code>std:*</code> modules.</li>
-<li><a href="19-ffi.html">Foreign Function Interface</a> — <code>extern</code>, pointers, pinning.</li>
-<li><a href="20-concurrency.html">Concurrency</a> — <code>std:thread</code>, <code>std:sync</code>: threads, channels, <code>Shared</code>.</li>
-<li><a href="21-async.html">Async</a> — <code>Future</code>, <code>await</code>, <code>spawn</code> (<code>std:async</code>), <code>AsyncIterator</code>, async closures.</li>
-<li><a href="22-macros.html">Macros</a> — procedural macros: <code>@UpperCamelCase</code>, decorator / expression / block forms, hygiene, sandbox, phases, <code>@Derive</code>.</li>
-</ol>
+<div class="diagram">
+  <svg viewBox="0 0 920 520" role="img" aria-label="Chapter dependency map">
+    <defs>
+      <marker id="arr" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+        <path d="M 0 0 L 9 3 L 0 6 z" fill="#5a5a60"/>
+      </marker>
+    </defs>
 
-<h2 id="design-at-a-glance">Design at a glance</h2>
+    <!-- Layer labels -->
+    <text x="22" y="30"  class="label" font-weight="700" fill="#1a4a8a">Foundation</text>
+    <text x="22" y="135" class="label" font-weight="700" fill="#2a6f4d">Type system</text>
+    <text x="22" y="260" class="label" font-weight="700" fill="#6b4ba8">Computation</text>
+    <text x="22" y="370" class="label" font-weight="700" fill="#b54708">System &amp; runtime</text>
+    <text x="22" y="475" class="label" font-weight="700" fill="#5a5a60">Platform</text>
 
-<ul>
-<li><strong>Type system</strong>: nominal structs, structural tuples, discriminated unions everywhere.</li>
-<li><strong>Memory</strong>: reference-counted managed heap with a cycle collector; deterministic-ish drop; manual pinning for FFI.</li>
-<li><strong>Mutation</strong>: every binding is mutable; access restrictions come from module visibility.</li>
-<li><strong>Errors</strong>: unions plus <code>?</code>; no exceptions; panics terminate the thread.</li>
-<li><strong>Concurrency</strong>: isolated threads, MPSC/MPMC channels with zero-copy on RC=1, <code>Shared&lt;T&gt;</code> mutex.</li>
-<li><strong>Async</strong>: state-machine futures, explicit executor, no built-in generator syntax.</li>
-<li><strong>FFI</strong>: C ABI via <code>extern</code>; managed heap and foreign heap are disjoint regions.</li>
-<li><strong>Generics</strong>: monomorphized by default; dynamic dispatch only when an interface type appears as a value type.</li>
-</ul>
+    <!-- Foundation row: 01, 02 -->
+    <g>
+      <rect x="160" y="14" width="120" height="50" rx="6" fill="#eaf0f8" stroke="#1a4a8a"/>
+      <text x="220" y="34" text-anchor="middle" font-weight="700">01 Lexical</text>
+      <text x="220" y="52" text-anchor="middle" class="small">tokens · literals</text>
 
-<h2 id="conventions-in-this-document">Conventions in this document</h2>
+      <rect x="310" y="14" width="120" height="50" rx="6" fill="#eaf0f8" stroke="#1a4a8a"/>
+      <text x="370" y="34" text-anchor="middle" font-weight="700">02 Primitives</text>
+      <text x="370" y="52" text-anchor="middle" class="small">i32 · f64 · str</text>
+    </g>
 
-<ul>
-<li>Code samples are in the language unless explicitly marked otherwise.</li>
-<li><code>// ...</code> and <code>/* ... */</code> are comments.</li>
-<li>Type identifiers (<code>Person</code>, <code>i32</code>, <code>Color</code>) appear in identifier syntax.</li>
-<li>Where a section says "panics", it means the panic semantics described in <a href="14-panics.html">14-panics.html</a>.</li>
-</ul>
+    <!-- Type system row: 03, 04, 05, 06 -->
+    <g>
+      <rect x="160" y="115" width="120" height="50" rx="6" fill="#eef6f1" stroke="#2a6f4d"/>
+      <text x="220" y="135" text-anchor="middle" font-weight="700">03 Unions</text>
+      <text x="220" y="153" text-anchor="middle" class="small">A | B | C</text>
+
+      <rect x="310" y="115" width="120" height="50" rx="6" fill="#eef6f1" stroke="#2a6f4d"/>
+      <text x="370" y="135" text-anchor="middle" font-weight="700">04 Structs</text>
+      <text x="370" y="153" text-anchor="middle" class="small">nominal records</text>
+
+      <rect x="460" y="115" width="120" height="50" rx="6" fill="#eef6f1" stroke="#2a6f4d"/>
+      <text x="520" y="135" text-anchor="middle" font-weight="700">05 Tuples</text>
+      <text x="520" y="153" text-anchor="middle" class="small">structural</text>
+
+      <rect x="610" y="115" width="120" height="50" rx="6" fill="#eef6f1" stroke="#2a6f4d"/>
+      <text x="670" y="135" text-anchor="middle" font-weight="700">06 Variables</text>
+      <text x="670" y="153" text-anchor="middle" class="small">var · scope</text>
+    </g>
+
+    <!-- Computation row: 07, 08, 09, 10, 11, 12 -->
+    <g>
+      <rect x="160" y="240" width="105" height="50" rx="6" fill="#f3eefa" stroke="#6b4ba8"/>
+      <text x="212" y="260" text-anchor="middle" font-weight="700">07 Expressions</text>
+      <text x="212" y="278" text-anchor="middle" class="small">if · match</text>
+
+      <rect x="280" y="240" width="105" height="50" rx="6" fill="#f3eefa" stroke="#6b4ba8"/>
+      <text x="332" y="260" text-anchor="middle" font-weight="700">08 Control</text>
+      <text x="332" y="278" text-anchor="middle" class="small">for · while</text>
+
+      <rect x="400" y="240" width="105" height="50" rx="6" fill="#f3eefa" stroke="#6b4ba8"/>
+      <text x="452" y="260" text-anchor="middle" font-weight="700">09 Functions</text>
+      <text x="452" y="278" text-anchor="middle" class="small">|x| · closures</text>
+
+      <rect x="520" y="240" width="105" height="50" rx="6" fill="#f3eefa" stroke="#6b4ba8"/>
+      <text x="572" y="260" text-anchor="middle" font-weight="700">10 Interfaces</text>
+      <text x="572" y="278" text-anchor="middle" class="small">extend</text>
+
+      <rect x="640" y="240" width="105" height="50" rx="6" fill="#f3eefa" stroke="#6b4ba8"/>
+      <text x="692" y="260" text-anchor="middle" font-weight="700">11 Generics</text>
+      <text x="692" y="278" text-anchor="middle" class="small">&lt;T&gt;</text>
+
+      <rect x="760" y="240" width="120" height="50" rx="6" fill="#f3eefa" stroke="#6b4ba8"/>
+      <text x="820" y="260" text-anchor="middle" font-weight="700">12 Type logic</text>
+      <text x="820" y="278" text-anchor="middle" class="small">is · as · flow</text>
+    </g>
+
+    <!-- System row: 13, 14, 15, 16, 17 -->
+    <g>
+      <rect x="160" y="350" width="115" height="50" rx="6" fill="#fbf3ec" stroke="#b54708"/>
+      <text x="217" y="370" text-anchor="middle" font-weight="700">13 Errors</text>
+      <text x="217" y="388" text-anchor="middle" class="small">T | E · ?</text>
+
+      <rect x="290" y="350" width="105" height="50" rx="6" fill="#fbf3ec" stroke="#b54708"/>
+      <text x="342" y="370" text-anchor="middle" font-weight="700">14 Panics</text>
+      <text x="342" y="388" text-anchor="middle" class="small">terminate</text>
+
+      <rect x="410" y="350" width="115" height="50" rx="6" fill="#fbf3ec" stroke="#b54708"/>
+      <text x="467" y="370" text-anchor="middle" font-weight="700">15 Operators</text>
+      <text x="467" y="388" text-anchor="middle" class="small">overload · ToStr</text>
+
+      <rect x="540" y="350" width="115" height="50" rx="6" fill="#fbf3ec" stroke="#b54708"/>
+      <text x="597" y="370" text-anchor="middle" font-weight="700">16 Memory</text>
+      <text x="597" y="388" text-anchor="middle" class="small">RC · GC · Drop</text>
+
+      <rect x="670" y="350" width="115" height="50" rx="6" fill="#fbf3ec" stroke="#b54708"/>
+      <text x="727" y="370" text-anchor="middle" font-weight="700">17 Modules</text>
+      <text x="727" y="388" text-anchor="middle" class="small">pub · pkg:</text>
+    </g>
+
+    <!-- Platform row: 18, 19, 20, 21, 22 -->
+    <g>
+      <rect x="160" y="455" width="110" height="50" rx="6" fill="#fff" stroke="#6b6b70"/>
+      <text x="215" y="475" text-anchor="middle" font-weight="700">18 Stdlib</text>
+      <text x="215" y="493" text-anchor="middle" class="small">prelude · std:*</text>
+
+      <rect x="285" y="455" width="105" height="50" rx="6" fill="#fff" stroke="#6b6b70"/>
+      <text x="337" y="475" text-anchor="middle" font-weight="700">19 FFI</text>
+      <text x="337" y="493" text-anchor="middle" class="small">extern · C ABI</text>
+
+      <rect x="405" y="455" width="125" height="50" rx="6" fill="#fff" stroke="#6b6b70"/>
+      <text x="467" y="475" text-anchor="middle" font-weight="700">20 Concurrency</text>
+      <text x="467" y="493" text-anchor="middle" class="small">threads · chans</text>
+
+      <rect x="545" y="455" width="105" height="50" rx="6" fill="#fff" stroke="#6b6b70"/>
+      <text x="597" y="475" text-anchor="middle" font-weight="700">21 Async</text>
+      <text x="597" y="493" text-anchor="middle" class="small">Future · await</text>
+
+      <rect x="665" y="455" width="115" height="50" rx="6" fill="#fff" stroke="#6b6b70"/>
+      <text x="722" y="475" text-anchor="middle" font-weight="700">22 Macros</text>
+      <text x="722" y="493" text-anchor="middle" class="small">@Derive · proc</text>
+    </g>
+
+    <!-- Dependency arrows (selected major flows) -->
+    <path d="M 220 64 L 220 115"   stroke="#5a5a60" stroke-width="1.5" fill="none" marker-end="url(#arr)"/>
+    <path d="M 370 64 L 370 115"   stroke="#5a5a60" stroke-width="1.5" fill="none" marker-end="url(#arr)"/>
+    <path d="M 370 165 L 370 220"  stroke="#5a5a60" stroke-width="1.5" fill="none" marker-end="url(#arr)"/>
+    <path d="M 520 165 L 520 220"  stroke="#5a5a60" stroke-width="1.5" fill="none" marker-end="url(#arr)"/>
+    <path d="M 670 165 L 670 220"  stroke="#5a5a60" stroke-width="1.5" fill="none" marker-end="url(#arr)"/>
+    <path d="M 452 290 L 452 330"  stroke="#5a5a60" stroke-width="1.5" fill="none" marker-end="url(#arr)"/>
+    <path d="M 692 290 L 692 330"  stroke="#5a5a60" stroke-width="1.5" fill="none" marker-end="url(#arr)"/>
+    <path d="M 467 400 L 467 435"  stroke="#5a5a60" stroke-width="1.5" fill="none" marker-end="url(#arr)"/>
+    <path d="M 727 400 L 727 435"  stroke="#5a5a60" stroke-width="1.5" fill="none" marker-end="url(#arr)"/>
+  </svg>
+  <div class="diagram-caption">Arrows point from a chapter to one it depends on. Cross-row dependencies omitted for clarity.</div>
+</div>
+
+<!-- =========================================================== -->
+<h2 id="index">Chapter index</h2>
+
+<div class="chapter-grid">
+  <a class="chapter-card foundation" href="01-lexical.html"><span class="num">01 · Foundation</span><span class="title">Lexical structure</span><span class="desc">Comments (incl. <code>///</code> doc), identifiers, <code>""</code>/<code>''</code> literals, suffixes, interpolation, keywords.</span></a>
+  <a class="chapter-card foundation" href="02-types.html"><span class="num">02 · Foundation</span><span class="title">Primitive types</span><span class="desc">Integers, floats, <code>bool</code>, <code>char</code>, <code>str</code>, <code>null</code>.</span></a>
+
+  <a class="chapter-card types" href="03-unions.html"><span class="num">03 · Type system</span><span class="title">Discriminated unions</span><span class="desc">Pipe syntax, flattening, recursion, ordering.</span></a>
+  <a class="chapter-card types" href="04-structs.html"><span class="num">04 · Type system</span><span class="title">Structs</span><span class="desc">Regular, tuple, unit; construction; field shorthand; spread.</span></a>
+  <a class="chapter-card types" href="05-tuples.html"><span class="num">05 · Type system</span><span class="title">Tuples</span><span class="desc">Structural typing; positional access; destructuring.</span></a>
+  <a class="chapter-card types" href="06-variables.html"><span class="num">06 · Type system</span><span class="title">Variables</span><span class="desc"><code>var</code>, mutability, module-level, scoping, shadowing.</span></a>
+
+  <a class="chapter-card flow" href="07-expressions.html"><span class="num">07 · Computation</span><span class="title">Expressions</span><span class="desc">Blocks, <code>if</code>, <code>match</code>.</span></a>
+  <a class="chapter-card flow" href="08-control-flow.html"><span class="num">08 · Computation</span><span class="title">Control flow</span><span class="desc"><code>for</code>, <code>while</code>, <code>loop</code>, <code>break</code>, <code>continue</code>.</span></a>
+  <a class="chapter-card flow" href="09-functions.html"><span class="num">09 · Computation</span><span class="title">Functions &amp; closures</span><span class="desc"><code>function</code>, lambdas, <code>|x|</code>, <code>it</code>, function types.</span></a>
+  <a class="chapter-card flow" href="10-interfaces.html"><span class="num">10 · Computation</span><span class="title">Interfaces &amp; extensions</span><span class="desc"><code>interface</code>, <code>extend</code>, <code>Self</code>, defaults, orphan rule.</span></a>
+  <a class="chapter-card flow" href="11-generics.html"><span class="num">11 · Computation</span><span class="title">Generics</span><span class="desc">Monomorphization, dynamic dispatch, overlap rules.</span></a>
+  <a class="chapter-card flow" href="12-type-logic.html"><span class="num">12 · Computation</span><span class="title">Type logic</span><span class="desc"><code>is</code>, <code>as</code>, flow typing, narrowing.</span></a>
+
+  <a class="chapter-card system" href="13-error-handling.html"><span class="num">13 · System</span><span class="title">Error handling</span><span class="desc"><code>T | E</code>, <code>?</code>, <code>Try</code> interface.</span></a>
+  <a class="chapter-card system" href="14-panics.html"><span class="num">14 · System</span><span class="title">Panics</span><span class="desc"><code>panic</code>, panic sources, integer overflow.</span></a>
+  <a class="chapter-card system" href="15-operators.html"><span class="num">15 · System</span><span class="title">Operators</span><span class="desc">Operator overloading; built-in interfaces; <code>ToStr</code>.</span></a>
+  <a class="chapter-card system" href="16-memory.html"><span class="num">16 · System</span><span class="title">Memory model</span><span class="desc">GC, reference counting, layout, drop semantics.</span></a>
+  <a class="chapter-card system" href="17-modules.html"><span class="num">17 · System</span><span class="title">Modules &amp; imports</span><span class="desc">Layout, <code>pub mod</code>, path forms, <code>pub import</code> re-exports.</span></a>
+
+  <a class="chapter-card platform" href="18-stdlib.html"><span class="num">18 · Platform</span><span class="title">Standard library</span><span class="desc"><code>core:prelude</code> + index of <code>std:*</code> modules.</span></a>
+  <a class="chapter-card platform" href="19-ffi.html"><span class="num">19 · Platform</span><span class="title">Foreign Function Interface</span><span class="desc"><code>extern</code>, pointers, pinning.</span></a>
+  <a class="chapter-card platform" href="20-concurrency.html"><span class="num">20 · Platform</span><span class="title">Concurrency</span><span class="desc"><code>std:thread</code>, <code>std:sync</code>: threads, channels, <code>Shared</code>.</span></a>
+  <a class="chapter-card platform" href="21-async.html"><span class="num">21 · Platform</span><span class="title">Async</span><span class="desc"><code>Future</code>, <code>await</code>, <code>spawn</code>, <code>AsyncIterator</code>.</span></a>
+  <a class="chapter-card platform" href="22-macros.html"><span class="num">22 · Platform</span><span class="title">Macros</span><span class="desc">Procedural macros: <code>@UpperCamelCase</code>, hygiene, sandbox, <code>@Derive</code>.</span></a>
+</div>
+
+<!-- =========================================================== -->
+<h2 id="glance">Design at a glance</h2>
+
+<p>Seven pillars that together describe how the language behaves at runtime
+and how it asks you to organise code. Each maps to a specific chapter.</p>
+
+<div class="pillar-grid">
+  <div class="pillar">
+    <h4>Type system</h4>
+    <p>Nominal structs, structural tuples, discriminated unions <em>everywhere</em>.</p>
+  </div>
+  <div class="pillar orange">
+    <h4>Memory</h4>
+    <p>Reference-counted managed heap + cycle collector. Deterministic-ish drop. Manual pinning for FFI.</p>
+  </div>
+  <div class="pillar green">
+    <h4>Mutation</h4>
+    <p>Every binding is mutable; access restrictions come from module visibility.</p>
+  </div>
+  <div class="pillar orange">
+    <h4>Errors</h4>
+    <p>Unions plus <code>?</code>. No exceptions. Panics terminate the thread.</p>
+  </div>
+  <div class="pillar purple">
+    <h4>Concurrency</h4>
+    <p>Isolated threads, MPSC/MPMC channels with zero-copy on RC=1, <code>Shared&lt;T&gt;</code> mutex.</p>
+  </div>
+  <div class="pillar purple">
+    <h4>Async</h4>
+    <p>State-machine futures, explicit executor, no built-in generator syntax.</p>
+  </div>
+  <div class="pillar">
+    <h4>FFI</h4>
+    <p>C ABI via <code>extern</code>; managed heap and foreign heap are disjoint regions.</p>
+  </div>
+  <div class="pillar green">
+    <h4>Generics</h4>
+    <p>Monomorphized by default; dynamic dispatch only when an interface appears as a value type.</p>
+  </div>
+</div>
+
+<!-- =========================================================== -->
+<h2 id="conv">Conventions in this document</h2>
+
+<div class="callout">
+  <strong>How to read code samples</strong>
+  Code samples are in the language unless explicitly marked otherwise.
+  <code>// ...</code> and <code>/* ... */</code> are comments.
+  Type identifiers (<code>Person</code>, <code>i32</code>, <code>Color</code>) appear in identifier syntax.
+  Where a section says <em>panics</em>, it means the panic semantics in
+  <a href="14-panics.html">14 — Panics</a>.
+</div>
 
 </body>
 </html>

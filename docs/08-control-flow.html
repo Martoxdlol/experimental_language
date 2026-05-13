@@ -5,201 +5,146 @@
 <title>8. Control Flow</title>
 <style>
   :root {
-    --fg: #1b1b1d;
-    --muted: #5a5a60;
-    --bg: #fdfdfc;
-    --accent: #1a4a8a;
-    --accent-2: #2a6f4d;
-    --warn: #b54708;
-    --code-bg: #f4f2ee;
-    --code-fg: #1b1b1d;
-    --border: #e4e1dc;
-    --table-stripe: #f8f7f4;
-    --pub: #2a6f4d;
-    --priv: #b54708;
-    --pkg: #1a4a8a;
-    --core: #6b4ba8;
+    --fg: #1b1b1d; --muted: #5a5a60; --bg: #fdfdfc;
+    --accent: #1a4a8a; --accent-2: #2a6f4d; --warn: #b54708;
+    --code-bg: #f4f2ee; --code-fg: #1b1b1d; --border: #e4e1dc;
+    --table-stripe: #f8f7f4; --pub: #2a6f4d; --priv: #b54708;
+    --pkg: #1a4a8a; --core: #6b4ba8;
   }
-  html { box-sizing: border-box; }
-  *, *::before, *::after { box-sizing: inherit; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-    color: var(--fg);
-    background: var(--bg);
-    line-height: 1.55;
-    max-width: 980px;
-    margin: 0 auto;
-    padding: 2.5rem 1.5rem 6rem;
-  }
-  h1, h2, h3, h4 {
-    color: var(--fg);
-    line-height: 1.25;
-    margin-top: 2.2rem;
-    margin-bottom: 0.6rem;
-  }
+  html { box-sizing: border-box; } *, *::before, *::after { box-sizing: inherit; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color: var(--fg); background: var(--bg); line-height: 1.55;
+    max-width: 980px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem; }
+  h1, h2, h3, h4 { color: var(--fg); line-height: 1.25; margin-top: 2.2rem; margin-bottom: 0.6rem; }
   h1 { font-size: 2rem; border-bottom: 2px solid var(--border); padding-bottom: 0.4rem; }
   h2 { font-size: 1.45rem; margin-top: 2.6rem; }
   h3 { font-size: 1.15rem; color: var(--accent); }
   h4 { font-size: 1rem; color: var(--muted); }
-  p { margin: 0.7rem 0; }
-  ul, ol { margin: 0.7rem 0; padding-left: 1.6rem; }
-  li { margin: 0.3rem 0; }
-  code {
-    font-family: "SF Mono", Menlo, Consolas, "Courier New", monospace;
-    background: var(--code-bg);
-    color: var(--code-fg);
-    padding: 0.1em 0.35em;
-    border-radius: 3px;
-    font-size: 0.92em;
-  }
-  pre {
-    background: var(--code-bg);
-    color: var(--code-fg);
-    padding: 0.9rem 1rem;
-    border-radius: 6px;
-    overflow-x: auto;
-    font-size: 0.88rem;
-    line-height: 1.5;
-    border: 1px solid var(--border);
-  }
+  p { margin: 0.7rem 0; } ul, ol { margin: 0.7rem 0; padding-left: 1.6rem; } li { margin: 0.3rem 0; }
+  code { font-family: "SF Mono", Menlo, Consolas, "Courier New", monospace;
+    background: var(--code-bg); color: var(--code-fg); padding: 0.1em 0.35em;
+    border-radius: 3px; font-size: 0.92em; }
+  pre { background: var(--code-bg); color: var(--code-fg); padding: 0.9rem 1rem;
+    border-radius: 6px; overflow-x: auto; font-size: 0.88rem; line-height: 1.5;
+    border: 1px solid var(--border); }
   pre code { background: none; padding: 0; font-size: inherit; }
-  table {
-    border-collapse: collapse;
-    width: 100%;
-    margin: 1rem 0;
-    font-size: 0.94rem;
-  }
-  th, td {
-    text-align: left;
-    padding: 0.5rem 0.7rem;
-    border-bottom: 1px solid var(--border);
-    vertical-align: top;
-  }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: 0.94rem; }
+  th, td { text-align: left; padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--border); vertical-align: top; }
   th { background: var(--code-bg); font-weight: 600; }
   tbody tr:nth-child(even) { background: var(--table-stripe); }
-  .lead {
-    font-size: 1.05rem;
-    color: var(--muted);
-    margin-bottom: 1.6rem;
-  }
-  .toc {
-    background: var(--code-bg);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 1rem 1.2rem;
-    margin: 1.6rem 0 2rem;
-    font-size: 0.94rem;
-  }
+  .lead { font-size: 1.05rem; color: var(--muted); margin-bottom: 1.6rem; }
+  .toc { background: var(--code-bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 1rem 1.2rem; margin: 1.6rem 0 2rem; font-size: 0.94rem; }
   .toc ol { margin: 0.2rem 0 0; padding-left: 1.3rem; }
-  .toc a { color: var(--accent); text-decoration: none; }
-  .toc a:hover { text-decoration: underline; }
-
-  .diagram {
-    background: #ffffff;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 1.4rem;
-    margin: 1.4rem 0;
-    overflow-x: auto;
-  }
-  .diagram-caption {
-    font-size: 0.85rem;
-    color: var(--muted);
-    text-align: center;
-    margin-top: 0.6rem;
-    font-style: italic;
-  }
+  .toc a { color: var(--accent); text-decoration: none; } .toc a:hover { text-decoration: underline; }
+  .diagram { background: #ffffff; border: 1px solid var(--border);
+    border-radius: 8px; padding: 1.4rem; margin: 1.4rem 0; overflow-x: auto; }
+  .diagram-caption { font-size: 0.85rem; color: var(--muted); text-align: center;
+    margin-top: 0.6rem; font-style: italic; }
   svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
   svg text { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; fill: var(--fg); }
   svg .label { font-family: -apple-system, system-ui, sans-serif; font-size: 12px; }
   svg .small { font-size: 10px; fill: var(--muted); }
-
-  .legend {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 1rem;
-    justify-content: center;
-    margin-top: 0.8rem;
-    font-size: 0.85rem;
-  }
-  .legend-item { display: flex; align-items: center; gap: 0.4rem; }
-  .legend-swatch {
-    width: 14px;
-    height: 14px;
-    border-radius: 3px;
-    border: 1px solid rgba(0,0,0,0.15);
-  }
-
-  .tag {
-    display: inline-block;
-    padding: 0.1em 0.55em;
-    border-radius: 3px;
-    font-size: 0.78em;
-    font-weight: 600;
-    font-family: "SF Mono", Menlo, monospace;
-    color: white;
-    vertical-align: middle;
-  }
-  .tag.pub  { background: var(--pub); }
-  .tag.priv { background: var(--priv); }
-  .tag.pkg  { background: var(--pkg); }
-  .tag.core { background: var(--core); }
-  .tag.warn { background: var(--warn); }
-
-  .callout {
-    border-left: 4px solid var(--accent);
-    background: #f0f4fa;
-    padding: 0.8rem 1rem;
-    margin: 1.2rem 0;
-    border-radius: 0 6px 6px 0;
-  }
+  .callout { border-left: 4px solid var(--accent); background: #f0f4fa;
+    padding: 0.8rem 1rem; margin: 1.2rem 0; border-radius: 0 6px 6px 0; }
   .callout.warn { border-color: var(--warn); background: #fbf3ec; }
   .callout.good { border-color: var(--accent-2); background: #eef6f1; }
   .callout strong { display: block; margin-bottom: 0.3rem; }
-
-  .two-col {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 1rem;
-    margin: 1.2rem 0;
-  }
-  @media (max-width: 720px) {
-    .two-col { grid-template-columns: 1fr; }
-  }
-
-  .file-tree {
-    font-family: "SF Mono", Menlo, monospace;
-    font-size: 0.88rem;
-    line-height: 1.55;
-    background: var(--code-bg);
-    padding: 1rem 1.2rem;
-    border-radius: 6px;
-    border: 1px solid var(--border);
-    white-space: pre;
-    overflow-x: auto;
-  }
-  .file-tree .pub  { color: var(--pub); font-weight: 600; }
-  .file-tree .priv { color: var(--priv); }
-  .file-tree .note { color: var(--muted); font-style: italic; }
+  .three-col { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; margin: 1.2rem 0; }
+  @media (max-width: 720px) { .three-col { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
 
 <h1>8. Control Flow</h1>
+<p class="lead">
+  Three loops — <code>for</code>, <code>while</code>, <code>loop</code> — plus <code>break</code> and
+  <code>continue</code>. Bare-keyword headers; parens only when a struct literal would be ambiguous.
+</p>
 
-<p>Loops use bare keywords — <strong>no parentheses around their headers</strong>. Parens are only needed when the syntax would otherwise be ambiguous (specifically, a struct literal as the top-level expression in the header; see <a href="07-expressions.html#72-if-expression">07-expressions.md §7.2</a>). The same rule applies to <code>if</code>, <code>while</code>, and the <code>match</code> scrutinee.</p>
+<div class="toc">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#for"><code>for</code> loop</a></li>
+    <li><a href="#while"><code>while</code> loop</a></li>
+    <li><a href="#loop"><code>loop</code> — infinite</a></li>
+    <li><a href="#break"><code>break</code> &amp; <code>continue</code></a></li>
+    <li><a href="#types">Loop expression types</a></li>
+    <li><a href="#nest">Nested loops</a></li>
+    <li><a href="#iter">Iterator protocol</a></li>
+    <li><a href="#ex">Examples</a></li>
+  </ol>
+</div>
 
-<h2 id="8-1-for-loop">8.1 <code>for</code> loop</h2>
+<!-- =========================================================== -->
+<h2 id="overview">The three loop shapes at a glance</h2>
 
-<p>Iterates over any value implementing <code>Iterator&lt;T&gt;</code> (see <a href="18-stdlib.html">18-stdlib.html</a>):</p>
+<div class="diagram">
+  <svg viewBox="0 0 920 240" role="img" aria-label="Three loops">
+    <g transform="translate(20, 20)">
+      <rect width="280" height="200" rx="8" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
+      <text x="140" y="22" text-anchor="middle" font-weight="700" fill="#2a6f4d">for x in iter</text>
+      <text x="140" y="40" text-anchor="middle" class="small">drives an Iterator&lt;T&gt;</text>
+
+      <g transform="translate(20, 60)" font-size="11.5">
+        <text y="0">for n in numbers {</text>
+        <text y="18">  print(n as str)</text>
+        <text y="36">}</text>
+      </g>
+
+      <text x="20" y="130" font-size="11" class="small">Patterns supported (irrefutable):</text>
+      <text x="20" y="148" font-size="11">for (k, v) in entries { … }</text>
+      <text x="20" y="166" font-size="11">for Entry { key, .. } in m { … }</text>
+      <text x="20" y="188" font-size="11" class="small">List/Map/str accepted directly.</text>
+    </g>
+
+    <g transform="translate(320, 20)">
+      <rect width="280" height="200" rx="8" fill="#eaf0f8" stroke="#1a4a8a" stroke-width="2"/>
+      <text x="140" y="22" text-anchor="middle" font-weight="700" fill="#1a4a8a">while cond</text>
+      <text x="140" y="40" text-anchor="middle" class="small">checks before each iter</text>
+
+      <g transform="translate(20, 60)" font-size="11.5">
+        <text y="0">while i &lt; 10 {</text>
+        <text y="18">  print(i as str)</text>
+        <text y="36">  i = i + 1</text>
+        <text y="54">}</text>
+      </g>
+
+      <text x="20" y="148" font-size="11" class="small">Condition must be bool.</text>
+      <text x="20" y="166" font-size="11" class="small">No implicit truthiness.</text>
+      <text x="20" y="188" font-size="11">break cannot carry a value.</text>
+    </g>
+
+    <g transform="translate(620, 20)">
+      <rect width="280" height="200" rx="8" fill="#f3eefa" stroke="#6b4ba8" stroke-width="2"/>
+      <text x="140" y="22" text-anchor="middle" font-weight="700" fill="#6b4ba8">loop</text>
+      <text x="140" y="40" text-anchor="middle" class="small">irrefutably infinite</text>
+
+      <g transform="translate(20, 60)" font-size="11.5">
+        <text y="0">var v = loop {</text>
+        <text y="18">  if found {</text>
+        <text y="36">    break value</text>
+        <text y="54">  }</text>
+        <text y="72">}</text>
+      </g>
+
+      <text x="20" y="160" font-size="11">break can carry a value.</text>
+      <text x="20" y="178" font-size="11" fill="#6b4ba8">Type = unified break types.</text>
+    </g>
+  </svg>
+  <div class="diagram-caption">Pick the loop by its termination story: collection, condition, or break-out-with-a-value.</div>
+</div>
+
+<!-- =========================================================== -->
+<h2 id="for">1. <code>for</code> loop</h2>
+
+<p>Iterates over any value implementing <code>Iterator&lt;T&gt;</code> (see <a href="18-stdlib.html">18-stdlib</a>):</p>
 
 <pre><code>for n in numbers {
   print(n as str)
-}</code></pre>
+}
 
-<p>Pattern destructuring is supported in the loop variable:</p>
-
-<pre><code>for (k, v) in map_entries {        // Iterator&lt;(K, V)&gt;
+for (k, v) in map_entries {        // Iterator&lt;(K, V)&gt;
   print(k + ": " + (v as str))
 }
 
@@ -209,15 +154,20 @@ for Entry { key, value } in user_ages {
 
 <p>The pattern must be irrefutable (always matches the yielded type).</p>
 
-<p>Collections that aren't themselves iterators expose iterator factories: <code>list.iter()</code>, <code>map.entries()</code>, <code>map.keys()</code>, <code>map.values()</code>. As a convenience, lists, maps, and strings are accepted directly in <code>for ... in ...</code> and the appropriate iterator is constructed implicitly:</p>
+<div class="callout">
+  <strong>Direct iteration shortcuts</strong>
+  Collections that aren't iterators expose factories: <code>list.iter()</code>,
+  <code>map.entries()</code>, <code>map.keys()</code>, <code>map.values()</code>.
+  As a convenience, lists, maps, and strings are accepted directly:
+  <ul style="margin-top: 0.4rem;">
+    <li><code>for x in list</code> — yields <code>T</code></li>
+    <li><code>for entry in map</code> — yields <code>Entry&lt;K, V&gt;</code></li>
+    <li><code>for ch in s</code> — yields <code>char</code></li>
+  </ul>
+</div>
 
-<ul>
-  <li><code>for x in list</code> — yields <code>T</code> (list elements)</li>
-  <li><code>for entry in map</code> — yields <code>Entry&lt;K, V&gt;</code></li>
-  <li><code>for ch in s</code> — yields <code>char</code></li>
-</ul>
-
-<h2 id="8-2-while-loop">8.2 <code>while</code> loop</h2>
+<!-- =========================================================== -->
+<h2 id="while">2. <code>while</code> loop</h2>
 
 <pre><code>while i &lt; 10 {
   print(i as str)
@@ -226,71 +176,125 @@ for Entry { key, value } in user_ages {
 
 <p>The condition must be <code>bool</code>. Evaluated before each iteration.</p>
 
-<h2 id="8-3-loop-infinite-loop">8.3 <code>loop</code> — infinite loop</h2>
+<!-- =========================================================== -->
+<h2 id="loop">3. <code>loop</code> — infinite loop</h2>
 
 <pre><code>loop {
   if done { break }
   do_work()
 }</code></pre>
 
-<p><code>loop</code> runs forever until <code>break</code>. Unlike <code>while true</code>, the compiler knows <code>loop</code> is irrefutably infinite, so it accepts code that depends on <code>break</code> for control-flow type inference:</p>
+<p>Runs forever until <code>break</code>. Unlike <code>while true</code>, the compiler knows
+<code>loop</code> is irrefutably infinite, so it accepts code that depends on <code>break</code>
+for control-flow type inference:</p>
 
 <pre><code>var result = loop {
   if found { break value }
 }
 // `result` has the type of `value`</code></pre>
 
-<h2 id="8-4-break">8.4 <code>break</code></h2>
+<!-- =========================================================== -->
+<h2 id="break">4. <code>break</code> &amp; <code>continue</code></h2>
 
-<p>Exits the nearest enclosing loop.</p>
+<div class="diagram">
+  <svg viewBox="0 0 920 280" role="img" aria-label="Break and continue">
+    <defs>
+      <marker id="arr" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+        <path d="M 0 0 L 9 3 L 0 6 z" fill="#5a5a60"/>
+      </marker>
+    </defs>
+
+    <!-- loop body box -->
+    <g transform="translate(60, 30)">
+      <rect width="800" height="160" rx="10" fill="#fafafa" stroke="#d6d3cd" stroke-width="2"/>
+      <text x="14" y="22" font-weight="700">loop body</text>
+
+      <!-- iteration node -->
+      <g transform="translate(30, 50)">
+        <rect width="160" height="50" rx="6" fill="#eaf0f8" stroke="#1a4a8a"/>
+        <text x="80" y="30" text-anchor="middle" font-size="11">do work</text>
+      </g>
+
+      <path d="M 190 75 L 240 75" stroke="#5a5a60" stroke-width="2" marker-end="url(#arr)"/>
+
+      <!-- conditional -->
+      <g transform="translate(240, 50)">
+        <rect width="160" height="50" rx="6" fill="#f3eefa" stroke="#6b4ba8"/>
+        <text x="80" y="30" text-anchor="middle" font-size="11">check</text>
+      </g>
+
+      <!-- continue path -->
+      <path d="M 320 100 L 320 130 L 60 130 L 60 75 L 30 75" stroke="#2a6f4d" stroke-width="2" fill="none" marker-end="url(#arr)"/>
+      <rect x="320" y="105" width="80" height="20" rx="4" fill="#eef6f1" stroke="#2a6f4d"/>
+      <text x="360" y="121" text-anchor="middle" font-size="10" fill="#2a6f4d">continue</text>
+
+      <!-- break path -->
+      <path d="M 400 75 L 600 75" stroke="#b54708" stroke-width="2" marker-end="url(#arr)"/>
+      <rect x="450" y="55" width="80" height="20" rx="4" fill="#fbf3ec" stroke="#b54708"/>
+      <text x="490" y="71" text-anchor="middle" font-size="10" fill="#b54708">break [v]</text>
+
+      <g transform="translate(600, 50)">
+        <rect width="160" height="50" rx="6" fill="#fbf3ec" stroke="#b54708"/>
+        <text x="80" y="30" text-anchor="middle" font-size="11">exit loop</text>
+      </g>
+    </g>
+
+    <g transform="translate(60, 210)">
+      <rect width="800" height="60" rx="8" fill="#fbf3ec" stroke="#b54708"/>
+      <text x="14" y="22" font-weight="700" fill="#b54708">break with value — only out of <tspan font-family="SF Mono, Menlo, monospace">loop</tspan></text>
+      <text x="14" y="42" font-size="11">while/for: loops may exit via the condition without hitting break, so they always yield <tspan font-family="SF Mono, Menlo, monospace">null</tspan>.</text>
+      <text x="14" y="56" font-size="11"><tspan font-family="SF Mono, Menlo, monospace">continue</tspan> never carries a value.</text>
+    </g>
+  </svg>
+  <div class="diagram-caption"><code>continue</code> returns to the head; <code>break</code> exits — only <code>loop</code> can break with a value.</div>
+</div>
 
 <pre><code>for x in xs {
   if x &lt; 0 { break }
   process(x)
-}</code></pre>
+}
 
-<p><code>break</code> may carry a value, but <strong>only out of <code>loop</code></strong>:</p>
-
-<pre><code>var first_match = loop {
+var first_match = loop {
   var item = next_item()
   if item is null { break null }
   if matches(item) { break item }
-}</code></pre>
+}
 
-<p>For <code>while</code> and <code>for</code>, <code>break</code> cannot carry a value — the loop's value is always <code>null</code>, because the loop may exit via the condition without ever hitting <code>break</code>.</p>
-
-<h2 id="8-5-continue">8.5 <code>continue</code></h2>
-
-<p>Skips to the next iteration of the nearest enclosing loop.</p>
-
-<pre><code>for n in numbers {
+for n in numbers {
   if n &lt; 0 { continue }
   print(n as str)
 }</code></pre>
 
-<p><code>continue</code> cannot carry a value.</p>
-
-<h2 id="8-6-type-of-a-loop-expression">8.6 Type of a loop expression</h2>
+<!-- =========================================================== -->
+<h2 id="types">5. Loop expression types</h2>
 
 <table>
-<thead><tr><th>Loop</th><th>Type when used as an expression</th></tr></thead>
-<tbody>
-<tr><td><code>for ... in ...</code></td><td><code>null</code></td></tr>
-<tr><td><code>while cond</code></td><td><code>null</code></td></tr>
-<tr><td><code>loop</code> (no <code>break</code> with value)</td><td><code>null</code> (but the loop never returns to its caller, so the surrounding code is unreachable)</td></tr>
-<tr><td><code>loop</code> (with <code>break &lt;expr&gt;</code>)</td><td>The unified type of every <code>break</code> expression</td></tr>
-</tbody>
+  <thead><tr><th>Loop</th><th>Type when used as an expression</th></tr></thead>
+  <tbody>
+    <tr><td><code>for ... in ...</code></td><td><code>null</code></td></tr>
+    <tr><td><code>while cond</code></td><td><code>null</code></td></tr>
+    <tr><td><code>loop</code> (no value-break)</td><td><strong>never</strong> — the loop never returns; surrounding code is unreachable</td></tr>
+    <tr><td><code>loop</code> (with <code>break &lt;expr&gt;</code>)</td><td>Unified type of every <code>break</code> expression</td></tr>
+  </tbody>
 </table>
 
-<p>Because <code>loop</code> may diverge (run forever), the compiler treats a <code>loop</code> whose body never breaks as having type <strong>never</strong> — meaning the code following it is unreachable. In type unification, the never type is absorbed:</p>
+<div class="callout good">
+  <strong>The "never" type</strong>
+  In type unification, never is absorbed:
+  <code>var x = if cond { 5 } else { loop {} }</code> ⇒ <code>x: i64</code>.
+  The <code>loop {}</code> branch can never produce a value, so it doesn't contribute to the union.
+</div>
 
-<pre><code>var x = if cond { 5 } else { loop {} }  // x: i64 (the loop branch is never)</code></pre>
+<!-- =========================================================== -->
+<h2 id="nest">6. Nested loops</h2>
 
-<h2 id="8-7-nested-loops">8.7 Nested loops</h2>
+<p><code>break</code> and <code>continue</code> always act on the <strong>innermost</strong>
+enclosing loop. There are no labeled loops in this version of the spec.</p>
 
-<p><code>break</code> and <code>continue</code> always act on the innermost enclosing loop. There are no labeled loops in this version of the spec. If you need to exit multiple levels, use a function:</p>
-
-<pre><code>function search(): Item | null {
+<div class="callout">
+  <strong>Multi-level exit?</strong>
+  Use a function and <code>return</code>:
+<pre style="background: transparent; border: none; padding: 0;"><code>function search(): Item | null {
   for row in rows {
     for cell in row {
       if matches(cell) { return cell }
@@ -298,12 +302,11 @@ for Entry { key, value } in user_ages {
   }
   null
 }</code></pre>
+  Labeled loops may be added later but aren't required for completeness.
+</div>
 
-<p>(Labeled loops may be added in a future revision but are not required for completeness.)</p>
-
-<h2 id="8-8-iterator-protocol-quick-reference">8.8 Iterator protocol — quick reference</h2>
-
-<p>The <code>for x in v</code> syntax requires <code>v</code> to implement <code>Iterator&lt;T&gt;</code> (directly) or to be one of the built-in iterable shapes (<code>List&lt;T&gt;</code>, <code>Map&lt;K, V&gt;</code>, <code>str</code>).</p>
+<!-- =========================================================== -->
+<h2 id="iter">7. Iterator protocol — quick reference</h2>
 
 <pre><code>interface Iterator&lt;T&gt; {
   function next(self): Item&lt;T&gt; | Done
@@ -312,9 +315,46 @@ for Entry { key, value } in user_ages {
 struct Item&lt;T&gt; { value: T }
 struct Done;</code></pre>
 
-<p>The loop body sees <code>T</code>. Iteration ends when <code>next()</code> returns <code>Done</code>. See <a href="18-stdlib.html">18-stdlib.html</a> for details and a worked example.</p>
+<div class="diagram">
+  <svg viewBox="0 0 920 200" role="img" aria-label="Iterator state machine">
+    <defs>
+      <marker id="arr2" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+        <path d="M 0 0 L 9 3 L 0 6 z" fill="#5a5a60"/>
+      </marker>
+    </defs>
 
-<h2 id="8-9-examples">8.9 Examples</h2>
+    <g transform="translate(60, 60)">
+      <rect width="160" height="60" rx="8" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
+      <text x="80" y="32" text-anchor="middle" font-weight="700" fill="#2a6f4d">next()</text>
+      <text x="80" y="50" text-anchor="middle" class="small">called by for</text>
+    </g>
+
+    <path d="M 220 90 L 320 60" stroke="#5a5a60" stroke-width="2" marker-end="url(#arr2)"/>
+    <text x="270" y="58" font-size="10" fill="#2a6f4d">Item(value)</text>
+
+    <path d="M 220 90 L 320 130" stroke="#5a5a60" stroke-width="2" marker-end="url(#arr2)"/>
+    <text x="270" y="142" font-size="10" fill="#b54708">Done</text>
+
+    <g transform="translate(320, 30)">
+      <rect width="220" height="60" rx="8" fill="#eaf0f8" stroke="#1a4a8a"/>
+      <text x="110" y="32" text-anchor="middle" font-weight="700" fill="#1a4a8a">body sees T</text>
+      <text x="110" y="50" text-anchor="middle" class="small">loop body executes</text>
+    </g>
+
+    <g transform="translate(320, 110)">
+      <rect width="220" height="60" rx="8" fill="#fbf3ec" stroke="#b54708"/>
+      <text x="110" y="32" text-anchor="middle" font-weight="700" fill="#b54708">loop exits</text>
+      <text x="110" y="50" text-anchor="middle" class="small">iteration finished</text>
+    </g>
+
+    <path d="M 540 60 Q 700 0 100 30" stroke="#5a5a60" stroke-width="1.5" fill="none" stroke-dasharray="3 3"/>
+    <text x="640" y="20" font-size="10" class="small">loop again</text>
+  </svg>
+  <div class="diagram-caption">The loop body sees <code>T</code>; iteration ends when <code>next()</code> returns <code>Done</code>.</div>
+</div>
+
+<!-- =========================================================== -->
+<h2 id="ex">8. Examples</h2>
 
 <pre><code>function sum(xs: List&lt;i64&gt;): i64 {
   var total: i64 = 0
