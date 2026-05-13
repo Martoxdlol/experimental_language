@@ -455,11 +455,79 @@ the kind unambiguous from a glance:</p>
   </tbody>
 </table>
 
-<h3>Import syntax</h3>
-<pre><code>import "util/helpers"                              <span style="color:#5a5a60">// glob — every pub name</span>
-import { Foo, bar } from "util/helpers"            <span style="color:#5a5a60">// named</span>
-import { Foo as Bar } from "util/helpers"          <span style="color:#5a5a60">// aliased</span>
+<h3>The three import forms</h3>
+
+<p>Three forms, each contributing something different to the current module. <strong>Extensions activate with every form</strong> &mdash; <code>extend</code> blocks are anonymous and ride along with their defining module.</p>
+
+<div class="diagram">
+  <svg viewBox="0 0 920 230" role="img" aria-label="Three import forms">
+    <!-- Ambient -->
+    <g transform="translate(20, 20)">
+      <rect width="280" height="190" rx="8" fill="#fbf3ec" stroke="#b54708" stroke-width="2"/>
+      <text x="140" y="26" text-anchor="middle" font-weight="700" font-size="13" fill="#b54708">Ambient</text>
+      <text x="140" y="46" text-anchor="middle" class="small">import "pkg:m"</text>
+
+      <line x1="20" y1="60" x2="260" y2="60" stroke="#b54708" stroke-dasharray="3 2"/>
+
+      <text x="20" y="82" font-weight="600" font-size="11">Names bound:</text>
+      <text x="20" y="100" font-size="11" fill="#5a5a60">— none —</text>
+
+      <text x="20" y="130" font-weight="600" font-size="11">Extensions:</text>
+      <text x="20" y="148" font-size="11" fill="#2a6f4d">✓ activate</text>
+
+      <text x="20" y="178" font-size="10" class="small" font-style="italic">"give me the methods,</text>
+      <text x="20" y="192" font-size="10" class="small" font-style="italic">not the names"</text>
+    </g>
+
+    <!-- Namespace -->
+    <g transform="translate(320, 20)">
+      <rect width="280" height="190" rx="8" fill="#eaf0f8" stroke="#1a4a8a" stroke-width="2"/>
+      <text x="140" y="26" text-anchor="middle" font-weight="700" font-size="13" fill="#1a4a8a">Namespace</text>
+      <text x="140" y="46" text-anchor="middle" class="small">import "pkg:m" as M</text>
+
+      <line x1="20" y1="60" x2="260" y2="60" stroke="#1a4a8a" stroke-dasharray="3 2"/>
+
+      <text x="20" y="82" font-weight="600" font-size="11">Names bound:</text>
+      <text x="20" y="100" font-size="11" fill="#1a4a8a">M  (qualified: M.Foo)</text>
+
+      <text x="20" y="130" font-weight="600" font-size="11">Extensions:</text>
+      <text x="20" y="148" font-size="11" fill="#2a6f4d">✓ activate</text>
+
+      <text x="20" y="178" font-size="10" class="small" font-style="italic">explicit name required —</text>
+      <text x="20" y="192" font-size="10" class="small" font-style="italic">no auto-derivation</text>
+    </g>
+
+    <!-- Named -->
+    <g transform="translate(620, 20)">
+      <rect width="280" height="190" rx="8" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
+      <text x="140" y="26" text-anchor="middle" font-weight="700" font-size="13" fill="#2a6f4d">Named</text>
+      <text x="140" y="46" text-anchor="middle" class="small">import { Foo, bar } from "pkg:m"</text>
+
+      <line x1="20" y1="60" x2="260" y2="60" stroke="#2a6f4d" stroke-dasharray="3 2"/>
+
+      <text x="20" y="82" font-weight="600" font-size="11">Names bound:</text>
+      <text x="20" y="100" font-size="11" fill="#2a6f4d">Foo, bar  (in local scope)</text>
+
+      <text x="20" y="130" font-weight="600" font-size="11">Extensions:</text>
+      <text x="20" y="148" font-size="11" fill="#2a6f4d">✓ activate</text>
+
+      <text x="20" y="178" font-size="10" class="small" font-style="italic">aliasing with `as`</text>
+      <text x="20" y="192" font-size="10" class="small" font-style="italic">supported per name</text>
+    </g>
+  </svg>
+  <div class="diagram-caption">Three forms, three jobs. Forms compose &mdash; you can use all three against the same path.</div>
+</div>
+
+<pre><code>import "pkg:my_module"                              <span style="color:#5a5a60">// ambient — no names bound, extensions activate</span>
+import "pkg:my_module" as M                         <span style="color:#5a5a60">// namespace bind to M</span>
+import { Foo, bar }      from "util/helpers"        <span style="color:#5a5a60">// named</span>
+import { Foo as Bar }    from "util/helpers"        <span style="color:#5a5a60">// named with alias</span>
 import { Foo, bar as baz, Qux } from "util/helpers" <span style="color:#5a5a60">// mixed</span></code></pre>
+
+<div class="callout">
+  <strong>Why a no-names form?</strong>
+  <code>extend</code> blocks are anonymous and module-bound &mdash; the only way to pick up their methods is to import the defining module. The bare form lets you do that without dumping any names into your namespace.
+</div>
 
 <!-- =========================================================== -->
 <h2 id="pub">4. The <code>pub</code> chain</h2>
@@ -575,14 +643,14 @@ link breaks the chain.</p>
     <tr><td><code>pub var X</code></td><td>The module var (read <em>and</em> write — no read-only modifier)</td></tr>
     <tr><td><code>pub extern function</code></td><td>Exported via the C ABI for FFI</td></tr>
     <tr><td><code>pub function … @ProcMacro</code></td><td>Macro invokable from other modules</td></tr>
-    <tr><td><code>pub import { … }</code></td><td>Re-export — see §5</td></tr>
+    <tr><td><code>pub import "…"</code> / <code>… as M</code> / <code>{ … } from …</code></td><td>Re-export (extensions / namespace / names) — see §5</td></tr>
   </tbody>
 </table>
 
 <div class="callout">
   <strong>No <code>pub</code> on <code>extend</code> blocks</strong>
-  Methods added by <code>extend</code> inherit visibility from the type and interface they touch.
-  <code>extend Foo: Pub</code> is reachable wherever both <code>Foo</code> and <code>Pub</code> are.
+  <code>extend</code> blocks are <strong>anonymous</strong> and <strong>module-bound</strong>: they activate in any module that imports their defining module (in any of the three forms from §3).
+  The orphan rule keeps the set of possible extension sources small and grep-able.
 </div>
 
 <!-- =========================================================== -->
@@ -660,7 +728,8 @@ public API.</p>
 mod internals                                       <span style="color:#5a5a60">// private — consumers can't reach internals/*</span>
 pub import { Logger } from "internals/log"          <span style="color:#5a5a60">// Logger lifted to pkg API</span>
 pub import { Db, open } from "internals/db"
-pub import "util/helpers"                           <span style="color:#5a5a60">// glob re-export</span>
+pub import "pkg:iter_ext"                           <span style="color:#5a5a60">// re-export extension activation (umbrella)</span>
+pub import "pkg:json" as Json                       <span style="color:#5a5a60">// re-export as namespace</span>
 pub import { Foo as Bar } from "util/helpers"       <span style="color:#5a5a60">// aliased re-export</span></code></pre>
 
 <ul>
@@ -668,6 +737,7 @@ pub import { Foo as Bar } from "util/helpers"       <span style="color:#5a5a60">
   <li>Same definition &mdash; not a new type, just reachable under a new path.</li>
   <li>The declaring module itself must still be on a <code>pub mod</code> chain for external reach.</li>
   <li>Collision rules apply &mdash; alias one side with <code>as</code> if needed.</li>
+  <li>The bare form <code>pub import "&lt;path&gt;"</code> makes the target's extensions ambient for any consumer of this module too &mdash; the basis of <strong>umbrella packages</strong>.</li>
 </ul>
 
 <!-- =========================================================== -->
@@ -826,6 +896,10 @@ the realistic minimum the language can run on: an allocator is mandatory, but an
     <tr><td>Two siblings share internals</td><td>Put both under a common <code>mod parent</code> (no <code>pub</code>)</td></tr>
     <tr><td>Read-only-from-outside state</td><td>Private <code>var</code> + <code>pub function getter()</code></td></tr>
     <tr><td>Reach another package</td><td>Always via <code>pkg:&lt;name&gt;/…</code> &mdash; relative paths can't cross</td></tr>
+    <tr><td>Just a module's extension methods, no names</td><td><code>import "pkg:m"</code> (bare ambient form)</td></tr>
+    <tr><td>Qualified access to a module</td><td><code>import "pkg:m" as M</code> &mdash; explicit <code>as</code> required</td></tr>
+    <tr><td>Specific names from a module</td><td><code>import { Foo, bar } from "pkg:m"</code></td></tr>
+    <tr><td>Umbrella package that re-exports extensions</td><td><code>pub import "pkg:dep"</code> in <code>lib.lang</code></td></tr>
   </tbody>
 </table>
 

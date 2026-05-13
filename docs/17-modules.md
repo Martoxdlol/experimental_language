@@ -83,20 +83,69 @@ Inline modules cannot have **external** children: declaring `mod foo` (no body) 
 
 ## 17.3 Import forms
 
+Three forms, distinguished by what they contribute to the current module: just extensions, a namespace, or specific names.
+
 ```
-import "util/helpers"                                   // glob — every public name
-import { Foo, bar } from "util/helpers"                 // named
-import { Foo as Bar } from "util/helpers"               // named with alias
-import { Foo, bar as baz, Qux } from "util/helpers"     // mixed
+import "pkg:my_module"                              // ambient — extensions only, no names bound
+import "pkg:my_module" as M                         // namespace bind to M
+import { Foo, bar }      from "util/helpers"        // named
+import { Foo as Bar }    from "util/helpers"        // named with alias
+import { Foo, bar as baz, Qux } from "util/helpers" // mixed
 ```
 
-### Glob import
+### Ambient form — `import "<path>"`
 
-`import "<path>"` makes every `pub` name from the target module visible in the current module under its original name.
+The bare form binds **no names**. Its only effect is to activate the target module's **extensions** (`extend` blocks). Use it when you want a module's extension methods available on existing values without bringing any other names into scope:
 
-### Named import
+```
+import "pkg:iter_ext"                  // activates extension methods on Iterator<T>
+                                       // no other names from iter_ext are bound
 
-`import { ... } from "<path>"` brings exactly the listed names into scope. Each may be aliased with `as`.
+var doubled = numbers.my_map(|x| x * 2)
+```
+
+### Namespace form — `import "<path>" as <Name>`
+
+Binds the module to `<Name>`; access members via `.`:
+
+```
+import "pkg:json" as Json
+
+var v = Json.parse(text)
+var s = Json.stringify(v)
+```
+
+The namespace name is **required** — there is no auto-derivation from the path. Pick a name that's meaningful at the call site.
+
+### Named form — `import { ... } from "<path>"`
+
+Brings exactly the listed names into the current scope. Each name may be aliased with `as`:
+
+```
+import { Logger }                from "util/log"
+import { open, close as shut }   from "io/file"
+import { Foo, Bar, baz }         from "pkg:lib"
+```
+
+### Extensions always activate
+
+Every form activates the target module's extensions. There is no way to import names *without* also activating extensions — `extend` blocks are anonymous (see [10-interfaces.md](./10-interfaces.md#104-extensions--adding-methods)) and hitch a ride on the module itself.
+
+The orphan rule ([10.9](./10-interfaces.md#109-orphan-rule)) constrains extensions to live in either the type's or the interface's defining module — so the set of "which extensions could come from this import?" is small and statically determinable.
+
+### Combining forms
+
+A file may use multiple forms against the same path; their effects compose:
+
+```
+import "pkg:lib" as Lib
+import { Foo }   from "pkg:lib"        // both Lib.Foo and bare Foo work
+
+import "pkg:iter_ext"                  // ambient only
+import { my_helper } from "pkg:iter_ext"   // also bring a name
+```
+
+Importing the same local name twice (or aliasing into a colliding name) is an error — see [17.9](#179-shadowing-rules-at-import).
 
 ## 17.4 Path forms
 
@@ -180,7 +229,7 @@ If `lib.lang` had written `mod util` (no `pub`), the entire `util/*` subtree wou
 
 For structs, **each field has independent visibility**. A `pub struct` with all-private fields can be returned and held but not constructed or destructured outside its module.
 
-`extend` blocks have no `pub` modifier themselves — the methods they add inherit the visibility rules: an `extend Foo: Pub` impl is visible wherever `Foo` and `Pub` are both visible.
+`extend` blocks have no `pub` modifier themselves. They are **anonymous** and **module-bound**: an `extend` block activates in any module that imports its defining module (in any of the three [import forms](#173-import-forms)). The orphan rule ([10.9](./10-interfaces.md#109-orphan-rule)) constrains an `extend T: I` block to live in either `T`'s or `I`'s defining module, so the set of possible extension sources for any value is small and grep-able.
 
 ### No finer-grained visibility
 
@@ -296,16 +345,16 @@ A freestanding (no-OS) target compiles fine without any `std:*` import; `core:pr
 
 - A local definition silently shadows an import. If a module both imports `Foo` and defines its own `Foo`, the local one wins in that module.
 - Importing the same local name from multiple imports is an error. You must alias one or both.
-- An `import "..."` glob that would introduce a name colliding with an existing import is an error (unless one of the imports aliases the name).
+- A namespace name (the `as Name` of a `import "..." as Name`) collides with any other binding of the same name in the file. Alias it with a different `Name` to resolve.
 
 ## 17.10 Re-exports — `pub import`
 
-`pub mod` exposes an entire submodule. To re-expose **individual names** from a submodule (without making the whole submodule public), use `pub import`:
+`pub mod` exposes an entire submodule. To selectively re-export from one module under another's public API, use `pub import`. All three [import forms](#173-import-forms) work with a `pub` prefix:
 
 ```
 // src/lib.lang
 mod internals                                       // private — pkg consumers can't reach internals/*
-pub import { Logger } from "internals/log"          // but Logger is in pkg:cool-lib's public surface
+pub import { Logger } from "internals/log"          // re-export an individual name
 pub import { Db, open } from "internals/db"
 
 pub function version(): str { "1.2.3" }
@@ -314,24 +363,27 @@ pub function version(): str { "1.2.3" }
 Syntax and forms parallel `import` exactly, with `pub` prepended:
 
 ```
-pub import "util/helpers"                             // glob re-export
-pub import { Foo, bar } from "util/helpers"           // named re-export
-pub import { Foo as Bar } from "util/helpers"         // aliased re-export
+pub import "pkg:iter_ext"                          // re-export extension activation
+pub import "pkg:json" as Json                      // re-export as namespace
+pub import { Foo, bar }    from "util/helpers"     // re-export names
+pub import { Foo as Bar }  from "util/helpers"     // re-export with alias
 ```
 
-The re-exported names appear in the re-exporting module's `pub` set. Importers of the re-exporting module see them as if they were defined locally.
+The re-exported names — and the namespace, and the ambient extensions — appear in the re-exporting module's `pub` set. Importers of the re-exporting module see them as if they were defined locally.
 
 ### Semantics
 
-- `pub import` simultaneously **imports** the named items into the current module (so the current module can use them) and **re-exports** them as part of this module's public API.
+- `pub import` simultaneously **imports** into the current module (so the current module can use the names / namespace) and **re-exports** them as part of this module's public API.
 - For the re-export to be reachable from an external consumer, the **declaring module itself** must be on a `pub mod` chain — `pub import` doesn't bypass module visibility.
 - Re-exporting a name does not produce a new type, struct, or function — it's still the same definition, just reachable under a new path.
-- Collision rules (17.9) apply: a `pub import`ed name that collides with a local definition or another import is an error; alias one or both with `as`.
+- Collision rules ([17.9](#179-shadowing-rules-at-import)) apply: a `pub import`ed name that collides with a local definition or another import is an error; alias one or both with `as`.
+- The bare form `pub import "<path>"` makes the target module's extensions ambient for any consumer of this module too — useful for "umbrella" packages that pull in several extension packages and re-export their methods.
 
 ### What this lets you do
 
 - Curate a flat public API at `lib.lang` while keeping the internal directory tree as deep as you want.
 - Move implementation files around without changing the public API spelling — consumers always see the `lib.lang` paths.
+- Build an **umbrella package** that re-exports several extension crates: consumers do one `import "pkg:fancy-iters"` and pick up all the re-exported extensions transitively.
 - Mix `pub mod`-style "expose the whole submodule" with `pub import`-style "lift individual names" without conflict.
 
 ## 17.11 Compilation units

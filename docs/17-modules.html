@@ -275,19 +275,64 @@ pub mod db
 
 <h2 id="17-3-import-forms">17.3 Import forms</h2>
 
-<pre><code>import "util/helpers"                                   // glob — every public name
-import { Foo, bar } from "util/helpers"                 // named
-import { Foo as Bar } from "util/helpers"               // named with alias
-import { Foo, bar as baz, Qux } from "util/helpers"     // mixed
+<p>Three forms, distinguished by what they contribute to the current module: just extensions, a namespace, or specific names.</p>
+
+<pre><code>import "pkg:my_module"                              // ambient — extensions only, no names bound
+import "pkg:my_module" as M                         // namespace bind to M
+import { Foo, bar }      from "util/helpers"        // named
+import { Foo as Bar }    from "util/helpers"        // named with alias
+import { Foo, bar as baz, Qux } from "util/helpers" // mixed
 </code></pre>
 
-<h3>Glob import</h3>
+<h3>Ambient form — <code>import "&lt;path&gt;"</code></h3>
 
-<p><code>import "&lt;path&gt;"</code> makes every <code>pub</code> name from the target module visible in the current module under its original name.</p>
+<p>The bare form binds <strong>no names</strong>. Its only effect is to activate the target module's <strong>extensions</strong> (<code>extend</code> blocks). Use it when you want a module's extension methods available on existing values without bringing any other names into scope:</p>
 
-<h3>Named import</h3>
+<pre><code>import "pkg:iter_ext"                  // activates extension methods on Iterator&lt;T&gt;
+                                       // no other names from iter_ext are bound
 
-<p><code>import { ... } from "&lt;path&gt;"</code> brings exactly the listed names into scope. Each may be aliased with <code>as</code>.</p>
+var doubled = numbers.my_map(|x| x * 2)
+</code></pre>
+
+<h3>Namespace form — <code>import "&lt;path&gt;" as &lt;Name&gt;</code></h3>
+
+<p>Binds the module to <code>&lt;Name&gt;</code>; access members via <code>.</code>:</p>
+
+<pre><code>import "pkg:json" as Json
+
+var v = Json.parse(text)
+var s = Json.stringify(v)
+</code></pre>
+
+<p>The namespace name is <strong>required</strong> — there is no auto-derivation from the path. Pick a name that's meaningful at the call site.</p>
+
+<h3>Named form — <code>import { ... } from "&lt;path&gt;"</code></h3>
+
+<p>Brings exactly the listed names into the current scope. Each name may be aliased with <code>as</code>:</p>
+
+<pre><code>import { Logger }                from "util/log"
+import { open, close as shut }   from "io/file"
+import { Foo, Bar, baz }         from "pkg:lib"
+</code></pre>
+
+<h3>Extensions always activate</h3>
+
+<p>Every form activates the target module's extensions. There is no way to import names <em>without</em> also activating extensions — <code>extend</code> blocks are anonymous (see <a href="10-interfaces.html#104-extensions--adding-methods">10-interfaces.html</a>) and hitch a ride on the module itself.</p>
+
+<p>The orphan rule (<a href="10-interfaces.html#109-orphan-rule">10.9</a>) constrains extensions to live in either the type's or the interface's defining module — so the set of "which extensions could come from this import?" is small and statically determinable.</p>
+
+<h3>Combining forms</h3>
+
+<p>A file may use multiple forms against the same path; their effects compose:</p>
+
+<pre><code>import "pkg:lib" as Lib
+import { Foo }   from "pkg:lib"        // both Lib.Foo and bare Foo work
+
+import "pkg:iter_ext"                  // ambient only
+import { my_helper } from "pkg:iter_ext"   // also bring a name
+</code></pre>
+
+<p>Importing the same local name twice (or aliasing into a colliding name) is an error — see <a href="#17-9-shadowing-rules-at-import">17.9</a>.</p>
 
 <h2 id="17-4-path-forms">17.4 Path forms</h2>
 
@@ -376,7 +421,7 @@ struct Internal { ... }       // Internal is NOT visible to outside callers
 
 <p>For structs, <strong>each field has independent visibility</strong>. A <code>pub struct</code> with all-private fields can be returned and held but not constructed or destructured outside its module.</p>
 
-<p><code>extend</code> blocks have no <code>pub</code> modifier themselves — the methods they add inherit the visibility rules: an <code>extend Foo: Pub</code> impl is visible wherever <code>Foo</code> and <code>Pub</code> are both visible.</p>
+<p><code>extend</code> blocks have no <code>pub</code> modifier themselves. They are <strong>anonymous</strong> and <strong>module-bound</strong>: an <code>extend</code> block activates in any module that imports its defining module (in any of the three <a href="#17-3-import-forms">import forms</a>). The orphan rule (<a href="10-interfaces.html#109-orphan-rule">10.9</a>) constrains an <code>extend T: I</code> block to live in either <code>T</code>'s or <code>I</code>'s defining module, so the set of possible extension sources for any value is small and grep-able.</p>
 
 <h3>No finer-grained visibility</h3>
 
@@ -505,16 +550,16 @@ import { spawn, block_on } from "std:async"
 <ul>
 <li>A local definition silently shadows an import. If a module both imports <code>Foo</code> and defines its own <code>Foo</code>, the local one wins in that module.</li>
 <li>Importing the same local name from multiple imports is an error. You must alias one or both.</li>
-<li>An <code>import "..."</code> glob that would introduce a name colliding with an existing import is an error (unless one of the imports aliases the name).</li>
+<li>A namespace name (the <code>as Name</code> of an <code>import "..." as Name</code>) collides with any other binding of the same name in the file. Alias it with a different <code>Name</code> to resolve.</li>
 </ul>
 
 <h2 id="17-10-re-exports--pub-import">17.10 Re-exports — <code>pub import</code></h2>
 
-<p><code>pub mod</code> exposes an entire submodule. To re-expose <strong>individual names</strong> from a submodule (without making the whole submodule public), use <code>pub import</code>:</p>
+<p><code>pub mod</code> exposes an entire submodule. To selectively re-export from one module under another's public API, use <code>pub import</code>. All three <a href="#17-3-import-forms">import forms</a> work with a <code>pub</code> prefix:</p>
 
 <pre><code>// src/lib.lang
 mod internals                                       // private — pkg consumers can't reach internals/*
-pub import { Logger } from "internals/log"          // but Logger is in pkg:cool-lib's public surface
+pub import { Logger } from "internals/log"          // re-export an individual name
 pub import { Db, open } from "internals/db"
 
 pub function version(): str { "1.2.3" }
@@ -522,20 +567,22 @@ pub function version(): str { "1.2.3" }
 
 <p>Syntax and forms parallel <code>import</code> exactly, with <code>pub</code> prepended:</p>
 
-<pre><code>pub import "util/helpers"                             // glob re-export
-pub import { Foo, bar } from "util/helpers"           // named re-export
-pub import { Foo as Bar } from "util/helpers"         // aliased re-export
+<pre><code>pub import "pkg:iter_ext"                          // re-export extension activation
+pub import "pkg:json" as Json                      // re-export as namespace
+pub import { Foo, bar }    from "util/helpers"     // re-export names
+pub import { Foo as Bar }  from "util/helpers"     // re-export with alias
 </code></pre>
 
-<p>The re-exported names appear in the re-exporting module's <code>pub</code> set. Importers of the re-exporting module see them as if they were defined locally.</p>
+<p>The re-exported names — and the namespace, and the ambient extensions — appear in the re-exporting module's <code>pub</code> set. Importers of the re-exporting module see them as if they were defined locally.</p>
 
 <h3>Semantics</h3>
 
 <ul>
-<li><code>pub import</code> simultaneously <strong>imports</strong> the named items into the current module (so the current module can use them) and <strong>re-exports</strong> them as part of this module's public API.</li>
+<li><code>pub import</code> simultaneously <strong>imports</strong> into the current module (so the current module can use the names / namespace) and <strong>re-exports</strong> them as part of this module's public API.</li>
 <li>For the re-export to be reachable from an external consumer, the <strong>declaring module itself</strong> must be on a <code>pub mod</code> chain — <code>pub import</code> doesn't bypass module visibility.</li>
 <li>Re-exporting a name does not produce a new type, struct, or function — it's still the same definition, just reachable under a new path.</li>
-<li>Collision rules (17.9) apply: a <code>pub import</code>ed name that collides with a local definition or another import is an error; alias one or both with <code>as</code>.</li>
+<li>Collision rules (<a href="#17-9-shadowing-rules-at-import">17.9</a>) apply: a <code>pub import</code>ed name that collides with a local definition or another import is an error; alias one or both with <code>as</code>.</li>
+<li>The bare form <code>pub import "&lt;path&gt;"</code> makes the target module's extensions ambient for any consumer of this module too — useful for "umbrella" packages that pull in several extension packages and re-export their methods.</li>
 </ul>
 
 <h3>What this lets you do</h3>
@@ -543,6 +590,7 @@ pub import { Foo as Bar } from "util/helpers"         // aliased re-export
 <ul>
 <li>Curate a flat public API at <code>lib.lang</code> while keeping the internal directory tree as deep as you want.</li>
 <li>Move implementation files around without changing the public API spelling — consumers always see the <code>lib.lang</code> paths.</li>
+<li>Build an <strong>umbrella package</strong> that re-exports several extension crates: consumers do one <code>import "pkg:fancy-iters"</code> and pick up all the re-exported extensions transitively.</li>
 <li>Mix <code>pub mod</code>-style "expose the whole submodule" with <code>pub import</code>-style "lift individual names" without conflict.</li>
 </ul>
 
