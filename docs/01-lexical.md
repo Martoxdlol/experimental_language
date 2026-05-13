@@ -6,7 +6,9 @@ Source files are UTF-8. Line breaks are `\n` or `\r\n`; they are equivalent.
 
 ## 1.2 Comments
 
-Two forms, both ignored by the compiler:
+Four forms. Two are ignored by the compiler; two are **doc comments** attached to items.
+
+### Ordinary comments
 
 ```
 // Line comment — to end of line.
@@ -18,6 +20,29 @@ Two forms, both ignored by the compiler:
 ```
 
 Block comments nest, so a block comment can be used to comment out code that itself contains block comments.
+
+### Doc comments
+
+```
+/// Documents the item that follows.
+/// Markdown is the convention for body content.
+pub struct Person {
+  /// The person's name.
+  pub name: str,
+}
+
+//! Documents the enclosing module.
+//! Use this at the top of a file to document the module itself.
+```
+
+- **`///`** is an **outer doc comment** — it attaches to the *next* item (struct, function, interface, type, mod, field, ...). Multiple consecutive `///` lines form one doc block.
+- **`//!`** is an **inner doc comment** — it attaches to the *enclosing module*. Conventionally placed at the top of a file (the only place `//!` is allowed).
+
+The content is plain text; the toolchain's documentation generator interprets it as Markdown.
+
+Doc comments are first-class syntactic attributes — they are visible to procedural macros via `ctx.docs(input)` (see [22-macros.md](./22-macros.md)) and surface in error messages, hover-info, and generated docs.
+
+A doc comment on an item that has no recipient (a trailing `///` at the end of a file, a `///` on a statement inside a function body) is a compile warning.
 
 ## 1.3 Identifiers
 
@@ -116,11 +141,19 @@ Supported escape sequences inside character and string literals:
 | `\\` | Backslash |
 | `\'` | Single quote |
 | `\"` | Double quote |
+| `\$` | Literal `$` (only meaningful inside a string literal — escapes interpolation) |
 | `\0` | Null byte |
 | `\xHH` | Byte with hex value HH (only valid for bytes 0..=0x7F in string literals; full range in byte literals if any are added later) |
 | `\u{H...}` | Unicode scalar value (1–6 hex digits) |
 
-## 1.9 String literals
+### Quote style — strict split
+
+- **`""`** is always a **string literal** of type `str`.
+- **`''`** is always a **character literal** of type `char`. A `''` literal must contain exactly one Unicode scalar value (`'a'`, `'\n'`, `'\u{1F600}'`); zero characters (`''`) or more than one is a compile error.
+
+The two are not interchangeable: `'x'` is never a one-character string and `"x"` is never a character.
+
+## 1.9 String literals and interpolation
 
 ```
 "hello"
@@ -130,7 +163,36 @@ Supported escape sequences inside character and string literals:
 
 String literals are UTF-8 and produce `str` values. `str` is immutable and heap-allocated (see [02-types.md](./02-types.md) and [18-stdlib.md](./18-stdlib.md)).
 
-Raw strings and string interpolation are not in the initial spec.
+### Interpolation
+
+A string literal may embed expressions whose results are spliced in:
+
+```
+var name = "Alice"
+print("Hello, $name")                  // Hello, Alice
+
+var user = User { name: "Alice", age: 30 }
+print("Hello, ${user.name}, age ${user.age}")
+
+print("Total: ${items.size() + 1}")
+```
+
+Two forms:
+
+- **`$<identifier>`** — interpolates the value of `<identifier>`. The identifier is parsed greedily as letters, digits, and underscores starting with a letter or `_`. `$name` is the identifier `name`; `$_x` is the identifier `_x`; `$1` is not valid (no leading digit).
+- **`${<expression>}`** — interpolates an arbitrary expression. Use this for field access, method calls, arithmetic, or any expression more complex than a bare identifier.
+
+To produce a literal `$`, escape it: `"\$"`. A `$` not followed by an identifier or `{` is a compile error (so typos are caught rather than silently emitting the literal).
+
+### Stringification rule
+
+Every interpolated value must implement the `ToStr` interface (defined in `core:prelude`; see [15-operators.md](./15-operators.md)). The interpolated form `"x = $x"` desugars to `"x = " + x.to_str()`. Primitives, `str`, and `null` implement `ToStr` out of the box; user types implement it to participate in interpolation.
+
+If `x` does not implement `ToStr`, the compile error points at the `$x` site, not at the desugared `+`.
+
+### Raw strings
+
+Raw strings — opting out of escape and interpolation processing — are not in this version of the spec.
 
 ## 1.10 Punctuation and operators
 

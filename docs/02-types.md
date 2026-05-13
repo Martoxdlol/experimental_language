@@ -79,6 +79,8 @@ char   // 32-bit Unicode scalar value
 
 A `char` is exactly one Unicode scalar value, encoded as a 32-bit value. Surrogate code points are not valid `char` values.
 
+`char` literals use **single quotes** (`'a'`, `'\n'`, `'\u{1F600}'`) and must contain exactly one Unicode scalar value. `''` (empty) or `'ab'` (more than one) is a compile error. `char` and `str` literals are not interchangeable: `"a"` is always `str`, `'a'` is always `char`. See [01-lexical.md](./01-lexical.md).
+
 `char` does not auto-convert to or from integers; use `as`:
 
 ```
@@ -103,6 +105,8 @@ String length is conceptually defined two ways:
 `str` indexing is **not** done by integer index because UTF-8 makes that ambiguous. Use `s.get(i)` to get the `i`-th character, or `s.substring(start, end)` for slices. See [18-stdlib.md](./18-stdlib.md).
 
 `+` on two `str` is a shortcut for `concat`.
+
+String literals support **interpolation**: `"Hello $name"` or `"Hello, ${user.name}, age ${user.age + 1}"`. Interpolated values must implement `ToStr`. See [01-lexical.md §1.9](./01-lexical.md#19-string-literals-and-interpolation) for the lexical rules and [15-operators.md §15.10](./15-operators.md#1510-stringification--tostr) for `ToStr`.
 
 ## 2.6 The empty type — `null`
 

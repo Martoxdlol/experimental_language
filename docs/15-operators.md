@@ -237,16 +237,54 @@ Called by the runtime just before deallocating an object. Implement this to rele
 
 See [16-memory.md](./16-memory.md) for the full drop / GC interaction.
 
-## 15.10 Display / formatting
-
-There is no built-in `Display` or `Debug` interface in the initial spec. Convert to `str` with explicit functions:
+## 15.10 Stringification — `ToStr`
 
 ```
-str_of_int(x)
-str_of_float(x)
+pub interface ToStr {
+  function to_str(self): str
+}
 ```
 
-or implement a project-local interface for your types. The `+` operator on `str` is the conventional way to build strings without a format machinery; format helpers are stdlib but not part of the language semantics.
+`ToStr` produces a user-readable string for a value. It is the one interface used by **string interpolation** (see [01-lexical.md §1.9](./01-lexical.md#19-string-literals-and-interpolation)). The compiler desugars `"x = $x"` to:
+
+```
+"x = " + x.to_str()
+```
+
+Every interpolated value's type must implement `ToStr` (or implement it via a `pub mod` chain visible at the interpolation site), otherwise the compile error points at the `$x` / `${...}` site.
+
+### Built-in implementations
+
+- Numeric primitives (`i8`..`i64`, `u8`..`u64`, `usize`, `isize`, `f32`, `f64`) — decimal representation (matches `as str` on primitives).
+- `bool` — `"true"` / `"false"`.
+- `char` — a single-character `str`.
+- `str` — identity (`s.to_str()` is `s`).
+- `null` — `"null"`.
+- `List<T>` — `"[a, b, c]"` (requires `T: ToStr`).
+- `Map<K, V>` — `"{k1: v1, k2: v2}"` (requires `K: ToStr` and `V: ToStr`).
+- Tuples — `"(a, b, c)"` (requires every component to implement `ToStr`).
+
+### Relationship to `as str`
+
+The `as str` cast (defined in [12-type-logic.md](./12-type-logic.md)) for numeric primitives produces the same string as `ToStr::to_str`. For user types, `as str` is **not** defined unless they implement `ToStr` — in which case `value as str` is sugar for `value.to_str()`. This keeps one stringification path through the type system.
+
+### Auto-derive
+
+`@Derive(ToStr)` (see [22-macros.md](./22-macros.md)) synthesizes a field-by-field implementation:
+
+```
+@Derive(ToStr)
+pub struct Person { pub name: str, pub age: i32 }
+
+// Person { name: "Alice", age: 30 } produces:
+// "Person { name: Alice, age: 30 }"
+```
+
+The derived form is intended for diagnostics and `print` debugging. For user-facing formatting (locale-aware numbers, custom separators, etc.), implement `ToStr` by hand.
+
+### No `Display` / `Debug` split
+
+Some languages distinguish a user-facing `Display` from a developer-facing `Debug` (Rust). This spec collapses them into one `ToStr`. If a project needs the distinction, it can define its own `Debug` interface as user code — the language doesn't bless one. The rationale: most string output is either logs (`Debug`-ish) or user UI (which usually goes through a localization layer anyway, where neither built-in is enough). One interface keeps the surface small.
 
 ## 15.11 `ReprC` — disabling GC header for FFI
 

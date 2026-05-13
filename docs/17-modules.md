@@ -246,6 +246,7 @@ Contains everything that the language's syntax desugars into, plus the heap-usin
 - **Future protocol** — `Future<T>`, `Ready<T>`, `Pending`, `Context`.
 - **Error propagation** — `Try<O, R>`, `FromResidual<R>`.
 - **Lifecycle** — `Clone`, `Drop`.
+- **Stringification** — `ToStr` (used by string interpolation; see [01-lexical.md §1.9](./01-lexical.md#19-string-literals-and-interpolation) and [15-operators.md §15.10](./15-operators.md#1510-stringification--tostr)).
 - **FFI** — `ReprC`, `pin<T>`, `unpin<T>`, the `Buffer` extern struct.
 - **Panic** — `panic(msg: str)`, `panic_with(value: T)`.
 - **Heap collections** — `List<T>`, `Map<K, V>`, `Entry<K, V>`. (These use the allocator, which is always available.)

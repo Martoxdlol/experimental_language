@@ -4,7 +4,7 @@ This is the full specification, split across topical chapters. Chapters are inte
 
 ## Index
 
-1. [Lexical structure](./01-lexical.md) — comments, identifiers, literals, literal suffixes, keywords.
+1. [Lexical structure](./01-lexical.md) — comments (incl. `///` doc), identifiers, literals (`""` str, `''` char), literal suffixes, string interpolation, keywords.
 2. [Primitive types](./02-types.md) — integers, floats, `bool`, `char`, `str`, `null`.
 3. [Discriminated unions](./03-unions.md) — pipe syntax, flattening, recursion, ordering.
 4. [Structs](./04-structs.md) — regular, tuple, unit; construction syntax; field shorthand; spread.
@@ -18,7 +18,7 @@ This is the full specification, split across topical chapters. Chapters are inte
 12. [Type logic](./12-type-logic.md) — `is`, `as`, flow typing, narrowing.
 13. [Error handling](./13-error-handling.md) — `T | E`, `?`, `Try` interface.
 14. [Panics](./14-panics.md) — `panic`, panic sources, integer overflow.
-15. [Operators](./15-operators.md) — operator overloading; built-in interfaces.
+15. [Operators](./15-operators.md) — operator overloading; built-in interfaces; `ToStr` for string interpolation.
 16. [Memory model](./16-memory.md) — GC, reference counting, layout, drop semantics.
 17. [Modules and imports](./17-modules.md) — project layout, `mod` / `pub mod` tree, `import` paths (`core:` / `std:` / `pkg:` / project / relative), package-escape rule, visibility chain, `pub import` re-exports.
 18. [Standard library](./18-stdlib.md) — `core:prelude` (`str`, `List`, `Map`, `Item`, `Iterator`, `Buffer`) + index of `std:*` modules.
