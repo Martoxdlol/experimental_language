@@ -84,9 +84,8 @@
 <p class="lead">
   This chapter extends <a href="./18-stdlib.html">18-stdlib</a> with the full proposed
   standard-library surface. Item status is marked
-  <span class="pill spec">spec</span> (already specified in chapter 18 / elsewhere),
-  <span class="pill planned">planned</span> (named but not detailed),
-  or <span class="pill new">new</span> (introduced by this chapter).
+  <span class="pill spec">spec</span> (already specified in chapter 18 / elsewhere) or
+  <span class="pill planned">planned</span> (named but not detailed).
 </p>
 
 <div class="callout">
@@ -103,6 +102,7 @@
     <li><a href="#layering">Layering: shape vs runtime</a></li>
     <li><a href="#fragmentation">The Request/Response problem</a></li>
     <li><a href="#prelude-additions"><code>core:prelude</code> additions</a></li>
+    <li><a href="#collections"><code>core:collections</code> — List · Map · Set</a></li>
     <li><a href="#io"><code>core:io</code> — Reader · Writer · Seeker</a></li>
     <li><a href="#fmt"><code>core:fmt</code> — Display · Debug</a></li>
     <li><a href="#error"><code>core:error</code> — error interface</a></li>
@@ -148,23 +148,24 @@ keeping <code>std:</code> for everything that needs an OS.</p>
       <!-- core boxes -->
       <g transform="translate(60, 208)" font-size="10.5">
         <rect width="100" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="50" y="16" text-anchor="middle">core:prelude</text>
-        <rect x="110" width="80" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="150" y="16" text-anchor="middle">core:io</text>
-        <rect x="200" width="90" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="245" y="16" text-anchor="middle">core:fmt</text>
-        <rect x="300" width="90" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="345" y="16" text-anchor="middle">core:error</text>
-        <rect x="400" width="90" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="445" y="16" text-anchor="middle">core:time</text>
-        <rect x="500" width="90" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="545" y="16" text-anchor="middle">core:hash</text>
-        <rect x="600" width="100" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="650" y="16" text-anchor="middle">core:async</text>
-        <rect x="710" width="80" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="750" y="16" text-anchor="middle">core:json</text>
+        <rect x="110" width="130" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="175" y="16" text-anchor="middle">core:collections</text>
+        <rect x="250" width="80" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="290" y="16" text-anchor="middle">core:io</text>
+        <rect x="340" width="90" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="385" y="16" text-anchor="middle">core:fmt</text>
+        <rect x="440" width="90" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="485" y="16" text-anchor="middle">core:error</text>
+        <rect x="540" width="90" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="585" y="16" text-anchor="middle">core:time</text>
+        <rect x="640" width="90" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="685" y="16" text-anchor="middle">core:hash</text>
+        <rect x="740" width="100" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="790" y="16" text-anchor="middle">core:async</text>
       </g>
       <g transform="translate(60, 240)" font-size="10.5">
-        <rect width="130" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="65" y="16" text-anchor="middle">core:net:types</text>
-        <rect x="140" width="90" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="185" y="16" text-anchor="middle">core:http</text>
-        <rect x="240" width="80" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="280" y="16" text-anchor="middle">core:ffi</text>
+        <rect width="80" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="40" y="16" text-anchor="middle">core:json</text>
+        <rect x="90" width="130" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="155" y="16" text-anchor="middle">core:net:types</text>
+        <rect x="230" width="90" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="275" y="16" text-anchor="middle">core:http</text>
+        <rect x="330" width="80" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="370" y="16" text-anchor="middle">core:ffi</text>
       </g>
 
-      <text x="60" y="298" font-size="11" class="small">Concrete: str · List · Map · Set · Deque · Bytes · Iterator · Item/Done · Buffer · numeric helpers</text>
-      <text x="60" y="316" font-size="11" class="small">Interfaces: Reader · Writer · Seeker · Display · Debug · Error · Hash · Hasher · Future · AsyncIterator · ToStr · Eq · Ord · Clone</text>
-      <text x="60" y="334" font-size="11" class="small">Value types: Duration · Json · IpAddr · SocketAddr · Uri · Url · HttpRequest · HttpResponse · Headers · Method · Status</text>
+      <text x="60" y="298" font-size="11" class="small">prelude (auto): str · Iterator · Item/Done · Buffer · numeric helpers · Deque · Bytes</text>
+      <text x="60" y="316" font-size="11" class="small">collections (explicit): List · Map · Set — opt-in to keep prelude small and the GC-heap surface visible at import sites</text>
+      <text x="60" y="334" font-size="11" class="small">Interfaces / value types in their own modules: Reader · Writer · Display · Debug · Error · Duration · Json · Url · HttpRequest · ...</text>
 
       <!-- OS line -->
       <rect x="40" y="138" width="820" height="24" rx="4" fill="#fff" stroke="#d6d3cd" stroke-dasharray="3 3"/>
@@ -267,38 +268,22 @@ late. Before that, every HTTP library shipped its own. The cost compounds:</p>
 (the Logger interface).</p>
 
 <!-- =========================================================== -->
-<h2 id="prelude-additions">4. <code>core:prelude</code> — additions <span class="pill new">new</span></h2>
+<h2 id="prelude-additions">4. <code>core:prelude</code> — additions</h2>
 
-<p>Chapter 18 covers the existing prelude (<code>str</code>, <code>List</code>,
-<code>Map</code>, <code>Iterator</code>, <code>Item/Done</code>, <code>Buffer</code>,
-numeric helpers). The roadmap adds three collections.</p>
+<p>Chapter 18 leaves the prelude with <code>str</code>, <code>List</code>,
+<code>Map</code>, <code>Iterator</code>, <code>Item/Done</code>, <code>Buffer</code>, and
+the numeric helper namespaces. The roadmap <strong>removes</strong> <code>List</code> and
+<code>Map</code> from the prelude — they move to the explicit-import
+<a href="#collections"><code>core:collections</code></a> module along with <code>Set</code>.
+The prelude gains <code>Deque</code> and <code>Bytes</code>.</p>
 
-<h3 id="set"><code>Set&lt;T&gt;</code> where <code>T: Eq + Hash</code></h3>
-
-<pre><code>var s: Set&lt;str&gt; = { "a", "b" }       // set literal
-var t = Set.new&lt;str&gt;()
-var u = Set&lt;str&gt;()                    // shorthand</code></pre>
-
-<table>
-  <thead><tr><th>Method</th><th>Returns</th><th>Notes</th></tr></thead>
-  <tbody>
-    <tr><td><code>new()</code> static</td><td><code>Set&lt;T&gt;</code></td><td>Empty</td></tr>
-    <tr><td><code>size()</code> · <code>is_empty()</code></td><td><code>i64</code> · <code>bool</code></td><td></td></tr>
-    <tr><td><code>contains(v)</code></td><td><code>bool</code></td><td></td></tr>
-    <tr><td><code>add(v)</code></td><td><code>bool</code></td><td><code>true</code> if newly inserted</td></tr>
-    <tr><td><code>remove(v)</code></td><td><code>bool</code></td><td><code>true</code> if removed</td></tr>
-    <tr><td><code>union(o)</code> · <code>intersect(o)</code> · <code>difference(o)</code></td><td><code>Set&lt;T&gt;</code></td><td>New set</td></tr>
-    <tr><td><code>iter()</code></td><td><code>Iterator&lt;T&gt;</code></td><td></td></tr>
-  </tbody>
-</table>
-
-<div class="callout warn">
-  <strong>Set literal vs map literal</strong>
-  <code>{ a, b }</code> (no <code>:</code>) is a <strong>set literal</strong>;
-  <code>{ a: 1, b: 2 }</code> is a map literal. The disambiguation rules from §18.4 are
-  extended: the parser commits to <em>set</em> if it sees comma-separated bare expressions,
-  to <em>map</em> if it sees <code>key : value</code>. <code>{}</code> is still the empty
-  block — use <code>Set.new</code> / <code>Map.new</code> for empty containers.
+<div class="callout">
+  <strong>Why explicit collections</strong>
+  <code>List&lt;T&gt;</code> and <code>Map&lt;K, V&gt;</code> are heap-allocated, GC-managed
+  containers. Pulling them out of the prelude makes their use visible at every import site
+  rather than implicit. It also keeps the auto-imported surface minimal: the prelude after
+  this change contains language-fundamental shapes only (text, iteration, FFI bytes, numeric
+  helpers).
 </div>
 
 <h3 id="deque"><code>Deque&lt;T&gt;</code></h3>
@@ -350,7 +335,73 @@ var raw = b.as_buffer()               // Buffer view (pinned for caller scope)</
 <code>Hash</code>.</p>
 
 <!-- =========================================================== -->
-<h2 id="io">5. <code>core:io</code> — Reader · Writer · Seeker <span class="pill new">new</span></h2>
+<h2 id="collections">5. <code>core:collections</code> — List · Map · Set</h2>
+
+<p>Explicit-import module within the <code>core:</code> tier. Holds the three
+heap-allocated, GC-managed general-purpose containers.</p>
+
+<pre><code>import { List, Map, Set } from "core:collections"
+
+var xs: List&lt;i64&gt;     = [1, 2, 3]
+var m:  Map&lt;str, i64&gt; = { "x": 1 }
+var s:  Set&lt;str&gt;      = { "a", "b" }</code></pre>
+
+<div class="callout">
+  <strong>Literal syntax still works without prelude</strong>
+  The literal forms <code>[...]</code>, <code>{ k: v, ... }</code>, and <code>{ a, b }</code>
+  are language-level syntax (chapters 1 &amp; 18). They construct the corresponding
+  container type — but the <em>name</em> <code>List</code> / <code>Map</code> /
+  <code>Set</code> must still be imported to write type annotations, call static
+  constructors, or use the type-as-constructor shorthand.
+</div>
+
+<h3 id="list-collections"><code>List&lt;T&gt;</code></h3>
+
+<p>Dynamic array. Full definition in <a href="./18-stdlib.html#list">18.3</a>; the only
+change here is module location.</p>
+
+<pre><code>var a: List&lt;i64&gt; = [1, 2, 3]
+var b = List.new&lt;i64&gt;()
+var c = List&lt;i64&gt;()</code></pre>
+
+<h3 id="map-collections"><code>Map&lt;K, V&gt;</code> where <code>K: Eq + Hash</code></h3>
+
+<p>Hash map. Full definition in <a href="./18-stdlib.html#map">18.4</a>; module location
+moves to <code>core:collections</code>.</p>
+
+<pre><code>var m: Map&lt;str, i64&gt; = { "x": 1, "y": 2 }
+var n = Map.new&lt;str, i64&gt;()</code></pre>
+
+<h3 id="set-collections"><code>Set&lt;T&gt;</code> where <code>T: Eq + Hash</code></h3>
+
+<pre><code>var s: Set&lt;str&gt; = { "a", "b" }       // set literal
+var t = Set.new&lt;str&gt;()
+var u = Set&lt;str&gt;()                    // shorthand</code></pre>
+
+<table>
+  <thead><tr><th>Method</th><th>Returns</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td><code>new()</code> static</td><td><code>Set&lt;T&gt;</code></td><td>Empty</td></tr>
+    <tr><td><code>size()</code> · <code>is_empty()</code></td><td><code>i64</code> · <code>bool</code></td><td></td></tr>
+    <tr><td><code>contains(v)</code></td><td><code>bool</code></td><td></td></tr>
+    <tr><td><code>add(v)</code></td><td><code>bool</code></td><td><code>true</code> if newly inserted</td></tr>
+    <tr><td><code>remove(v)</code></td><td><code>bool</code></td><td><code>true</code> if removed</td></tr>
+    <tr><td><code>union(o)</code> · <code>intersect(o)</code> · <code>difference(o)</code></td><td><code>Set&lt;T&gt;</code></td><td>New set</td></tr>
+    <tr><td><code>iter()</code></td><td><code>Iterator&lt;T&gt;</code></td><td></td></tr>
+  </tbody>
+</table>
+
+<div class="callout warn">
+  <strong>Set literal vs map literal</strong>
+  <code>{ a, b }</code> (no <code>:</code>) is a <strong>set literal</strong>;
+  <code>{ a: 1, b: 2 }</code> is a map literal. The disambiguation rules from §18.4 are
+  extended: the parser commits to <em>set</em> if it sees comma-separated bare expressions,
+  to <em>map</em> if it sees <code>key : value</code>. <code>{}</code> is still the empty
+  block — use <code>Set.new</code> / <code>Map.new</code> for empty containers.
+</div>
+
+<!-- =========================================================== -->
+<h2 id="io">6. <code>core:io</code> — Reader · Writer · Seeker</h2>
 
 <p>The single most load-bearing addition. Every I/O source/sink in <code>std:</code>
 implements these three interfaces, so parsers, encoders, compressors, and protocol code
@@ -410,7 +461,7 @@ extend&lt;W: Writer&gt; BufWriter&lt;W&gt;: Writer {
 </div>
 
 <!-- =========================================================== -->
-<h2 id="fmt">6. <code>core:fmt</code> — Display &amp; Debug <span class="pill new">new</span></h2>
+<h2 id="fmt">7. <code>core:fmt</code> — Display &amp; Debug</h2>
 
 <p>Chapter 18 notes that there is no formatting machinery. The roadmap adds the minimum
 needed to prevent every library inventing its own stringification. The existing
@@ -447,7 +498,7 @@ pub struct FmtError { pub message: str }</code></pre>
 </div>
 
 <!-- =========================================================== -->
-<h2 id="error">7. <code>core:error</code> — error interface <span class="pill new">new</span></h2>
+<h2 id="error">8. <code>core:error</code> — error interface</h2>
 
 <p>Chapter 13 makes errors values in unions. That works for one library. Across libraries,
 nothing forces a common shape. <code>core:error</code> defines one.</p>
@@ -483,7 +534,7 @@ extend Context: Error {
 </ul>
 
 <!-- =========================================================== -->
-<h2 id="time-core">8. <code>core:time</code> — Duration <span class="pill new">new</span></h2>
+<h2 id="time-core">9. <code>core:time</code> — Duration</h2>
 
 <p>Just the shape — no clock. <code>Duration</code> is OS-independent.</p>
 
@@ -511,7 +562,7 @@ extend Duration {
 <code>Add</code>, <code>Sub</code>, <code>Display</code>, <code>Debug</code>.</p>
 
 <!-- =========================================================== -->
-<h2 id="hash">9. <code>core:hash</code> — Hasher <span class="pill new">new</span></h2>
+<h2 id="hash">10. <code>core:hash</code> — Hasher</h2>
 
 <p>The existing <code>Hash</code> interface (§15) hashes a value into a 64-bit number.
 That hides which hasher is used. <code>core:hash</code> exposes the hasher so users can pick
@@ -542,7 +593,7 @@ hasher rather than returning <code>u64</code> directly. <code>Map</code> and <co
 construct a <code>DefaultHasher</code> internally.</p>
 
 <!-- =========================================================== -->
-<h2 id="async-core">10. <code>core:async</code> — shapes only <span class="pill planned">planned</span></h2>
+<h2 id="async-core">11. <code>core:async</code> — shapes only <span class="pill planned">planned</span></h2>
 
 <p>Chapter 21 introduces <code>Future</code>, <code>Ready</code>, <code>Pending</code>,
 <code>Context</code>, and <code>AsyncIterator</code> in <code>core:prelude</code>. The
@@ -566,7 +617,7 @@ pub interface AsyncIterator&lt;T&gt; {
 provides the executor that drives them.</p>
 
 <!-- =========================================================== -->
-<h2 id="json">11. <code>core:json</code> — value type <span class="pill new">new</span></h2>
+<h2 id="json">12. <code>core:json</code> — value type</h2>
 
 <p>No parser. No serializer. Just the value tree that any parser must produce and any
 serializer must accept.</p>
@@ -598,7 +649,7 @@ pub struct JsonNull;</code></pre>
 <code>Eq</code>. <em>Parsing</em> a string into <code>Json</code> is a pkg:-tier concern.</p>
 
 <!-- =========================================================== -->
-<h2 id="net-types">12. <code>core:net:types</code> — IP, sockets, URLs <span class="pill new">new</span></h2>
+<h2 id="net-types">13. <code>core:net:types</code> — IP, sockets, URLs</h2>
 
 <p>Parsed network identifiers. No connections — those live in <code>std:net</code>.</p>
 
@@ -639,7 +690,7 @@ pub struct ParseError { pub message: str, pub position: i64 }</code></pre>
 <code>Debug</code>, <code>Eq</code>, <code>Hash</code>, <code>Clone</code>.</p>
 
 <!-- =========================================================== -->
-<h2 id="http">13. <code>core:http</code> — Method · Status · Headers · Request · Response <span class="pill new">new</span></h2>
+<h2 id="http">14. <code>core:http</code> — Method · Status · Headers · Request · Response</h2>
 
 <p>The single most important fragmentation defense. Implementations of clients and servers
 live in pkg: or are layered on <code>std:net</code>; the <em>types</em> are universal.</p>
@@ -707,7 +758,7 @@ pub union HttpVersion = Http10 | Http11 | Http2 | Http3</code></pre>
 </div>
 
 <!-- =========================================================== -->
-<h2 id="io-impl">14. <code>std:io</code> — concrete handles <span class="pill spec">spec</span> + <span class="pill new">new</span></h2>
+<h2 id="io-impl">15. <code>std:io</code> — concrete handles <span class="pill spec">spec</span></h2>
 
 <p>Chapter 18 already places <code>print</code> / <code>println</code> here. The roadmap
 adds the standard streams and file handle as concrete <code>Reader</code>/<code>Writer</code>
@@ -731,7 +782,7 @@ extend Stdout: Writer { ... }
 extend Stderr: Writer { ... }</code></pre>
 
 <!-- =========================================================== -->
-<h2 id="fs">15. <code>std:fs</code> — files · Path <span class="pill planned">planned</span></h2>
+<h2 id="fs">16. <code>std:fs</code> — files · Path <span class="pill planned">planned</span></h2>
 
 <p><code>Path</code> is a structured string with OS-aware separator handling. Even though
 it could live in <code>core:</code>, it ships in <code>std:fs</code> because canonicalization
@@ -780,7 +831,7 @@ pub struct DirEntry {
 pub union FileKind = RegularFile | Directory | Symlink | OtherKind</code></pre>
 
 <!-- =========================================================== -->
-<h2 id="net">16. <code>std:net</code> — TCP · UDP · DNS <span class="pill planned">planned</span></h2>
+<h2 id="net">17. <code>std:net</code> — TCP · UDP · DNS <span class="pill planned">planned</span></h2>
 
 <pre><code>pub struct TcpStream { ... }
 extend TcpStream: Reader + Writer { ... }
@@ -813,7 +864,7 @@ pub function resolve(host: str): List&lt;IpAddr&gt; | IoError</code></pre>
 <code>AsyncWrite</code> shapes, which themselves live in <code>core:async</code>.</p>
 
 <!-- =========================================================== -->
-<h2 id="time-std">17. <code>std:time</code> — Instant · DateTime · TimeZone <span class="pill planned">planned</span></h2>
+<h2 id="time-std">18. <code>std:time</code> — Instant · DateTime · TimeZone <span class="pill planned">planned</span></h2>
 
 <pre><code>pub struct Instant     { ... }    // monotonic, opaque
 pub struct SystemTime  { ... }    // wall-clock, opaque
@@ -854,7 +905,7 @@ extend DateTime {
 pub struct TimeError { pub message: str }</code></pre>
 
 <!-- =========================================================== -->
-<h2 id="sync-extra">18. <code>std:sync</code> — additions <span class="pill spec">spec</span> + <span class="pill new">new</span></h2>
+<h2 id="sync-extra">19. <code>std:sync</code> — additions <span class="pill spec">spec</span></h2>
 
 <p>Chapter 20 covers <code>Shared&lt;T&gt;</code>, channels, and <code>LockBusy</code>.
 Additions:</p>
@@ -879,7 +930,7 @@ extend&lt;T&gt; Lazy&lt;T&gt; {
 }</code></pre>
 
 <!-- =========================================================== -->
-<h2 id="atomic">19. <code>std:sync:atomic</code> <span class="pill new">new</span></h2>
+<h2 id="atomic">20. <code>std:sync:atomic</code></h2>
 
 <pre><code>pub struct AtomicI32  { ... }
 pub struct AtomicI64  { ... }
@@ -904,7 +955,7 @@ extend AtomicI64 {
 // Other Atomic* types mirror this shape.</code></pre>
 
 <!-- =========================================================== -->
-<h2 id="process">20. <code>std:process</code> <span class="pill new">new</span></h2>
+<h2 id="process">21. <code>std:process</code></h2>
 
 <pre><code>pub function args(): List&lt;str&gt;
 pub function env(name: str): str | null
@@ -945,7 +996,7 @@ pub struct ExitStatus { pub code: i32 | null, pub signal: i32 | null }
 pub struct Output     { pub status: ExitStatus, pub stdout: Bytes, pub stderr: Bytes }</code></pre>
 
 <!-- =========================================================== -->
-<h2 id="rand">21. <code>std:rand</code> <span class="pill new">new</span></h2>
+<h2 id="rand">22. <code>std:rand</code></h2>
 
 <pre><code>pub interface Rng {
   function next_u32(self): u32
@@ -976,7 +1027,7 @@ pub function shuffle&lt;T&gt;(rng: Rng, list: List&lt;T&gt;): null
 pub function choose&lt;T&gt;(rng: Rng, list: List&lt;T&gt;): T | null</code></pre>
 
 <!-- =========================================================== -->
-<h2 id="log">22. <code>std:log</code> <span class="pill new">new</span></h2>
+<h2 id="log">23. <code>std:log</code></h2>
 
 <p>One interface, one global logger, replaceable backend. Prevents Rust's <code>log</code>
 / <code>tracing</code> ecosystem rift.</p>
@@ -1014,12 +1065,11 @@ pub function info_with(message: str, fields: Map&lt;str, str&gt;): null
 // ... etc.</code></pre>
 
 <!-- =========================================================== -->
-<h2 id="summary">23. Full module index</h2>
+<h2 id="summary">24. Full module index</h2>
 
 <div class="legend">
   <span><i style="background:#eef6f1;border:1px solid #c2dccf"></i>spec — defined in chapter 18 or another existing chapter</span>
   <span><i style="background:#fbf3ec;border:1px solid #e8c9aa"></i>planned — named only</span>
-  <span><i style="background:#f9eef5;border:1px solid #d9bdcd"></i>new — introduced here</span>
 </div>
 
 <table>
@@ -1027,29 +1077,31 @@ pub function info_with(message: str, fields: Map&lt;str, str&gt;): null
     <tr><th>Module</th><th>Tier</th><th>Status</th><th>What it provides</th></tr>
   </thead>
   <tbody>
-    <tr><td><code>core:prelude</code></td><td>core</td><td><span class="pill spec">spec</span> <span class="pill new">+Set/Deque/Bytes</span></td>
-        <td><code>str</code>, <code>List</code>, <code>Map</code>, <code>Set</code>, <code>Deque</code>, <code>Bytes</code>, <code>Iterator</code>, <code>Item</code>/<code>Done</code>, <code>Buffer</code>, numeric helpers</td></tr>
+    <tr><td><code>core:prelude</code></td><td>core</td><td></td>
+        <td><code>str</code>, <code>Iterator</code>, <code>Item</code>/<code>Done</code>, <code>Buffer</code>, <code>Deque</code>, <code>Bytes</code>, numeric helpers</td></tr>
+    <tr><td><code>core:collections</code></td><td>core</td><td></td>
+        <td><code>List</code>, <code>Map</code>, <code>Set</code> — explicit import</td></tr>
     <tr><td><code>core:ffi</code></td><td>core</td><td><span class="pill spec">spec</span></td>
         <td>Pinning, C-width aliases, <code>Foreign</code> allocator</td></tr>
-    <tr><td><code>core:io</code></td><td>core</td><td><span class="pill new">new</span></td>
+    <tr><td><code>core:io</code></td><td>core</td><td></td>
         <td><code>Reader</code>, <code>Writer</code>, <code>Seeker</code>, <code>BufReader</code>, <code>BufWriter</code>, <code>IoError</code></td></tr>
-    <tr><td><code>core:fmt</code></td><td>core</td><td><span class="pill new">new</span></td>
+    <tr><td><code>core:fmt</code></td><td>core</td><td></td>
         <td><code>Display</code>, <code>Debug</code>, <code>FmtSink</code></td></tr>
-    <tr><td><code>core:error</code></td><td>core</td><td><span class="pill new">new</span></td>
+    <tr><td><code>core:error</code></td><td>core</td><td></td>
         <td><code>Error</code> interface, <code>Context</code> wrapper</td></tr>
-    <tr><td><code>core:time</code></td><td>core</td><td><span class="pill new">new</span></td>
+    <tr><td><code>core:time</code></td><td>core</td><td></td>
         <td><code>Duration</code> only (no clock)</td></tr>
-    <tr><td><code>core:hash</code></td><td>core</td><td><span class="pill new">new</span></td>
+    <tr><td><code>core:hash</code></td><td>core</td><td></td>
         <td><code>Hasher</code>, <code>Hash</code>, <code>DefaultHasher</code></td></tr>
     <tr><td><code>core:async</code></td><td>core</td><td><span class="pill spec">spec (re-export)</span></td>
         <td><code>Future</code>, <code>Ready</code>, <code>Pending</code>, <code>Context</code>, <code>AsyncIterator</code></td></tr>
-    <tr><td><code>core:json</code></td><td>core</td><td><span class="pill new">new</span></td>
+    <tr><td><code>core:json</code></td><td>core</td><td></td>
         <td><code>Json</code> value union (no parser)</td></tr>
-    <tr><td><code>core:net:types</code></td><td>core</td><td><span class="pill new">new</span></td>
+    <tr><td><code>core:net:types</code></td><td>core</td><td></td>
         <td><code>IpAddr</code>, <code>SocketAddr</code>, <code>Uri</code>, <code>Url</code></td></tr>
-    <tr><td><code>core:http</code></td><td>core</td><td><span class="pill new">new</span></td>
+    <tr><td><code>core:http</code></td><td>core</td><td></td>
         <td><code>Method</code>, <code>Status</code>, <code>Headers</code>, <code>HttpRequest</code>, <code>HttpResponse</code>, <code>HttpVersion</code></td></tr>
-    <tr><td><code>std:io</code></td><td>std</td><td><span class="pill spec">spec</span> <span class="pill new">+streams</span></td>
+    <tr><td><code>std:io</code></td><td>std</td><td><span class="pill spec">spec</span></td>
         <td><code>print</code>, <code>println</code>, <code>stdin</code>/<code>stdout</code>/<code>stderr</code></td></tr>
     <tr><td><code>std:fs</code></td><td>std</td><td><span class="pill planned">planned</span></td>
         <td><code>Path</code>, <code>File</code>, <code>DirEntry</code>, dir ops</td></tr>
@@ -1059,17 +1111,17 @@ pub function info_with(message: str, fields: Map&lt;str, str&gt;): null
         <td><code>Instant</code>, <code>SystemTime</code>, <code>DateTime</code>, <code>TimeZone</code>, <code>sleep</code></td></tr>
     <tr><td><code>std:thread</code></td><td>std</td><td><span class="pill spec">spec</span></td>
         <td><code>Thread.spawn</code>, <code>JoinHandle</code>, <code>Joined</code>, <code>Panicked</code></td></tr>
-    <tr><td><code>std:sync</code></td><td>std</td><td><span class="pill spec">spec</span> <span class="pill new">+RwLock/Once/Lazy</span></td>
+    <tr><td><code>std:sync</code></td><td>std</td><td><span class="pill spec">spec</span></td>
         <td><code>Shared</code>, channels, <code>RwLock</code>, <code>Once</code>, <code>Lazy</code></td></tr>
-    <tr><td><code>std:sync:atomic</code></td><td>std</td><td><span class="pill new">new</span></td>
+    <tr><td><code>std:sync:atomic</code></td><td>std</td><td></td>
         <td><code>AtomicI32/I64/U32/U64/Bool/Ptr</code>, <code>Ordering</code></td></tr>
     <tr><td><code>std:async</code></td><td>std</td><td><span class="pill spec">spec</span></td>
         <td>Executor, <code>spawn</code>, <code>block_on</code>, <code>timeout</code></td></tr>
-    <tr><td><code>std:process</code></td><td>std</td><td><span class="pill new">new</span></td>
+    <tr><td><code>std:process</code></td><td>std</td><td></td>
         <td><code>args</code>, <code>env</code>, <code>exit</code>, <code>Command</code>, <code>Child</code></td></tr>
-    <tr><td><code>std:rand</code></td><td>std</td><td><span class="pill new">new</span></td>
+    <tr><td><code>std:rand</code></td><td>std</td><td></td>
         <td><code>Rng</code>, <code>ThreadRng</code>, <code>OsRng</code>, <code>SeededRng</code></td></tr>
-    <tr><td><code>std:log</code></td><td>std</td><td><span class="pill new">new</span></td>
+    <tr><td><code>std:log</code></td><td>std</td><td></td>
         <td><code>Logger</code>, <code>Level</code>, <code>Record</code>, global logger</td></tr>
   </tbody>
 </table>

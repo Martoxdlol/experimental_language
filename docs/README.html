@@ -175,12 +175,12 @@
 <!-- =========================================================== -->
 <h2 id="map">Reading map</h2>
 
-<p>The 22 chapters cluster into five concentric layers — surface syntax at the edges,
-the runtime at the core. The arrows show the dependency direction; a later chapter
+<p>The 24 chapters cluster into six concentric layers — surface syntax at the edges,
+the runtime at the core, and tooling on top. The arrows show the dependency direction; a later chapter
 assumes the ones it points back to.</p>
 
 <div class="diagram">
-  <svg viewBox="0 0 920 520" role="img" aria-label="Chapter dependency map">
+  <svg viewBox="0 0 920 610" role="img" aria-label="Chapter dependency map">
     <defs>
       <marker id="arr" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
         <path d="M 0 0 L 9 3 L 0 6 z" fill="#5a5a60"/>
@@ -193,6 +193,7 @@ assumes the ones it points back to.</p>
     <text x="22" y="260" class="label" font-weight="700" fill="#6b4ba8">Computation</text>
     <text x="22" y="370" class="label" font-weight="700" fill="#b54708">System &amp; runtime</text>
     <text x="22" y="475" class="label" font-weight="700" fill="#5a5a60">Platform</text>
+    <text x="22" y="565" class="label" font-weight="700" fill="#5a5a60">Tooling</text>
 
     <!-- Foundation row: 01, 02 -->
     <g>
@@ -297,6 +298,17 @@ assumes the ones it points back to.</p>
       <text x="722" y="493" text-anchor="middle" class="small">@Derive · proc</text>
     </g>
 
+    <!-- Tooling row: 23, 24 -->
+    <g>
+      <rect x="160" y="545" width="120" height="50" rx="6" fill="#fff" stroke="#6b6b70"/>
+      <text x="220" y="565" text-anchor="middle" font-weight="700">23 CLI</text>
+      <text x="220" y="583" text-anchor="middle" class="small">lang · liblangc</text>
+
+      <rect x="310" y="545" width="135" height="50" rx="6" fill="#fff" stroke="#6b6b70"/>
+      <text x="377" y="565" text-anchor="middle" font-weight="700">24 Stdlib+</text>
+      <text x="377" y="583" text-anchor="middle" class="small">extended roadmap</text>
+    </g>
+
     <!-- Dependency arrows (selected major flows) -->
     <path d="M 220 64 L 220 115"   stroke="#5a5a60" stroke-width="1.5" fill="none" marker-end="url(#arr)"/>
     <path d="M 370 64 L 370 115"   stroke="#5a5a60" stroke-width="1.5" fill="none" marker-end="url(#arr)"/>
@@ -307,6 +319,8 @@ assumes the ones it points back to.</p>
     <path d="M 692 290 L 692 330"  stroke="#5a5a60" stroke-width="1.5" fill="none" marker-end="url(#arr)"/>
     <path d="M 467 400 L 467 435"  stroke="#5a5a60" stroke-width="1.5" fill="none" marker-end="url(#arr)"/>
     <path d="M 727 400 L 727 435"  stroke="#5a5a60" stroke-width="1.5" fill="none" marker-end="url(#arr)"/>
+    <path d="M 215 505 L 215 540"  stroke="#5a5a60" stroke-width="1.5" fill="none" marker-end="url(#arr)"/>
+    <path d="M 377 505 L 377 540"  stroke="#5a5a60" stroke-width="1.5" fill="none" marker-end="url(#arr)"/>
   </svg>
   <div class="diagram-caption">Arrows point from a chapter to one it depends on. Cross-row dependencies omitted for clarity.</div>
 </div>
@@ -341,6 +355,9 @@ assumes the ones it points back to.</p>
   <a class="chapter-card platform" href="20-concurrency.html"><span class="num">20 · Platform</span><span class="title">Concurrency</span><span class="desc"><code>std:thread</code>, <code>std:sync</code>: threads, channels, <code>Shared</code>.</span></a>
   <a class="chapter-card platform" href="21-async.html"><span class="num">21 · Platform</span><span class="title">Async</span><span class="desc"><code>Future</code>, <code>await</code>, <code>spawn</code>, <code>AsyncIterator</code>.</span></a>
   <a class="chapter-card platform" href="22-macros.html"><span class="num">22 · Platform</span><span class="title">Macros</span><span class="desc">Procedural macros: <code>@UpperCamelCase</code>, hygiene, sandbox, <code>@Derive</code>.</span></a>
+
+  <a class="chapter-card platform" href="23-cli.html"><span class="num">23 · Tooling</span><span class="title">CLI &amp; toolchain</span><span class="desc">One binary, subcommands. Placeholder <code>lang</code>; built on <code>liblangc</code> shared with the LSP.</span></a>
+  <a class="chapter-card platform" href="24-stdlib-extended.html"><span class="num">24 · Tooling</span><span class="title">Stdlib — extended roadmap</span><span class="desc">Full proposed <code>std:*</code> surface beyond chapter 18, with item-level status markers.</span></a>
 </div>
 
 <!-- =========================================================== -->
