@@ -363,7 +363,7 @@ correctly. Pinning a value that already lives on the foreign heap is a no-op.</p
 <p>User-facing entry points:</p>
 <ul>
   <li><code>&amp;expr</code> at extern call sites — auto-pin for the call's duration.</li>
-  <li><code>with_pin(value, |ptr| ...)</code> — scoped pin across a closure body.</li>
+  <li><code>with_pin(value) { ptr =&gt; ... }</code> — scoped pin across a closure body.</li>
   <li><code>Pin.acquire(value)</code> — long-lived pin returning a <code>PinHandle&lt;T&gt;</code>, released explicitly or on <code>Drop</code>.</li>
 </ul>
 

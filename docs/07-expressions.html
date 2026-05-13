@@ -116,6 +116,14 @@ The block evaluates to the trailing expression, or to <code>null</code> if there
 
 <p>Blocks introduce a new lexical scope (see <a href="06-variables.html#scope">06-variables §3</a>).</p>
 
+<div class="callout">
+  <strong>Block vs trailing closure</strong>
+  A <code>{ ... }</code> immediately following a call <code>f(...)</code>, an identifier callable,
+  or <code>]</code> is parsed as a <strong>trailing closure</strong> (sugar for passing it as the
+  last argument — see <a href="09-functions.html#trail">09-functions §6</a>). Anywhere else a
+  <code>{ ... }</code> is a plain block expression.
+</div>
+
 <!-- =========================================================== -->
 <h2 id="if">2. <code>if</code> expression</h2>
 
@@ -150,25 +158,36 @@ var grade =
   special case for flow narrowing — see <a href="12-type-logic.html">12-type-logic</a>.
 </div>
 
-<h3>Struct-literal ambiguity in headers</h3>
+<h3 id="header-ambiguity">Brace ambiguity in headers</h3>
+
+<p>Two different constructs use <code>{ ... }</code> in expression position: struct literals
+(<code>Range { current: 0, end: 5 }</code>) and trailing closures (<code>xs.map { it * 2 }</code>).
+In the bare top-level expression of an <code>if / while / for / match</code> header, the parser
+can't tell where the header ends and the body begins — so both forms must be wrapped in parens.</p>
 
 <div class="diagram">
-  <svg viewBox="0 0 920 220" role="img" aria-label="Struct literal in for header">
-    <g transform="translate(20, 30)">
-      <rect width="880" height="170" rx="8" fill="#fafafa" stroke="#d6d3cd"/>
+  <svg viewBox="0 0 920 320" role="img" aria-label="Brace ambiguity in headers">
+    <g transform="translate(20, 20)">
+      <rect width="880" height="280" rx="8" fill="#fafafa" stroke="#d6d3cd"/>
       <text x="14" y="22" font-weight="700">Why parens may be needed</text>
-      <text x="14" y="40" class="small">Parser can't tell where the header ends and the body begins.</text>
+      <text x="14" y="40" class="small">A bare <tspan font-family="SF Mono, Menlo, monospace">{</tspan> in the header could open the body or continue the header expression.</text>
 
-      <rect x="14" y="56" width="870" height="36" rx="4" fill="#fbf3ec" stroke="#b54708"/>
-      <text x="22" y="78" font-size="11" fill="#b54708">✗  for n in Range { current: 0, end: 5 } { print(n as str) }</text>
+      <text x="14" y="68" font-weight="700" font-size="12">Struct literal</text>
+      <rect x="14" y="76" width="870" height="32" rx="4" fill="#fbf3ec" stroke="#b54708"/>
+      <text x="22" y="96" font-size="11" fill="#b54708">✗  for n in Range { current: 0, end: 5 } { print(n as str) }</text>
+      <rect x="14" y="112" width="870" height="32" rx="4" fill="#eef6f1" stroke="#2a6f4d"/>
+      <text x="22" y="132" font-size="11" fill="#2a6f4d">✓  for n in (Range { current: 0, end: 5 }) { print(n as str) }</text>
 
-      <rect x="14" y="100" width="870" height="36" rx="4" fill="#eef6f1" stroke="#2a6f4d"/>
-      <text x="22" y="122" font-size="11" fill="#2a6f4d">✓  for n in (Range { current: 0, end: 5 }) { print(n as str) }</text>
+      <text x="14" y="170" font-weight="700" font-size="12">Trailing closure</text>
+      <rect x="14" y="178" width="870" height="32" rx="4" fill="#fbf3ec" stroke="#b54708"/>
+      <text x="22" y="198" font-size="11" fill="#b54708">✗  for n in xs.map { it * 2 } { print(n as str) }</text>
+      <rect x="14" y="214" width="870" height="32" rx="4" fill="#eef6f1" stroke="#2a6f4d"/>
+      <text x="22" y="234" font-size="11" fill="#2a6f4d">✓  for n in (xs.map { it * 2 }) { print(n as str) }</text>
 
-      <text x="14" y="158" font-size="11" class="small">Only the bare top-level expression of <tspan font-family="SF Mono, Menlo, monospace">if / while / for / match</tspan> headers needs this; nested struct literals are unaffected.</text>
+      <text x="14" y="266" font-size="11" class="small">Only the bare top-level expression of <tspan font-family="SF Mono, Menlo, monospace">if / while / for / match</tspan> headers needs this; nested struct literals and nested trailing closures are unaffected.</text>
     </g>
   </svg>
-  <div class="diagram-caption">Wrap the offending expression in parens.</div>
+  <div class="diagram-caption">Wrap the offending expression in parens. The rule covers both brace-using constructs uniformly.</div>
 </div>
 
 <!-- =========================================================== -->

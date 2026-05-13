@@ -364,7 +364,7 @@ struct Done;</code></pre>
   total
 }
 
-function find_first&lt;T&gt;(xs: List&lt;T&gt;, pred: (T) -&gt; bool): T | null {
+function find_first&lt;T&gt;(xs: List&lt;T&gt;, pred: (T) =&gt; bool): T | null {
   for x in xs {
     if pred(x) {
       return x

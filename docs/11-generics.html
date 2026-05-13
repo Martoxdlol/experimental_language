@@ -341,7 +341,7 @@ var any: Dog | Cat = dog              // OK — bare value widens
 
 var dogs: List&lt;Dog&gt; = ...
 var any_list: List&lt;Dog | Cat&gt; = dogs  // ERROR — List is invariant</code></pre>
-  Build a new collection explicitly: <code>dogs.map({ it as Dog | Cat })</code>.
+  Build a new collection explicitly: <code>dogs.map { it as Dog | Cat }</code>.
 </div>
 
 <!-- =========================================================== -->

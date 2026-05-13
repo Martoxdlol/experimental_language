@@ -173,7 +173,7 @@ pub function JsonSerializable(ctx: MacroContext, input: ASTNode): ASTNode {
 
 <ul>
   <li>The function name (UpperCamelCase) is the macro's invocation name.</li>
-  <li>Signature is always <code>(MacroContext, ASTNode) -&gt; ASTNode</code>. Bundle multiple inputs into an args node.</li>
+  <li>Signature is always <code>(MacroContext, ASTNode) =&gt; ASTNode</code>. Bundle multiple inputs into an args node.</li>
   <li>Must be <code>pub</code> for cross-module use; <code>@ProcMacro</code> functions follow the same <code>pub mod</code> chain.</li>
   <li>Cannot import any <code>std:*</code> module — the compiler refuses to load OS-dependent macro plugins (see §6).</li>
 </ul>

@@ -136,7 +136,7 @@ for fallible async.</p>
 
 <pre><code>extern struct Context {
   waker_data: *u8,
-  wake_fn:    extern (*u8) -&gt; null,
+  wake_fn:    extern (*u8) =&gt; null,
 }</code></pre>
 
 <div class="diagram">
@@ -283,12 +283,18 @@ function main() {
   x as str
 }
 
-var f2 = async |x| {
+var f2 = async (x) =&gt; {
   await sleep(100)
   x as str
 }
 
-var f3 = async { await fetch(it) }   // implicit it, single param</code></pre>
+// To get the "implicit it" feel, attach the async closure as a trailing closure
+// to a launcher like spawn:
+spawn { await fetch(it) }              // it: the argument the launcher passes in</code></pre>
+
+<p>The <code>async</code> modifier attaches to a function expression — either
+<code>function(...)</code> or <code>(...) =&gt; ...</code>. There is no bare <code>async { ... }</code>
+expression form; use a launcher's trailing closure when you want implicit <code>it</code>.</p>
 
 <p>Captures follow ordinary closure rules. When passed to <code>spawn</code>, the captured set is
 subject to cross-thread isolation (<a href="20-concurrency.html#threads">20 §1</a>) — captured

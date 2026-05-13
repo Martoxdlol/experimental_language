@@ -110,8 +110,8 @@ import { Shared, channel } from "std:sync"</code></pre>
 
       <g transform="translate(20, 60)" font-size="11">
         <text y="0">var s = Shared.new(value)</text>
-        <text y="22">s.lock(|v| { mutate(v) })</text>
-        <text y="40">s.try_lock(|v| read(v))</text>
+        <text y="22">s.lock { v =&gt; mutate(v) }</text>
+        <text y="40">s.try_lock { v =&gt; read(v) }</text>
       </g>
 
       <text x="20" y="140" font-size="11">— exclusive access in body</text>
@@ -127,7 +127,7 @@ import { Shared, channel } from "std:sync"</code></pre>
 
       <g transform="translate(20, 60)" font-size="11">
         <text y="0">var p = Person { … }</text>
-        <text y="22">Thread.spawn(|| use(p))</text>
+        <text y="22">Thread.spawn { use(p) }</text>
         <text y="40">// p deep-cloned for thread</text>
       </g>
 
@@ -143,7 +143,7 @@ import { Shared, channel } from "std:sync"</code></pre>
 <!-- =========================================================== -->
 <h2 id="threads">1. Threads — <code>std:thread</code></h2>
 
-<pre><code>pub function Thread.spawn&lt;R&gt;(work: () -&gt; R): JoinHandle&lt;R&gt;
+<pre><code>pub function Thread.spawn&lt;R&gt;(work: () =&gt; R): JoinHandle&lt;R&gt;
 
 pub struct JoinHandle&lt;R&gt; { ... }
 
@@ -347,16 +347,16 @@ time, the pointer is <strong>moved</strong> rather than cloned.</p>
 
 extend&lt;T&gt; Shared&lt;T&gt; {
   static function new(value: T): Shared&lt;T&gt;
-  function lock&lt;R&gt;(self, body: (T) -&gt; R): R
-  function try_lock&lt;R&gt;(self, body: (T) -&gt; R): R | LockBusy
+  function lock&lt;R&gt;(self, body: (T) =&gt; R): R
+  function try_lock&lt;R&gt;(self, body: (T) =&gt; R): R | LockBusy
 }
 
 pub struct LockBusy;
 
 var state = Shared.new(Counter { value: 0 })
 
-state.lock(|c| { c.value = c.value + 1 })
-var snapshot = state.lock(|c| { c.value })</code></pre>
+state.lock { c =&gt; c.value = c.value + 1 }
+var snapshot = state.lock { c =&gt; c.value }</code></pre>
 
 <div class="callout warn">
   <strong>Detachment rule — references can't escape the lock</strong>
@@ -475,8 +475,8 @@ function consumer(rx: Receiver&lt;i64&gt;) {
 
 function main() {
   var (tx, rx) = channel&lt;i64&gt;()
-  var h1 = Thread.spawn(|| producer(tx))
-  var h2 = Thread.spawn(|| consumer(rx))
+  var h1 = Thread.spawn { producer(tx) }
+  var h2 = Thread.spawn { consumer(rx) }
   h1.join()
   h2.join()
 }</code></pre>
@@ -490,14 +490,14 @@ function main() {
   var handles = List.new&lt;JoinHandle&lt;null&gt;&gt;()
   for _ in (Range { current: 0, end: 8 }) {
     var s = state.clone()    // Shared&lt;T&gt; is Clone (clones the handle, same inner)
-    handles.push(Thread.spawn(|| {
+    handles.push(Thread.spawn {
       for _ in (Range { current: 0, end: 1000 }) {
-        s.lock(|n| { /* mutate */ })
+        s.lock { /* mutate */ it }
       }
-    }))
+    })
   }
   for h in handles { h.join() }
-  println(state.lock(|n| n) as str)
+  println(state.lock { it } as str)
 }</code></pre>
 
 <div class="callout">

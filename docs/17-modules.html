@@ -291,7 +291,7 @@ import { Foo, bar as baz, Qux } from "util/helpers" // mixed
 <pre><code>import "pkg:iter_ext"                  // activates extension methods on Iterator&lt;T&gt;
                                        // no other names from iter_ext are bound
 
-var doubled = numbers.my_map(|x| x * 2)
+var doubled = numbers.my_map { it * 2 }
 </code></pre>
 
 <h3>Namespace form — <code>import "&lt;path&gt;" as &lt;Name&gt;</code></h3>

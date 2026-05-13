@@ -320,8 +320,8 @@ extend AppError: FromResidual&lt;ParseError&gt; {
 }
 
 function load_wrapped(path: str): Config | AppError {
-  var s = read_file(path)?       // IoError -&gt; AppError via FromResidual
-  parse(s)?                      // ParseError -&gt; AppError via FromResidual
+  var s = read_file(path)?       // IoError → AppError via FromResidual
+  parse(s)?                      // ParseError → AppError via FromResidual
 }</code></pre>
 
 </body>

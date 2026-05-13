@@ -312,8 +312,9 @@ people
       <code>]</code> begins a <strong>trailing closure</strong> — that block becomes the last
       argument.</li>
   <li>Inside that block, the parser attempts to parse a parameter list followed by <code>=&gt;</code>.
-      If it succeeds, those are the closure's parameters. If not, the block is the body and may
-      reference <code>it</code> (valid only when the expected arity is 1).</li>
+      If it succeeds, those are the closure's parameters. Otherwise the block is the body — it
+      may reference <code>it</code> when the expected arity is 1; for arity 0 the body has no
+      <code>it</code>; for arity ≥ 2 an explicit param list is required.</li>
   <li>A <code>{</code> elsewhere (after <code>=</code>, after <code>return</code>, in operator
       position, etc.) is a <strong>block expression</strong>, not a closure.</li>
 </ol>
