@@ -220,7 +220,7 @@ var alice = Person("Alice", 30)?    // same as Person.new("Alice", 30)?</code></
         <text y="0">var alice = Person { name: "Alice", age: 30 }</text>
         <rect x="0" y="14" width="380" height="32" rx="4" fill="#f3eefa" stroke="#6b4ba8"/>
         <text x="14" y="34" fill="#6b4ba8">var older = Person { ..alice, age: 31 }</text>
-        <text y="62" class="small">refs are copied (RC++), source is unchanged</text>
+        <text y="62" class="small">refs are aliased (same GC object), source is unchanged</text>
         <text y="82" class="small">trailing position recommended for clarity</text>
       </g>
     </g>
@@ -319,7 +319,7 @@ var b2 = Box&lt;i64&gt; { value: 42 }            // explicit</code></pre>
       <text x="305" y="60" text-anchor="middle" font-weight="700">heap object</text>
 
       <rect x="216" y="74" width="180" height="26" rx="3" fill="#fbf3ec" stroke="#b54708"/>
-      <text x="306" y="92" text-anchor="middle" font-size="11" fill="#b54708">GC header (negative offset)</text>
+      <text x="306" y="92" text-anchor="middle" font-size="11" fill="#b54708">object header (negative offset)</text>
 
       <rect x="216" y="108" width="180" height="22" rx="3" fill="#fafafa" stroke="#d6d3cd"/>
       <text x="306" y="124" text-anchor="middle" font-size="11">name: str ref →</text>
@@ -331,7 +331,7 @@ var b2 = Box&lt;i64&gt; { value: 42 }            // explicit</code></pre>
       <text x="306" y="176" text-anchor="middle" font-size="11">↑ field block</text>
 
       <text x="14" y="226" font-size="11" class="small">handle points at the field block;</text>
-      <text x="14" y="240" font-size="11" class="small">GC header sits just before it.</text>
+      <text x="14" y="240" font-size="11" class="small">object header sits just before it.</text>
     </g>
 
     <!-- Methods -->
@@ -371,7 +371,7 @@ var b2 = Box&lt;i64&gt; { value: 42 }            // explicit</code></pre>
 </div>
 
 <p><code>extern struct</code> is laid out as a C struct, lives on the foreign heap, and has
-<strong>no</strong> GC header — see <a href="19-ffi.html">19-ffi</a>.</p>
+<strong>no</strong> object header — see <a href="19-ffi.html">19-ffi</a>.</p>
 
 <!-- =========================================================== -->
 <h2 id="destr">8. Destructuring</h2>

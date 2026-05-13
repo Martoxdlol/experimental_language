@@ -227,8 +227,8 @@ local, return type, generic argument.</p>
 var p: Printable = person       // implicit widen — fat pointer
 var back = p as Person          // narrow — checks tag, panics on mismatch</code></pre>
 
-<p>Widening produces a fat pointer. Narrowing checks the type tag in the GC header
-(see <a href="16-memory.html">16-memory</a>) and panics on mismatch.</p>
+<p>Widening produces a fat pointer. Narrowing reads the type pointer from the object header
+(see <a href="16-memory.html#layout">16-memory §3</a>) and panics on mismatch.</p>
 
 <div class="callout warn">
   <strong>Object safety</strong>

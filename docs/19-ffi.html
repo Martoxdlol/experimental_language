@@ -78,7 +78,8 @@
     <li><a href="#cb">Function pointers and callbacks</a></li>
     <li><a href="#patterns">C patterns without new syntax</a></li>
     <li><a href="#pin">Pinning</a></li>
-    <li><a href="#runtime">Runtime semantics</a></li>
+    <li><a href="#handles">Handles — long-lived foreign rooting</a></li>
+    <li><a href="#runtime">Runtime semantics — safepoints &amp; trampolines</a></li>
     <li><a href="#manifest">Linkage &amp; the manifest</a></li>
     <li><a href="#tools">Tooling — <code>lang ffi</code></a></li>
     <li><a href="#restr">Restrictions on extern signatures</a></li>
@@ -103,7 +104,7 @@
       </g>
 
       <text x="20" y="148" font-size="11" class="small">controls field offsets,</text>
-      <text x="20" y="164" font-size="11" class="small">alignment, GC header presence</text>
+      <text x="20" y="164" font-size="11" class="small">alignment, object header presence</text>
     </g>
 
     <g transform="translate(320, 30)">
@@ -144,7 +145,7 @@
 
 <div class="callout">
   <strong>Managed vs foreign</strong>
-  Managed heap: GC-traced. Holds normal structs, lists, maps, strings, closures.
+  Managed heap: tracing GC (MMTk · Immix). Holds normal structs, lists, maps, strings, closures.
   Foreign heap: opaque to the GC; manual lifetime. <code>*T</code> is a raw pointer into either
   region; the GC inspects the address range at runtime to decide whether to trace.
   See <a href="16-memory.html">16-memory</a>.
@@ -231,7 +232,7 @@ function snapshot(): Rusage | i32 {
 <pre><code>extern struct Buffer { pub data: *u8, pub size: u64 }
 extern struct Timeval { pub tv_sec: i64, pub tv_usec: i64 }</code></pre>
 
-<p>Consequences: no GC header; can't be a generic argument to managed collections;
+<p>Consequences: no object header; can't be a generic argument to managed collections;
 all field types must be extern-compatible; may live on the foreign heap, on the stack,
 or as a by-value parameter/return.</p>
 
@@ -351,6 +352,16 @@ function make_message(kind: u32, payload: Buffer): *Message | null {
 
 <p><code>str</code> is <strong>not</strong> ABI-compatible with C strings (managed-heap UTF-8 with a length header, not NUL-terminated). <code>core:ffi</code> ships boundary types.</p>
 
+<div class="callout good">
+  <strong>Auto-materialized stack temporaries</strong>
+  When the compiler sees an extern call site like <code>extern_fn(my_str)</code> where the
+  foreign signature expects <code>*const c_char</code> and <code>my_str</code> is a managed
+  <code>str</code>, it materializes a NUL-terminated copy in a stack buffer (or in the
+  <code>nonmoving</code> space for large strings) <em>for the duration of the call</em>. No
+  pin, no foreign alloc, no GC interaction — the common case is zero-overhead. Falls back to
+  <code>CString.from_str</code> only when the copy must outlive the call.
+</div>
+
 <div class="three-col">
   <div>
     <h3>CStr — borrowed</h3>
@@ -448,8 +459,11 @@ values.</p>
 <!-- =========================================================== -->
 <h2 id="pin">10. Pinning</h2>
 
-<p>The GC may move or reclaim managed objects at any time. Whenever a <code>*T</code> pointing
-into the managed heap is handed to foreign code, the object must be <strong>pinned</strong>.</p>
+<p>The GC may relocate managed objects during collection (Immix evacuates fragmented blocks).
+A <code>*T</code> pointing into the managed heap is only safe across an extern call if the
+object is <strong>pinned</strong> — meaning the collector won't move it for the pin's lifetime.
+Pinning does <em>not</em> prevent reclamation: an unreachable pinned object is still collected,
+just not relocated first. See <a href="16-memory.html#pin">16-memory §14</a>.</p>
 
 <div class="diagram">
   <svg viewBox="0 0 920 290" role="img" aria-label="Three pinning APIs">
@@ -503,19 +517,120 @@ into the managed heap is handed to foreign code, the object must be <strong>pinn
         <text y="54">h.release()</text>
       </g>
 
-      <text x="14" y="138" font-size="11" class="small">— Drop releases if unused</text>
+      <text x="14" y="138" font-size="11" class="small">— call .release() explicitly; Drop is async</text>
       <text x="14" y="156" font-size="11" class="small">— debug build warns on leak</text>
 
       <text x="14" y="200" font-size="11" font-weight="700">When to use</text>
-      <text x="14" y="218" font-size="11">Callback registrations that outlive</text>
-      <text x="14" y="234" font-size="11">any single call.</text>
+      <text x="14" y="218" font-size="11">Synchronous outparams that outlive a</text>
+      <text x="14" y="234" font-size="11">single call. Prefer Handle for stored refs.</text>
     </g>
   </svg>
-  <div class="diagram-caption">Pinning is refcounted per object — nesting composes correctly.</div>
+  <div class="diagram-caption">Pin counts compose by object (nesting works); the runtime keeps a small per-object pin counter independent of the GC.</div>
+</div>
+
+<h3><code>@Pinnable</code> — pre-commit to the nonmoving space</h3>
+
+<p>For types pinned often, decorate the definition:</p>
+
+<pre><code>@Pinnable
+pub struct AudioRingBuffer {
+  ... fields ...
+}</code></pre>
+
+<p>Instances are allocated in the <strong>nonmoving</strong> space — no per-pin runtime cost, no
+heap fragmentation. Use this for types passed into long-running C libraries (DSP buffers, GPU
+upload regions, ring buffers shared with kernel drivers).</p>
+
+<div class="callout warn">
+  <strong>Don't long-pin objects in default Immix space</strong>
+  A dynamic pin on an object in the default space blocks evacuation of its block. Across many
+  collections this fragments the heap. Either mark the type <code>@Pinnable</code>, or — for
+  references that don't need a raw pointer — use a <strong>handle</strong> (next section).
 </div>
 
 <!-- =========================================================== -->
-<h2 id="runtime">11. Runtime semantics</h2>
+<h2 id="handles">11. Handles — long-lived foreign rooting</h2>
+
+<p>When foreign code retains a managed reference across calls (callback registrations, observer
+patterns, foreign data structures storing managed objects), use a <strong>handle</strong>: an
+opaque cookie that roots the object without blocking movement. The collector follows the handle
+table; on evacuation, it rewrites the table slot — the cookie value never changes.</p>
+
+<pre><code>pub struct Handle&lt;T&gt;;     // release explicitly; Drop is async best-effort
+
+extend&lt;T&gt; Handle {
+  static function acquire(value: T): Handle&lt;T&gt;
+  function raw(self): u64                          // opaque cookie for foreign storage
+  function release(self)                           // explicit release; also runs on Drop
+
+  static function resolve&lt;T&gt;(cookie: u64): T       // panics on stale cookie
+}</code></pre>
+
+<div class="diagram">
+  <svg viewBox="0 0 920 250" role="img" aria-label="Handle vs Pin">
+    <g transform="translate(20, 20)">
+      <rect width="430" height="220" rx="8" fill="#eaf0f8" stroke="#1a4a8a" stroke-width="2"/>
+      <text x="14" y="22" font-weight="700" fill="#1a4a8a">Pin — when foreign needs the bytes</text>
+      <text x="14" y="50" font-size="11">— Synchronous call: foreign reads/writes</text>
+      <text x="14" y="68" font-size="11">  the object's memory directly.</text>
+      <text x="14" y="86" font-size="11">— Foreign sees a raw <tspan font-family="SF Mono, Menlo, monospace">*T</tspan>.</text>
+      <text x="14" y="104" font-size="11">— Movement blocked for pin lifetime.</text>
+      <text x="14" y="132" font-size="11" font-weight="700">Typical</text>
+      <text x="14" y="150" font-size="11">read/write buffers, output params, scalar</text>
+      <text x="14" y="168" font-size="11">handoff during a single libc call.</text>
+    </g>
+
+    <g transform="translate(470, 20)">
+      <rect width="430" height="220" rx="8" fill="#f3eefa" stroke="#6b4ba8" stroke-width="2"/>
+      <text x="14" y="22" font-weight="700" fill="#6b4ba8">Handle — when foreign stores the ref</text>
+      <text x="14" y="50" font-size="11">— Foreign stores an opaque <tspan font-family="SF Mono, Menlo, monospace">u64</tspan> cookie.</text>
+      <text x="14" y="68" font-size="11">— Object stays movable; GC rewrites the</text>
+      <text x="14" y="86" font-size="11">  handle table slot on evacuation.</text>
+      <text x="14" y="104" font-size="11">— On callback: <tspan font-family="SF Mono, Menlo, monospace">Handle.resolve</tspan> → current ptr.</text>
+      <text x="14" y="132" font-size="11" font-weight="700">Typical</text>
+      <text x="14" y="150" font-size="11">GUI callbacks, observer registrations, async</text>
+      <text x="14" y="168" font-size="11">completion ports — anything that outlives</text>
+      <text x="14" y="186" font-size="11">any single call.</text>
+    </g>
+  </svg>
+  <div class="diagram-caption">Two answers to two different problems. Picking the right one keeps the heap movable and ergonomic.</div>
+</div>
+
+<pre><code>// GUI listener registered with a C library
+function install_listener(l: Listener) {
+  var h = Handle.acquire(l)              // h: Handle&lt;Listener&gt;
+  c_gui_register(on_native_event, h.raw())
+  // ... h must outlive the registration; typically stored alongside the registration
+}
+
+// Foreign callback (exported extern)
+@Reentrant("any")
+extern function on_native_event(cookie: u64) {
+  var listener = Handle.resolve&lt;Listener&gt;(cookie)
+  listener.notify()
+}</code></pre>
+
+<div class="callout">
+  <strong>Cookie stability</strong>
+  A handle's <code>raw()</code> value is stable for the handle's entire lifetime — foreign code
+  may store, compare, hash it freely. After <code>release()</code> the cookie is stale; using it
+  via <code>Handle.resolve</code> panics. Stale cookies are not memory-unsafe; they are a
+  program error.
+</div>
+
+<!-- =========================================================== -->
+<h2 id="runtime">12. Runtime semantics — safepoints &amp; trampolines</h2>
+
+<p>Every extern boundary is a <strong>safepoint</strong>: the mutator's live managed pointers
+are recorded in a precise stack map (see <a href="16-memory.html#safepoints">16-memory §6</a>),
+the thread is marked "blocked-in-foreign," and the foreign call runs without holding back GC.
+On return, the thread re-acquires mutator state and re-reads any roots that may have moved while
+it was away.</p>
+
+<p>Exported externs (managed code callable from foreign code) get an automatic <strong>entry
+trampoline</strong>: attach the thread if needed, push a frame the GC can stack-map, run the
+body, drop the trampoline frame on return. The trampoline is invisible at the source level —
+it's part of the calling convention.</p>
 
 <div class="diagram">
   <svg viewBox="0 0 920 240" role="img" aria-label="Safe points around imports">
@@ -593,7 +708,7 @@ extern function on_tick(data: *c_void) {
 </div>
 
 <!-- =========================================================== -->
-<h2 id="manifest">12. Linkage &amp; the manifest</h2>
+<h2 id="manifest">13. Linkage &amp; the manifest</h2>
 
 <pre><code>[package.links]
 zlib    = { lib = "z",      kind = "dynamic", version = "&gt;=1.2" }
@@ -611,7 +726,7 @@ exports = [
 ]</code></pre>
 
 <!-- =========================================================== -->
-<h2 id="tools">13. Tooling — <code>lang ffi</code></h2>
+<h2 id="tools">14. Tooling — <code>lang ffi</code></h2>
 
 <table>
   <thead><tr><th>Command</th><th>Purpose</th></tr></thead>
@@ -624,7 +739,7 @@ exports = [
 </table>
 
 <!-- =========================================================== -->
-<h2 id="restr">14. Restrictions on extern signatures</h2>
+<h2 id="restr">15. Restrictions on extern signatures</h2>
 
 <div class="two-col">
   <div>
@@ -653,7 +768,7 @@ exports = [
 </div>
 
 <!-- =========================================================== -->
-<h2 id="summary">15. Summary</h2>
+<h2 id="summary">16. Summary</h2>
 
 <div class="callout good">
   <ul>
@@ -663,8 +778,10 @@ exports = [
     <li><strong>Globals</strong> — <code>extern var name: T</code> with optional <code>@Link</code>.</li>
     <li><strong>Allocation</strong> — <code>Foreign.alloc</code> family. <code>Buffer</code>, <code>CStr</code>, <code>CString</code> are the boundary types.</li>
     <li><strong>Functions</strong> — <code>extern function</code> for imports and exports. Six decorators: <code>@Link</code>, <code>@Symbol</code>, <code>@CallConv</code>, <code>@Variadic</code>, <code>@Reentrant</code>, <code>@OnPanic</code>.</li>
-    <li><strong>Pinning</strong> — <code>&amp;</code> auto-pin · <code>with_pin</code> scoped · <code>Pin.acquire</code>/<code>PinHandle&lt;T&gt;</code> long-lived.</li>
-    <li><strong>Runtime</strong> — auto safe-point around imports; <code>@Reentrant</code> for foreign threads; <code>@OnPanic</code> for export panic policy.</li>
+    <li><strong>Pinning</strong> — prevents <em>movement</em>. <code>&amp;</code> auto-pin · <code>with_pin</code> scoped · <code>Pin.acquire</code>/<code>PinHandle&lt;T&gt;</code> long-lived · <code>@Pinnable</code> for pre-commit to nonmoving space.</li>
+    <li><strong>Handles</strong> — <code>Handle&lt;T&gt;</code> for long-lived foreign-stored references; movement-friendly alternative to pinning; <code>.release()</code> explicitly.</li>
+    <li><strong>Runtime</strong> — every extern boundary is a safepoint with precise stack maps; exports get entry trampolines; <code>@Reentrant</code> for foreign threads; <code>@OnPanic</code> for export panic policy.</li>
+    <li><strong>Auto-materialization</strong> — <code>str</code> → <code>*const c_char</code> at call sites becomes a stack temporary, no foreign alloc.</li>
     <li><strong>Tooling</strong> — <code>lang ffi bindgen</code>/<code>cbindgen</code>/<code>check</code>/<code>layout</code>.</li>
   </ul>
 </div>

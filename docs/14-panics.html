@@ -146,7 +146,7 @@ function require_positive(n: i64): i64 {
 
     <g transform="translate(40, 100)">
       <rect width="840" height="50" rx="8" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
-      <text x="14" y="32" font-weight="700" fill="#2a6f4d">2. Runtime walks T's stack, calling Drop.drop in reverse order of construction</text>
+      <text x="14" y="32" font-weight="700" fill="#2a6f4d">2. Runtime unwinds T's stack; stack roots released (no synchronous Drop calls)</text>
     </g>
 
     <path d="M 460 150 L 460 170" stroke="#5a5a60" stroke-width="2" marker-end="url(#arr)"/>
@@ -163,7 +163,7 @@ function require_positive(n: i64): i64 {
       <text x="14" y="22" font-weight="700" fill="#b54708">T is the main thread</text>
       <text x="14" y="44" font-size="11">Program aborts.</text>
       <text x="14" y="62" font-size="11">Non-main threads stopped without</text>
-      <text x="14" y="80" font-size="11">stack unwinding (best-effort drop).</text>
+      <text x="14" y="80" font-size="11">stack unwinding (roots released only).</text>
     </g>
 
     <g transform="translate(470, 240)">
@@ -183,9 +183,17 @@ function require_positive(n: i64): i64 {
 
 <div class="callout warn">
   <strong>No double-panic support</strong>
-  A <code>Drop</code> impl that itself panics during normal collection aborts the entire process.
-  Same if a <code>Drop</code> impl during stack unwinding (already inside a panic) panics. Keep
-  <code>Drop</code> impls infallible — that is the user's responsibility.
+  A <code>Drop</code> impl that itself panics during finalizer-queue execution aborts the
+  entire process. Keep <code>Drop</code> impls infallible — that is the user's responsibility.
+</div>
+
+<div class="callout">
+  <strong>Drop during a panic</strong>
+  Stack unwinding does <strong>not</strong> call <code>Drop</code> synchronously. It releases
+  stack roots; objects only reachable from the panicking thread become unreachable and follow
+  the regular finalizer-queue path (eventual, unordered, best-effort). See
+  <a href="16-memory.html#drop">16-memory §8</a>. For resources that must be released before
+  the thread dies, do so explicitly before reaching the panic point.
 </div>
 
 <!-- =========================================================== -->

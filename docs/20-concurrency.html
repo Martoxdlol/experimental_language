@@ -99,7 +99,7 @@ import { Shared, channel } from "std:sync"</code></pre>
 
       <text x="20" y="140" font-size="11">— typed FIFO</text>
       <text x="20" y="156" font-size="11">— MPSC default, MPMC available</text>
-      <text x="20" y="172" font-size="11">— zero-copy on RC=1</text>
+      <text x="20" y="172" font-size="11">— move when locally unique, else Clone</text>
       <text x="20" y="188" font-size="11">— Receiver is Iterator&lt;T&gt;</text>
     </g>
 
@@ -284,11 +284,13 @@ pub struct ChannelClosed;</code></pre>
 <!-- =========================================================== -->
 <h2 id="zerocopy">3. Zero-copy on send</h2>
 
-<p>When the runtime can prove the sent value has refcount <strong>exactly 1</strong> at send
-time, the pointer is <strong>moved</strong> rather than cloned.</p>
+<p>The tracing GC keeps no reference count, so uniqueness is established
+<strong>statically</strong> at the send site. The decision is purely local — no runtime check,
+no atomic op, no whole-program analysis. The compiler picks <strong>Move</strong> when it can
+prove the value is not aliased; otherwise it falls back to <strong>Clone</strong>.</p>
 
 <div class="diagram">
-  <svg viewBox="0 0 920 290" role="img" aria-label="Send zero-copy decision">
+  <svg viewBox="0 0 920 410" role="img" aria-label="Send zero-copy decision">
     <defs>
       <marker id="arr2" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
         <path d="M 0 0 L 9 3 L 0 6 z" fill="#5a5a60"/>
@@ -296,48 +298,82 @@ time, the pointer is <strong>moved</strong> rather than cloned.</p>
     </defs>
 
     <g transform="translate(40, 30)">
-      <rect width="200" height="50" rx="6" fill="#eaf0f8" stroke="#1a4a8a" stroke-width="2"/>
-      <text x="100" y="22" text-anchor="middle" font-weight="700">tx.send(p)</text>
-      <text x="100" y="40" text-anchor="middle" class="small">last use of p?</text>
+      <rect width="220" height="50" rx="6" fill="#eaf0f8" stroke="#1a4a8a" stroke-width="2"/>
+      <text x="110" y="22" text-anchor="middle" font-weight="700">tx.send(p)</text>
+      <text x="110" y="40" text-anchor="middle" class="small">at last use of p?</text>
     </g>
 
-    <path d="M 240 55 L 290 55" stroke="#5a5a60" stroke-width="2" marker-end="url(#arr2)"/>
+    <path d="M 260 55 L 310 55" stroke="#5a5a60" stroke-width="2" marker-end="url(#arr2)"/>
 
-    <g transform="translate(290, 30)">
-      <rect width="200" height="50" rx="6" fill="#f3eefa" stroke="#6b4ba8" stroke-width="2"/>
-      <text x="100" y="22" text-anchor="middle" font-weight="700">runtime: RC == 1?</text>
-      <text x="100" y="40" text-anchor="middle" class="small">atomic check</text>
+    <g transform="translate(310, 30)">
+      <rect width="240" height="50" rx="6" fill="#f3eefa" stroke="#6b4ba8" stroke-width="2"/>
+      <text x="120" y="22" text-anchor="middle" font-weight="700">never escaped p locally?</text>
+      <text x="120" y="40" text-anchor="middle" class="small">local construction, no aliasing</text>
     </g>
 
-    <path d="M 490 45 L 550 30" stroke="#2a6f4d" stroke-width="2" marker-end="url(#arr2)"/>
-    <text x="510" y="22" font-size="10" fill="#2a6f4d">yes</text>
+    <path d="M 550 45 L 610 30" stroke="#2a6f4d" stroke-width="2" marker-end="url(#arr2)"/>
+    <text x="570" y="22" font-size="10" fill="#2a6f4d">yes</text>
 
-    <g transform="translate(550, 0)">
-      <rect width="320" height="60" rx="6" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
+    <g transform="translate(610, 0)">
+      <rect width="280" height="60" rx="6" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
       <text x="14" y="22" font-weight="700" fill="#2a6f4d">Move</text>
-      <text x="14" y="42" font-size="11">pointer transferred; sender's binding dropped</text>
+      <text x="14" y="42" font-size="11">pointer transferred; binding invalidated</text>
     </g>
 
-    <path d="M 490 65 L 550 90" stroke="#b54708" stroke-width="2" marker-end="url(#arr2)"/>
-    <text x="510" y="92" font-size="10" fill="#b54708">no</text>
+    <path d="M 550 65 L 610 90" stroke="#b54708" stroke-width="2" marker-end="url(#arr2)"/>
+    <text x="570" y="92" font-size="10" fill="#b54708">no</text>
 
-    <g transform="translate(550, 80)">
-      <rect width="320" height="60" rx="6" fill="#fbf3ec" stroke="#b54708" stroke-width="2"/>
+    <g transform="translate(610, 80)">
+      <rect width="280" height="60" rx="6" fill="#fbf3ec" stroke="#b54708" stroke-width="2"/>
       <text x="14" y="22" font-weight="700" fill="#b54708">Clone</text>
       <text x="14" y="42" font-size="11">Clone.clone(p); both sides keep references</text>
     </g>
 
     <g transform="translate(40, 160)">
-      <rect width="840" height="110" rx="8" fill="#fafafa" stroke="#d6d3cd"/>
-      <text x="14" y="22" font-weight="700">Mental model — "send and forget"</text>
-      <text x="14" y="44" font-size="11">var p = Person { name: "John", age: 30 }</text>
-      <text x="14" y="60" font-size="11">tx.send(p)   // p is at its last use — pointer move if RC == 1</text>
+      <rect width="400" height="230" rx="8" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
+      <text x="14" y="22" font-weight="700" fill="#2a6f4d">Moves (zero-copy)</text>
+      <text x="14" y="48" font-size="11">var p = Person { ... }</text>
+      <text x="14" y="64" font-size="11">tx.send(p)              // locally built, last use</text>
 
-      <text x="14" y="86" font-size="11" class="small">Requirements: T: Clone (fallback). Last-use analysis is conservative — closures referencing p defeat it.</text>
-      <text x="14" y="100" font-size="11" class="small">Cross-thread refcounts are atomic; the runtime check is race-free.</text>
+      <text x="14" y="92" font-size="11">tx.send(Person { ... }) // anonymous expression</text>
+
+      <text x="14" y="120" font-size="11">var p = build_one()     // build_one returns a fresh value</text>
+      <text x="14" y="136" font-size="11">tx.send(p)              // and p is never aliased after</text>
+
+      <text x="14" y="170" font-size="11" class="small">Pattern: construct or receive p,</text>
+      <text x="14" y="186" font-size="11" class="small">don't pass it elsewhere,</text>
+      <text x="14" y="202" font-size="11" class="small">send at its last use.</text>
+    </g>
+
+    <g transform="translate(460, 160)">
+      <rect width="430" height="230" rx="8" fill="#fbf3ec" stroke="#b54708" stroke-width="2"/>
+      <text x="14" y="22" font-weight="700" fill="#b54708">Clones (compiler can't prove uniqueness)</text>
+      <text x="14" y="48" font-size="11">helper(p); tx.send(p)         // helper might've stored p</text>
+
+      <text x="14" y="76" font-size="11">list.push(p); ...; tx.send(p) // p exists in list</text>
+
+      <text x="14" y="104" font-size="11">var task = { use(p) }         // captured into a closure</text>
+      <text x="14" y="120" font-size="11">tx.send(p)                    // task still holds p</text>
+
+      <text x="14" y="148" font-size="11">tx.send(self.field)           // field is a heap-stored alias</text>
+
+      <text x="14" y="182" font-size="11" class="small">Pattern: any time p was visible</text>
+      <text x="14" y="198" font-size="11" class="small">to code the compiler can't audit,</text>
+      <text x="14" y="214" font-size="11" class="small">we fall back to Clone.</text>
     </g>
   </svg>
-  <div class="diagram-caption">Combined static (last-use) + dynamic (RC == 1) check enables zero-copy on the common path.</div>
+  <div class="diagram-caption">Decision is purely static — no runtime check, no atomic. Cross-thread send is a pointer move plus a write barrier.</div>
+</div>
+
+<div class="callout warn">
+  <strong>What we can't recover with static analysis</strong>
+  A runtime reference count could detect uniqueness <em>opportunistically</em> — a value that
+  was aliased earlier but happens to have a single live reference at send time could still
+  move. The tracing GC keeps no such count, so the compiler can only guarantee a move when
+  it sees, locally, that the value never escaped. Anything passing through a function call,
+  heap field, or escaping closure becomes a Clone — even if at runtime the alias is no longer
+  live. <code>T: Clone</code> is therefore <strong>required</strong> for any channel element
+  type; no <code>Clone</code> impl → compile error at the channel declaration.
 </div>
 
 <!-- =========================================================== -->
@@ -502,7 +538,9 @@ function main() {
 
 <div class="callout">
   <strong><code>Shared&lt;T&gt;.clone</code> clones the handle, not the value</strong>
-  The handle is a refcounted pointer to (mutex + inner data); both clones lock the same mutex.
+  The handle is a GC-managed pointer to (mutex + inner data); both clones reference the same
+  managed object and therefore lock the same mutex. The GC keeps it alive as long as any clone
+  is reachable.
 </div>
 
 </body>

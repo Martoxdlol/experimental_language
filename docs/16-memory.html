@@ -51,15 +51,17 @@
   .callout.good { border-color: var(--accent-2); background: #eef6f1; }
   .callout strong { display: block; margin-bottom: 0.3rem; }
   .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 1.2rem 0; }
-  @media (max-width: 720px) { .two-col { grid-template-columns: 1fr; } }
+  .three-col { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; margin: 1.2rem 0; }
+  @media (max-width: 720px) { .two-col, .three-col { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
 
 <h1>16. Memory Model</h1>
 <p class="lead">
-  Refcount + cycle collector hybrid GC. Two disjoint heaps — managed and foreign. Drop is
-  best-effort; refcount traffic is mostly elided by the compiler.
+  Tracing GC (Immix mark-region, optionally generational via StickyImmix), driven by precise
+  stack maps emitted by Cranelift. Two disjoint heaps — managed and foreign. Drop is
+  best-effort, asynchronous, and not guaranteed to run — release resources explicitly.
 </p>
 
 <div class="toc">
@@ -68,14 +70,17 @@
     <li><a href="#heaps">The two heaps</a></li>
     <li><a href="#valref">Value vs reference semantics</a></li>
     <li><a href="#layout">Object layout</a></li>
-    <li><a href="#rc">Refcount semantics</a></li>
-    <li><a href="#cycle">Cycles &amp; the cycle collector</a></li>
-    <li><a href="#drop">Drop determinism</a></li>
+    <li><a href="#tracing">Tracing GC — Immix &amp; StickyImmix</a></li>
+    <li><a href="#spaces">Allocation spaces</a></li>
+    <li><a href="#safepoints">Safepoints &amp; stack maps</a></li>
+    <li><a href="#barriers">Write barriers</a></li>
+    <li><a href="#drop">Drop semantics</a></li>
     <li><a href="#inline">Inline / stack allocation</a></li>
     <li><a href="#typeid">Type identification</a></li>
     <li><a href="#oom">Allocation failure</a></li>
     <li><a href="#concurrency">Concurrency interactions</a></li>
     <li><a href="#pin">Pinning</a></li>
+    <li><a href="#handles">Handles — long-lived foreign rooting</a></li>
     <li><a href="#summary">Summary</a></li>
   </ol>
 </div>
@@ -91,11 +96,11 @@
       <text x="14" y="40" class="small">every non-extern heap value</text>
 
       <rect x="14" y="58" width="402" height="36" rx="4" fill="#fff" stroke="#2a6f4d"/>
-      <text x="215" y="80" text-anchor="middle" font-size="11">GC allocates · traces · refcounts · frees</text>
+      <text x="215" y="80" text-anchor="middle" font-size="11">MMTk · Immix mark-region · concurrent &amp; parallel</text>
 
-      <text x="14" y="118" font-size="11">— Refcounted with cycle collector</text>
-      <text x="14" y="136" font-size="11">— GC headers on every object</text>
-      <text x="14" y="154" font-size="11">— Drop runs on RC-zero or cycle collection</text>
+      <text x="14" y="118" font-size="11">— Tracing collector with precise stack maps</text>
+      <text x="14" y="136" font-size="11">— Object header: type ptr + mark/forwarding word</text>
+      <text x="14" y="154" font-size="11">— Drop runs from finalizer queue (best-effort)</text>
       <text x="14" y="172" font-size="11">— Allocator panics on OOM</text>
     </g>
 
@@ -107,13 +112,13 @@
       <rect x="14" y="58" width="402" height="36" rx="4" fill="#fff" stroke="#b54708"/>
       <text x="215" y="80" text-anchor="middle" font-size="11">opaque to GC · manual ownership</text>
 
-      <text x="14" y="118" font-size="11">— Allocated by extern code</text>
-      <text x="14" y="136" font-size="11">— No GC headers</text>
+      <text x="14" y="118" font-size="11">— Allocated by extern code or Foreign.alloc</text>
+      <text x="14" y="136" font-size="11">— No object header</text>
       <text x="14" y="154" font-size="11">— Fallible malloc returns null</text>
-      <text x="14" y="172" font-size="11">— Cross-boundary via pinning (see 19-ffi)</text>
+      <text x="14" y="172" font-size="11">— Cross-boundary via pinning / handles (see 19-ffi)</text>
     </g>
   </svg>
-  <div class="diagram-caption">Distinct address ranges. A runtime address-range check identifies managed vs foreign pointers; foreign pointers are ignored by the GC entirely.</div>
+  <div class="diagram-caption">Distinct address ranges. A runtime address-range check classifies a pointer as managed or foreign; the GC ignores foreign pointers entirely.</div>
 </div>
 
 <!-- =========================================================== -->
@@ -129,9 +134,10 @@
   </div>
   <div>
     <h3 style="color:#2a6f4d;">Reference (the rest)</h3>
-    <p>The variable holds a pointer to a managed-heap object. Assignment copies the pointer
-    (and increments the refcount). Mutation through one binding is visible through every other
-    binding holding the same pointer.</p>
+    <p>The variable holds a managed-heap pointer. Assignment copies the pointer; both bindings
+    observe the same object. Mutation through one binding is visible through every other binding
+    holding the same pointer. The GC keeps the object alive for as long as any reachable binding
+    references it.</p>
     <p><code>str</code>, <code>List&lt;T&gt;</code>, <code>Map&lt;K, V&gt;</code>, structs,
     interface objects, function values that capture state, boxed tuples.</p>
   </div>
@@ -142,206 +148,360 @@
 <!-- =========================================================== -->
 <h2 id="layout">3. Object layout</h2>
 
-<p>Every managed-heap object has the same header layout. The pointer held by a variable points
+<p>Every managed-heap object has the same two-word header. The pointer held by a variable points
 to the <strong>start of the object fields</strong>; the header lives at negative offsets — so
-normal field access does not need to skip the header.</p>
+field access does not need to skip the header.</p>
 
 <div class="diagram">
-  <svg viewBox="0 0 920 280" role="img" aria-label="Heap object layout">
+  <svg viewBox="0 0 920 320" role="img" aria-label="Heap object layout">
     <g transform="translate(120, 30)">
-      <rect width="680" height="40" rx="0" fill="#fbf3ec" stroke="#b54708" stroke-width="2"/>
-      <text x="340" y="26" text-anchor="middle" font-weight="700" fill="#b54708">GC header — refcount + color/mark bits</text>
+      <rect width="680" height="40" rx="0" fill="#f3eefa" stroke="#6b4ba8" stroke-width="2"/>
+      <text x="340" y="26" text-anchor="middle" font-weight="700" fill="#6b4ba8">type ptr (8 B) — vtable + structural metadata</text>
 
-      <rect y="40" width="680" height="32" rx="0" fill="#f3eefa" stroke="#6b4ba8" stroke-width="2"/>
-      <text x="340" y="60" text-anchor="middle" font-weight="700" fill="#6b4ba8">type id (4 B) + padding</text>
+      <rect y="40" width="680" height="40" rx="0" fill="#fbf3ec" stroke="#b54708" stroke-width="2"/>
+      <text x="340" y="66" text-anchor="middle" font-weight="700" fill="#b54708">mark / forwarding word (8 B)</text>
 
-      <rect y="72" width="680" height="36" rx="0" fill="#fff" stroke="#1a4a8a" stroke-width="3"/>
-      <text x="-12" y="94" text-anchor="end" font-size="11" font-weight="700">ptr →</text>
-      <text x="340" y="94" text-anchor="middle" font-size="11" class="small">pointer held by managed code lands here</text>
+      <rect y="80" width="680" height="36" rx="0" fill="#fff" stroke="#1a4a8a" stroke-width="3"/>
+      <text x="-12" y="102" text-anchor="end" font-size="11" font-weight="700">ptr →</text>
+      <text x="340" y="102" text-anchor="middle" font-size="11" class="small">pointer held by managed code lands here</text>
 
-      <rect y="108" width="680" height="32" rx="0" fill="#eaf0f8" stroke="#1a4a8a"/>
-      <text x="340" y="128" text-anchor="middle" font-size="11">field 0</text>
+      <rect y="116" width="680" height="32" rx="0" fill="#eaf0f8" stroke="#1a4a8a"/>
+      <text x="340" y="136" text-anchor="middle" font-size="11">field 0</text>
 
-      <rect y="140" width="680" height="32" rx="0" fill="#eaf0f8" stroke="#1a4a8a"/>
-      <text x="340" y="160" text-anchor="middle" font-size="11">field 1</text>
+      <rect y="148" width="680" height="32" rx="0" fill="#eaf0f8" stroke="#1a4a8a"/>
+      <text x="340" y="168" text-anchor="middle" font-size="11">field 1</text>
 
-      <rect y="172" width="680" height="32" rx="0" fill="#eaf0f8" stroke="#1a4a8a"/>
-      <text x="340" y="192" text-anchor="middle" font-size="11">…</text>
+      <rect y="180" width="680" height="32" rx="0" fill="#eaf0f8" stroke="#1a4a8a"/>
+      <text x="340" y="200" text-anchor="middle" font-size="11">…</text>
     </g>
 
-    <g transform="translate(60, 230)">
-      <rect width="800" height="40" rx="8" fill="#fafafa" stroke="#d6d3cd"/>
-      <text x="14" y="22" font-size="11" font-weight="700">Why the pointer is at the field boundary</text>
-      <text x="14" y="36" font-size="11">Field access is one pointer-dereference. Refcount, drop, and <tspan font-family="SF Mono, Menlo, monospace">as</tspan>-narrowing read at known negative offsets.</text>
+    <g transform="translate(60, 260)">
+      <rect width="800" height="50" rx="8" fill="#fafafa" stroke="#d6d3cd"/>
+      <text x="14" y="20" font-size="11" font-weight="700">Why the pointer is at the field boundary</text>
+      <text x="14" y="36" font-size="11">Field access is one pointer-dereference. Type lookup, mark, and forwarding read at known negative offsets.</text>
     </g>
   </svg>
-  <div class="diagram-caption">Exact sizes are implementation-defined; treat the layout as conceptual. <code>extern struct</code> types have <strong>no</strong> GC header.</div>
+  <div class="diagram-caption">Exact sizes are implementation-defined; treat the layout as conceptual. <code>extern struct</code> types have <strong>no</strong> object header.</div>
 </div>
 
-<!-- =========================================================== -->
-<h2 id="rc">4. Refcount semantics</h2>
+<h3>The two header words</h3>
 
 <table>
-  <thead><tr><th>Event</th><th>RC change</th></tr></thead>
+  <thead><tr><th>Word</th><th>Contains</th><th>Read by</th></tr></thead>
   <tbody>
-    <tr><td>Assignment to new binding · capture into long-lived closure · push into collection · send over channel</td><td><strong>increment</strong></td></tr>
-    <tr><td>Scope exit · reassignment · replacement in collection</td><td><strong>decrement</strong></td></tr>
-    <tr><td>Object reachable from multiple threads</td><td><strong>atomic</strong> ops (conservative)</td></tr>
+    <tr><td>type ptr</td><td>Pointer to the type descriptor: size, field offset map, vtable, drop slot, scan function.</td><td><code>is</code>/<code>as</code>, interface dispatch, GC tracing.</td></tr>
+    <tr><td>mark / forwarding</td><td>Immix mark bits, line-mark state, pin bit; on evacuation, the forwarding pointer to the new location.</td><td>The collector only; mutator code never reads this directly.</td></tr>
   </tbody>
 </table>
 
-<p>When refcount hits 0:</p>
-<ol>
-  <li><code>Drop.drop(self)</code> if <code>Self</code> implements <code>Drop</code>.</li>
-  <li>Each strong-referencing field has its refcount decremented (recursively).</li>
-  <li>The object's memory is returned to the allocator.</li>
-</ol>
-
-<div class="callout good">
-  <strong>Compiler elides most inc/dec</strong>
-  Last-use analysis turns inc/dec pairs into pointer moves. If <code>x</code> is passed to a
-  function and not used afterward, the compiler hands off the reference. If <code>x</code> is
-  returned, the inc/dec at the return site cancels with the call-site receive.
-  This makes refcount overhead near-zero for straight-line code, and powers
-  <strong>zero-copy channel sends</strong> when RC=1 — see <a href="20-concurrency.html">20-concurrency</a>.
+<div class="callout">
+  <strong>The type pointer doubles as the vtable</strong>
+  Interface objects no longer need a separate fat-pointer vtable — the object header already
+  carries it. An interface reference is still a fat pointer when the required vtable isn't the
+  object's primary one (multi-interface bridging); the single-interface case can collapse to a
+  thin pointer. See <a href="11-generics.html">11-generics §dispatch</a>.
 </div>
 
 <!-- =========================================================== -->
-<h2 id="cycle">5. Cycles &amp; the cycle collector</h2>
+<h2 id="tracing">4. Tracing GC — Immix &amp; StickyImmix</h2>
 
-<p>Pure refcounting cannot reclaim cycles. The runtime includes a cycle collector that runs
-periodically.</p>
+<p>The runtime uses <strong>MMTk</strong> with the <strong>Immix</strong> plan (or
+<strong>StickyImmix</strong> for generational behavior — same memory layout, two flips in
+configuration). Immix is a mark-region collector with opportunistic evacuation: the heap is
+carved into 32 KiB <em>blocks</em> of 128-byte <em>lines</em>; objects are bump-allocated into
+recyclable holes; fragmented blocks are evacuated lazily.</p>
 
 <div class="diagram">
-  <svg viewBox="0 0 920 290" role="img" aria-label="Cycle collection">
+  <svg viewBox="0 0 920 320" role="img" aria-label="Immix blocks and lines">
+    <g transform="translate(40, 20)">
+      <text x="0" y="14" font-weight="700">Block (32 KiB) — divided into 128-byte lines</text>
+    </g>
+
+    <g transform="translate(40, 40)">
+      <!-- 16 lines representation -->
+      <rect width="40" height="40" fill="#eef6f1" stroke="#2a6f4d"/>
+      <rect x="40" width="40" height="40" fill="#eef6f1" stroke="#2a6f4d"/>
+      <rect x="80" width="40" height="40" fill="#fbf3ec" stroke="#b54708"/>
+      <rect x="120" width="40" height="40" fill="#fbf3ec" stroke="#b54708"/>
+      <rect x="160" width="40" height="40" fill="#eef6f1" stroke="#2a6f4d"/>
+      <rect x="200" width="40" height="40" fill="#fbf3ec" stroke="#b54708"/>
+      <rect x="240" width="40" height="40" fill="#eef6f1" stroke="#2a6f4d"/>
+      <rect x="280" width="40" height="40" fill="#eef6f1" stroke="#2a6f4d"/>
+      <rect x="320" width="40" height="40" fill="#fff"     stroke="#5a5a60"/>
+      <rect x="360" width="40" height="40" fill="#fff"     stroke="#5a5a60"/>
+      <rect x="400" width="40" height="40" fill="#fff"     stroke="#5a5a60"/>
+      <rect x="440" width="40" height="40" fill="#eef6f1" stroke="#2a6f4d"/>
+      <rect x="480" width="40" height="40" fill="#fbf3ec" stroke="#b54708"/>
+      <rect x="520" width="40" height="40" fill="#eef6f1" stroke="#2a6f4d"/>
+      <rect x="560" width="40" height="40" fill="#fff"     stroke="#5a5a60"/>
+      <rect x="600" width="40" height="40" fill="#fff"     stroke="#5a5a60"/>
+    </g>
+
+    <g transform="translate(40, 100)">
+      <rect width="14" height="14" fill="#eef6f1" stroke="#2a6f4d"/>
+      <text x="22" y="11" font-size="11">marked (live object on this line)</text>
+      <rect x="220" width="14" height="14" fill="#fbf3ec" stroke="#b54708"/>
+      <text x="242" y="11" font-size="11">conservative-mark (neighbor of marked line)</text>
+      <rect x="500" width="14" height="14" fill="#fff" stroke="#5a5a60"/>
+      <text x="522" y="11" font-size="11">free / recyclable hole</text>
+    </g>
+
+    <g transform="translate(40, 140)">
+      <rect width="840" height="160" rx="8" fill="#fafafa" stroke="#d6d3cd"/>
+      <text x="14" y="22" font-weight="700">Per-thread mutator: bump-allocate into holes</text>
+      <text x="14" y="44" font-size="11">— Each mutator owns a recyclable block; allocation = a few inlined instructions.</text>
+      <text x="14" y="62" font-size="11">— Out of holes → request a new block from the global pool (slow path into MMTk).</text>
+      <text x="14" y="80" font-size="11">— Large objects (&gt; one line) go to the Large Object Space (LOS).</text>
+
+      <text x="14" y="108" font-weight="700">Collector cycle</text>
+      <text x="14" y="126" font-size="11">— Parallel marking from precise roots; concurrent with mutator where the plan allows.</text>
+      <text x="14" y="144" font-size="11">— Fragmented blocks are evacuation candidates; live objects are forwarded as marking proceeds.</text>
+    </g>
+  </svg>
+  <div class="diagram-caption">Mark-region with opportunistic evacuation. Compaction happens only where it pays — no dedicated copying nursery is required.</div>
+</div>
+
+<h3>StickyImmix — generational without a separate nursery</h3>
+
+<p>StickyImmix flips one bit per block to remember "this object survived the last collection."
+Young (unmarked) objects in old (sticky) blocks are reclaimed by a fast nursery-only pass; full
+collections happen less often. No nursery copying, no separate space — same blocks, two passes
+of the same collector. This is the default plan for production builds.</p>
+
+<div class="callout good">
+  <strong>Why Immix</strong>
+  Mark-region beats mark-sweep on fragmentation, beats semi-space on memory overhead, and beats
+  classical generational copying on simplicity. Production-tested in V8, Julia, and OpenJDK
+  research builds. We get a battle-tested collector by integrating MMTk rather than rolling our
+  own.
+</div>
+
+<!-- =========================================================== -->
+<h2 id="spaces">5. Allocation spaces</h2>
+
+<table>
+  <thead><tr><th>Space</th><th>Purpose</th><th>Mover?</th></tr></thead>
+  <tbody>
+    <tr><td><code>default</code> (Immix)</td><td>General-purpose object allocation. Bump into holes; opportunistic evacuation.</td><td>Yes (when fragmented).</td></tr>
+    <tr><td><code>nonmoving</code></td><td>Types declared <code>@Pinnable</code> or with a runtime pin bit set on alloc. Allocated here so pinning is free.</td><td>No.</td></tr>
+    <tr><td><code>immortal</code></td><td>Module-level constants, interned strings, type descriptors, string literals.</td><td>No, never freed.</td></tr>
+    <tr><td><code>los</code> (large object space)</td><td>Objects exceeding one Immix line.</td><td>No (in-place mark-sweep).</td></tr>
+  </tbody>
+</table>
+
+<p>Space selection is decided by the allocator at the slow path; the inline fast path always
+goes to the mutator's default Immix block. The compiler can hint allocations to a space via
+type-level annotations (e.g. <code>@Pinnable</code>) — see <a href="#pin">§14 Pinning</a>.</p>
+
+<!-- =========================================================== -->
+<h2 id="safepoints">6. Safepoints &amp; stack maps</h2>
+
+<p>The collector needs to identify every managed pointer on every thread's stack. Instead of
+scanning conservatively (false-retention prone, hostile to moving) the compiler emits
+<strong>precise stack maps</strong> at each safepoint: a per-call-site descriptor of which
+SSA values and stack slots hold managed pointers.</p>
+
+<div class="diagram">
+  <svg viewBox="0 0 920 340" role="img" aria-label="Safepoint and stack maps">
     <defs>
-      <marker id="arr" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <marker id="arrm" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
         <path d="M 0 0 L 9 3 L 0 6 z" fill="#5a5a60"/>
       </marker>
     </defs>
 
-    <!-- Cycle visualization -->
-    <g transform="translate(40, 30)">
-      <rect width="400" height="240" rx="8" fill="#fafafa" stroke="#d6d3cd"/>
-      <text x="14" y="22" font-weight="700">A cycle that RC can't free</text>
-
-      <g transform="translate(100, 60)">
-        <circle cx="50" cy="50" r="40" fill="#eaf0f8" stroke="#1a4a8a" stroke-width="2"/>
-        <text x="50" y="46" text-anchor="middle" font-weight="700">A</text>
-        <text x="50" y="62" text-anchor="middle" class="small">RC=1</text>
-      </g>
-
-      <g transform="translate(220, 60)">
-        <circle cx="50" cy="50" r="40" fill="#f3eefa" stroke="#6b4ba8" stroke-width="2"/>
-        <text x="50" y="46" text-anchor="middle" font-weight="700">B</text>
-        <text x="50" y="62" text-anchor="middle" class="small">RC=1</text>
-      </g>
-
-      <path d="M 190 90 Q 235 70 270 90" stroke="#5a5a60" stroke-width="2" fill="none" marker-end="url(#arr)"/>
-      <path d="M 270 130 Q 235 150 190 130" stroke="#5a5a60" stroke-width="2" fill="none" marker-end="url(#arr)"/>
-
-      <text x="200" y="200" text-anchor="middle" font-size="11" class="small">No external reference, but RC never reaches 0.</text>
-      <text x="200" y="216" text-anchor="middle" font-size="11" class="small">Cycle collector required.</text>
+    <g transform="translate(20, 20)">
+      <rect width="420" height="150" rx="8" fill="#eaf0f8" stroke="#1a4a8a" stroke-width="2"/>
+      <text x="14" y="22" font-weight="700" fill="#1a4a8a">Compiler (Cranelift)</text>
+      <text x="14" y="48" font-size="11">— Managed pointers use r64 reference type.</text>
+      <text x="14" y="66" font-size="11">— Each call site is a safepoint;</text>
+      <text x="14" y="84" font-size="11">  user_stack_maps records live r64 values.</text>
+      <text x="14" y="102" font-size="11">— Loop back-edges emit a safepoint poll.</text>
+      <text x="14" y="120" font-size="11">— Write barriers inserted at IR-gen time.</text>
+      <text x="14" y="138" font-size="11">— Alloc fast path inlined; slow path calls MMTk.</text>
     </g>
 
-    <!-- Algorithm -->
-    <g transform="translate(470, 30)">
-      <rect width="410" height="240" rx="8" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
-      <text x="14" y="22" font-weight="700" fill="#2a6f4d">Algorithm (informal)</text>
+    <g transform="translate(480, 20)">
+      <rect width="420" height="150" rx="8" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
+      <text x="14" y="22" font-weight="700" fill="#2a6f4d">Runtime (MMTk)</text>
+      <text x="14" y="48" font-size="11">— Triggers GC when allocation budget exhausted.</text>
+      <text x="14" y="66" font-size="11">— Sets per-thread "GC requested" flag.</text>
+      <text x="14" y="84" font-size="11">— Mutators reach next safepoint poll and park.</text>
+      <text x="14" y="102" font-size="11">— Collector reads each thread's stack map at PC.</text>
+      <text x="14" y="120" font-size="11">— Marks/forwards in parallel; restarts mutators.</text>
+      <text x="14" y="138" font-size="11">— Concurrent-friendly: most marking off mutator.</text>
+    </g>
 
-      <text x="14" y="50" font-size="11">— Track "suspect" set: objects whose RC was</text>
-      <text x="14" y="66" font-size="11">  decremented but didn't reach 0.</text>
-
-      <text x="14" y="92" font-size="11">— Background thread (or safe point) does a</text>
-      <text x="14" y="108" font-size="11">  partial trace from suspects.</text>
-
-      <text x="14" y="134" font-size="11">— Suspects not reachable from a global root</text>
-      <text x="14" y="150" font-size="11">  are garbage — collected.</text>
-
-      <rect x="14" y="170" width="382" height="60" rx="6" fill="#fbf3ec" stroke="#b54708"/>
-      <text x="24" y="190" font-size="11" fill="#b54708" font-weight="700">Cycle drop ordering</text>
-      <text x="24" y="208" font-size="11">— Drop called in unspecified order.</text>
-      <text x="24" y="224" font-size="11">— References to other cycle members are zeroed first.</text>
+    <g transform="translate(60, 200)">
+      <rect width="800" height="120" rx="8" fill="#fafafa" stroke="#d6d3cd"/>
+      <text x="14" y="22" font-weight="700">Cranelift IR sketch</text>
+      <text x="14" y="48" font-size="11">v1: r64 = alloc &lt;ListNode&gt;</text>
+      <text x="14" y="66" font-size="11">v2: r64 = call do_work(v1) ; safepoint, stack_map = {v1, v2}</text>
+      <text x="14" y="84" font-size="11">if poll_gc() { call mmtk_yield() } ; loop-back safepoint</text>
+      <text x="14" y="102" font-size="11" class="small">No user-visible syntax — the codegen inserts these automatically.</text>
     </g>
   </svg>
-  <div class="diagram-caption">Roots: thread stacks, module-level vars, captured environments of live closures, pinned objects.</div>
+  <div class="diagram-caption">Cranelift's <code>user_stack_maps</code> mode keeps managed pointers precisely tracked; the runtime never scans the stack blindly.</div>
 </div>
 
-<div class="callout warn">
-  <strong>Drop inside cycle collection: safe patterns</strong>
-  <ul>
-    <li>Touch only primitive fields of <code>self</code>.</li>
-    <li>Release foreign resources (file descriptors, malloc'd buffers).</li>
-    <li>Log or count (provided logging is itself drop-safe).</li>
-  </ul>
-  <strong style="margin-top:0.4rem;">Unsafe patterns</strong>
-  <ul>
-    <li>Call methods on referenced managed objects (they may already be dropped).</li>
-    <li>Resurrect <code>self</code> by storing it into a long-lived location.</li>
-    <li>Panic — see <a href="14-panics.html#drop">14-panics §4</a>.</li>
-  </ul>
+<div class="callout">
+  <strong>Why precise, not conservative</strong>
+  Conservative scanning treats every word-sized stack value as a potential pointer. That defeats
+  moving collection (you can't rewrite pointers you only suspect exist) and causes false
+  retention. Precise stack maps cost a small per-call-site metadata table and a tiny IR
+  annotation — paid back many times over by tighter heap usage and the ability to evacuate.
 </div>
 
 <!-- =========================================================== -->
-<h2 id="drop">6. Drop determinism</h2>
+<h2 id="barriers">7. Write barriers</h2>
+
+<p>When a field of a managed object is overwritten with another managed pointer, the compiler
+emits a <strong>write barrier</strong> — a short code sequence that informs the collector. The
+barrier flavor depends on the active plan:</p>
+
+<ul>
+  <li><strong>StickyImmix</strong> needs a <em>remembered-set</em> barrier: old-space writes
+  that point to young-space objects record the slot, so the next nursery collection sees the
+  old-to-young edge as a root.</li>
+  <li><strong>Concurrent marking</strong> needs a <em>SATB</em> (snapshot-at-the-beginning) or
+  <em>incremental-update</em> barrier so the collector doesn't miss objects that became
+  reachable mid-cycle.</li>
+</ul>
+
+<div class="callout">
+  <strong>Cost in practice</strong>
+  A typical write barrier is 3–5 inlined instructions on the hot path (a card-table store or
+  a remembered-set buffer push). Cranelift inserts it at every <code>store</code> of an
+  <code>r64</code> into a heap location; stores into stack slots and primitive stores are
+  unbarriered.
+</div>
+
+<!-- =========================================================== -->
+<h2 id="drop">8. Drop semantics</h2>
+
+<p>For ordinary managed objects, <code>Drop</code> is <strong>best-effort</strong>: when the
+collector determines an object is unreachable, its descriptor's <em>drop slot</em> (if any) is
+enqueued to the finalizer queue. A dedicated finalizer thread pops the queue and runs each
+<code>drop</code> in turn.</p>
+
+<div class="diagram">
+  <svg viewBox="0 0 920 270" role="img" aria-label="Drop lifecycle">
+    <defs>
+      <marker id="arrd" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+        <path d="M 0 0 L 9 3 L 0 6 z" fill="#5a5a60"/>
+      </marker>
+    </defs>
+
+    <g transform="translate(40, 30)">
+      <rect width="200" height="60" rx="6" fill="#eaf0f8" stroke="#1a4a8a" stroke-width="2"/>
+      <text x="100" y="26" text-anchor="middle" font-weight="700">Collector</text>
+      <text x="100" y="46" text-anchor="middle" font-size="11">finds unreachable obj</text>
+    </g>
+
+    <path d="M 240 60 L 300 60" stroke="#5a5a60" stroke-width="2" marker-end="url(#arrd)"/>
+
+    <g transform="translate(300, 30)">
+      <rect width="240" height="60" rx="6" fill="#f3eefa" stroke="#6b4ba8" stroke-width="2"/>
+      <text x="120" y="26" text-anchor="middle" font-weight="700" fill="#6b4ba8">Has drop slot?</text>
+      <text x="120" y="46" text-anchor="middle" font-size="11">read from type descriptor</text>
+    </g>
+
+    <path d="M 540 50 L 600 30" stroke="#2a6f4d" stroke-width="2" marker-end="url(#arrd)"/>
+    <text x="555" y="30" font-size="10" fill="#2a6f4d">yes</text>
+
+    <g transform="translate(600, 0)">
+      <rect width="280" height="60" rx="6" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
+      <text x="14" y="22" font-weight="700" fill="#2a6f4d">Enqueue for finalizer thread</text>
+      <text x="14" y="42" font-size="11">drop runs asynchronously</text>
+    </g>
+
+    <path d="M 540 70 L 600 90" stroke="#b54708" stroke-width="2" marker-end="url(#arrd)"/>
+    <text x="555" y="92" font-size="10" fill="#b54708">no</text>
+
+    <g transform="translate(600, 80)">
+      <rect width="280" height="60" rx="6" fill="#fbf3ec" stroke="#b54708" stroke-width="2"/>
+      <text x="14" y="22" font-weight="700" fill="#b54708">Reclaim memory immediately</text>
+      <text x="14" y="42" font-size="11">no drop to run</text>
+    </g>
+
+    <g transform="translate(40, 170)">
+      <rect width="840" height="80" rx="8" fill="#fafafa" stroke="#d6d3cd"/>
+      <text x="14" y="22" font-weight="700">Determinism</text>
+      <text x="14" y="44" font-size="11">— No guaranteed order between dropped objects.</text>
+      <text x="14" y="62" font-size="11">— Program exit makes a best-effort pass; objects may leak silently.</text>
+    </g>
+  </svg>
+  <div class="diagram-caption">Release resources explicitly when you need deterministic destruction — <code>Drop</code> is asynchronous and not guaranteed.</div>
+</div>
 
 <table>
   <thead><tr><th>Scenario</th><th>Guarantee</th></tr></thead>
   <tbody>
-    <tr><td>Linear (non-cyclic) chain, scope exit</td><td>Deterministic — called at scope exit</td></tr>
-    <tr><td>Cycle</td><td>Eventually, unspecified order, when collector runs</td></tr>
-    <tr><td>Program exit</td><td>Best-effort pass, no guarantee</td></tr>
-    <tr><td>Panicked thread</td><td>Stack roots dropped; objects only reachable from that thread may leak until cycle-collected</td></tr>
+    <tr><td>Reachable object, scope exits</td><td>Object stays alive — no drop yet (until unreachable).</td></tr>
+    <tr><td>Unreachable object, regular GC</td><td>Drop runs <em>eventually</em> on the finalizer thread; no ordering across objects.</td></tr>
+    <tr><td>Program exit</td><td>Best-effort pass; may skip finalizers.</td></tr>
+    <tr><td>Panicked thread</td><td>Stack roots released; objects become unreachable and follow the regular finalizer path. No synchronous drop on unwind.</td></tr>
   </tbody>
 </table>
 
 <div class="callout warn">
   <strong>Don't rely on <code>Drop</code> for correctness</strong>
-  Programs that need deterministic finalization (file flushing, etc.) should release resources
-  explicitly before scope exit, not depend on <code>Drop</code>.
+  Programs that need deterministic finalization (file flushing, transaction commit, lock release)
+  must release resources <strong>explicitly</strong> by calling the relevant method
+  (<code>file.close()</code>, <code>lock.release()</code>, <code>tx.commit()</code>) before the
+  binding goes out of scope. There is no language-level scope-exit hook — like JavaScript,
+  Python without <code>with</code>, or Java without try-with-resources, cleanup is a manual
+  responsibility.
 </div>
 
 <!-- =========================================================== -->
-<h2 id="inline">7. Inline / stack allocation</h2>
+<h2 id="inline">9. Inline / stack allocation</h2>
 
-<p>The compiler may "inline" small heap objects onto the stack when their lifetime is provably
+<p>The compiler may stack-allocate small managed objects when their lifetime is provably
 bounded by a single frame. Invisible at the language level — observable semantics are always
 as if the object lived on the managed heap.</p>
 
 <p>Tuples and small structs are the most common candidates. The compiler proves the value does
 not escape (returned, captured into an escaping closure, sent over a channel, stored in a
-collection) and replaces the heap allocation with a stack slot.</p>
+collection) and replaces the heap allocation with a stack slot. Stack-allocated objects still
+carry the two-word object header so type identification and GC tracing work uniformly.</p>
 
 <!-- =========================================================== -->
-<h2 id="typeid">8. Type identification</h2>
+<h2 id="typeid">10. Type identification</h2>
 
-<p>The <code>type id</code> field is a compile-time-assigned integer identifying the concrete
-type. This is what <code>is</code>/<code>as</code> consult at runtime.</p>
+<p>Every managed object's header holds a pointer to its <strong>type descriptor</strong>: a
+runtime structure with size, field map (for tracing), drop slot, and the vtable. This is what
+<code>is</code>/<code>as</code> and interface dispatch consult.</p>
 
-<p>Type IDs are stable within a single compilation. Across separate compilations or dylib
-boundaries, a runtime registry maps type identity by structure (nominal types by
-fully-qualified module-and-name; tuple shapes by structural hash).</p>
-
-<p>Interface dispatch is <strong>not</strong> based on type id alone — it uses a vtable pointer
-that is part of the interface-object representation (a fat pointer). See <a href="11-generics.html">11-generics</a>.</p>
+<p>Type descriptors are deduplicated across compilation units. Across separate compilations or
+dylib boundaries, a runtime registry maps type identity by structure (nominal types by
+fully-qualified module-and-name; tuple shapes by structural hash). Descriptors themselves live
+in the <code>immortal</code> space and are never collected.</p>
 
 <!-- =========================================================== -->
-<h2 id="oom">9. Allocation failure</h2>
+<h2 id="oom">11. Allocation failure</h2>
 
 <div class="callout warn">
   <strong>Managed allocation is infallible (panics on OOM)</strong>
-  There is no fallible <code>alloc</code> for managed code.
+  There is no fallible <code>alloc</code> for managed code. The fast path tries the bump pointer,
+  the slow path requests a fresh block from MMTk, MMTk may trigger a GC, and only if a full
+  collection still cannot satisfy the request does the runtime panic.
   Foreign allocation via <code>malloc</code> is fallible — returns <code>null</code> to the user.
   See <a href="19-ffi.html">19-ffi</a>.
 </div>
 
 <!-- =========================================================== -->
-<h2 id="concurrency">10. Concurrency interactions</h2>
+<h2 id="concurrency">12. Concurrency interactions</h2>
 
 <ul>
-  <li>The refcount field is updated <strong>atomically</strong> when the runtime determines the object is reachable from more than one thread.</li>
-  <li>For thread-local objects, refcount updates are non-atomic (a single-thread optimization).</li>
-  <li>Cross-thread reads/writes of struct fields are <strong>not</strong> synchronized — use <code>Shared&lt;T&gt;</code> or channels.</li>
+  <li>Each mutator thread has its own <strong>thread-local allocation buffer</strong> (TLAB) —
+    no contention on the alloc fast path.</li>
+  <li>GC is <strong>parallel</strong> (multiple collector threads) and may be
+    <strong>concurrent</strong> (mutators keep running during marking, modulo brief pauses at
+    safepoints). The default plan is parallel marking with short stop-the-world flips.</li>
+  <li>Cross-thread reads/writes of struct fields are <strong>not</strong> synchronized — use
+    <code>Shared&lt;T&gt;</code> or channels.</li>
+  <li>Write barriers ensure cross-thread heap stores are visible to the collector even when
+    mutators race.</li>
 </ul>
 
 <div class="callout good">
@@ -352,34 +512,139 @@ that is part of the interface-object representation (a fat pointer). See <a href
 </div>
 
 <!-- =========================================================== -->
-<h2 id="pin">11. Pinning</h2>
+<h2 id="pin">13. Pinning</h2>
 
-<p>Pinning a managed object adds a strong root that prevents the cycle collector from moving
-(if a moving collector is in use) or reclaiming the object until the pin is released.</p>
+<p>Pinning a managed object <strong>prevents the GC from moving it</strong>. It does
+<strong>not</strong> prevent reclamation — a pinned object that becomes unreachable is still
+collected (the runtime will not move it during that collection's evacuation; in-place sweep
+reclaims it). Reachability is the regular root scan; pinning is purely an immovability
+declaration.</p>
 
-<p>Pinning is <strong>refcounted per object</strong>: nested pins on the same value compose
-correctly. Pinning a value that already lives on the foreign heap is a no-op.</p>
+<div class="diagram">
+  <svg viewBox="0 0 920 230" role="img" aria-label="Pinning strategy">
+    <g transform="translate(40, 20)">
+      <rect width="400" height="180" rx="8" fill="#eaf0f8" stroke="#1a4a8a" stroke-width="2"/>
+      <text x="14" y="22" font-weight="700" fill="#1a4a8a">Two pin paths</text>
+      <text x="14" y="50" font-size="11">— <tspan font-weight="700">Static</tspan>: types declared @Pinnable</text>
+      <text x="14" y="68" font-size="11">  are allocated in the nonmoving space.</text>
+      <text x="14" y="86" font-size="11">  Pinning is free at runtime.</text>
+      <text x="14" y="114" font-size="11">— <tspan font-weight="700">Dynamic</tspan>: any object can be pinned via</text>
+      <text x="14" y="132" font-size="11">  &amp;expr, with_pin, Pin.acquire. The runtime</text>
+      <text x="14" y="150" font-size="11">  sets a pin bit; if the object lives in Immix's</text>
+      <text x="14" y="168" font-size="11">  default space, evacuation skips it for now.</text>
+    </g>
 
-<p>User-facing entry points:</p>
-<ul>
-  <li><code>&amp;expr</code> at extern call sites — auto-pin for the call's duration.</li>
-  <li><code>with_pin(value) { ptr =&gt; ... }</code> — scoped pin across a closure body.</li>
-  <li><code>Pin.acquire(value)</code> — long-lived pin returning a <code>PinHandle&lt;T&gt;</code>, released explicitly or on <code>Drop</code>.</li>
-</ul>
+    <g transform="translate(480, 20)">
+      <rect width="400" height="180" rx="8" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
+      <text x="14" y="22" font-weight="700" fill="#2a6f4d">Pin entry points</text>
+      <text x="14" y="50" font-size="11">— &amp;expr at extern call sites — auto-pin for</text>
+      <text x="14" y="68" font-size="11">  the call's duration.</text>
+      <text x="14" y="86" font-size="11">— with_pin(value) { ptr =&gt; ... } — scoped pin</text>
+      <text x="14" y="104" font-size="11">  across a closure body.</text>
+      <text x="14" y="122" font-size="11">— Pin.acquire(value) — long-lived pin returning</text>
+      <text x="14" y="140" font-size="11">  a PinHandle&lt;T&gt;; call .release() or rely on Drop.</text>
+      <text x="14" y="168" font-size="11">— Per-object pin counter — nesting composes.</text>
+    </g>
+  </svg>
+  <div class="diagram-caption">Prefer <code>@Pinnable</code> for types that are pinned often; reserve dynamic pinning for short transient cases.</div>
+</div>
 
-<p>There is no direct <code>pin</code>/<code>unpin</code> user API. See <a href="19-ffi.html#pin">19-ffi §pinning</a>.</p>
+<div class="callout warn">
+  <strong>Long-term dynamic pins fragment the heap</strong>
+  A pinned object in default Immix blocks evacuation of its block. For values you'll retain
+  across many collections (callback registrations, foreign-stored references), prefer
+  <code>@Pinnable</code> on the type — or use a handle (§15) instead.
+</div>
+
+<p>See <a href="19-ffi.html#pin">19-ffi §pinning</a> for the surface syntax.</p>
 
 <!-- =========================================================== -->
-<h2 id="summary">12. Summary</h2>
+<h2 id="handles">14. Handles — long-lived foreign rooting</h2>
+
+<p>When foreign code needs to retain a managed pointer <em>across calls</em> — a GUI library
+that stores your callback target, a registry of observers, a long-running native task — pinning
+is the wrong tool. The right tool is a <strong>handle</strong>: an opaque, integer-sized cookie
+that:</p>
+
+<ul>
+  <li>Is a GC <strong>root</strong> in the runtime's handle table (so the object stays alive).</li>
+  <li>Does <strong>not</strong> prevent movement (so Immix stays free to compact).</li>
+  <li>Resolves to the current object location through one indirection at deref.</li>
+</ul>
+
+<div class="diagram">
+  <svg viewBox="0 0 920 290" role="img" aria-label="Handle table">
+    <g transform="translate(40, 30)">
+      <rect width="240" height="60" rx="6" fill="#fbf3ec" stroke="#b54708" stroke-width="2"/>
+      <text x="120" y="26" text-anchor="middle" font-weight="700" fill="#b54708">Foreign code</text>
+      <text x="120" y="46" text-anchor="middle" font-size="11">stores Handle as u64 cookie</text>
+    </g>
+
+    <path d="M 280 60 L 350 60" stroke="#5a5a60" stroke-width="2" marker-end="url(#arrd)"/>
+
+    <g transform="translate(350, 30)">
+      <rect width="240" height="60" rx="6" fill="#f3eefa" stroke="#6b4ba8" stroke-width="2"/>
+      <text x="120" y="26" text-anchor="middle" font-weight="700" fill="#6b4ba8">Handle table</text>
+      <text x="120" y="46" text-anchor="middle" font-size="11">slot[k] → managed ptr</text>
+    </g>
+
+    <path d="M 590 60 L 660 60" stroke="#5a5a60" stroke-width="2" marker-end="url(#arrd)"/>
+
+    <g transform="translate(660, 30)">
+      <rect width="220" height="60" rx="6" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
+      <text x="110" y="26" text-anchor="middle" font-weight="700" fill="#2a6f4d">Managed object</text>
+      <text x="110" y="46" text-anchor="middle" font-size="11">freely movable</text>
+    </g>
+
+    <g transform="translate(40, 130)">
+      <rect width="840" height="140" rx="8" fill="#fafafa" stroke="#d6d3cd"/>
+      <text x="14" y="22" font-weight="700">API sketch</text>
+      <text x="14" y="46" font-size="11">var h: Handle&lt;Listener&gt; = Handle.acquire(my_listener)</text>
+      <text x="14" y="64" font-size="11">register_native_callback(on_event, h.raw())             // raw() yields an opaque u64</text>
+      <text x="14" y="82" font-size="11">// later, in the export body:</text>
+      <text x="14" y="100" font-size="11">var listener = Handle.resolve&lt;Listener&gt;(cookie)         // resolves via the table</text>
+      <text x="14" y="118" font-size="11">h.release()  // or h goes out of scope — Drop releases the table slot</text>
+    </g>
+  </svg>
+  <div class="diagram-caption">JNI-style global refs, but typed. Cheap to create, free to keep, and movement-friendly.</div>
+</div>
+
+<div class="callout">
+  <strong>Pin vs Handle — choosing</strong>
+  <ul>
+    <li><strong>Pin</strong> when the foreign side needs a <em>real pointer</em> to the object's
+    bytes (synchronous call passing a buffer to C, output-parameter writes).</li>
+    <li><strong>Handle</strong> when the foreign side stores the reference and calls back later,
+    or when many references are retained — anything where movement-blocking would hurt the
+    heap.</li>
+    <li><strong>Both</strong> in a small number of cases: a pinnable type held via a handle, for
+    long-lived foreign storage that also needs a stable address.</li>
+  </ul>
+</div>
+
+<div class="callout warn">
+  <strong>Release explicitly</strong>
+  <code>Handle.release()</code> must be called when the registration is removed. The handle's
+  <code>Drop</code> impl will release the table slot eventually, but eventually means "whenever
+  the finalizer queue gets to it" — possibly never. Each leaked handle keeps its referent alive
+  forever and consumes a table slot.
+</div>
+
+<!-- =========================================================== -->
+<h2 id="summary">15. Summary</h2>
 
 <div class="callout good">
   <ul>
-    <li>Refcount + cycle collector hybrid GC.</li>
-    <li>Managed objects share a uniform header: <code>[gc header | type id | fields]</code>, pointer at the field boundary.</li>
-    <li>Primitives by value; references inc/dec a refcount.</li>
-    <li>Compiler elides redundant inc/dec via last-use analysis (used by channels for zero-copy moves).</li>
-    <li>Drop is best-effort, not guaranteed; don't depend on it for correctness.</li>
-    <li>Two heaps; the GC ignores foreign pointers.</li>
+    <li>Tracing GC: <strong>MMTk</strong> with the <strong>Immix</strong> plan (StickyImmix for generational).</li>
+    <li>Two-word object header: <code>[type ptr | mark/forwarding]</code>; pointer at the field boundary.</li>
+    <li>Precise stack maps from Cranelift (<code>user_stack_maps</code>); safepoints at calls and loop back-edges.</li>
+    <li>Write barriers inserted at IR-gen for cross-space and concurrent-marking correctness.</li>
+    <li>Allocation spaces: <code>default</code> (Immix), <code>nonmoving</code> (for <code>@Pinnable</code>), <code>immortal</code>, <code>los</code>.</li>
+    <li>Drop is best-effort by default — finalizer queue, no ordering.</li>
+    <li>No language-level deterministic-drop mechanism — release resources explicitly.</li>
+    <li>Pinning prevents <em>movement</em>, not reclamation. <code>@Pinnable</code> avoids dynamic pins.</li>
+    <li>Handles for long-lived foreign rooting — movement-friendly alternative to pinning.</li>
+    <li>Managed alloc panics on OOM; foreign alloc returns null. Two heaps; GC ignores foreign pointers.</li>
   </ul>
 </div>
 

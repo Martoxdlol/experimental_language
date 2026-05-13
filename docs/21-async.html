@@ -318,16 +318,29 @@ subject to cross-thread isolation (<a href="20-concurrency.html#threads">20 §1<
 references are deep-cloned at spawn time. Async closures cannot be <code>extern</code>.</p>
 
 <!-- =========================================================== -->
-<h2 id="cancel">8. Cancellation — by drop</h2>
+<h2 id="cancel">8. Cancellation</h2>
+
+<p>Cancellation is <strong>explicit</strong>. A future exposes a <code>.cancel()</code> method
+that aborts the underlying state machine and releases I/O registrations synchronously.
+<code>select!</code>-style combinators call <code>.cancel()</code> on the losing futures when a
+winner completes.</p>
+
+<pre><code>extend&lt;T&gt; Future&lt;T&gt; {
+  function cancel(self)        // aborts the future; safe to call repeatedly
+}</code></pre>
 
 <div class="callout warn">
-  <strong>Drop the future = cancel it</strong>
-  Dropping a future invokes its <code>Drop</code> impl, which releases any acquired resources
-  (open FDs, pending I/O registrations). <code>select!</code>-style combinators work by polling
-  multiple futures and dropping the losers when a winner completes.
+  <strong>Dropping a future does <em>not</em> cancel it promptly</strong>
+  <code>Future&lt;T&gt;</code> is a regular GC-managed value. Letting it go out of scope means
+  its <code>Drop</code> impl runs eventually via the finalizer queue — possibly never. If the
+  future holds an I/O registration or a network connection, that resource leaks until the
+  collector observes the future as unreachable <em>and</em> the finalizer thread gets to it.
+  <br><strong style="margin-top: 0.4rem;">Always call <code>.cancel()</code> explicitly</strong>
+  for futures you no longer want. Treat this like closing a file handle.
   <br><strong style="margin-top: 0.4rem;">No built-in cancellation token</strong>
-  For cooperative cancellation, pass a <code>Shared&lt;bool&gt;</code> or a
-  <code>Receiver&lt;Cancel&gt;</code> to the future and let it check.
+  For cooperative cancellation deeper in the future's body, pass a
+  <code>Shared&lt;bool&gt;</code> or a <code>Receiver&lt;Cancel&gt;</code> and check it
+  periodically.
 </div>
 
 <!-- =========================================================== -->
@@ -337,7 +350,7 @@ references are deep-cloned at spawn time. Async closures cannot be <code>extern<
 
 pub struct TimedOut;</code></pre>
 
-<p>Races <code>fut</code> against a timer. Whichever finishes first wins; the other is dropped.</p>
+<p>Races <code>fut</code> against a timer. Whichever finishes first wins; <code>.cancel()</code> is called on the loser.</p>
 
 <!-- =========================================================== -->
 <h2 id="asynciter">10. <code>AsyncIterator&lt;T&gt;</code></h2>
@@ -426,7 +439,7 @@ additions, not core language. The minimum guarantees:</p>
     <li>Futures must be <code>spawn</code>ed or <code>await</code>ed; ignoring them is a compile error.</li>
     <li>The default executor is a work-stealing pool; <code>block_on</code> runs a top-level future.</li>
     <li><code>AsyncIterator&lt;T&gt;</code> + <code>for await</code> for async streams. No generator syntax.</li>
-    <li>Cancellation by drop; timeouts via <code>timeout(...)</code>.</li>
+    <li>Cancellation via explicit <code>.cancel()</code>; timeouts via <code>timeout(...)</code>.</li>
     <li>Async closures use postfix <code>async</code> too; bare <code>async { ... }</code> is a zero-arg inline future literal.</li>
   </ul>
 </div>

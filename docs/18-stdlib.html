@@ -358,7 +358,7 @@ var c = List&lt;i64&gt;()          // shorthand — same as List.new&lt;i64&gt;(
       <rect width="880" height="70" rx="8" fill="#fafafa" stroke="#d6d3cd"/>
       <text x="14" y="22" font-weight="700">Rules</text>
       <text x="14" y="42" font-size="11">— <tspan font-family="SF Mono, Menlo, monospace">..&lt;expr&gt;</tspan> works on any <tspan font-family="SF Mono, Menlo, monospace">Iterator&lt;T&gt;</tspan> (not just List).  Any number of spreads, any position.</text>
-      <text x="14" y="58" font-size="11">— Result is a new List. Primitives copy; references RC++.</text>
+      <text x="14" y="58" font-size="11">— Result is a new List. Primitives copy; references alias the same GC object.</text>
     </g>
   </svg>
   <div class="diagram-caption">Sources are never modified — every literal builds a new list.</div>
@@ -489,7 +489,7 @@ for n in (Range { current: 0, end: 5 }) {
     <li>Passes to/from extern functions by value or pointer, no shim.</li>
     <li>Bytes live on the <em>foreign</em> heap — manual <code>alloc</code>/<code>free</code>; GC does not trace.</li>
     <li>Cannot implement interfaces.</li>
-    <li>Cannot be a generic type argument (no GC header).</li>
+    <li>Cannot be a generic type argument (no object header).</li>
   </ul>
 </div>
 
