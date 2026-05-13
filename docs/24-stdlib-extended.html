@@ -270,12 +270,19 @@ late. Before that, every HTTP library shipped its own. The cost compounds:</p>
 <!-- =========================================================== -->
 <h2 id="prelude-additions">4. <code>core:prelude</code> — additions</h2>
 
-<p>Chapter 18 leaves the prelude with <code>str</code>, <code>List</code>,
-<code>Map</code>, <code>Iterator</code>, <code>Item/Done</code>, <code>Buffer</code>, and
-the numeric helper namespaces. The roadmap <strong>removes</strong> <code>List</code> and
-<code>Map</code> from the prelude — they move to the explicit-import
-<a href="#collections"><code>core:collections</code></a> module along with <code>Set</code>.
-The prelude gains <code>Deque</code> and <code>Bytes</code>.</p>
+<p>Chapter 18 leaves the prelude with <code>str</code>, <code>List</code>, <code>Map</code>,
+<code>Iterator</code>, <code>Item/Done</code>, <code>Buffer</code>, the <code>Error</code>
+interface + <code>Annotated</code> wrapper, and the numeric helper namespaces. The roadmap
+<strong>removes</strong>:</p>
+<ul>
+  <li><code>List</code> and <code>Map</code> — move to
+    <a href="#collections"><code>core:collections</code></a> along with <code>Set</code>.</li>
+  <li><code>Error</code>, <code>Annotated</code>, <code>with_context</code> — move to
+    <a href="#error"><code>core:error</code></a>.</li>
+</ul>
+<p>The prelude gains <code>Deque</code> and <code>Bytes</code>. After the move, the
+auto-imported surface contains only language-fundamental shapes (text, iteration, FFI bytes,
+numeric helpers).</p>
 
 <div class="callout">
   <strong>Why explicit collections</strong>
@@ -500,38 +507,47 @@ pub struct FmtError { pub message: str }</code></pre>
 <!-- =========================================================== -->
 <h2 id="error">8. <code>core:error</code> — error interface</h2>
 
-<p>Chapter 13 makes errors values in unions. That works for one library. Across libraries,
-nothing forces a common shape. <code>core:error</code> defines one.</p>
+<p>The <code>Error</code> interface and the <code>Annotated</code> wrapper are
+<strong>spec'd in chapter 18</strong> (<a href="./18-stdlib.html#error">§18.3</a>) and live
+in <code>core:prelude</code> today. This roadmap moves them out of the prelude into a
+dedicated <code>core:error</code> module — same definitions, explicit import.</p>
 
-<pre><code>pub interface Error: Display + Debug {
+<pre><code>// Re-spec from 18.3, unchanged shape:
+pub interface Error: ToStr {
   function message(self): str
-  function cause(self): Error | null         // for chaining; default: null
+  function cause(self): Error | null
 }
 
-// Wrap an arbitrary error with extra context.
-pub struct Context {
-  pub message: str,
-  pub source:  Error,
+pub struct Annotated {
+  pub note:   str,
+  pub source: Error,
 }
 
-extend Context: Error {
-  function message(self): str    { self.message }
-  function cause(self):   Error | null  { self.source }
-  function display(self): str    { self.message + ": " + self.source.display() }
-  function debug(self):   str    { "Context { ... }" }
-}</code></pre>
+extend Annotated: Error {
+  function message(self): str          { self.note }
+  function cause(self):   Error | null { self.source }
+  function to_str(self):  str          { self.note + ": " + self.source.to_str() }
+}
 
-<p>Conventions:</p>
+pub function with_context&lt;T, E: Error&gt;(
+  value: T | E,
+  note: str,
+): T | Annotated</code></pre>
 
-<ul>
-  <li>Libraries define their own error <em>structs</em>, then <code>extend</code> them with
-    <code>Error</code>. They still appear in unions (<code>T | MyError</code>) — the
-    interface just lets them flow into generic error-handling code.</li>
-  <li><code>?</code> (chapter 13) continues to work on unions; this chapter adds nothing to
-    its rules.</li>
-  <li>Logging and tracing libraries can accept any <code>Error</code> without knowing the
-    concrete type.</li>
-</ul>
+<div class="callout">
+  <strong>Conventions (recap from chapter 13)</strong>
+  <ul>
+    <li>Libraries define their own error <em>structs</em>, then <code>extend</code> them
+      with <code>Error</code>. They still appear in unions (<code>T | MyError</code>); the
+      interface just lets them flow into generic error-handling code.</li>
+    <li><code>?</code> (chapter 13) continues to work on unions; this module adds nothing
+      to its rules.</li>
+    <li>Logging and tracing libraries accept any <code>Error</code> without knowing the
+      concrete type, and call <code>to_str()</code> to render.</li>
+    <li>No <code>Display</code> / <code>Debug</code> split — <code>ToStr</code> (chapter 15)
+      is the only stringification path, so <code>Error: ToStr</code> alone is enough.</li>
+  </ul>
+</div>
 
 <!-- =========================================================== -->
 <h2 id="time-core">9. <code>core:time</code> — Duration</h2>
@@ -1087,8 +1103,8 @@ pub function info_with(message: str, fields: Map&lt;str, str&gt;): null
         <td><code>Reader</code>, <code>Writer</code>, <code>Seeker</code>, <code>BufReader</code>, <code>BufWriter</code>, <code>IoError</code></td></tr>
     <tr><td><code>core:fmt</code></td><td>core</td><td></td>
         <td><code>Display</code>, <code>Debug</code>, <code>FmtSink</code></td></tr>
-    <tr><td><code>core:error</code></td><td>core</td><td></td>
-        <td><code>Error</code> interface, <code>Context</code> wrapper</td></tr>
+    <tr><td><code>core:error</code></td><td>core</td><td><span class="pill spec">spec</span></td>
+        <td><code>Error</code> interface, <code>Annotated</code> wrapper, <code>with_context</code></td></tr>
     <tr><td><code>core:time</code></td><td>core</td><td></td>
         <td><code>Duration</code> only (no clock)</td></tr>
     <tr><td><code>core:hash</code></td><td>core</td><td></td>

@@ -59,7 +59,8 @@
 <h1>13. Error Handling</h1>
 <p class="lead">
   No exceptions. No <code>try</code>/<code>catch</code>. Errors are union variants;
-  the postfix <code>?</code> propagates them; <code>panic</code> handles truly unrecoverable cases.
+  the postfix <code>?</code> propagates them; the <code>Error</code> interface gives them a
+  shared shape; <code>panic</code> handles truly unrecoverable cases.
 </p>
 
 <div class="toc">
@@ -69,6 +70,8 @@
     <li><a href="#qmark">The <code>?</code> operator</a></li>
     <li><a href="#try">The <code>Try</code> interface</a></li>
     <li><a href="#from">Residual conversion (<code>FromResidual</code>)</a></li>
+    <li><a href="#iface">The <code>Error</code> interface &amp; <code>Annotated</code></a></li>
+    <li><a href="#tnull">When to use <code>T | null</code> vs <code>T | E</code></a></li>
     <li><a href="#noexc">No exceptions, no unwinding</a></li>
     <li><a href="#panic">Panics are not catchable</a></li>
     <li><a href="#style">Style guidance</a></li>
@@ -256,8 +259,188 @@ propagate but not exactly, <code>FromResidual</code> lets the compiler insert a 
   function from_residual(r: R): Self
 }</code></pre>
 
+<div class="callout warn">
+  <strong>No automatic <code>null</code> → <code>Error</code> conversion</strong>
+  <code>FromResidual&lt;null&gt;</code> is <strong>not</strong> auto-implemented for any
+  <code>Error</code>-type. A function that calls a <code>T | null</code> API but returns
+  <code>T | E</code> must lift explicitly:
+  <pre><code>function head(list: List&lt;User&gt;): User | NotFound {
+  var first = list.get(0)              // User | null
+  if first is null { return NotFound }
+  first as User
+}</code></pre>
+  This keeps the <em>"no reason"</em> vs <em>"with reason"</em> choice deliberate. If you
+  want it implicit for a given error type, write the impl yourself:
+  <code>extend MyError: FromResidual&lt;null&gt; { ... }</code>.
+</div>
+
 <!-- =========================================================== -->
-<h2 id="noexc">5. No exceptions, no unwinding</h2>
+<h2 id="iface">5. The <code>Error</code> interface &amp; <code>Annotated</code></h2>
+
+<p>Errors are still ordinary values living in unions. What the <code>Error</code> interface
+(defined in <a href="18-stdlib.html#error">18.3</a>, lives in <code>core:prelude</code>) gives
+you is a <strong>shared shape</strong> across libraries — so loggers, panic-helpers, and
+context-wrappers can consume any error without knowing its concrete type.</p>
+
+<pre><code>pub interface Error: ToStr {
+  function message(self): str
+  function cause(self): Error | null
+}</code></pre>
+
+<p><code>Error: ToStr</code> means every error is also stringifiable through the
+language's single <code>ToStr</code> path (chapter 15). <code>message(self)</code> is this
+layer's short text; <code>cause(self)</code> walks the chain.</p>
+
+<h3>Canonical error shapes</h3>
+
+<p>Two layouts. Pick whichever matches the failure modes you expose.</p>
+
+<div class="two-col">
+  <div>
+    <strong>Kinded</strong> — multiple failure modes the caller may discriminate.
+    <pre><code>pub struct IoError {
+  pub kind:    IoErrorKind,
+  pub message: str,
+}
+
+pub union IoErrorKind =
+    NotFound | PermissionDenied
+  | ConnectionRefused | TimedOut
+  | UnexpectedEof | Interrupted
+  | Other</code></pre>
+  </div>
+  <div>
+    <strong>Flat</strong> — one failure mode plus optional payload.
+    <pre><code>pub struct ParseError {
+  pub message:  str,
+  pub position: i64,
+}</code></pre>
+  </div>
+</div>
+
+<div class="callout">
+  <strong>Forward-compatibility rule for kinded errors</strong>
+  Include an <code>Other</code> variant in every public <code>*Kind</code> union, and always
+  handle it with an <code>else =&gt;</code> arm in <code>match</code>. Adding new variants
+  later is then non-breaking for any caller following the rule.
+</div>
+
+<h3>Annotating errors — <code>Annotated</code> + <code>with_context</code></h3>
+
+<p>To attach a breadcrumb when crossing a layer boundary, wrap any error with
+<code>Annotated</code>. The wrapped value is itself an <code>Error</code>, so chains nest:</p>
+
+<pre><code>pub struct Annotated {
+  pub note:   str,     // this layer's contribution
+  pub source: Error,   // the wrapped lower-level error
+}
+
+// Helper: lift a fallible result, attaching context only on failure.
+pub function with_context&lt;T, E: Error&gt;(
+  value: T | E,
+  note: str,
+): T | Annotated</code></pre>
+
+<div class="diagram">
+  <svg viewBox="0 0 920 220" role="img" aria-label="Annotated chain">
+    <defs>
+      <marker id="ann" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+        <path d="M 0 0 L 9 3 L 0 6 z" fill="#5a5a60"/>
+      </marker>
+    </defs>
+
+    <g transform="translate(20, 30)">
+      <rect width="220" height="50" rx="6" fill="#fbf3ec" stroke="#b54708" stroke-width="2"/>
+      <text x="14" y="22" font-weight="700" fill="#b54708">IoError</text>
+      <text x="14" y="40" font-size="11">kind: NotFound</text>
+    </g>
+
+    <path d="M 240 55 L 290 55" stroke="#5a5a60" stroke-width="2" marker-end="url(#ann)"/>
+    <text x="265" y="48" font-size="10" class="small">.cause()</text>
+
+    <g transform="translate(300, 30)">
+      <rect width="280" height="50" rx="6" fill="#f3eefa" stroke="#6b4ba8" stroke-width="2"/>
+      <text x="14" y="22" font-weight="700" fill="#6b4ba8">Annotated</text>
+      <text x="14" y="40" font-size="11">note: "parsing config"</text>
+    </g>
+
+    <path d="M 580 55 L 630 55" stroke="#5a5a60" stroke-width="2" marker-end="url(#ann)"/>
+    <text x="605" y="48" font-size="10" class="small">.cause()</text>
+
+    <g transform="translate(640, 30)">
+      <rect width="260" height="50" rx="6" fill="#f3eefa" stroke="#6b4ba8" stroke-width="2"/>
+      <text x="14" y="22" font-weight="700" fill="#6b4ba8">Annotated</text>
+      <text x="14" y="40" font-size="11">note: "starting server"</text>
+    </g>
+
+    <g transform="translate(20, 100)">
+      <rect width="880" height="100" rx="8" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
+      <text x="14" y="22" font-weight="700" fill="#2a6f4d">to_str() walks the chain</text>
+      <text x="14" y="44" font-size="11" font-family="SF Mono, Menlo, monospace">"starting server: parsing config: file not found"</text>
+      <text x="14" y="68" font-size="11">Each <tspan font-family="SF Mono, Menlo, monospace">with_context(...)</tspan> at a <tspan font-family="SF Mono, Menlo, monospace">?</tspan>-site adds one layer; nothing is captured automatically.</text>
+      <text x="14" y="86" font-size="11" class="small">Errors do <em>not</em> carry source-location info — see "No backtraces on errors" below.</text>
+    </g>
+  </svg>
+  <div class="diagram-caption">Chains are explicit, bottom-up, allocation-cheap — and grep-able like any other call.</div>
+</div>
+
+<pre><code>function load(path: str): Config | Annotated {
+  var bytes  = with_context(read_file(path),     "loading config")?
+  var parsed = with_context(parse(bytes),        "parsing config")?
+  with_context(validate(parsed),                 "validating config")?
+}</code></pre>
+
+<div class="callout">
+  <strong>No backtraces on errors</strong>
+  Value-errors do not capture file/line at construction — this would impose hidden
+  allocations on every fallible call. Debug-build <em>panics</em> still print stack traces
+  (chapter 14). For value-errors, the explicit <code>Annotated</code> chain plays the same
+  role: each <code>with_context</code> at a propagation site is a deliberate breadcrumb.
+  Tooling that wants real captured locations can add a field to its own error struct.
+</div>
+
+<!-- =========================================================== -->
+<h2 id="tnull">6. When to use <code>T | null</code> vs <code>T | E</code></h2>
+
+<p>Both shapes exist for a reason. The rule:</p>
+
+<table>
+  <thead><tr><th>Shape</th><th>Use when…</th><th>Examples</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><code>T | null</code></td>
+      <td>Failure carries <strong>no</strong> information beyond "absent or invalid input".
+          The caller does not need to render <em>why</em> it failed.</td>
+      <td><code>Map.get</code>, <code>List.pop</code>, <code>str.index_of</code>,
+          <code>parse_int</code> (when "not a number" is the whole story).</td>
+    </tr>
+    <tr>
+      <td><code>T | E</code> where <code>E: Error</code></td>
+      <td>Failure has a <strong>reason</strong> the caller may render, log, branch on, or
+          enrich with context.</td>
+      <td><code>read_file</code>, <code>connect</code>, <code>parse_config</code>,
+          <code>authenticate</code>.</td>
+    </tr>
+    <tr>
+      <td><code>panic</code></td>
+      <td>The condition violates an <strong>invariant</strong> the caller is responsible for
+          upholding — a programming bug, not a runtime failure path.</td>
+      <td>Indexing past <code>List.size()</code>, division by zero, <code>as</code> on a
+          variant that doesn't match.</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout">
+  <strong>No blessed <code>Result&lt;T, E&gt;</code> alias</strong>
+  Chapter 3 shows <code>type Result&lt;T, E&gt; = T | E</code> works as a generic union. The
+  stdlib does <strong>not</strong> ship it. Write <code>T | E</code> directly. The reason is
+  pedagogical: the language's failure model <em>is</em> the union — wrapping it in a named
+  alias hides what's going on without adding power.
+</div>
+
+<!-- =========================================================== -->
+<h2 id="noexc">7. No exceptions, no unwinding</h2>
 
 <div class="callout warn">
   <strong>What's missing — on purpose</strong>
@@ -271,7 +454,7 @@ propagate but not exactly, <code>FromResidual</code> lets the compiler insert a 
 </div>
 
 <!-- =========================================================== -->
-<h2 id="panic">6. Panics are not catchable</h2>
+<h2 id="panic">8. Panics are not catchable</h2>
 
 <p><code>panic(...)</code> and panic-on-failure operations (<code>as</code> mismatch, integer
 ÷ by zero, etc.) terminate the current thread. They are <strong>not</strong> catchable.
@@ -279,50 +462,105 @@ Use them only for programming bugs and truly unrecoverable conditions; use
 <code>T | Error</code> + <code>?</code> for expected error paths. See <a href="14-panics.html">14-panics</a>.</p>
 
 <!-- =========================================================== -->
-<h2 id="style">7. Style guidance</h2>
+<h2 id="style">9. Style guidance</h2>
 
 <div class="callout good">
-  <strong>Style recommendations</strong>
+  <strong>Default practices</strong>
   <ul>
-    <li>Define a single error type per module boundary (e.g. <code>AppError</code>) and convert specific errors into it with <code>FromResidual</code>.</li>
-    <li>Use <code>?</code> for "if this fails I want to return now" and <code>match</code> for "I want to decide based on which failure".</li>
-    <li>Don't use union types with more than ~5 error variants in a public API; collapse them with <code>FromResidual</code>.</li>
+    <li><strong>One error type per module boundary.</strong> A public API exposes one
+        <code>Error</code>-implementing struct (e.g. <code>AppError</code>) and uses
+        <code>FromResidual</code> to absorb lower-level errors.</li>
+    <li><strong>Pick the canonical shape.</strong> Use the <em>kinded</em> layout
+        (<code>{ kind, message, ... }</code>) when callers may discriminate; <em>flat</em>
+        when there is one failure mode plus payload.</li>
+    <li><strong>Always include <code>Other</code></strong> in a public <code>*Kind</code>
+        union and always use <code>else =&gt;</code> in <code>match</code> on it. Adding
+        variants later is then non-breaking.</li>
+    <li><strong>Annotate at boundaries.</strong> Wrap with <code>Annotated</code> /
+        <code>with_context(...)</code> at the layer that has the context to add. Don't wrap
+        at every <code>?</code> — only where the breadcrumb is meaningful.</li>
+    <li><strong><code>?</code> first, <code>match</code> when you need to discriminate.</strong>
+        Reserve <code>match</code> for branching on failure kind.</li>
+    <li><strong>Keep public unions narrow.</strong> More than ~5 error variants in an
+        exported return type is a signal to collapse via <code>FromResidual</code>.</li>
+    <li><strong>Panics are for invariants, not flow.</strong> Use <code>T | E</code> /
+        <code>?</code> for any failure mode a caller might handle.</li>
+    <li><strong>Pick <code>T | null</code> only when failure carries no reason.</strong>
+        See §6 — and don't lift implicitly into <code>T | Error</code>.</li>
   </ul>
 </div>
 
 <!-- =========================================================== -->
-<h2 id="ex">8. Examples</h2>
+<h2 id="ex">10. Examples</h2>
 
-<pre><code>struct IoError    { pub kind: str }
-struct ParseError { pub at:   i64 }
+<pre><code>// === Lower-level error types ===
+pub struct IoError {
+  pub kind:    IoErrorKind,
+  pub message: str,
+}
+pub union IoErrorKind = NotFound | PermissionDenied | Other
 
-function read_file(path: str): str | IoError { ... }
-function parse(s: str): Config | ParseError { ... }
-
-// Propagating both
-function load(path: str): Config | IoError | ParseError {
-  var s = read_file(path)?       // strips IoError on failure
-  parse(s)?                      // strips ParseError on failure
+pub struct ParseError {
+  pub message:  str,
+  pub position: i64,
 }
 
-// Wrapping into a single error type
-struct AppError { pub message: str }
+extend IoError: Error {
+  function message(self): str          { self.message }
+  function cause(self):   Error | null { null }
+  function to_str(self):  str          { "io: " + self.message }
+}
+extend ParseError: Error {
+  function message(self): str          { self.message }
+  function cause(self):   Error | null { null }
+  function to_str(self):  str          { "parse@" + (self.position as str) + ": " + self.message }
+}
+
+function read_file(path: str): str    | IoError    { ... }
+function parse(s: str):         Config | ParseError { ... }
+
+// === Option A: propagate the raw union ===
+function load(path: str): Config | IoError | ParseError {
+  var s = read_file(path)?       // strips IoError
+  parse(s)?                      // strips ParseError
+}
+
+// === Option B: collapse into a single module-level error via FromResidual ===
+pub struct AppError {
+  pub kind:    AppErrorKind,
+  pub message: str,
+}
+pub union AppErrorKind = Io | Parse | Validation | Other
+
+extend AppError: Error {
+  function message(self): str          { self.message }
+  function cause(self):   Error | null { null }
+  function to_str(self):  str          { self.message }
+}
 
 extend AppError: FromResidual&lt;IoError&gt; {
   function from_residual(e: IoError): AppError {
-    AppError { message: "io: " + e.kind }
+    AppError { kind: Io, message: e.to_str() }
   }
 }
 extend AppError: FromResidual&lt;ParseError&gt; {
   function from_residual(e: ParseError): AppError {
-    AppError { message: "parse at " + (e.at as str) }
+    AppError { kind: Parse, message: e.to_str() }
   }
 }
 
 function load_wrapped(path: str): Config | AppError {
-  var s = read_file(path)?       // IoError → AppError via FromResidual
+  var s = read_file(path)?       // IoError  → AppError via FromResidual
   parse(s)?                      // ParseError → AppError via FromResidual
-}</code></pre>
+}
+
+// === Option C: keep the chain visible via Annotated breadcrumbs ===
+function load_with_breadcrumbs(path: str): Config | Annotated {
+  var bytes  = with_context(read_file(path),  "loading config")?
+  var parsed = with_context(parse(bytes),     "parsing config")?
+  with_context(validate(parsed),              "validating config")?
+}
+// Calling load_with_breadcrumbs and walking .cause() yields the full chain.</code></pre>
 
 </body>
 </html>
