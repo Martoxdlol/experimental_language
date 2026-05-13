@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>6. Variables and Mutability</title>
+<style>
+  :root {
+    --fg: #1b1b1d;
+    --muted: #5a5a60;
+    --bg: #fdfdfc;
+    --accent: #1a4a8a;
+    --accent-2: #2a6f4d;
+    --warn: #b54708;
+    --code-bg: #f4f2ee;
+    --code-fg: #1b1b1d;
+    --border: #e4e1dc;
+    --table-stripe: #f8f7f4;
+    --pub: #2a6f4d;
+    --priv: #b54708;
+    --pkg: #1a4a8a;
+    --core: #6b4ba8;
+  }
+  html { box-sizing: border-box; }
+  *, *::before, *::after { box-sizing: inherit; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color: var(--fg);
+    background: var(--bg);
+    line-height: 1.55;
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 2.5rem 1.5rem 6rem;
+  }
+  h1, h2, h3, h4 {
+    color: var(--fg);
+    line-height: 1.25;
+    margin-top: 2.2rem;
+    margin-bottom: 0.6rem;
+  }
+  h1 { font-size: 2rem; border-bottom: 2px solid var(--border); padding-bottom: 0.4rem; }
+  h2 { font-size: 1.45rem; margin-top: 2.6rem; }
+  h3 { font-size: 1.15rem; color: var(--accent); }
+  h4 { font-size: 1rem; color: var(--muted); }
+  p { margin: 0.7rem 0; }
+  ul, ol { margin: 0.7rem 0; padding-left: 1.6rem; }
+  li { margin: 0.3rem 0; }
+  code {
+    font-family: "SF Mono", Menlo, Consolas, "Courier New", monospace;
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 0.1em 0.35em;
+    border-radius: 3px;
+    font-size: 0.92em;
+  }
+  pre {
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 0.9rem 1rem;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 0.88rem;
+    line-height: 1.5;
+    border: 1px solid var(--border);
+  }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1rem 0;
+    font-size: 0.94rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.5rem 0.7rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th { background: var(--code-bg); font-weight: 600; }
+  tbody tr:nth-child(even) { background: var(--table-stripe); }
+  .lead {
+    font-size: 1.05rem;
+    color: var(--muted);
+    margin-bottom: 1.6rem;
+  }
+  .toc {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1rem 1.2rem;
+    margin: 1.6rem 0 2rem;
+    font-size: 0.94rem;
+  }
+  .toc ol { margin: 0.2rem 0 0; padding-left: 1.3rem; }
+  .toc a { color: var(--accent); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+
+  .diagram {
+    background: #ffffff;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.4rem;
+    margin: 1.4rem 0;
+    overflow-x: auto;
+  }
+  .diagram-caption {
+    font-size: 0.85rem;
+    color: var(--muted);
+    text-align: center;
+    margin-top: 0.6rem;
+    font-style: italic;
+  }
+  svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+  svg text { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; fill: var(--fg); }
+  svg .label { font-family: -apple-system, system-ui, sans-serif; font-size: 12px; }
+  svg .small { font-size: 10px; fill: var(--muted); }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    justify-content: center;
+    margin-top: 0.8rem;
+    font-size: 0.85rem;
+  }
+  .legend-item { display: flex; align-items: center; gap: 0.4rem; }
+  .legend-swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    border: 1px solid rgba(0,0,0,0.15);
+  }
+
+  .tag {
+    display: inline-block;
+    padding: 0.1em 0.55em;
+    border-radius: 3px;
+    font-size: 0.78em;
+    font-weight: 600;
+    font-family: "SF Mono", Menlo, monospace;
+    color: white;
+    vertical-align: middle;
+  }
+  .tag.pub  { background: var(--pub); }
+  .tag.priv { background: var(--priv); }
+  .tag.pkg  { background: var(--pkg); }
+  .tag.core { background: var(--core); }
+  .tag.warn { background: var(--warn); }
+
+  .callout {
+    border-left: 4px solid var(--accent);
+    background: #f0f4fa;
+    padding: 0.8rem 1rem;
+    margin: 1.2rem 0;
+    border-radius: 0 6px 6px 0;
+  }
+  .callout.warn { border-color: var(--warn); background: #fbf3ec; }
+  .callout.good { border-color: var(--accent-2); background: #eef6f1; }
+  .callout strong { display: block; margin-bottom: 0.3rem; }
+
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin: 1.2rem 0;
+  }
+  @media (max-width: 720px) {
+    .two-col { grid-template-columns: 1fr; }
+  }
+
+  .file-tree {
+    font-family: "SF Mono", Menlo, monospace;
+    font-size: 0.88rem;
+    line-height: 1.55;
+    background: var(--code-bg);
+    padding: 1rem 1.2rem;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    white-space: pre;
+    overflow-x: auto;
+  }
+  .file-tree .pub  { color: var(--pub); font-weight: 600; }
+  .file-tree .priv { color: var(--priv); }
+  .file-tree .note { color: var(--muted); font-style: italic; }
+</style>
+</head>
+<body>
+
+<h1>6. Variables and Mutability</h1>
+
+<p>Every binding is declared with <code>var</code>. There is no <code>let</code> / <code>const</code>. Every binding is mutable.</p>
+
+<pre><code>var name: str = "John Doe"
+var age = 30           // type inferred — i64 (default integer literal type)
+var price: f32 = 19.99
+
+name = "Jane Doe"      // mutation</code></pre>
+
+<p>Restrictions on what an outside caller can mutate come from <strong>module visibility</strong> (see <a href="17-modules.html">17-modules.html</a>), not from variable annotations.</p>
+
+<h2 id="6-1-declaration-syntax">6.1 Declaration syntax</h2>
+
+<pre><code>var &lt;name&gt;          : &lt;type&gt; = &lt;expr&gt;     // explicit type + initializer
+var &lt;name&gt;                    = &lt;expr&gt;     // inferred type</code></pre>
+
+<p>Both forms require an initializer. Uninitialized bindings (<code>var x: i64</code>) are not allowed; primitives have no implicit default value.</p>
+
+<p>A <code>var</code> statement is terminated by <code>;</code> unless it is the last item in a block, where the <code>;</code> is optional but conventional.</p>
+
+<h2 id="6-2-mutation">6.2 Mutation</h2>
+
+<p>Any binding can be reassigned, including across types when the new value fits the declared (or inferred) type:</p>
+
+<pre><code>var x: i64 | str = 1
+x = "hello"            // OK — fits i64 | str
+x = true               // compile error — bool not in the union</code></pre>
+
+<p>Reassignment to a value of a different concrete type is fine; reassignment that escapes the declared type is rejected by the type checker.</p>
+
+<p>Mutating a struct field uses <code>=</code>:</p>
+
+<pre><code>person.age = person.age + 1</code></pre>
+
+<p>For overloaded indexing, see <a href="15-operators.html">15-operators.html</a>.</p>
+
+<h2 id="6-3-scoping">6.3 Scoping</h2>
+
+<p>Lexical scoping. A block <code>{ ... }</code> introduces a new scope. Bindings in an inner scope shadow same-named bindings in outer scopes.</p>
+
+<pre><code>var x = 1
+{
+  var x = 2     // shadows outer
+  print(x as str)  // 2
+}
+print(x as str)     // 1</code></pre>
+
+<p>Two <code>var</code>s with the same name in the same scope are an error.</p>
+
+<p>A binding is in scope from the point of declaration until the end of the enclosing block.</p>
+
+<h2 id="6-4-module-level-variables">6.4 Module-level variables</h2>
+
+<p>Variables declared at module top level are persistent storage:</p>
+
+<pre><code>pub var MAX_RETRIES: i32 = 5
+var counter: i64 = 0
+pub var DEFAULT_CONFIG = Config { debug: false, port: 8080 }</code></pre>
+
+<h3>Initializer restrictions</h3>
+
+<p>A module-level <code>var</code> must be initialized with a <strong>compile-time constant expression</strong>:</p>
+
+<ul>
+  <li>Literals (<code>42</code>, <code>"hello"</code>, <code>true</code>, <code>null</code>, <code>3.14</code>).</li>
+  <li>Struct construction whose every field is itself a compile-time constant.</li>
+  <li>Tuple construction whose every element is itself a compile-time constant.</li>
+  <li>Arithmetic, bitwise, and logical operations on the above (the compiler evaluates these).</li>
+  <li>Other module-level <code>var</code> references whose initializers are themselves constant.</li>
+</ul>
+
+<p>The following are <strong>not</strong> allowed at module level:</p>
+
+<ul>
+  <li>Function calls (even pure ones — there is no way to mark a function <code>const</code>).</li>
+  <li><code>as</code> casts that can fail (union narrowing).</li>
+  <li><code>await</code>, <code>spawn</code>, <code>pin</code>, channel construction.</li>
+  <li>Indexing into collections.</li>
+  <li><code>if</code>/<code>match</code> expressions (control flow is for function bodies).</li>
+</ul>
+
+<p>If you need lazy initialization, expose a function and call it from <code>main</code>:</p>
+
+<pre><code>var get_start_time_initialized: bool = false
+var start_time_storage: i64 = 0
+function start_time(): i64 {
+  if !get_start_time_initialized {
+    start_time_storage = clock_now()
+    get_start_time_initialized = true
+  }
+  start_time_storage
+}</code></pre>
+
+<p>(Note: <code>Shared&lt;T&gt;</code> is the right tool if multiple threads might race.)</p>
+
+<h3>Initialization order</h3>
+
+<p>Because there is no module init code (see <a href="17-modules.html">17-modules.html</a>), all module-level <code>var</code> values are computed at compile time and embedded directly into static storage. There is no runtime "load order" between modules. This makes circular imports trivially safe.</p>
+
+<h3>Visibility</h3>
+
+<ul>
+  <li><code>var FOO</code> — module-private.</li>
+  <li><code>pub var FOO</code> — visible to importers.</li>
+</ul>
+
+<p>A <code>pub var</code> is read <strong>and</strong> writeable by importers. The language does not distinguish read-only from read-write at the visibility layer. If you want read-only-from-outside semantics, expose a getter function and keep the <code>var</code> private.</p>
+
+<p>This is intentional: avoids the design complexity of <code>pub</code> / <code>pub(crate)</code> / <code>pub(read)</code> etc., and the visibility system is exclusively about access, not about mutability. Mutating shared module state is unsafe across threads unless wrapped (see <code>Shared&lt;T&gt;</code> in <a href="20-concurrency.html">20-concurrency.html</a>).</p>
+
+<h2 id="6-5-shadowing">6.5 Shadowing</h2>
+
+<p>Inner scopes may declare a same-named binding:</p>
+
+<pre><code>function example() {
+  var x: i64 = 5
+  if x &gt; 0 {
+    var x: str = "positive"   // shadows; type can differ
+    print(x)
+  }
+  // x is still i64 here
+}</code></pre>
+
+<p>Shadowing only crosses block boundaries — within a single block, redeclaring is an error.</p>
+
+<h2 id="6-6-assignment-expressions-statements">6.6 Assignment, expressions, statements</h2>
+
+<p>Assignment is a statement, not an expression. It does not produce a value. You cannot write <code>var y = (x = 5)</code> — that's a parse error.</p>
+
+<p><code>var</code> declaration is also a statement.</p>
+
+<p>For expression-vs-statement rules, see <a href="07-expressions.html">07-expressions.html</a>.</p>
+
+<h2 id="6-7-pattern-bindings">6.7 Pattern bindings</h2>
+
+<p><code>var</code> accepts destructuring patterns:</p>
+
+<pre><code>var (x, y) = point
+var (a, ..rest) = quad             // tuple rest binding — rest is a sub-tuple
+var Person { name, age } = alice
+var Pair(a, b) = pair</code></pre>
+
+<p>In each case the names introduced are normal <code>var</code> bindings, individually mutable.</p>
+
+<p>A pattern in <code>var</code> must be <strong>irrefutable</strong> — it must always match. To match conditionally, use <code>match</code> or an <code>if v is T</code> guard. <strong>List patterns</strong> like <code>[head, ..tail] = list</code> are <em>refutable</em> (an empty list doesn't match <code>[head, ..tail]</code>), so they are not valid in <code>var</code> — use <code>match</code> for those.</p>
+
+<h2 id="6-8-reference-semantics-what-assignment-does">6.8 Reference semantics — what assignment does</h2>
+
+<p>For primitive types (<code>i8</code>..<code>i64</code>, <code>u8</code>..<code>u64</code>, <code>f32</code>, <code>f64</code>, <code>bool</code>, <code>char</code>, <code>null</code>), assignment copies the value.</p>
+
+<p>For reference types (<code>str</code>, structs, <code>List&lt;T&gt;</code>, <code>Map&lt;K, V&gt;</code>, tuples that have been boxed), assignment copies the <strong>reference</strong>, incrementing the underlying object's refcount. Both bindings then refer to the same heap object. Mutation through one is visible through the other.</p>
+
+<pre><code>var a = Person { name: "Alice", age: 30 }
+var b = a             // b refers to the same heap object as a
+b.age = 31
+print(a.age as str)   // 31 — a and b alias</code></pre>
+
+<p>To get a deep copy, call <code>.clone()</code> (requires the type to implement <code>Clone</code>; see <a href="15-operators.html">15-operators.html</a>):</p>
+
+<pre><code>var b = a.clone()
+b.age = 31
+print(a.age as str)   // 30 — independent</code></pre>
+
+<p>This aliasing-with-mutation model is the standard one for refcounted languages and matches the memory model in <a href="16-memory.html">16-memory.html</a>.</p>
+
+</body>
+</html>

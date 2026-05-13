@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>17. Modules and Imports</title>
+<style>
+  :root {
+    --fg: #1b1b1d;
+    --muted: #5a5a60;
+    --bg: #fdfdfc;
+    --accent: #1a4a8a;
+    --accent-2: #2a6f4d;
+    --warn: #b54708;
+    --code-bg: #f4f2ee;
+    --code-fg: #1b1b1d;
+    --border: #e4e1dc;
+    --table-stripe: #f8f7f4;
+    --pub: #2a6f4d;
+    --priv: #b54708;
+    --pkg: #1a4a8a;
+    --core: #6b4ba8;
+  }
+  html { box-sizing: border-box; }
+  *, *::before, *::after { box-sizing: inherit; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color: var(--fg);
+    background: var(--bg);
+    line-height: 1.55;
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 2.5rem 1.5rem 6rem;
+  }
+  h1, h2, h3, h4 {
+    color: var(--fg);
+    line-height: 1.25;
+    margin-top: 2.2rem;
+    margin-bottom: 0.6rem;
+  }
+  h1 { font-size: 2rem; border-bottom: 2px solid var(--border); padding-bottom: 0.4rem; }
+  h2 { font-size: 1.45rem; margin-top: 2.6rem; }
+  h3 { font-size: 1.15rem; color: var(--accent); }
+  h4 { font-size: 1rem; color: var(--muted); }
+  p { margin: 0.7rem 0; }
+  ul, ol { margin: 0.7rem 0; padding-left: 1.6rem; }
+  li { margin: 0.3rem 0; }
+  code {
+    font-family: "SF Mono", Menlo, Consolas, "Courier New", monospace;
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 0.1em 0.35em;
+    border-radius: 3px;
+    font-size: 0.92em;
+  }
+  pre {
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 0.9rem 1rem;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 0.88rem;
+    line-height: 1.5;
+    border: 1px solid var(--border);
+  }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1rem 0;
+    font-size: 0.94rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.5rem 0.7rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th { background: var(--code-bg); font-weight: 600; }
+  tbody tr:nth-child(even) { background: var(--table-stripe); }
+  .lead {
+    font-size: 1.05rem;
+    color: var(--muted);
+    margin-bottom: 1.6rem;
+  }
+  .toc {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1rem 1.2rem;
+    margin: 1.6rem 0 2rem;
+    font-size: 0.94rem;
+  }
+  .toc ol { margin: 0.2rem 0 0; padding-left: 1.3rem; }
+  .toc a { color: var(--accent); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+
+  .diagram {
+    background: #ffffff;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.4rem;
+    margin: 1.4rem 0;
+    overflow-x: auto;
+  }
+  .diagram-caption {
+    font-size: 0.85rem;
+    color: var(--muted);
+    text-align: center;
+    margin-top: 0.6rem;
+    font-style: italic;
+  }
+  svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+  svg text { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; fill: var(--fg); }
+  svg .label { font-family: -apple-system, system-ui, sans-serif; font-size: 12px; }
+  svg .small { font-size: 10px; fill: var(--muted); }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    justify-content: center;
+    margin-top: 0.8rem;
+    font-size: 0.85rem;
+  }
+  .legend-item { display: flex; align-items: center; gap: 0.4rem; }
+  .legend-swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    border: 1px solid rgba(0,0,0,0.15);
+  }
+
+  .tag {
+    display: inline-block;
+    padding: 0.1em 0.55em;
+    border-radius: 3px;
+    font-size: 0.78em;
+    font-weight: 600;
+    font-family: "SF Mono", Menlo, monospace;
+    color: white;
+    vertical-align: middle;
+  }
+  .tag.pub  { background: var(--pub); }
+  .tag.priv { background: var(--priv); }
+  .tag.pkg  { background: var(--pkg); }
+  .tag.core { background: var(--core); }
+  .tag.warn { background: var(--warn); }
+
+  .callout {
+    border-left: 4px solid var(--accent);
+    background: #f0f4fa;
+    padding: 0.8rem 1rem;
+    margin: 1.2rem 0;
+    border-radius: 0 6px 6px 0;
+  }
+  .callout.warn { border-color: var(--warn); background: #fbf3ec; }
+  .callout.good { border-color: var(--accent-2); background: #eef6f1; }
+  .callout strong { display: block; margin-bottom: 0.3rem; }
+
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin: 1.2rem 0;
+  }
+  @media (max-width: 720px) {
+    .two-col { grid-template-columns: 1fr; }
+  }
+
+  .file-tree {
+    font-family: "SF Mono", Menlo, monospace;
+    font-size: 0.88rem;
+    line-height: 1.55;
+    background: var(--code-bg);
+    padding: 1rem 1.2rem;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    white-space: pre;
+    overflow-x: auto;
+  }
+  .file-tree .pub  { color: var(--pub); font-weight: 600; }
+  .file-tree .priv { color: var(--priv); }
+  .file-tree .note { color: var(--muted); font-style: italic; }
+</style>
+</head>
+<body>
+
+<h1>17. Modules and Imports</h1>
+
+<p>A module is the unit of source organization and visibility. <strong>One source file is exactly one module</strong> (with the exception of inline <code>mod</code> blocks; see 17.2). The module tree is built from explicit <code>mod</code> declarations and mirrors the filesystem.</p>
+
+<h2 id="17-1-project-layout">17.1 Project layout</h2>
+
+<p>A project has:</p>
+
+<ul>
+<li>A <strong>manifest file</strong> at the project root (toolchain-defined name; treat <code>project.toml</code> as the placeholder).</li>
+<li>A <strong>source root</strong>, conventionally <code>src/</code>, declared in the manifest.</li>
+<li>An <strong>entry file</strong> declared in the manifest:
+  <ul>
+    <li><strong>Binary</strong>: <code>kind = "binary"</code>, <code>entry = "src/main.lang"</code>. <code>main.lang</code> must export <code>function main()</code>. The package produces an executable; it is <strong>not</strong> consumable via <code>pkg:</code>.</li>
+    <li><strong>Library</strong>: <code>kind = "library"</code>, <code>entry = "src/lib.lang"</code>. The package's public API is everything <code>pub</code> in <code>lib.lang</code>. Consumers <code>import { ... } from "pkg:&lt;name&gt;"</code> resolve against <code>lib.lang</code>.</li>
+    <li><strong>Library + binaries</strong>: <code>kind = "library+bins"</code>, plus <code>bins = ["src/bin/&lt;name&gt;.lang", ...]</code>. The library entry is <code>lib.lang</code>; each bin is an additional entry the compiler walks.</li>
+  </ul>
+</li>
+<li>Dependencies declared in the manifest, available under the <code>pkg:</code> prefix.</li>
+</ul>
+
+<p>The compiler starts at each declared entry and walks the <code>mod</code> tree (see 17.2). Every <code>.lang</code> file under <code>src/</code> must be reachable from some entry through a chain of <code>mod</code> declarations. <strong>A source file that no <code>mod</code> declaration mentions is a hard error</strong>:</p>
+
+<pre><code>unreferenced source file: src/util/dead.lang
+  expected `mod dead` in src/util.lang (or an ancestor)
+</code></pre>
+
+<p>This is the same strictness as Rust: if it's not in the <code>mod</code> tree, the compiler doesn't see it.</p>
+
+<h2 id="17-2-module-declarations">17.2 Module declarations</h2>
+
+<p>A file declares its submodules with <code>mod</code> or <code>pub mod</code>:</p>
+
+<pre><code>// src/lib.lang
+mod internals          // private — usable from this file, not visible to pkg consumers
+pub mod util           // public — pkg:cool-lib/util is a valid import path for consumers
+pub mod db
+</code></pre>
+
+<p>Two forms, exactly:</p>
+
+<ul>
+<li><strong><code>mod &lt;name&gt;</code></strong> — submodule exists; addressable from this file (and its other submodules) but <strong>not</strong> from importers of this module.</li>
+<li><strong><code>pub mod &lt;name&gt;</code></strong> — submodule exists; addressable both internally and from importers of this module.</li>
+</ul>
+
+<h3>Resolution to files</h3>
+
+<p>A <code>mod foo</code> in file <code>path/to/parent.lang</code> resolves to <code>path/to/parent/foo.lang</code>. The submodule directory shares its parent file's basename.</p>
+
+<p>Top-level entries are the one exception: <code>mod foo</code> in <code>src/lib.lang</code> (or <code>src/main.lang</code>, or any file directly named in <code>bins</code>) resolves to <code>src/foo.lang</code> — siblings of the entry, not <code>src/lib/foo.lang</code>. This matches Rust's crate-root convention and keeps the source root flat.</p>
+
+<pre><code>src/
+  lib.lang                 // entry: mod util, pub mod db, mod internals
+  util.lang                // mod helpers, mod parser
+  util/
+    helpers.lang           // mod text
+    helpers/
+      text.lang
+    parser.lang
+  db.lang                  // pub mod query
+  db/
+    query.lang
+  internals.lang
+</code></pre>
+
+<p>There are no <code>mod.lang</code> index files. Every module's source file is named after itself.</p>
+
+<h3>Inline modules</h3>
+
+<p>A <code>mod</code> declaration may carry a body, defining the module inline:</p>
+
+<pre><code>mod conversions {
+  pub function as_celsius(f: f64): f64 { (f - 32.0) * 5.0 / 9.0 }
+  pub function as_fahrenheit(c: f64): f64 { c * 9.0 / 5.0 + 32.0 }
+}
+</code></pre>
+
+<p>Inline modules cannot have <strong>external</strong> children: declaring <code>mod foo</code> (no body) inside an inline <code>mod parent { ... }</code> is a compile error. (To split out children, make <code>parent</code> an external module first.) Inline <code>mod</code> inside inline <code>mod</code> is fine.</p>
+
+<h3>What <code>mod</code> does not do</h3>
+
+<ul>
+<li>It does not import names. Use <code>import</code> (17.3) to bring names into scope.</li>
+<li>It does not auto-execute the submodule's code (there is no module-load code; see 17.6).</li>
+<li>It does not change a file's contents in any way — it just registers the file's existence in the module tree.</li>
+</ul>
+
+<h2 id="17-3-import-forms">17.3 Import forms</h2>
+
+<pre><code>import "util/helpers"                                   // glob — every public name
+import { Foo, bar } from "util/helpers"                 // named
+import { Foo as Bar } from "util/helpers"               // named with alias
+import { Foo, bar as baz, Qux } from "util/helpers"     // mixed
+</code></pre>
+
+<h3>Glob import</h3>
+
+<p><code>import "&lt;path&gt;"</code> makes every <code>pub</code> name from the target module visible in the current module under its original name.</p>
+
+<h3>Named import</h3>
+
+<p><code>import { ... } from "&lt;path&gt;"</code> brings exactly the listed names into scope. Each may be aliased with <code>as</code>.</p>
+
+<h2 id="17-4-path-forms">17.4 Path forms</h2>
+
+<p>There are four kinds of import paths. The prefix (or its absence) makes the kind unambiguous from a glance:</p>
+
+<table>
+<thead><tr><th>Form</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>"core:..."</code>, <code>"std:..."</code></td><td>Built-in module supplied by the toolchain (see 17.8).</td></tr>
+<tr><td><code>"pkg:&lt;name&gt;"</code>, <code>"pkg:&lt;name&gt;/&lt;sub&gt;"</code></td><td>An external dependency listed in the manifest.</td></tr>
+<tr><td><code>"&lt;segment&gt;/&lt;segment&gt;/..."</code></td><td><strong>Absolute</strong> path inside the current package — names trace through the <code>mod</code> tree from the entry's siblings.</td></tr>
+<tr><td><code>"./&lt;segment&gt;"</code>, <code>"../&lt;segment&gt;"</code></td><td><strong>Relative</strong> path inside the current package — resolved from the importing file's directory.</td></tr>
+</tbody>
+</table>
+
+<p>Path examples (with source root <code>src/</code>):</p>
+
+<pre><code>import { Logger } from "util/log"            // src/util/log.lang
+import { open }   from "io/file"             // src/io/file.lang
+import { Helper } from "./helper"            // file in same directory
+import { Util }   from "../shared/util"      // sibling directory
+import { parse }  from "pkg:json/parse"      // external package, subpath
+</code></pre>
+
+<h3>Relative-import escape rule</h3>
+
+<p>Relative paths (<code>./</code> / <code>../</code>) are convenient for "next to me" and "directly above me" references, <strong>but they cannot escape the package boundary</strong>. The package boundary is the source root.</p>
+
+<pre><code>src/
+  app/
+    main.lang                  // can import "../util/log" (resolves to src/util/log.lang)
+    db/
+      query.lang               // can import "../../util/log" (resolves to src/util/log.lang)
+                               // CANNOT import "../../../something"  ERROR: escapes package
+  util/
+    log.lang
+</code></pre>
+
+<p>Any <code>../</code> chain that resolves above the source root is rejected by the compiler:</p>
+
+<pre><code>relative import "../../../outside" escapes package "myapp"
+</code></pre>
+
+<p>The same rule applies inside external packages: a file in <code>pkg:cool-lib/...</code> cannot relative-import out of <code>cool-lib</code>. Each package is its own escape boundary. The only way to reach another package's contents is its <code>pkg:</code> prefix (and only the names that package marks <code>pub</code> in its entry/library file).</p>
+
+<h3>Style guidance (lint, not error)</h3>
+
+<ul>
+<li>Prefer <strong>absolute</strong> project paths for cross-cutting modules (logging, types, constants) — the path stays meaningful in error messages and grep results.</li>
+<li>Prefer <strong>relative</strong> for tightly-coupled siblings or children — the path stays valid if the subtree moves to a different location.</li>
+</ul>
+
+<h2 id="17-5-visibility">17.5 Visibility</h2>
+
+<p>There are two visibility knobs, no others:</p>
+
+<ul>
+<li><strong><code>pub</code> on an item</strong> — the item is visible to importers of <em>this module</em>.</li>
+<li><strong><code>pub mod</code></strong> — the submodule is visible to importers of <em>its parent module</em>.</li>
+</ul>
+
+<p>Together they form a chain. For a name to be reachable from outside the package, <strong>every <code>mod</code> along the path from the entry must be <code>pub mod</code>, and the leaf item must be <code>pub</code></strong>.</p>
+
+<pre><code>// src/lib.lang
+pub mod util       // util is part of the public surface
+
+// src/util.lang
+pub mod log        // util/log is part of the public surface
+
+// src/util/log.lang
+pub struct Logger { ... }    // Logger is visible to outside callers
+struct Internal { ... }       // Internal is NOT visible to outside callers
+</code></pre>
+
+<p>If <code>lib.lang</code> had written <code>mod util</code> (no <code>pub</code>), the entire <code>util/*</code> subtree would be package-internal, regardless of <code>pub</code> markers further down.</p>
+
+<h3>What <code>pub</code> exposes</h3>
+
+<ul>
+<li><code>pub struct Foo</code> — the struct type is importable.</li>
+<li><code>pub interface I</code> — the interface is importable.</li>
+<li><code>pub function f</code> — the function is importable.</li>
+<li><code>pub type T = ...</code> — the alias is importable.</li>
+<li><code>pub var X</code> — the module-level variable is importable (and writable; see <a href="06-variables.html">06-variables.html</a>).</li>
+</ul>
+
+<p>For structs, <strong>each field has independent visibility</strong>. A <code>pub struct</code> with all-private fields can be returned and held but not constructed or destructured outside its module.</p>
+
+<p><code>extend</code> blocks have no <code>pub</code> modifier themselves — the methods they add inherit the visibility rules: an <code>extend Foo: Pub</code> impl is visible wherever <code>Foo</code> and <code>Pub</code> are both visible.</p>
+
+<h3>No finer-grained visibility</h3>
+
+<p>There is no <code>pub(crate)</code>, <code>pub(super)</code>, <code>pub(in path)</code>, etc. The chain of <code>pub mod</code> declarations and per-item <code>pub</code> is the entire lattice:</p>
+
+<ul>
+<li>"Visible within this file": leave the item private.</li>
+<li>"Visible to my package only": <code>pub</code> the item; declare its containing <code>mod</code> <em>without</em> <code>pub</code> somewhere along the chain.</li>
+<li>"Visible to external consumers": <code>pub</code> the item; <code>pub mod</code> the whole chain.</li>
+</ul>
+
+<p>If two sibling files need to share internals without exposing them globally, place them under a common parent that's declared <code>mod</code> (not <code>pub mod</code>). Items marked <code>pub</code> are then reachable from siblings under the same parent but invisible outside the package.</p>
+
+<h2 id="17-6-no-top-level-runtime">17.6 No top-level runtime</h2>
+
+<p>There is <strong>no module-load runtime</strong> — modules do not execute code on import. Specifically:</p>
+
+<ul>
+<li>Module-level <code>var</code> initializers must be compile-time constants (see <a href="06-variables.html">06-variables.html</a>). Their values are computed at compile time and embedded into static storage.</li>
+<li>There is no equivalent of a JavaScript "module body" or a Python module-level execution.</li>
+<li>There is no implicit <code>main</code> runner per module.</li>
+</ul>
+
+<p>Practical consequence: import order, transitively, does not matter at runtime. The compiler builds the symbol graph; the linker fills in addresses; the program starts at <code>main</code>.</p>
+
+<h2 id="17-7-circular-imports">17.7 Circular imports</h2>
+
+<p>Circular imports are <strong>allowed</strong>. Because there is no module-level runtime code, there is no possibility of "using a module before its body has run". The compiler resolves type and function references regardless of cycle:</p>
+
+<pre><code>// module a
+import { B } from "b"
+pub struct A { b: B }
+
+// module b
+import { A } from "a"
+pub struct B { a: A }
+</code></pre>
+
+<p>Two cautions:</p>
+
+<ul>
+<li>A cyclic type definition like <code>pub struct A { b: B }</code> and <code>pub struct B { a: A }</code> is recursive through references; the struct fields are pointers to heap objects, so the recursion is well-founded (each value's size is finite).</li>
+<li>The compiler must still solve generic constraints transitively; pathological generic cycles (e.g. <code>f&lt;T: g&lt;T&gt;&gt;</code>) are caught at compile time.</li>
+</ul>
+
+<h2 id="17-8-built-in-modules--core-and-std">17.8 Built-in modules — <code>core:</code> and <code>std:</code></h2>
+
+<p>Two reserved prefixes identify modules supplied by the toolchain:</p>
+
+<ul>
+<li><strong><code>core:</code></strong> — assumes an allocator, <strong>no OS</strong>. Always available wherever the language runs (including bare metal with a heap). <code>core:prelude</code> is auto-imported into every user module; other <code>core:*</code> modules (currently <code>core:ffi</code>) require explicit imports.</li>
+<li><strong><code>std:</code></strong> — assumes an OS. Sub-modules under <code>std:</code> provide IO, threading, synchronization, async runtime, time, filesystem, networking. Must be explicitly imported. Not available on freestanding targets.</li>
+</ul>
+
+<p>The name distinction reflects the realistic minimum the language can run on: an allocator is mandatory (structs are RC-managed on the heap, <code>str</code> is heap-allocated, closures box their environments), but an OS is not.</p>
+
+<p>You cannot:</p>
+
+<ul>
+<li>Create a module whose path starts with <code>core:</code> or <code>std:</code>.</li>
+<li>Shadow or re-export names from these prefixes.</li>
+</ul>
+
+<h3><code>core:prelude</code></h3>
+
+<p>Auto-imported into every user module. No explicit <code>import</code> needed.</p>
+
+<p>Contains everything that the language's syntax desugars into, plus the heap-using container types:</p>
+
+<ul>
+<li><strong>Operator interfaces</strong> — <code>Add</code>, <code>Sub</code>, <code>Mul</code>, <code>Div</code>, <code>Mod</code>, <code>Neg</code>, <code>Not</code>, <code>BitAnd</code>, <code>BitOr</code>, <code>BitXor</code>, <code>Shl</code>, <code>Shr</code>, <code>Eq</code>, <code>Ord</code>, <code>Index</code>, <code>IndexMut</code>, <code>Hash</code>. The <code>Ordering</code> type and its <code>Less</code> / <code>Equal</code> / <code>Greater</code> variants.</li>
+<li><strong>Iterator protocol</strong> — <code>Iterator&lt;T&gt;</code>, <code>Item&lt;T&gt;</code>, <code>Done</code>.</li>
+<li><strong>Future protocol</strong> — <code>Future&lt;T&gt;</code>, <code>Ready&lt;T&gt;</code>, <code>Pending</code>, <code>Context</code>.</li>
+<li><strong>Error propagation</strong> — <code>Try&lt;O, R&gt;</code>, <code>FromResidual&lt;R&gt;</code>.</li>
+<li><strong>Lifecycle</strong> — <code>Clone</code>, <code>Drop</code>.</li>
+<li><strong>Stringification</strong> — <code>ToStr</code> (used by string interpolation; see <a href="01-lexical.html#19-string-literals-and-interpolation">01-lexical.md §1.9</a> and <a href="15-operators.html#1510-stringification--tostr">15-operators.md §15.10</a>).</li>
+<li><strong>FFI</strong> — <code>ReprC</code>, the <code>Buffer</code> extern struct. (The rest of the FFI surface — <code>with_pin</code>, <code>Pin</code>, <code>PinHandle&lt;T&gt;</code>, <code>Foreign</code>, <code>CStr</code>, <code>CString</code>, <code>Callback&lt;C, R&gt;</code>, the C-width aliases, <code>c_void</code>, <code>c_va_list</code>, <code>attach_thread</code>, <code>detach_thread</code> — lives in <code>core:ffi</code> and is explicitly imported. See <a href="19-ffi.html">19-ffi.html</a>.)</li>
+<li><strong>Panic</strong> — <code>panic(msg: str)</code>, <code>panic_with(value: T)</code>.</li>
+<li><strong>Heap collections</strong> — <code>List&lt;T&gt;</code>, <code>Map&lt;K, V&gt;</code>, <code>Entry&lt;K, V&gt;</code>. (These use the allocator, which is always available.)</li>
+<li><strong>Methods on primitive <code>str</code></strong> — <code>str</code> is heap-allocated and its methods are part of the language.</li>
+</ul>
+
+<p>Numeric helper namespaces (<code>i32.wrapping_add</code> etc.) are reachable without import: numeric primitives are keywords, and their static methods come along for free.</p>
+
+<h3><code>core:ffi</code> — explicit-import FFI module</h3>
+
+<p>The FFI surface beyond <code>ReprC</code> and <code>Buffer</code> lives in <code>core:ffi</code>. It is <code>core:</code>-tier (no OS dependency, works on freestanding targets) but is <strong>not</strong> auto-imported:</p>
+
+<pre><code>import {
+  c_int, c_uint, c_long, c_ulong, c_size_t, c_void, c_va_list,
+  Foreign, CStr, CString, Callback,
+  Pin, PinHandle, with_pin,
+  attach_thread, detach_thread,
+} from "core:ffi"
+</code></pre>
+
+<p>See <a href="19-ffi.html">19-ffi.html</a> for the full contents.</p>
+
+<h3><code>std:*</code> — explicit-import modules</h3>
+
+<table>
+<thead><tr><th>Module</th><th>What it provides</th><th>Why it's not in <code>core:</code></th></tr></thead>
+<tbody>
+<tr><td><code>std:io</code></td><td><code>print</code>, <code>println</code>, file handles, byte streams</td><td>Needs an OS (stdout/stderr, file descriptors).</td></tr>
+<tr><td><code>std:thread</code></td><td><code>Thread.spawn</code>, <code>JoinHandle</code>, <code>Joined</code>, <code>Panicked</code></td><td>Needs OS threads.</td></tr>
+<tr><td><code>std:sync</code></td><td><code>Shared&lt;T&gt;</code>, <code>LockBusy</code>, channels (<code>channel</code>, <code>channel_bounded</code>, <code>channel_mpmc</code>, <code>channel_mpmc_bounded</code>), <code>Sender&lt;T&gt;</code>, <code>Receiver&lt;T&gt;</code>, <code>MpmcSender&lt;T&gt;</code>, <code>MpmcReceiver&lt;T&gt;</code>, <code>ChannelClosed</code></td><td>Needs OS mutexes / condvars.</td></tr>
+<tr><td><code>std:async</code></td><td><code>spawn</code>, <code>block_on</code>, <code>timeout</code>, the default executor, <code>AsyncIterator</code> adapters</td><td>Needs an executor; default impl uses OS threads.</td></tr>
+<tr><td><code>std:time</code></td><td>wall-clock, monotonic time, durations</td><td>Needs an OS clock.</td></tr>
+<tr><td><code>std:fs</code></td><td>filesystem</td><td>Needs an OS filesystem.</td></tr>
+<tr><td><code>std:net</code></td><td>sockets, TCP, UDP</td><td>Needs an OS network stack.</td></tr>
+</tbody>
+</table>
+
+<p>Typical imports:</p>
+
+<pre><code>import { print, println } from "std:io"
+import { Thread, JoinHandle } from "std:thread"
+import { Shared, channel } from "std:sync"
+import { spawn, block_on } from "std:async"
+</code></pre>
+
+<p>A freestanding (no-OS) target compiles fine without any <code>std:*</code> import; <code>core:prelude</code> is enough to define types, run pure computation, and interact with FFI.</p>
+
+<h2 id="17-9-shadowing-rules-at-import">17.9 Shadowing rules at import</h2>
+
+<ul>
+<li>A local definition silently shadows an import. If a module both imports <code>Foo</code> and defines its own <code>Foo</code>, the local one wins in that module.</li>
+<li>Importing the same local name from multiple imports is an error. You must alias one or both.</li>
+<li>An <code>import "..."</code> glob that would introduce a name colliding with an existing import is an error (unless one of the imports aliases the name).</li>
+</ul>
+
+<h2 id="17-10-re-exports--pub-import">17.10 Re-exports — <code>pub import</code></h2>
+
+<p><code>pub mod</code> exposes an entire submodule. To re-expose <strong>individual names</strong> from a submodule (without making the whole submodule public), use <code>pub import</code>:</p>
+
+<pre><code>// src/lib.lang
+mod internals                                       // private — pkg consumers can't reach internals/*
+pub import { Logger } from "internals/log"          // but Logger is in pkg:cool-lib's public surface
+pub import { Db, open } from "internals/db"
+
+pub function version(): str { "1.2.3" }
+</code></pre>
+
+<p>Syntax and forms parallel <code>import</code> exactly, with <code>pub</code> prepended:</p>
+
+<pre><code>pub import "util/helpers"                             // glob re-export
+pub import { Foo, bar } from "util/helpers"           // named re-export
+pub import { Foo as Bar } from "util/helpers"         // aliased re-export
+</code></pre>
+
+<p>The re-exported names appear in the re-exporting module's <code>pub</code> set. Importers of the re-exporting module see them as if they were defined locally.</p>
+
+<h3>Semantics</h3>
+
+<ul>
+<li><code>pub import</code> simultaneously <strong>imports</strong> the named items into the current module (so the current module can use them) and <strong>re-exports</strong> them as part of this module's public API.</li>
+<li>For the re-export to be reachable from an external consumer, the <strong>declaring module itself</strong> must be on a <code>pub mod</code> chain — <code>pub import</code> doesn't bypass module visibility.</li>
+<li>Re-exporting a name does not produce a new type, struct, or function — it's still the same definition, just reachable under a new path.</li>
+<li>Collision rules (17.9) apply: a <code>pub import</code>ed name that collides with a local definition or another import is an error; alias one or both with <code>as</code>.</li>
+</ul>
+
+<h3>What this lets you do</h3>
+
+<ul>
+<li>Curate a flat public API at <code>lib.lang</code> while keeping the internal directory tree as deep as you want.</li>
+<li>Move implementation files around without changing the public API spelling — consumers always see the <code>lib.lang</code> paths.</li>
+<li>Mix <code>pub mod</code>-style "expose the whole submodule" with <code>pub import</code>-style "lift individual names" without conflict.</li>
+</ul>
+
+<h2 id="17-11-compilation-units">17.11 Compilation units</h2>
+
+<p>A module is a single source file. Multiple files form a project; the build tool composes them into one program (or library). Modules are compiled independently and combined.</p>
+
+<p><code>pub</code> and the orphan rule (see <a href="10-interfaces.html">10-interfaces.html</a>) together ensure that the import graph never produces ambiguous or conflicting type/interface configurations.</p>
+
+</body>
+</html>

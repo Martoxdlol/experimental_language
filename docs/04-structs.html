@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>4. Structs</title>
+<style>
+  :root {
+    --fg: #1b1b1d;
+    --muted: #5a5a60;
+    --bg: #fdfdfc;
+    --accent: #1a4a8a;
+    --accent-2: #2a6f4d;
+    --warn: #b54708;
+    --code-bg: #f4f2ee;
+    --code-fg: #1b1b1d;
+    --border: #e4e1dc;
+    --table-stripe: #f8f7f4;
+    --pub: #2a6f4d;
+    --priv: #b54708;
+    --pkg: #1a4a8a;
+    --core: #6b4ba8;
+  }
+  html { box-sizing: border-box; }
+  *, *::before, *::after { box-sizing: inherit; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color: var(--fg);
+    background: var(--bg);
+    line-height: 1.55;
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 2.5rem 1.5rem 6rem;
+  }
+  h1, h2, h3, h4 {
+    color: var(--fg);
+    line-height: 1.25;
+    margin-top: 2.2rem;
+    margin-bottom: 0.6rem;
+  }
+  h1 { font-size: 2rem; border-bottom: 2px solid var(--border); padding-bottom: 0.4rem; }
+  h2 { font-size: 1.45rem; margin-top: 2.6rem; }
+  h3 { font-size: 1.15rem; color: var(--accent); }
+  h4 { font-size: 1rem; color: var(--muted); }
+  p { margin: 0.7rem 0; }
+  ul, ol { margin: 0.7rem 0; padding-left: 1.6rem; }
+  li { margin: 0.3rem 0; }
+  code {
+    font-family: "SF Mono", Menlo, Consolas, "Courier New", monospace;
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 0.1em 0.35em;
+    border-radius: 3px;
+    font-size: 0.92em;
+  }
+  pre {
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 0.9rem 1rem;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 0.88rem;
+    line-height: 1.5;
+    border: 1px solid var(--border);
+  }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1rem 0;
+    font-size: 0.94rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.5rem 0.7rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th { background: var(--code-bg); font-weight: 600; }
+  tbody tr:nth-child(even) { background: var(--table-stripe); }
+  .lead {
+    font-size: 1.05rem;
+    color: var(--muted);
+    margin-bottom: 1.6rem;
+  }
+  .toc {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1rem 1.2rem;
+    margin: 1.6rem 0 2rem;
+    font-size: 0.94rem;
+  }
+  .toc ol { margin: 0.2rem 0 0; padding-left: 1.3rem; }
+  .toc a { color: var(--accent); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+
+  .diagram {
+    background: #ffffff;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.4rem;
+    margin: 1.4rem 0;
+    overflow-x: auto;
+  }
+  .diagram-caption {
+    font-size: 0.85rem;
+    color: var(--muted);
+    text-align: center;
+    margin-top: 0.6rem;
+    font-style: italic;
+  }
+  svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+  svg text { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; fill: var(--fg); }
+  svg .label { font-family: -apple-system, system-ui, sans-serif; font-size: 12px; }
+  svg .small { font-size: 10px; fill: var(--muted); }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    justify-content: center;
+    margin-top: 0.8rem;
+    font-size: 0.85rem;
+  }
+  .legend-item { display: flex; align-items: center; gap: 0.4rem; }
+  .legend-swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    border: 1px solid rgba(0,0,0,0.15);
+  }
+
+  .tag {
+    display: inline-block;
+    padding: 0.1em 0.55em;
+    border-radius: 3px;
+    font-size: 0.78em;
+    font-weight: 600;
+    font-family: "SF Mono", Menlo, monospace;
+    color: white;
+    vertical-align: middle;
+  }
+  .tag.pub  { background: var(--pub); }
+  .tag.priv { background: var(--priv); }
+  .tag.pkg  { background: var(--pkg); }
+  .tag.core { background: var(--core); }
+  .tag.warn { background: var(--warn); }
+
+  .callout {
+    border-left: 4px solid var(--accent);
+    background: #f0f4fa;
+    padding: 0.8rem 1rem;
+    margin: 1.2rem 0;
+    border-radius: 0 6px 6px 0;
+  }
+  .callout.warn { border-color: var(--warn); background: #fbf3ec; }
+  .callout.good { border-color: var(--accent-2); background: #eef6f1; }
+  .callout strong { display: block; margin-bottom: 0.3rem; }
+
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin: 1.2rem 0;
+  }
+  @media (max-width: 720px) {
+    .two-col { grid-template-columns: 1fr; }
+  }
+
+  .file-tree {
+    font-family: "SF Mono", Menlo, monospace;
+    font-size: 0.88rem;
+    line-height: 1.55;
+    background: var(--code-bg);
+    padding: 1rem 1.2rem;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    white-space: pre;
+    overflow-x: auto;
+  }
+  .file-tree .pub  { color: var(--pub); font-weight: 600; }
+  .file-tree .priv { color: var(--priv); }
+  .file-tree .note { color: var(--muted); font-style: italic; }
+</style>
+</head>
+<body>
+
+<h1>4. Structs</h1>
+
+<p>Structs are nominal types that group named (or positional) fields.</p>
+
+<p>There are three forms:</p>
+
+<ul>
+<li><strong>Record structs</strong> — named fields.</li>
+<li><strong>Tuple structs</strong> — positional fields.</li>
+<li><strong>Unit structs</strong> — no fields.</li>
+</ul>
+
+<h2 id="4-1-record-structs">4.1 Record structs</h2>
+
+<pre><code>pub struct Person {
+  pub name: str,
+  age: i32,             // private to the defining module
+}</code></pre>
+
+<p>Every field has its own visibility. Fields default to private; <code>pub</code> exposes them.</p>
+
+<p>Field separators: comma. Trailing comma is allowed.</p>
+
+<h3>Construction</h3>
+
+<pre><code>var alice = Person {
+  name: "Alice",
+  age:  30,
+}</code></pre>
+
+<p>All fields must be initialized (no defaults). If any field is private to another module, construction from outside the module is rejected by the compiler.</p>
+
+<p>For "smart constructors" — initialization that may fail, normalize input, or fetch from a pool — define a <code>new</code> static method via <code>extend</code>, then use the type-as-constructor shorthand:</p>
+
+<pre><code>extend Person {
+  function new(name: str, age: i32): Person | InvalidAge {
+    if age &lt; 0 { InvalidAge } else { Person { name, age } }
+  }
+}
+
+var alice = Person("Alice", 30)?    // same as Person.new("Alice", 30)?</code></pre>
+
+<p>The shorthand <code>T(args)</code> is purely syntactic sugar for <code>T.new(args)</code> — see <a href="09-functions.html#910-type-as-constructor-shorthand">09-functions.md §9.10</a>. It does not constrain what <code>new</code> returns.</p>
+
+<h3>Field init shorthand</h3>
+
+<p>When a local variable's name matches a field name, the field name may stand alone:</p>
+
+<pre><code>var name = "Alice"
+var age  = 30
+var alice = Person { name, age }   // shorthand for { name: name, age: age }</code></pre>
+
+<h3>Spread (functional update)</h3>
+
+<pre><code>var older = Person { ..alice, age: 31 }</code></pre>
+
+<p><code>..expr</code> copies all fields from <code>expr</code> (which must be of the same struct type). Explicit fields override the spread. The spread must appear at the end (or interleaved with overrides; trailing position is recommended for clarity).</p>
+
+<p>A spread does not move or invalidate the source — it copies field values. For reference-type fields, the copy is a reference copy (refcount increment).</p>
+
+<h3>Field access</h3>
+
+<pre><code>alice.name
+alice.age = 31    // mutation; see [06-variables.md]</code></pre>
+
+<p>External access to private fields is rejected by the compiler.</p>
+
+<h2 id="4-2-tuple-structs">4.2 Tuple structs</h2>
+
+<p>A nominal type whose fields are positional:</p>
+
+<pre><code>pub struct Pair(pub i64, pub i64)
+pub struct Wrapper&lt;T&gt;(T)</code></pre>
+
+<p>Constructed by name, like a function call:</p>
+
+<pre><code>var p = Pair(3, 4)
+var w = Wrapper(42)</code></pre>
+
+<p>Accessed positionally with <code>.0</code>, <code>.1</code>, ...</p>
+
+<pre><code>print(p.0 as str)
+print(p.1 as str)</code></pre>
+
+<p>Tuple structs are useful when you want a distinct nominal type but no meaningful field names. They are <em>not</em> the same as anonymous tuples (see <a href="05-tuples.html">05-tuples.html</a>): tuple structs are nominal, anonymous tuples are structural.</p>
+
+<h2 id="4-3-unit-structs">4.3 Unit structs</h2>
+
+<p>A struct with no fields:</p>
+
+<pre><code>pub struct Red;
+pub struct Green;
+pub struct Blue;</code></pre>
+
+<p>Constructed by name without parentheses:</p>
+
+<pre><code>var c: Red | Green | Blue = Red</code></pre>
+
+<p>(Mentioning the name in an expression context constructs the unique value.)</p>
+
+<p>Unit structs are the standard way to enumerate distinguishable variants:</p>
+
+<pre><code>pub type Color = Red | Green | Blue</code></pre>
+
+<h2 id="4-4-generic-structs">4.4 Generic structs</h2>
+
+<pre><code>pub struct Box&lt;T&gt; {
+  pub value: T,
+}
+
+pub struct Pair&lt;A, B&gt; {
+  pub first:  A,
+  pub second: B,
+}</code></pre>
+
+<p>Construction infers type parameters from the field values when possible:</p>
+
+<pre><code>var b = Box { value: 42 }       // Box&lt;i64&gt;
+var p = Pair { first: 1, second: "x" }   // Pair&lt;i64, str&gt;</code></pre>
+
+<p>Explicit form:</p>
+
+<pre><code>var b = Box&lt;i64&gt; { value: 42 }</code></pre>
+
+<h2 id="4-5-visibility-recap">4.5 Visibility recap</h2>
+
+<table>
+<thead><tr><th>Modifier</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td>(none) on struct</td><td>Struct visible only to its defining module</td></tr>
+<tr><td><code>pub</code> on struct</td><td>Struct visible to importers</td></tr>
+<tr><td>(none) on field</td><td>Field readable/writable only from defining module</td></tr>
+<tr><td><code>pub</code> on field</td><td>Field readable/writable from anywhere the struct is visible</td></tr>
+</tbody>
+</table>
+
+<p>A <code>pub struct</code> with all-private fields can be returned from functions and held by reference, but not constructed or destructured outside its module.</p>
+
+<h2 id="4-6-methods">4.6 Methods</h2>
+
+<p>Methods are added with <code>extend</code> blocks; see <a href="10-interfaces.html">10-interfaces.html</a>. A struct definition does <strong>not</strong> contain its own method bodies — they live in <code>extend</code> blocks. (The original prototype allowed methods inline in <code>struct</code> definitions; the current spec requires <code>extend</code>.)</p>
+
+<h2 id="4-7-equality-hashing-comparison">4.7 Equality, hashing, comparison</h2>
+
+<p>Structs are not automatically <code>Eq</code>, <code>Hash</code>, or <code>Ord</code>. Implement the corresponding interface (see <a href="15-operators.html">15-operators.html</a>) to enable <code>==</code>, hashing, and ordering.</p>
+
+<p>Two struct values of the same type with the same field values are not implicitly equal — equality is whatever <code>Eq</code> says it is, or <code>==</code> is a compile error.</p>
+
+<h2 id="4-8-memory-representation">4.8 Memory representation</h2>
+
+<p>Non-extern structs live on the managed heap with a GC header (see <a href="16-memory.html">16-memory.html</a>). A struct value is referenced by a pointer to the object's fields; the GC header sits at a negative offset.</p>
+
+<p><code>extern struct</code> is laid out as a C struct, lives on the foreign heap, has no GC header. See <a href="19-ffi.html">19-ffi.html</a>.</p>
+
+<h2 id="4-9-destructuring">4.9 Destructuring</h2>
+
+<p>Record structs are destructurable in <code>var</code> bindings and patterns:</p>
+
+<pre><code>var Person { name, age } = alice</code></pre>
+
+<p>In patterns (e.g. inside <code>match</code>), the <code>..</code> rest token can ignore remaining fields:</p>
+
+<pre><code>match alice {
+  Person { name, .. } =&gt; print(name),
+}</code></pre>
+
+<p>Tuple structs destructure positionally:</p>
+
+<pre><code>var Pair(x, y) = p</code></pre>
+
+<p>Unit structs destructure by name only and bind nothing:</p>
+
+<pre><code>match c {
+  Red   =&gt; "red",
+  Green =&gt; "green",
+  Blue  =&gt; "blue",
+}</code></pre>
+
+</body>
+</html>

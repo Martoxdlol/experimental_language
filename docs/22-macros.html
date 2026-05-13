@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>22. Procedural Macros</title>
+<style>
+  :root {
+    --fg: #1b1b1d;
+    --muted: #5a5a60;
+    --bg: #fdfdfc;
+    --accent: #1a4a8a;
+    --accent-2: #2a6f4d;
+    --warn: #b54708;
+    --code-bg: #f4f2ee;
+    --code-fg: #1b1b1d;
+    --border: #e4e1dc;
+    --table-stripe: #f8f7f4;
+    --pub: #2a6f4d;
+    --priv: #b54708;
+    --pkg: #1a4a8a;
+    --core: #6b4ba8;
+  }
+  html { box-sizing: border-box; }
+  *, *::before, *::after { box-sizing: inherit; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color: var(--fg);
+    background: var(--bg);
+    line-height: 1.55;
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 2.5rem 1.5rem 6rem;
+  }
+  h1, h2, h3, h4 {
+    color: var(--fg);
+    line-height: 1.25;
+    margin-top: 2.2rem;
+    margin-bottom: 0.6rem;
+  }
+  h1 { font-size: 2rem; border-bottom: 2px solid var(--border); padding-bottom: 0.4rem; }
+  h2 { font-size: 1.45rem; margin-top: 2.6rem; }
+  h3 { font-size: 1.15rem; color: var(--accent); }
+  h4 { font-size: 1rem; color: var(--muted); }
+  p { margin: 0.7rem 0; }
+  ul, ol { margin: 0.7rem 0; padding-left: 1.6rem; }
+  li { margin: 0.3rem 0; }
+  code {
+    font-family: "SF Mono", Menlo, Consolas, "Courier New", monospace;
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 0.1em 0.35em;
+    border-radius: 3px;
+    font-size: 0.92em;
+  }
+  pre {
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 0.9rem 1rem;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 0.88rem;
+    line-height: 1.5;
+    border: 1px solid var(--border);
+  }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1rem 0;
+    font-size: 0.94rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.5rem 0.7rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th { background: var(--code-bg); font-weight: 600; }
+  tbody tr:nth-child(even) { background: var(--table-stripe); }
+  .lead {
+    font-size: 1.05rem;
+    color: var(--muted);
+    margin-bottom: 1.6rem;
+  }
+  .toc {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1rem 1.2rem;
+    margin: 1.6rem 0 2rem;
+    font-size: 0.94rem;
+  }
+  .toc ol { margin: 0.2rem 0 0; padding-left: 1.3rem; }
+  .toc a { color: var(--accent); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+
+  .diagram {
+    background: #ffffff;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.4rem;
+    margin: 1.4rem 0;
+    overflow-x: auto;
+  }
+  .diagram-caption {
+    font-size: 0.85rem;
+    color: var(--muted);
+    text-align: center;
+    margin-top: 0.6rem;
+    font-style: italic;
+  }
+  svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+  svg text { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; fill: var(--fg); }
+  svg .label { font-family: -apple-system, system-ui, sans-serif; font-size: 12px; }
+  svg .small { font-size: 10px; fill: var(--muted); }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    justify-content: center;
+    margin-top: 0.8rem;
+    font-size: 0.85rem;
+  }
+  .legend-item { display: flex; align-items: center; gap: 0.4rem; }
+  .legend-swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    border: 1px solid rgba(0,0,0,0.15);
+  }
+
+  .tag {
+    display: inline-block;
+    padding: 0.1em 0.55em;
+    border-radius: 3px;
+    font-size: 0.78em;
+    font-weight: 600;
+    font-family: "SF Mono", Menlo, monospace;
+    color: white;
+    vertical-align: middle;
+  }
+  .tag.pub  { background: var(--pub); }
+  .tag.priv { background: var(--priv); }
+  .tag.pkg  { background: var(--pkg); }
+  .tag.core { background: var(--core); }
+  .tag.warn { background: var(--warn); }
+
+  .callout {
+    border-left: 4px solid var(--accent);
+    background: #f0f4fa;
+    padding: 0.8rem 1rem;
+    margin: 1.2rem 0;
+    border-radius: 0 6px 6px 0;
+  }
+  .callout.warn { border-color: var(--warn); background: #fbf3ec; }
+  .callout.good { border-color: var(--accent-2); background: #eef6f1; }
+  .callout strong { display: block; margin-bottom: 0.3rem; }
+
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin: 1.2rem 0;
+  }
+  @media (max-width: 720px) {
+    .two-col { grid-template-columns: 1fr; }
+  }
+
+  .file-tree {
+    font-family: "SF Mono", Menlo, monospace;
+    font-size: 0.88rem;
+    line-height: 1.55;
+    background: var(--code-bg);
+    padding: 1rem 1.2rem;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    white-space: pre;
+    overflow-x: auto;
+  }
+  .file-tree .pub  { color: var(--pub); font-weight: 600; }
+  .file-tree .priv { color: var(--priv); }
+  .file-tree .note { color: var(--muted); font-style: italic; }
+</style>
+</head>
+<body>
+
+<h1>22. Procedural Macros</h1>
+<p>Macros transform source code at compile time by manipulating ASTs. They are <strong>always procedural</strong> — written as functions in the language itself. There is no <code>macro_rules!</code>-style declarative template form.</p>
+<h2 id="22-1-naming">22.1 Naming</h2>
+<p>Macro names use <strong>UpperCamelCase</strong>, like struct and interface names: <code>@JsonSerializable</code>, <code>@Route</code>, <code>@Derive</code>. This visually separates a macro invocation from a regular function call (which uses <code>snake_case</code>). The compiler rejects <code>@lowercase_name</code> invocations with an error.</p>
+<h2 id="22-2-invocation-forms">22.2 Invocation forms</h2>
+<p>A macro can appear in three syntactic positions. The position determines how the input AST is shaped; the same proc-macro signature handles all three.</p>
+<h3>Decorator (item) form</h3>
+<pre><code>@JsonSerializable
+pub struct Config {
+  pub host: str,
+  pub port: i32,
+}
+
+@Route("/api/users", method = "GET")
+function get_users(): str {
+  "users"
+}
+
+@Derive(Eq, Hash, Clone)
+pub struct Person {
+  pub name: str,
+  pub age:  i32,
+}</code></pre>
+<p>The decorator sits above a top-level item — a <code>struct</code>, <code>function</code>, <code>interface</code>, <code>type</code> alias, <code>extend</code> block, or <code>mod</code> declaration. The decorated item is passed in as the macro's <code>input</code>.</p>
+<h3>Expression form</h3>
+<pre><code>var v = @Vec(1, 2, 3)
+var sql = @Query("SELECT * FROM users WHERE id = ?", id)</code></pre>
+<p>Used in any expression position. The macro is parsed as <code>@Name(args...)</code> and its <code>input</code> AST is an expression-shaped node holding the args.</p>
+<h3>Block form</h3>
+<pre><code>@Time {
+  do_work()
+  do_more_work()
+}
+
+@Trace("expensive op") {
+  compute_thing(input)
+}</code></pre>
+<p>The macro wraps a block of statements. The <code>input</code> AST is a block-shaped node.</p>
+<h3>Arguments</h3>
+<p>In every form, a macro invocation may carry positional and keyword arguments inside <code>(...)</code>:</p>
+<pre><code>@Route("/api/users", method = "GET", auth = true)</code></pre>
+<p>With no arguments, the parentheses may be omitted: <code>@JsonSerializable</code>.</p>
+<h3>Stacking decorators</h3>
+<p>A single item may have multiple <code>@</code> decorators. They are applied <strong>bottom-up</strong> (innermost first):</p>
+<pre><code>@Derive(Clone)            // applied second — sees the @JsonSerializable output
+@JsonSerializable         // applied first — sees the raw struct
+pub struct Config { ... }</code></pre>
+<p>Equivalent to <code>Derive(Clone, JsonSerializable(raw_struct))</code>.</p>
+<h2 id="22-3-macro-definition">22.3 Macro definition</h2>
+<p>A macro plugin is a normal <code>pub function</code> decorated with <code>@ProcMacro</code>:</p>
+<pre><code>import { MacroContext, ASTNode } from "core:compiler"
+
+@ProcMacro
+pub function JsonSerializable(ctx: MacroContext, input: ASTNode): ASTNode {
+  // inspect input, build a new AST, return it
+}</code></pre>
+<p>Rules:</p>
+<ul>
+<li>The function name (UpperCamelCase) is the macro's invocation name.</li>
+<li>The signature is always <code>(MacroContext, ASTNode) -&gt; ASTNode</code>. (Multiple-input macros are not supported; bundle inputs into an args node.)</li>
+<li>The function must be <code>pub</code> to be invokable from other modules; <code>@ProcMacro</code> functions follow the same <code>pub mod</code> chain as runtime code.</li>
+<li>The function may not import any <code>std:*</code> module (the compiler refuses to load a macro plugin that pulls in OS-dependent code; see 22.6).</li>
+</ul>
+<p>Macros live in the same source tree as runtime code — there is no separate "macro crate". The compiler compiles <code>@ProcMacro</code> functions as part of the normal build and loads them as plugins when their invocations are encountered.</p>
+<h2 id="22-4-compilation-phases">22.4 Compilation phases</h2>
+<p>Macro expansion is one of seven compilation phases. Macros run <strong>before</strong> type checking — they see syntax, not semantics.</p>
+<table>
+<thead><tr>
+<th>Phase</th>
+<th>What runs</th>
+</tr></thead>
+<tbody>
+<tr>
+<td>0 — Lex</td>
+<td>Source → tokens.</td>
+</tr>
+<tr>
+<td>1 — Parse</td>
+<td>Tokens → raw AST.</td>
+</tr>
+<tr>
+<td>2 — <strong>Macro expansion</strong></td>
+<td>Expand every <code>@</code> invocation; rerun parse on emitted tokens; repeat to a fixed point (depth-limited; see 22.10).</td>
+</tr>
+<tr>
+<td>3 — Module resolution</td>
+<td>Walk the <code>mod</code> tree; check orphan files; resolve <code>import</code>s.</td>
+</tr>
+<tr>
+<td>4 — Type check</td>
+<td>Generic constraints, flow narrowing, overload resolution.</td>
+</tr>
+<tr>
+<td>5 — Monomorphization</td>
+<td>Specialize generics; lower to IR.</td>
+</tr>
+<tr>
+<td>6 — Codegen</td>
+<td>LLVM / Cranelift.</td>
+</tr>
+</tbody>
+</table>
+<p>Practical consequences:</p>
+<ul>
+<li>A macro cannot ask "what type is this expression?" — types don't exist yet.</li>
+<li>A macro cannot ask "what module is this item in?" — imports aren't resolved yet.</li>
+<li>A macro can ask about <strong>syntactic</strong> shape: "is this a struct?", "what fields does it have?", "what's the literal value of this argument?".</li>
+<li>A macro's output may itself contain macro invocations, which are then expanded recursively.</li>
+</ul>
+<h2 id="22-5-hygiene">22.5 Hygiene</h2>
+<p>Macros are <strong>hygienic by default</strong>: identifiers a macro introduces live in a fresh syntax context. A <code>var temp = ...</code> emitted by a macro cannot collide with a caller's <code>temp</code>, even if the same spelling appears in both.</p>
+<p>To deliberately introduce a name in the caller's scope (needed for <code>@Derive</code>-style macros that add methods reachable by the original name), use the unhygienic-escape helper:</p>
+<pre><code>var name = ctx.unhygienic("from_json")   // an identifier the caller can name directly</code></pre>
+<p><code>ctx.unhygienic(name: str)</code> produces an identifier that resolves in the <strong>invocation site's</strong> scope. Use sparingly — most macros should keep their internal bindings hygienic.</p>
+<h2 id="22-6-sandbox">22.6 Sandbox</h2>
+<p>A macro runs as a pure function over the AST. The plugin runtime enforces:</p>
+<p><strong>Allowed:</strong></p>
+<ul>
+<li>Read the <code>input</code> AST and inspect span metadata.</li>
+<li>Construct new AST nodes via <code>ctx</code> helpers.</li>
+<li>Emit diagnostics via <code>ctx.error(span, msg)</code> / <code>ctx.warn(span, msg)</code> / <code>ctx.note(span, msg)</code>.</li>
+<li>Return a transformed AST.</li>
+</ul>
+<p><strong>Not allowed:</strong></p>
+<ul>
+<li>I/O of any kind — no file reads, no network, no environment variables, no clock. (See 22.13 for a future relaxation.)</li>
+<li>Spawning threads or futures. <code>std:thread</code> and <code>std:async</code> are unimportable from macro code.</li>
+<li>Persisting state across invocations (each call gets a fresh, empty plugin instance).</li>
+<li>Inspecting types or resolved import paths (Phase 2 runs before Phase 3/4).</li>
+</ul>
+<p>This makes macro execution deterministic and reproducible: given the same input AST and arguments, a macro always produces the same output AST.</p>
+<h2 id="22-7-errors-and-diagnostics">22.7 Errors and diagnostics</h2>
+<p>A macro signals failure by emitting one or more diagnostics through <code>MacroContext</code> and returning a sentinel:</p>
+<pre><code>@ProcMacro
+pub function Route(ctx: MacroContext, input: ASTNode): ASTNode {
+  var path = ctx.arg_string("path")
+  if path is null {
+    ctx.error(ctx.invocation_span, "@Route requires a 'path' argument")
+    return ASTNode.error_marker()
+  }
+  // ... build the transformed AST
+}</code></pre>
+<p><code>ASTNode.error_marker()</code> is a sentinel that tells the compiler "I've already reported the problem; suppress downstream checks on this subtree." Compilation continues so the user sees as many errors as possible per build.</p>
+<p><code>ctx.error</code> does <strong>not</strong> abort the macro — it accumulates. A macro can emit several errors and still return a real AST if some other check still produces something useful.</p>
+<h2 id="22-8-macrocontext-api-sketch">22.8 <code>MacroContext</code> API (sketch)</h2>
+<pre><code>pub interface MacroContext {
+  // span of the @MacroName itself
+  function invocation_span(self): Span
+
+  // arguments to the @MacroName(...) invocation
+  function args(self): List&lt;ASTNode&gt;            // positional, in order
+  function kwargs(self): Map&lt;str, ASTNode&gt;      // keyword args
+
+  // argument coercion helpers (return null if missing or wrong shape)
+  function arg_string(self, name: str): str | null
+  function arg_int(self, name: str):    i64 | null
+  function arg_bool(self, name: str):   bool | null
+  function arg_ident(self, name: str):  str | null
+
+  // diagnostics
+  function error(self, span: Span, message: str)
+  function warn(self,  span: Span, message: str)
+  function note(self,  span: Span, message: str)
+
+  // hygiene escape
+  function unhygienic(self, name: str): ASTNode
+
+  // identifier minting (hygienic temp names)
+  function fresh_ident(self, hint: str): ASTNode
+}</code></pre>
+<p>The full surface — argument inspection, span manipulation, AST construction helpers — is part of <code>core:compiler</code> and is documented separately from this language spec.</p>
+<h2 id="22-9-astnode-deferred">22.9 <code>ASTNode</code> (deferred)</h2>
+<p>The exact <code>ASTNode</code> schema — the discriminated union of node kinds (struct decl, function decl, expression, pattern, statement, block, ...), their fields, traversal helpers, and pretty-printers — is <strong>deferred to a future specification document</strong>.</p>
+<p>What this version of the spec commits to about <code>ASTNode</code>:</p>
+<ul>
+<li>It is a discriminated union (per <a href="03-unions.html">03-unions.html</a>) with one variant per syntactic category.</li>
+<li>Every node carries a <code>Span</code> for diagnostics.</li>
+<li>Nodes are immutable; "modifying" a node means producing a new one.</li>
+<li>A node can be re-parsed from a source string via <code>core:compiler</code> helpers (<code>parse_item</code>, <code>parse_expr</code>, <code>parse_block</code>), letting macros generate code by string concatenation when convenient.</li>
+</ul>
+<h2 id="22-10-recursion-and-depth-limit">22.10 Recursion and depth limit</h2>
+<p>A macro's output may contain further <code>@</code> invocations. The compiler re-expands them. Recursion terminates when no <code>@</code> invocations remain in the tree.</p>
+<p>The default recursion depth limit is <strong>128 levels</strong>. Going deeper produces an error pointing at the deepest expansion. The limit is configurable per project in the manifest:</p>
+<pre><code>[macros]
+recursion_limit = 256</code></pre>
+<p>A macro that recursively emits itself with no termination hits this limit and is rejected; the error includes the invocation chain.</p>
+<h2 id="22-11-built-in-derive">22.11 Built-in <code>@Derive</code></h2>
+<p><code>@Derive(Trait, ...)</code> is the one macro shipped with <code>core:prelude</code>. It synthesizes interface implementations for a struct.</p>
+<pre><code>@Derive(Eq, Hash, Clone, Ord)
+pub struct Person {
+  pub name: str,
+  pub age:  i32,
+}</code></pre>
+<p>Initial supported set:</p>
+<table>
+<thead><tr>
+<th>Derivable</th>
+<th>Requires</th>
+<th>Synthesizes</th>
+</tr></thead>
+<tbody>
+<tr>
+<td><code>@Derive(Eq)</code></td>
+<td>every field <code>Eq</code></td>
+<td><code>extend T: Eq</code> — field-by-field equality</td>
+</tr>
+<tr>
+<td><code>@Derive(Ord)</code></td>
+<td>every field <code>Ord</code>; implies <code>Eq</code></td>
+<td><code>extend T: Ord</code> — lexicographic comparison by declaration order</td>
+</tr>
+<tr>
+<td><code>@Derive(Hash)</code></td>
+<td>every field <code>Hash</code></td>
+<td><code>extend T: Hash</code> — combined hash of all fields</td>
+</tr>
+<tr>
+<td><code>@Derive(Clone)</code></td>
+<td>every field <code>Clone</code></td>
+<td><code>extend T: Clone</code> — deep copy of every field</td>
+</tr>
+</tbody>
+</table>
+<p><code>@Derive</code> for additional interfaces (<code>Drop</code>, project-specific traits) is not built-in — users write their own <code>@ProcMacro</code> to synthesize them. <code>@Derive(MyTrait)</code> resolves to a macro named <code>Derive_MyTrait</code> (the compiler concatenates the dispatch name); the user defines that macro the same way they define any other.</p>
+<h2 id="22-12-no-declarative-macros">22.12 No declarative macros</h2>
+<p>The language does <strong>not</strong> have <code>macro_rules!</code>-style declarative macros. Every macro is a procedural function. Rationale: one mental model, full generality, no fragment-specifier mini-grammar to learn. The tradeoff is more boilerplate for simple template substitutions; for those, write a small <code>@ProcMacro</code> that calls <code>parse_expr</code> / <code>parse_item</code> over a formatted string.</p>
+<h2 id="22-13-future-work">22.13 Future work</h2>
+<p>These items are deliberately deferred so the initial design stays small:</p>
+<ul>
+<li><strong>Exact <code>ASTNode</code> schema</strong> — the variant list, field accessors, and construction API are spec'd separately. See 22.9.</li>
+<li><strong>Macro debugging tools</strong> — pretty-print expanded AST, expansion tracing, span-aware diffs.</li>
+<li><strong><code>@Derive(Debug)</code></strong> — pending a <code>Debug</code> interface in stdlib.</li>
+<li><strong>Allowing I/O / async in privileged macros</strong> — some macros legitimately need to read files (e.g., <code>@IncludeBytes("./asset.bin")</code>, <code>@SqlSchema("schema.sql")</code>) or perform other "build-script-like" actions. The current rule (22.6) blocks them entirely. A future revision may introduce a <strong>tooling-level whitelist</strong>: the project manifest opts specific macros into limited I/O capabilities, enforced by the toolchain at macro-load time. The set of capabilities (read-files-under-path, read-env-var <code>X</code>, etc.) is per-macro and per-project; macros without explicit whitelist entries remain sandboxed. Async-in-macros could follow the same pattern but is lower priority and likely will reuse the same whitelist mechanism. The shape of the whitelist (manifest table, capability tokens, error reporting) is left for a future revision.</li>
+</ul>
+<h2 id="22-14-summary">22.14 Summary</h2>
+<ul>
+<li><code>@UpperCamelCase</code> is the invocation form. Three positions: decorator on items, expression, block.</li>
+<li>Multiple decorators apply bottom-up.</li>
+<li>Macros are <code>pub function Name(ctx: MacroContext, input: ASTNode): ASTNode</code> marked <code>@ProcMacro</code>.</li>
+<li>Macros run in Phase 2 — before type checking and import resolution.</li>
+<li>Hygienic by default; <code>ctx.unhygienic(...)</code> to deliberately leak a name to the caller.</li>
+<li>Sandboxed: no I/O, no threads, no type info, no global state. Pure AST-to-AST. (See 22.13 for future privileged-macro mechanism.)</li>
+<li>Errors via <code>ctx.error(span, msg)</code>; return <code>ASTNode.error_marker()</code> to suppress downstream noise.</li>
+<li>Recursion limit 128, configurable.</li>
+<li><code>@Derive(...)</code> is the only blessed macro in <code>core:prelude</code> (initial set: <code>Eq</code>, <code>Ord</code>, <code>Hash</code>, <code>Clone</code>).</li>
+<li>No declarative <code>macro_rules!</code>-style form.</li>
+<li><code>ASTNode</code> schema, debugging tools, and privileged-macro whitelist are future work.</li>
+</ul>
+
+</body>
+</html>

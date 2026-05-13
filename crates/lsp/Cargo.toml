@@ -1,0 +1,13 @@
+[package]
+name = "lsp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "langc-lsp-placeholder"
+path = "src/main.rs"
+
+[dependencies]
+compiler.workspace = true

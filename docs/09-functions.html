@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>9. Functions and Closures</title>
+<style>
+  :root {
+    --fg: #1b1b1d;
+    --muted: #5a5a60;
+    --bg: #fdfdfc;
+    --accent: #1a4a8a;
+    --accent-2: #2a6f4d;
+    --warn: #b54708;
+    --code-bg: #f4f2ee;
+    --code-fg: #1b1b1d;
+    --border: #e4e1dc;
+    --table-stripe: #f8f7f4;
+    --pub: #2a6f4d;
+    --priv: #b54708;
+    --pkg: #1a4a8a;
+    --core: #6b4ba8;
+  }
+  html { box-sizing: border-box; }
+  *, *::before, *::after { box-sizing: inherit; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color: var(--fg);
+    background: var(--bg);
+    line-height: 1.55;
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 2.5rem 1.5rem 6rem;
+  }
+  h1, h2, h3, h4 {
+    color: var(--fg);
+    line-height: 1.25;
+    margin-top: 2.2rem;
+    margin-bottom: 0.6rem;
+  }
+  h1 { font-size: 2rem; border-bottom: 2px solid var(--border); padding-bottom: 0.4rem; }
+  h2 { font-size: 1.45rem; margin-top: 2.6rem; }
+  h3 { font-size: 1.15rem; color: var(--accent); }
+  h4 { font-size: 1rem; color: var(--muted); }
+  p { margin: 0.7rem 0; }
+  ul, ol { margin: 0.7rem 0; padding-left: 1.6rem; }
+  li { margin: 0.3rem 0; }
+  code {
+    font-family: "SF Mono", Menlo, Consolas, "Courier New", monospace;
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 0.1em 0.35em;
+    border-radius: 3px;
+    font-size: 0.92em;
+  }
+  pre {
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 0.9rem 1rem;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 0.88rem;
+    line-height: 1.5;
+    border: 1px solid var(--border);
+  }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1rem 0;
+    font-size: 0.94rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.5rem 0.7rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th { background: var(--code-bg); font-weight: 600; }
+  tbody tr:nth-child(even) { background: var(--table-stripe); }
+  .lead {
+    font-size: 1.05rem;
+    color: var(--muted);
+    margin-bottom: 1.6rem;
+  }
+  .toc {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1rem 1.2rem;
+    margin: 1.6rem 0 2rem;
+    font-size: 0.94rem;
+  }
+  .toc ol { margin: 0.2rem 0 0; padding-left: 1.3rem; }
+  .toc a { color: var(--accent); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+
+  .diagram {
+    background: #ffffff;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.4rem;
+    margin: 1.4rem 0;
+    overflow-x: auto;
+  }
+  .diagram-caption {
+    font-size: 0.85rem;
+    color: var(--muted);
+    text-align: center;
+    margin-top: 0.6rem;
+    font-style: italic;
+  }
+  svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+  svg text { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; fill: var(--fg); }
+  svg .label { font-family: -apple-system, system-ui, sans-serif; font-size: 12px; }
+  svg .small { font-size: 10px; fill: var(--muted); }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    justify-content: center;
+    margin-top: 0.8rem;
+    font-size: 0.85rem;
+  }
+  .legend-item { display: flex; align-items: center; gap: 0.4rem; }
+  .legend-swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    border: 1px solid rgba(0,0,0,0.15);
+  }
+
+  .tag {
+    display: inline-block;
+    padding: 0.1em 0.55em;
+    border-radius: 3px;
+    font-size: 0.78em;
+    font-weight: 600;
+    font-family: "SF Mono", Menlo, monospace;
+    color: white;
+    vertical-align: middle;
+  }
+  .tag.pub  { background: var(--pub); }
+  .tag.priv { background: var(--priv); }
+  .tag.pkg  { background: var(--pkg); }
+  .tag.core { background: var(--core); }
+  .tag.warn { background: var(--warn); }
+
+  .callout {
+    border-left: 4px solid var(--accent);
+    background: #f0f4fa;
+    padding: 0.8rem 1rem;
+    margin: 1.2rem 0;
+    border-radius: 0 6px 6px 0;
+  }
+  .callout.warn { border-color: var(--warn); background: #fbf3ec; }
+  .callout.good { border-color: var(--accent-2); background: #eef6f1; }
+  .callout strong { display: block; margin-bottom: 0.3rem; }
+
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin: 1.2rem 0;
+  }
+  @media (max-width: 720px) {
+    .two-col { grid-template-columns: 1fr; }
+  }
+
+  .file-tree {
+    font-family: "SF Mono", Menlo, monospace;
+    font-size: 0.88rem;
+    line-height: 1.55;
+    background: var(--code-bg);
+    padding: 1rem 1.2rem;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    white-space: pre;
+    overflow-x: auto;
+  }
+  .file-tree .pub  { color: var(--pub); font-weight: 600; }
+  .file-tree .priv { color: var(--priv); }
+  .file-tree .note { color: var(--muted); font-style: italic; }
+</style>
+</head>
+<body>
+
+<h1>9. Functions and Closures</h1>
+
+<h2 id="9-1-function-declaration">9.1 Function declaration</h2>
+
+<pre><code>pub function add(a: i64, b: i64): i64 {
+  a + b
+}</code></pre>
+
+<p>Parts of the signature:</p>
+
+<ul>
+  <li><code>pub</code> — optional visibility.</li>
+  <li><code>function</code> keyword.</li>
+  <li>Name.</li>
+  <li>Optional generic parameters: <code>&lt;T, U: Bound&gt;</code> (see <a href="11-generics.html">11-generics.html</a>).</li>
+  <li>Parameter list: <code>(name: T, name: T, ...)</code>. Parameters cannot have default values. Trailing comma allowed.</li>
+  <li>Return type: <code>: T</code>. Omitted return type defaults to <code>null</code>.</li>
+  <li>Body: a block.</li>
+</ul>
+
+<p>The body is an expression-block. Its trailing expression is the return value. Use <code>return expr</code> for an early exit.</p>
+
+<pre><code>function get_ratio(current: f64, total: f64): f64 {
+  if total == 0.0 {
+    return 0.0
+  }
+  current / total
+}</code></pre>
+
+<h2 id="9-2-generic-functions">9.2 Generic functions</h2>
+
+<pre><code>function identity&lt;T&gt;(value: T): T {
+  value
+}
+
+function bigger&lt;T: Ord&gt;(a: T, b: T): T {
+  if a &gt; b { a } else { b }
+}
+
+function map&lt;I, O&gt;(xs: List&lt;I&gt;, f: (I) -&gt; O): List&lt;O&gt; {
+  var out = List.new&lt;O&gt;()
+  for x in xs {
+    out.push(f(x))
+  }
+  out
+}</code></pre>
+
+<p>See <a href="11-generics.html">11-generics.html</a> for bounds, monomorphization rules, and dynamic dispatch.</p>
+
+<h2 id="9-3-function-type-syntax">9.3 Function-type syntax</h2>
+
+<p>A function type is written <code>(P1, P2, ...) -&gt; R</code>:</p>
+
+<pre><code>var f: (i64) -&gt; i64 = function(x: i64): i64 { x * 2 }
+var combine: (i64, i64) -&gt; i64 = function(a: i64, b: i64): i64 { a + b }</code></pre>
+
+<p>Parameter names are not part of the type — only the types are:</p>
+
+<pre><code>type IntFn = (i64) -&gt; i64    // same as (x: i64) -&gt; i64 with names elided</code></pre>
+
+<p>For function types with the C ABI used in FFI, prefix with <code>extern</code>:</p>
+
+<pre><code>type CCallback = extern (data: *u8, size: u64) -&gt; i32</code></pre>
+
+<p>See <a href="19-ffi.html">19-ffi.html</a>.</p>
+
+<h2 id="9-4-anonymous-functions-long-form">9.4 Anonymous functions — long form</h2>
+
+<p>The <code>function</code> keyword with no name creates an anonymous function:</p>
+
+<pre><code>var double = function(x: i32): i32 {
+  x * 2
+}</code></pre>
+
+<p>Anonymous functions follow the same rules as named functions: implicit return of the trailing expression, all parameters typed (unless inference takes over), explicit return type allowed.</p>
+
+<h2 id="9-5-closures-short-form">9.5 Closures — short form</h2>
+
+<p>In contexts where the expected function type is known (a typed binding, an argument position, etc.), the short closure form may omit type annotations:</p>
+
+<pre><code>|x| x * 2
+
+|a, b| a + b
+
+|x| {
+  var y = x + 1
+  y * y
+}
+
+|x: i32| -&gt; i32 {
+  x + 1
+}</code></pre>
+
+<p>Syntax:</p>
+
+<ul>
+  <li><code>|&lt;params&gt;| &lt;body&gt;</code> — body is an expression or a block.</li>
+  <li>Parameter types and the return type are inferred from context when not annotated.</li>
+  <li>Parameters between <code>|...|</code> are comma-separated and may have type annotations.</li>
+  <li>The zero-parameter form is <code>|| &lt;body&gt;</code>. In argument position there is no ambiguity with the logical-OR operator because <code>||</code> does not begin a valid expression there.</li>
+</ul>
+
+<pre><code>spawn(|| producer(tx))      // zero-parameter closure
+var f = || 42               // zero-parameter closure returning i64</code></pre>
+
+<p>A short-form closure is <strong>exactly</strong> the same kind of value as a <code>function(...) { ... }</code> anonymous function — it just has lighter syntax. Both produce a value of some <code>(P...) -&gt; R</code> function type.</p>
+
+<h2 id="9-6-it-implicit-single-parameter">9.6 <code>it</code> — implicit single parameter</h2>
+
+<p>When a closure with exactly one parameter is expected (from the context), <code>{ ... }</code> without <code>|...|</code> is a closure body whose single parameter is named <code>it</code>:</p>
+
+<pre><code>var doubled = numbers.map({ it * 2 })
+var positives = numbers.filter({ it &gt; 0 })</code></pre>
+
+<p>Equivalent long forms:</p>
+
+<pre><code>var doubled   = numbers.map(|x| x * 2)
+var doubled_2 = numbers.map(function(x: i64): i64 { x * 2 })</code></pre>
+
+<p>Rules:</p>
+
+<ul>
+  <li>The implicit-<code>it</code> form requires the surrounding context to provide a unique function type with exactly one parameter. Otherwise the compiler rejects the form with "ambiguous closure parameter".</li>
+  <li><code>it</code> is just a regular parameter binding inside the body; it can be shadowed.</li>
+  <li>Nested <code>it</code>-closures: the inner <code>it</code> shadows the outer. To refer to both, use the explicit <code>|x| ...</code> form.</li>
+</ul>
+
+<h2 id="9-7-captures">9.7 Captures</h2>
+
+<p>Closures capture variables from their enclosing lexical scope. Capture is <strong>by reference</strong> for reference-type variables (the captured object is the same one the outer scope sees) and <strong>by value</strong> for primitive variables (a copy is taken at closure-creation time).</p>
+
+<pre><code>var n: i64 = 0
+var inc = function() { n = n + 1 }  // captures `n` by reference — but n is primitive</code></pre>
+
+<p>For primitives, the closure captures a binding cell so that mutations persist. The mental model is: every captured variable is captured by reference; primitives just happen to have inline storage in the cell.</p>
+
+<p>Practical implication: a closure that captures a struct shares it with the caller — mutations through the closure are visible to the caller. To capture a snapshot, clone before capture:</p>
+
+<pre><code>var snapshot = person.clone()
+var greet = function() { print(snapshot.name) }</code></pre>
+
+<h3>Capture analysis</h3>
+
+<p>Variables are captured automatically — there is no explicit capture list. The compiler determines the capture set from the closure body. A captured reference type's refcount is incremented at closure-creation time and decremented when the closure is dropped.</p>
+
+<h3><code>extern</code> callbacks cannot capture</h3>
+
+<p>Functions declared <code>extern</code> (so that they can be invoked across the C ABI) <strong>cannot capture</strong>: a C function pointer has no environment slot. To pass state to a C callback, use the conventional <code>void*</code> user-data parameter (typed as <code>*T</code> in this language). See <a href="19-ffi.html">19-ffi.html</a>.</p>
+
+<h2 id="9-8-async-functions-and-async-closures">9.8 Async functions and async closures</h2>
+
+<p><code>async function f(...) -&gt; T</code> returns a <code>Future&lt;T&gt;</code> rather than executing immediately. Bodies may use <code>await</code>. See <a href="21-async.html">21-async.html</a>.</p>
+
+<p>Async closures use the <code>async</code> prefix on either form:</p>
+
+<pre><code>var fut = async function(x: i64): str {
+  var d = await fetch(x)
+  d.body
+}
+
+var fut2 = async |x| {
+  var d = await fetch(x)
+  d.body
+}
+
+var fut3 = async { await fetch(it) }   // implicit it</code></pre>
+
+<p>The type of an async closure is <code>(...) -&gt; Future&lt;R&gt;</code>.</p>
+
+<h2 id="9-9-calling-syntax-recap">9.9 Calling syntax recap</h2>
+
+<pre><code>foo(a, b)                 // free function
+person.greet()            // method (instance)
+List.new&lt;i64&gt;()           // static / namespaced function
+List&lt;i64&gt;()               // type-as-constructor shorthand for List&lt;i64&gt;.new() — see 9.10
+(|x| x + 1)(5)            // call a closure expression</code></pre>
+
+<p>Methods and static functions share the same <code>function</code> keyword — they differ only by being inside an <code>extend</code> block and (for methods) taking <code>self</code> as their first parameter. See <a href="10-interfaces.html">10-interfaces.html</a>.</p>
+
+<h2 id="9-10-type-as-constructor-shorthand">9.10 Type-as-constructor shorthand</h2>
+
+<p>For any type <code>T</code> that exposes a <code>new</code> static method, the expression <code>T(args)</code> is a <strong>parse-time rewrite</strong> for <code>T.new(args)</code>:</p>
+
+<pre><code>var xs = List&lt;i64&gt;()              // → List&lt;i64&gt;.new()
+var m  = Map&lt;str, i64&gt;()          // → Map&lt;str, i64&gt;.new()
+var c  = Pool&lt;Conn&gt;(size = 16)    // → Pool&lt;Conn&gt;.new(size = 16)</code></pre>
+
+<h3>Rules</h3>
+
+<ul>
+  <li>The rewrite is <strong>purely syntactic</strong>. The compiler does not require <code>new</code> to return <code>T</code> — its return type is whatever the method declares. A <code>new</code> that returns <code>T | Error</code>, <code>T | null</code>, <code>Future&lt;T&gt;</code>, or any other type works the same way: <code>T(args)</code> evaluates to whatever <code>T.new(args)</code> evaluates to.
+
+<pre><code>extend MyCache: ... {
+  function new(size: i64): MyCache | InvalidSize {
+    if size &lt;= 0 { InvalidSize } else { MyCache { ... } }
+  }
+}
+
+var c = MyCache(16)?      // c: MyCache, after `?` propagates InvalidSize</code></pre>
+  </li>
+  <li>If <code>T</code> does not have a <code>new</code> static method, <code>T(args)</code> is a compile error: <code>"type T is not callable: no 'new' static method"</code>.</li>
+  <li>The rewrite applies only when <code>T</code> is used as a value-position expression. <code>T(args)</code> in a pattern, in a type annotation, or as a generic argument is not a constructor call.</li>
+  <li>Generic arguments work as usual. <code>List&lt;i64&gt;()</code> rewrites to <code>List&lt;i64&gt;.new()</code>; the type arguments are part of the receiver and flow into <code>new</code>.</li>
+</ul>
+
+<h3>Tuple structs are not rewritten</h3>
+
+<p>Tuple structs (<code>pub struct Pair(i64, i64)</code>) already use <code>Pair(1, 2)</code> as their literal constructor. The rewrite does <strong>not</strong> apply to them — <code>Pair(1, 2)</code> is direct construction regardless of whether anyone defined <code>Pair.new</code>. The compiler distinguishes the two cases by the declared kind of <code>T</code>.</p>
+
+<p>If you want both literal construction and a smart-constructor on the same type, expose the smart form under a different name (<code>Pair.make(...)</code>) or use a record struct instead of a tuple struct.</p>
+
+<h3>Why it's just sugar</h3>
+
+<p>Because the rewrite is purely syntactic, there is no <code>New</code> / <code>Constructor</code> interface in the language and nothing to implement. Defining a <code>new</code> static method on a type is the only thing that "opts in." This keeps the type system unchanged and means generic code over "things that can be <code>T(...)</code>-constructed" must still go through <code>T.new</code> explicitly (no generic bound like <code>T: New&lt;Args, Out&gt;</code> is available — design intentional, deferred to a future revision if it becomes needed).</p>
+
+<h2 id="9-11-no-variadics-no-default-arguments-no-named-arguments">9.11 No variadics, no default arguments, no named arguments</h2>
+
+<p>The function call grammar is fixed: positional, exact arity. To approximate optional parameters, accept a struct argument with a spread default; to approximate variadic input, accept a <code>List&lt;T&gt;</code>.</p>
+
+<h2 id="9-12-recursion">9.12 Recursion</h2>
+
+<p>Direct and mutual recursion are supported. Functions are visible throughout their declaring module regardless of declaration order — there is no top-down restriction.</p>
+
+<h2 id="9-13-diverging-functions">9.13 Diverging functions</h2>
+
+<p>A function that never returns (always panics, always loops) has an unreachable end-of-body. The compiler infers the return type as the never type in that case:</p>
+
+<pre><code>function fail(msg: str): null {
+  panic(msg)
+}</code></pre>
+
+<p>Such a function can be assigned anywhere any return type is expected, because never is a subtype of every type.</p>
+
+</body>
+</html>

@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>11. Generics</title>
+<style>
+  :root {
+    --fg: #1b1b1d;
+    --muted: #5a5a60;
+    --bg: #fdfdfc;
+    --accent: #1a4a8a;
+    --accent-2: #2a6f4d;
+    --warn: #b54708;
+    --code-bg: #f4f2ee;
+    --code-fg: #1b1b1d;
+    --border: #e4e1dc;
+    --table-stripe: #f8f7f4;
+    --pub: #2a6f4d;
+    --priv: #b54708;
+    --pkg: #1a4a8a;
+    --core: #6b4ba8;
+  }
+  html { box-sizing: border-box; }
+  *, *::before, *::after { box-sizing: inherit; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color: var(--fg);
+    background: var(--bg);
+    line-height: 1.55;
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 2.5rem 1.5rem 6rem;
+  }
+  h1, h2, h3, h4 {
+    color: var(--fg);
+    line-height: 1.25;
+    margin-top: 2.2rem;
+    margin-bottom: 0.6rem;
+  }
+  h1 { font-size: 2rem; border-bottom: 2px solid var(--border); padding-bottom: 0.4rem; }
+  h2 { font-size: 1.45rem; margin-top: 2.6rem; }
+  h3 { font-size: 1.15rem; color: var(--accent); }
+  h4 { font-size: 1rem; color: var(--muted); }
+  p { margin: 0.7rem 0; }
+  ul, ol { margin: 0.7rem 0; padding-left: 1.6rem; }
+  li { margin: 0.3rem 0; }
+  code {
+    font-family: "SF Mono", Menlo, Consolas, "Courier New", monospace;
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 0.1em 0.35em;
+    border-radius: 3px;
+    font-size: 0.92em;
+  }
+  pre {
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 0.9rem 1rem;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 0.88rem;
+    line-height: 1.5;
+    border: 1px solid var(--border);
+  }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1rem 0;
+    font-size: 0.94rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.5rem 0.7rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th { background: var(--code-bg); font-weight: 600; }
+  tbody tr:nth-child(even) { background: var(--table-stripe); }
+  .lead {
+    font-size: 1.05rem;
+    color: var(--muted);
+    margin-bottom: 1.6rem;
+  }
+  .toc {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1rem 1.2rem;
+    margin: 1.6rem 0 2rem;
+    font-size: 0.94rem;
+  }
+  .toc ol { margin: 0.2rem 0 0; padding-left: 1.3rem; }
+  .toc a { color: var(--accent); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+
+  .diagram {
+    background: #ffffff;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.4rem;
+    margin: 1.4rem 0;
+    overflow-x: auto;
+  }
+  .diagram-caption {
+    font-size: 0.85rem;
+    color: var(--muted);
+    text-align: center;
+    margin-top: 0.6rem;
+    font-style: italic;
+  }
+  svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+  svg text { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; fill: var(--fg); }
+  svg .label { font-family: -apple-system, system-ui, sans-serif; font-size: 12px; }
+  svg .small { font-size: 10px; fill: var(--muted); }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    justify-content: center;
+    margin-top: 0.8rem;
+    font-size: 0.85rem;
+  }
+  .legend-item { display: flex; align-items: center; gap: 0.4rem; }
+  .legend-swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    border: 1px solid rgba(0,0,0,0.15);
+  }
+
+  .tag {
+    display: inline-block;
+    padding: 0.1em 0.55em;
+    border-radius: 3px;
+    font-size: 0.78em;
+    font-weight: 600;
+    font-family: "SF Mono", Menlo, monospace;
+    color: white;
+    vertical-align: middle;
+  }
+  .tag.pub  { background: var(--pub); }
+  .tag.priv { background: var(--priv); }
+  .tag.pkg  { background: var(--pkg); }
+  .tag.core { background: var(--core); }
+  .tag.warn { background: var(--warn); }
+
+  .callout {
+    border-left: 4px solid var(--accent);
+    background: #f0f4fa;
+    padding: 0.8rem 1rem;
+    margin: 1.2rem 0;
+    border-radius: 0 6px 6px 0;
+  }
+  .callout.warn { border-color: var(--warn); background: #fbf3ec; }
+  .callout.good { border-color: var(--accent-2); background: #eef6f1; }
+  .callout strong { display: block; margin-bottom: 0.3rem; }
+
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin: 1.2rem 0;
+  }
+  @media (max-width: 720px) {
+    .two-col { grid-template-columns: 1fr; }
+  }
+
+  .file-tree {
+    font-family: "SF Mono", Menlo, monospace;
+    font-size: 0.88rem;
+    line-height: 1.55;
+    background: var(--code-bg);
+    padding: 1rem 1.2rem;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    white-space: pre;
+    overflow-x: auto;
+  }
+  .file-tree .pub  { color: var(--pub); font-weight: 600; }
+  .file-tree .priv { color: var(--priv); }
+  .file-tree .note { color: var(--muted); font-style: italic; }
+</style>
+</head>
+<body>
+
+<h1>11. Generics</h1>
+
+<p>Generic parameters appear in <code>&lt; &gt;</code> after a name. They apply to functions, structs, interfaces, and <code>extend</code> blocks.</p>
+
+<pre><code>function identity&lt;T&gt;(value: T): T { value }
+struct Box&lt;T&gt;     { pub value: T }
+interface Container&lt;T&gt; { function get(self): T }
+extend&lt;T&gt; Box&lt;T&gt;: Container&lt;T&gt; { function get(self): T { self.value } }</code></pre>
+
+<h2 id="11-1-type-parameters">11.1 Type parameters</h2>
+
+<p>A type parameter is a placeholder for a type. Each parameter has a kebab-friendly identifier; conventionally <code>T</code>, <code>U</code>, <code>K</code>, <code>V</code>, <code>E</code>, etc.</p>
+
+<p>Type parameters can be constrained:</p>
+
+<pre><code>function bigger&lt;T: Ord&gt;(a: T, b: T): T { if a &gt; b { a } else { b } }
+function dump&lt;T: Printable + Clone&gt;(x: T) { print(x.clone().to_string()) }</code></pre>
+
+<p>Multiple bounds separate with <code>+</code>. A bound is an interface (possibly with its own generic arguments):</p>
+
+<pre><code>function consume&lt;T: Iterator&lt;i64&gt;&gt;(it: T) { ... }</code></pre>
+
+<h2 id="11-2-default-type-parameters">11.2 Default type parameters</h2>
+
+<p>A generic parameter can have a default:</p>
+
+<pre><code>interface Add&lt;Rhs = Self, Output = Self&gt; {
+  function add(self, rhs: Rhs): Output
+}</code></pre>
+
+<p>A default lets callers omit the argument: <code>Add&lt;&gt;</code> (or just <code>Add</code>) means <code>Add&lt;Self, Self&gt;</code>. Defaults can refer to earlier parameters and to <code>Self</code>.</p>
+
+<p>Defaults are only meaningful in declaration positions; at use sites, omitted arguments simply use the default.</p>
+
+<h2 id="11-3-bidirectional-inference">11.3 Bidirectional inference</h2>
+
+<p>Type arguments are usually inferred from value arguments:</p>
+
+<pre><code>function pair&lt;A, B&gt;(a: A, b: B): (A, B) { (a, b) }
+
+var p = pair(1, "hi")          // pair&lt;i64, str&gt;</code></pre>
+
+<p>Explicit type arguments are written in <code>&lt; &gt;</code> immediately after the function or method name. There is no separate disambiguating prefix (no <code>::&lt;...&gt;</code> and no <code>.&lt;...&gt;</code>):</p>
+
+<pre><code>var p = pair&lt;i64, str&gt;(1, "hi")
+var empty = List.new&lt;str&gt;()</code></pre>
+
+<p>In expression positions where <code>name&lt;T&gt;(...)</code> could in principle be ambiguous with a chained comparison <code>name &lt; T &gt; (...)</code>, the parser commits to the generic-call interpretation when:</p>
+
+<ul>
+  <li>the name is a known type, generic function, or static method, <strong>and</strong></li>
+  <li>the <code>&lt;</code> is immediately followed by a type expression (and not, say, a value expression unsuitable as a type).</li>
+</ul>
+
+<p>In the rare case that the parser commits to the wrong interpretation, parenthesize: <code>(a &lt; b) &gt; c</code> for the comparison; explicit generic arguments are otherwise unambiguous.</p>
+
+<h2 id="11-4-monomorphization">11.4 Monomorphization</h2>
+
+<p>Every generic function and method is <strong>monomorphized</strong>: the compiler emits a separate copy for each distinct set of type arguments used in the program. This means:</p>
+
+<ul>
+  <li>Generic code is as fast as hand-written specialized code.</li>
+  <li>Binary size grows with the diversity of instantiations.</li>
+  <li>Generic parameters do not carry type tags at runtime — the type is "burned in" per instantiation.</li>
+</ul>
+
+<p>Monomorphization is <strong>always</strong> the default for <code>&lt;T: Bound&gt;</code> parameters.</p>
+
+<h2 id="11-5-dynamic-dispatch">11.5 Dynamic dispatch</h2>
+
+<p>There is exactly one situation that triggers dynamic dispatch: <strong>an interface name used as a value type</strong>. This includes parameter types, field types, local variable types, and return types.</p>
+
+<pre><code>function f(x: Printable) { ... }   // x: Printable — dyn dispatch
+var items: List&lt;Printable&gt; = ...   // dyn dispatch per element</code></pre>
+
+<p>In these cases, the value is represented as a "fat pointer" — a pair <code>(object_pointer, vtable_pointer)</code>. Method calls through this fat pointer use the vtable.</p>
+
+<p>By contrast, a generic-bounded form is monomorphized:</p>
+
+<pre><code>function f&lt;T: Printable&gt;(x: T) { ... }   // monomorphized</code></pre>
+
+<p>The compiler prefers monomorphization. It uses dynamic dispatch only when the interface appears as a value type. If you want monomorphization, use the generic form; if you need heterogeneous collections or runtime polymorphism, use the interface-type form.</p>
+
+<h3>When does this matter?</h3>
+
+<ul>
+  <li><code>List&lt;Shape&gt;</code> — every element can be a different concrete type implementing <code>Shape</code>. Dynamic dispatch.</li>
+  <li><code>List&lt;T&gt;</code> with <code>T: Shape</code> — every element is the <strong>same</strong> concrete type. Monomorphized.</li>
+</ul>
+
+<h3>Narrowing to an interface</h3>
+
+<p>A value can be widened to an interface (implicit) and narrowed back with <code>as</code> (panics if wrong):</p>
+
+<pre><code>var person = Person { ... }
+var p: Printable = person       // implicit widen to interface
+var back = p as Person          // narrow</code></pre>
+
+<p>The widening produces a fat pointer. Narrowing checks the type tag in the GC header (see <a href="16-memory.html">16-memory.html</a>) and panics on mismatch.</p>
+
+<h3>Non-object-safe interfaces</h3>
+
+<p>An interface that mentions <code>Self</code> outside the <code>self</code> parameter cannot be used as a value type — there's no way to express the result in a vtable. The compiler rejects this at use sites (see <a href="10-interfaces.html">10-interfaces.html</a>).</p>
+
+<h2 id="11-6-generic-structs">11.6 Generic structs</h2>
+
+<pre><code>struct Pair&lt;A, B&gt; {
+  pub first:  A,
+  pub second: B,
+}
+
+struct Cache&lt;K: Eq + Hash, V&gt; {
+  inner: Map&lt;K, V&gt;,
+}</code></pre>
+
+<p>Bounds on struct generics ensure that all uses (constructions and methods) honor those constraints.</p>
+
+<h2 id="11-7-generic-interfaces">11.7 Generic interfaces</h2>
+
+<pre><code>interface Iterator&lt;T&gt; {
+  function next(self): Item&lt;T&gt; | Done
+}
+
+interface Add&lt;Rhs = Self, Output = Self&gt; {
+  function add(self, rhs: Rhs): Output
+}</code></pre>
+
+<p>A generic interface can be implemented multiple times for the same type with different type arguments:</p>
+
+<pre><code>extend i32: Add&lt;i32, i32&gt; { function add(self, rhs: i32): i32 { ... } }
+extend i32: Add&lt;f64, f64&gt; { function add(self, rhs: f64): f64 { ... } }</code></pre>
+
+<p>Resolving <code>x.add(y)</code> uses argument types to pick the impl.</p>
+
+<h2 id="11-8-generic-extend-blocks">11.8 Generic <code>extend</code> blocks</h2>
+
+<p>Already shown in <a href="10-interfaces.html">10-interfaces.html</a>. Examples:</p>
+
+<pre><code>extend&lt;T&gt; Wrapper&lt;T&gt; { ... }                     // for all T
+extend&lt;T: Clone&gt; Wrapper&lt;T&gt;: Clone { ... }       // constrained
+extend Wrapper&lt;i32&gt; { ... }                      // specialization
+extend&lt;T&gt; List&lt;T&gt;: Iterator&lt;T&gt; { ... }           // generic interface impl</code></pre>
+
+<h2 id="11-9-overlap-and-specificity">11.9 Overlap and specificity</h2>
+
+<p>Two <code>extend</code> blocks for the same type-and-interface combination can overlap (e.g. <code>extend&lt;T&gt; List&lt;T&gt;: Foo</code> and <code>extend List&lt;i32&gt;: Foo</code>). The compiler picks the <strong>most specific</strong> impl. Specificity is defined as follows.</p>
+
+<p>Let A and B be candidate impls applicable to a given concrete type/interface pair. A is <strong>strictly more specific</strong> than B iff:</p>
+
+<ol>
+  <li>There exists a substitution σ from B's type parameters to types such that σ(B's type pattern) = A's type pattern, <strong>and</strong></li>
+  <li>There exists no substitution from A's type parameters to types that yields B's type pattern.</li>
+</ol>
+
+<p>Informally: A's pattern can be obtained as an instance of B's pattern, but not vice versa.</p>
+
+<p>Examples:</p>
+
+<table>
+<thead><tr><th>B's pattern</th><th>A's pattern</th><th>A more specific than B?</th></tr></thead>
+<tbody>
+<tr><td><code>extend&lt;T&gt; List&lt;T&gt;</code></td><td><code>extend List&lt;i32&gt;</code></td><td>yes (substitute T=i32)</td></tr>
+<tr><td><code>extend&lt;T&gt; Wrapper&lt;T&gt;</code></td><td><code>extend&lt;T: Clone&gt; Wrapper&lt;T&gt;</code></td><td>yes (added bound makes A's pattern an instance)</td></tr>
+<tr><td><code>extend&lt;T&gt; Pair&lt;T, T&gt;</code></td><td><code>extend&lt;A, B&gt; Pair&lt;A, B&gt;</code></td><td>the first is more specific (forces A=B)</td></tr>
+<tr><td><code>extend&lt;T: Foo&gt; Box&lt;T&gt;</code></td><td><code>extend&lt;T: Bar&gt; Box&lt;T&gt;</code></td><td>neither (incomparable)</td></tr>
+</tbody>
+</table>
+
+<p>If two impls overlap and neither is strictly more specific, the compiler reports an <strong>ambiguity error</strong> at the call site that exercised the overlap. To resolve, narrow one impl's bounds or remove one.</p>
+
+<p>This procedure is sound because:</p>
+
+<ul>
+  <li>It's a syntactic test on pattern shapes and bound sets.</li>
+  <li>It does not depend on the call site's surrounding code.</li>
+  <li>It rejects all true ambiguities and accepts all clearly-ordered cases.</li>
+</ul>
+
+<h3>Bound subsumption</h3>
+
+<p>When comparing two impls with the same type pattern but different bounds:</p>
+
+<ul>
+  <li>If A's bounds are a strict superset of B's bounds, A is more specific. (Adding bounds narrows applicability, so A applies to fewer types — exactly the cases where B also applies.)</li>
+  <li>If A's bound set is incomparable with B's, the impls are incomparable.</li>
+</ul>
+
+<h3>Practical guidance</h3>
+
+<p>Most code never hits overlap. When overlap is intentional (e.g. specialized fast paths), follow the pattern of (1) a fully generic blanket impl plus (2) a single concrete specialization. The compiler picks the specialization for matching concrete types and the blanket for everything else.</p>
+
+<h2 id="11-10-lifetimes">11.10 Lifetimes</h2>
+
+<p>There are no lifetimes. The garbage collector handles managed memory; FFI pointers are managed through the pinning APIs (<code>&amp;</code>, <code>with_pin</code>, <code>Pin.acquire</code>) — see <a href="19-ffi.html#1915-pinning">19-ffi.md §19.15</a>.</p>
+
+<h2 id="11-11-variance">11.11 Variance</h2>
+
+<p>Generic parameters are <strong>invariant</strong> unless the language specifies otherwise. There is no covariance/contravariance system in user code.</p>
+
+<p>The standard library uses invariance throughout: <code>List&lt;Animal&gt;</code> is not assignable to <code>List&lt;Cat&gt;</code> or vice versa.</p>
+
+<p>The one exception is union widening: <code>T</code> is implicitly assignable to <code>T | U</code>. This applies position-by-position in concrete type expressions but does <strong>not</strong> propagate through generic containers.</p>
+
+<pre><code>var dog: Dog = ...
+var any: Dog | Cat = dog          // OK: union widening on the bare value
+
+var dogs: List&lt;Dog&gt; = ...
+var any_list: List&lt;Dog | Cat&gt; = dogs   // ERROR: List is invariant</code></pre>
+
+<p>If you need that effect, build a new collection explicitly (e.g. <code>dogs.map({ it as Dog | Cat })</code>).</p>
+
+<h2 id="11-12-generic-functions-in-extern-signatures">11.12 Generic functions in extern signatures</h2>
+
+<p>Generics may appear in <code>extern function</code> declarations only in pointer position (<code>*T</code>), because the size of <code>T</code> is not known at the call site. See <a href="19-ffi.html">19-ffi.html</a>.</p>
+
+</body>
+</html>

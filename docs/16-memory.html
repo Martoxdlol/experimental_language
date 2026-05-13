@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>16. Memory Model</title>
+<style>
+  :root {
+    --fg: #1b1b1d;
+    --muted: #5a5a60;
+    --bg: #fdfdfc;
+    --accent: #1a4a8a;
+    --accent-2: #2a6f4d;
+    --warn: #b54708;
+    --code-bg: #f4f2ee;
+    --code-fg: #1b1b1d;
+    --border: #e4e1dc;
+    --table-stripe: #f8f7f4;
+    --pub: #2a6f4d;
+    --priv: #b54708;
+    --pkg: #1a4a8a;
+    --core: #6b4ba8;
+  }
+  html { box-sizing: border-box; }
+  *, *::before, *::after { box-sizing: inherit; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color: var(--fg);
+    background: var(--bg);
+    line-height: 1.55;
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 2.5rem 1.5rem 6rem;
+  }
+  h1, h2, h3, h4 {
+    color: var(--fg);
+    line-height: 1.25;
+    margin-top: 2.2rem;
+    margin-bottom: 0.6rem;
+  }
+  h1 { font-size: 2rem; border-bottom: 2px solid var(--border); padding-bottom: 0.4rem; }
+  h2 { font-size: 1.45rem; margin-top: 2.6rem; }
+  h3 { font-size: 1.15rem; color: var(--accent); }
+  h4 { font-size: 1rem; color: var(--muted); }
+  p { margin: 0.7rem 0; }
+  ul, ol { margin: 0.7rem 0; padding-left: 1.6rem; }
+  li { margin: 0.3rem 0; }
+  code {
+    font-family: "SF Mono", Menlo, Consolas, "Courier New", monospace;
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 0.1em 0.35em;
+    border-radius: 3px;
+    font-size: 0.92em;
+  }
+  pre {
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 0.9rem 1rem;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 0.88rem;
+    line-height: 1.5;
+    border: 1px solid var(--border);
+  }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1rem 0;
+    font-size: 0.94rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.5rem 0.7rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th { background: var(--code-bg); font-weight: 600; }
+  tbody tr:nth-child(even) { background: var(--table-stripe); }
+  .lead {
+    font-size: 1.05rem;
+    color: var(--muted);
+    margin-bottom: 1.6rem;
+  }
+  .toc {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1rem 1.2rem;
+    margin: 1.6rem 0 2rem;
+    font-size: 0.94rem;
+  }
+  .toc ol { margin: 0.2rem 0 0; padding-left: 1.3rem; }
+  .toc a { color: var(--accent); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+
+  .diagram {
+    background: #ffffff;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.4rem;
+    margin: 1.4rem 0;
+    overflow-x: auto;
+  }
+  .diagram-caption {
+    font-size: 0.85rem;
+    color: var(--muted);
+    text-align: center;
+    margin-top: 0.6rem;
+    font-style: italic;
+  }
+  svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+  svg text { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; fill: var(--fg); }
+  svg .label { font-family: -apple-system, system-ui, sans-serif; font-size: 12px; }
+  svg .small { font-size: 10px; fill: var(--muted); }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    justify-content: center;
+    margin-top: 0.8rem;
+    font-size: 0.85rem;
+  }
+  .legend-item { display: flex; align-items: center; gap: 0.4rem; }
+  .legend-swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    border: 1px solid rgba(0,0,0,0.15);
+  }
+
+  .tag {
+    display: inline-block;
+    padding: 0.1em 0.55em;
+    border-radius: 3px;
+    font-size: 0.78em;
+    font-weight: 600;
+    font-family: "SF Mono", Menlo, monospace;
+    color: white;
+    vertical-align: middle;
+  }
+  .tag.pub  { background: var(--pub); }
+  .tag.priv { background: var(--priv); }
+  .tag.pkg  { background: var(--pkg); }
+  .tag.core { background: var(--core); }
+  .tag.warn { background: var(--warn); }
+
+  .callout {
+    border-left: 4px solid var(--accent);
+    background: #f0f4fa;
+    padding: 0.8rem 1rem;
+    margin: 1.2rem 0;
+    border-radius: 0 6px 6px 0;
+  }
+  .callout.warn { border-color: var(--warn); background: #fbf3ec; }
+  .callout.good { border-color: var(--accent-2); background: #eef6f1; }
+  .callout strong { display: block; margin-bottom: 0.3rem; }
+
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin: 1.2rem 0;
+  }
+  @media (max-width: 720px) {
+    .two-col { grid-template-columns: 1fr; }
+  }
+
+  .file-tree {
+    font-family: "SF Mono", Menlo, monospace;
+    font-size: 0.88rem;
+    line-height: 1.55;
+    background: var(--code-bg);
+    padding: 1rem 1.2rem;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    white-space: pre;
+    overflow-x: auto;
+  }
+  .file-tree .pub  { color: var(--pub); font-weight: 600; }
+  .file-tree .priv { color: var(--priv); }
+  .file-tree .note { color: var(--muted); font-style: italic; }
+</style>
+</head>
+<body>
+
+<h1>16. Memory Model</h1>
+
+<h2 id="16-1-the-two-heaps">16.1 The two heaps</h2>
+
+<p>The runtime owns two disjoint memory regions:</p>
+
+<ul>
+<li><strong>Managed heap</strong> — every non-<code>extern</code> heap value lives here. The garbage collector allocates, traces, refcounts, and frees these objects.</li>
+<li><strong>Foreign heap</strong> — anything allocated by <code>extern</code> code (<code>malloc</code>, <code>mmap</code>, library allocators, arenas, stack buffers passed in by C). Opaque to the GC. Ownership is manual.</li>
+</ul>
+
+<p>The two regions occupy distinct address ranges. The GC can identify a pointer as "managed" or "foreign" by an address-range check at runtime; foreign pointers are ignored by the GC entirely.</p>
+
+<p>See <a href="19-ffi.html">19-ffi.html</a> for the foreign-heap side and pinning.</p>
+
+<h2 id="16-2-value-vs-reference-semantics">16.2 Value vs reference semantics</h2>
+
+<ul>
+<li><strong>Primitive types</strong> (<code>i8</code>..<code>i64</code>, <code>u8</code>..<code>u64</code>, <code>f32</code>, <code>f64</code>, <code>bool</code>, <code>char</code>, <code>null</code>, <code>usize</code>, <code>isize</code>): stored inline (stack, struct fields, registers). Assignment copies the value.</li>
+<li><strong>Reference types</strong> (<code>str</code>, <code>List&lt;T&gt;</code>, <code>Map&lt;K, V&gt;</code>, structs, interface objects, function values that capture state, "boxed" tuples): the variable holds a pointer to a managed-heap object. Assignment copies the pointer (and increments the refcount). Mutation through one binding is visible through every other binding that holds the same pointer.</li>
+</ul>
+
+<p>To get an independent copy, call <code>.clone()</code> (requires <code>Clone</code>; see <a href="15-operators.html">15-operators.html</a>).</p>
+
+<h2 id="16-3-object-layout">16.3 Object layout</h2>
+
+<p>Every managed-heap object has the same header layout. The pointer held by a variable points <strong>to the start of the object fields</strong>; the header lives at negative offsets.</p>
+
+<pre><code>   (low addresses)
+   +------------------+
+   | GC header (8B?)  |  refcount, color, mark bits, etc.
+   +------------------+
+   | type id (4B)     |  uniquely identifies the runtime type
+   +------------------+
+   | (padding to ptr) |
+   +------------------+  &lt;-- pointer value held by managed code
+   | field 0          |
+   | field 1          |
+   | ...              |
+   +------------------+
+   (high addresses)
+</code></pre>
+
+<p>This is deliberate: pointer dereferences for normal field access do not need to skip the header. Operations that need the header (refcount updates, drop dispatch, <code>as</code> narrowing to a struct type) read the header at known negative offsets.</p>
+
+<p>Exact byte sizes of the header are implementation-defined; treat the layout above as conceptual. Implementations may pack the refcount and color/mark bits into a single 8-byte word.</p>
+
+<p><code>extern struct</code> types <strong>do not</strong> have a GC header (see <a href="19-ffi.html">19-ffi.html</a>).</p>
+
+<h2 id="16-4-refcount-semantics">16.4 Refcount semantics</h2>
+
+<p>Every managed object has a refcount stored in its header. Refcount operations:</p>
+
+<ul>
+<li><strong>Increment</strong> when a new strong reference is created: assignment to a new binding, capture into a long-lived closure, push into a collection, send over a channel, etc.</li>
+<li><strong>Decrement</strong> when a strong reference is destroyed: scope exit, reassignment, replacement in a collection, etc.</li>
+<li><strong>Atomic</strong> when the object is reachable from more than one thread (after a send to a channel, after a capture by a spawned thread). The compiler is conservative — objects that <em>could</em> be shared use atomic ops.</li>
+</ul>
+
+<p>When a refcount hits 0:</p>
+
+<ol>
+<li><code>Drop.drop(self)</code> is invoked (if <code>Self</code> implements <code>Drop</code>).</li>
+<li>For each strong-referencing field, the field's refcount is decremented (recursively destroying chains).</li>
+<li>The object's memory is returned to the allocator.</li>
+</ol>
+
+<h3>Compiler optimizations</h3>
+
+<p>The compiler tracks <strong>last use</strong> of every binding and tries to avoid unnecessary refcount traffic:</p>
+
+<ul>
+<li>If a binding <code>x</code> is passed to a function and not used afterward in its scope, the compiler can hand off the existing reference without an inc/dec pair.</li>
+<li>If a binding <code>x</code> is returned, the inc/dec at the return site cancels with the call-site receive.</li>
+<li>Static analysis identifies these and emits a <strong>move</strong> (pointer transfer) instead of an inc/dec pair.</li>
+</ul>
+
+<p>This makes refcount overhead near-zero for typical straight-line code.</p>
+
+<h2 id="16-5-cycles-and-the-cycle-collector">16.5 Cycles and the cycle collector</h2>
+
+<p>Pure refcounting cannot reclaim cycles (object A holds B, B holds A; nothing reaches zero). The runtime includes a <strong>cycle collector</strong> that runs periodically.</p>
+
+<p>Algorithm (informal):</p>
+
+<ul>
+<li>The runtime tracks a set of "suspect" objects — objects whose refcount was decremented but did not reach zero. These are candidates for being part of a cycle.</li>
+<li>The collector runs on a background thread (or at scheduled safe points), performing a partial trace from the suspect set:
+  <ul>
+    <li>It marks reachable objects.</li>
+    <li>Any suspect not reached from a global root is part of a garbage cycle and is collected.</li>
+  </ul>
+</li>
+</ul>
+
+<p>Collection of cycles:</p>
+
+<ul>
+<li><code>Drop.drop</code> is called on each cycle member, in <strong>unspecified order</strong>.</li>
+<li>Fields holding references to other cycle members are zeroed before drop, so a cycle member's <code>Drop</code> impl observes the object's references as <code>null</code> or already-dropped.</li>
+</ul>
+
+<p>This means <code>Drop</code> impls <strong>must not</strong> assume that referenced objects are still alive when called as part of cycle collection. Practically: don't dereference children in a <code>Drop</code> impl unless you've also followed the rule below.</p>
+
+<h3>Drop guidance</h3>
+
+<p>Safe patterns inside <code>Drop.drop</code>:</p>
+
+<ul>
+<li>Touch only primitive fields of <code>self</code>.</li>
+<li>Release foreign resources (file descriptors, <code>malloc</code>'d buffers, etc.) — these are not subject to cycle-collection ordering.</li>
+<li>Log or count (provided logging is itself drop-safe).</li>
+</ul>
+
+<p>Unsafe patterns:</p>
+
+<ul>
+<li>Call methods on referenced managed objects (they may already be dropped).</li>
+<li>Resurrect <code>self</code> by storing it into a long-lived location.</li>
+<li>Panic.</li>
+</ul>
+
+<h3>Reachability roots</h3>
+
+<p>The set of GC roots includes:</p>
+
+<ul>
+<li>Local variables on every thread's stack at every safe point.</li>
+<li>Module-level <code>var</code> storage.</li>
+<li>Captured environments of live closures.</li>
+<li>Pinned objects — pins add a strong root entry; releasing the pin removes it. See <a href="19-ffi.html#1915-pinning">19-ffi.md §19.15</a> for the user-facing pinning APIs (<code>&</code> auto-pin, <code>with_pin</code>, <code>Pin.acquire</code> / <code>PinHandle&lt;T&gt;</code>).</li>
+</ul>
+
+<h2 id="16-6-determinism-of-drop">16.6 Determinism of drop</h2>
+
+<p><code>Drop</code> is <strong>not guaranteed</strong> to be deterministic. Specifically:</p>
+
+<ul>
+<li><strong>Linear (non-cyclic) reference chains</strong>: when a binding goes out of scope and was the last owner, <code>Drop</code> is called at the point of scope exit. This is deterministic and predictable in straight-line code.</li>
+<li><strong>Cycles</strong>: <code>Drop</code> runs eventually, in unspecified order, when the cycle collector runs. There is no guaranteed wall-clock bound.</li>
+<li><strong>At program exit</strong>: the runtime makes a best-effort pass to drop reachable objects, but no guarantee. Long-lived resources should be released explicitly before main returns.</li>
+<li><strong>Thread death</strong>: if a thread terminates (panic or normal exit), the runtime drops its stack roots. Objects reachable only from a panicked thread that the runtime can't unwind may leak until cycle-collected.</li>
+</ul>
+
+<p>Programs that depend on deterministic finalization (e.g. file flushing) should release resources explicitly rather than relying on <code>Drop</code>.</p>
+
+<h2 id="16-7-inline--stack-allocation">16.7 Inline / stack allocation</h2>
+
+<p>The compiler may "inline" small heap objects onto the stack when their lifetime is provably bounded by a single frame. This is an optimization invisible at the language level — the user-visible semantics are always as if the object lived on the managed heap.</p>
+
+<p>Tuples and small structs are the most common candidates. The compiler proves the value does not escape (does not appear in any returned value, captured closure, channel send, or assigned-to-collection element) and replaces the heap allocation with a stack slot.</p>
+
+<h2 id="16-8-type-identification">16.8 Type identification</h2>
+
+<p>The <code>type id</code> field in each object header is a compile-time-assigned integer identifying the object's concrete type. This is what <code>is</code>/<code>as</code> consult at runtime to perform narrowing on union types.</p>
+
+<p>Type IDs are stable within a single compilation. Across separate compilations or dylib boundaries, a runtime registry maps type identity by structure (for nominal types, this is the fully-qualified module-and-name; for tuple shapes, it's a structural hash).</p>
+
+<p>Interface dispatch is <em>not</em> based on type id alone — it uses a vtable pointer that is part of the interface-object representation (a fat pointer). See <a href="11-generics.html">11-generics.html</a>.</p>
+
+<h2 id="16-9-allocation-failure">16.9 Allocation failure</h2>
+
+<p>The managed allocator panics on out-of-memory. There is no fallible <code>alloc</code> for managed code. (Foreign allocation via <code>malloc</code> is fallible and returns <code>null</code> to the user; see <a href="19-ffi.html">19-ffi.html</a>.)</p>
+
+<h2 id="16-10-concurrency-interactions">16.10 Concurrency interactions</h2>
+
+<p>The refcount field is updated atomically when the runtime determines that an object is reachable from more than one thread. This is normally as soon as the object is sent to a channel or captured by a spawned thread.</p>
+
+<p>For thread-local objects, refcount updates are non-atomic (a single-thread optimization).</p>
+
+<p>Cross-thread reads and writes of struct fields are <strong>not synchronized</strong> by the language — use <code>Shared&lt;T&gt;</code> or channels (see <a href="20-concurrency.html">20-concurrency.html</a>). The language guarantees memory safety (no use-after-free) for managed pointers across threads, but not race-freedom on object contents.</p>
+
+<h2 id="16-11-pinning">16.11 Pinning</h2>
+
+<p>See <a href="19-ffi.html#1915-pinning">19-ffi.md §19.15</a> for the user-facing API. Pinning a managed object adds a strong root that prevents the cycle collector from moving (if a moving collector is in use) or reclaiming the object until the pin is released.</p>
+
+<p>Pinning is <strong>refcounted per object</strong>: nested pins on the same value compose correctly. Pinning a value that already lives on the foreign heap (or on the stack as an <code>extern struct</code>) is a no-op — the value is already non-moving.</p>
+
+<p>The user-facing entry points are <code>&expr</code> at extern call sites (auto-pin for the call's duration), <code>with_pin(value, |ptr| ...)</code> (scoped pin across a closure body), and <code>Pin.acquire(value)</code> returning a <code>PinHandle&lt;T&gt;</code> (long-lived pin released explicitly or on <code>Drop</code>). There is no direct <code>pin</code> / <code>unpin</code> user API.</p>
+
+<h2 id="16-12-summary">16.12 Summary</h2>
+
+<ul>
+<li>Refcount + cycle collector hybrid GC.</li>
+<li>Managed objects share a uniform header: <code>[gc header | type id | fields]</code>, pointer at the field boundary.</li>
+<li>Primitives by value; references inc/dec a refcount.</li>
+<li>Compiler elides redundant inc/dec via last-use analysis (used by channels for zero-copy moves).</li>
+<li>Drop is best-effort, not guaranteed; don't depend on it for correctness.</li>
+<li>Two heaps; the GC ignores foreign pointers.</li>
+</ul>
+
+</body>
+</html>

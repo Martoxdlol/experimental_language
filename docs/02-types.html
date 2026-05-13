@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>2. Primitive Types</title>
+<style>
+  :root {
+    --fg: #1b1b1d;
+    --muted: #5a5a60;
+    --bg: #fdfdfc;
+    --accent: #1a4a8a;
+    --accent-2: #2a6f4d;
+    --warn: #b54708;
+    --code-bg: #f4f2ee;
+    --code-fg: #1b1b1d;
+    --border: #e4e1dc;
+    --table-stripe: #f8f7f4;
+    --pub: #2a6f4d;
+    --priv: #b54708;
+    --pkg: #1a4a8a;
+    --core: #6b4ba8;
+  }
+  html { box-sizing: border-box; }
+  *, *::before, *::after { box-sizing: inherit; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color: var(--fg);
+    background: var(--bg);
+    line-height: 1.55;
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 2.5rem 1.5rem 6rem;
+  }
+  h1, h2, h3, h4 {
+    color: var(--fg);
+    line-height: 1.25;
+    margin-top: 2.2rem;
+    margin-bottom: 0.6rem;
+  }
+  h1 { font-size: 2rem; border-bottom: 2px solid var(--border); padding-bottom: 0.4rem; }
+  h2 { font-size: 1.45rem; margin-top: 2.6rem; }
+  h3 { font-size: 1.15rem; color: var(--accent); }
+  h4 { font-size: 1rem; color: var(--muted); }
+  p { margin: 0.7rem 0; }
+  ul, ol { margin: 0.7rem 0; padding-left: 1.6rem; }
+  li { margin: 0.3rem 0; }
+  code {
+    font-family: "SF Mono", Menlo, Consolas, "Courier New", monospace;
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 0.1em 0.35em;
+    border-radius: 3px;
+    font-size: 0.92em;
+  }
+  pre {
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 0.9rem 1rem;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 0.88rem;
+    line-height: 1.5;
+    border: 1px solid var(--border);
+  }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1rem 0;
+    font-size: 0.94rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.5rem 0.7rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th { background: var(--code-bg); font-weight: 600; }
+  tbody tr:nth-child(even) { background: var(--table-stripe); }
+  .lead {
+    font-size: 1.05rem;
+    color: var(--muted);
+    margin-bottom: 1.6rem;
+  }
+  .toc {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1rem 1.2rem;
+    margin: 1.6rem 0 2rem;
+    font-size: 0.94rem;
+  }
+  .toc ol { margin: 0.2rem 0 0; padding-left: 1.3rem; }
+  .toc a { color: var(--accent); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+
+  .diagram {
+    background: #ffffff;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.4rem;
+    margin: 1.4rem 0;
+    overflow-x: auto;
+  }
+  .diagram-caption {
+    font-size: 0.85rem;
+    color: var(--muted);
+    text-align: center;
+    margin-top: 0.6rem;
+    font-style: italic;
+  }
+  svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+  svg text { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; fill: var(--fg); }
+  svg .label { font-family: -apple-system, system-ui, sans-serif; font-size: 12px; }
+  svg .small { font-size: 10px; fill: var(--muted); }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    justify-content: center;
+    margin-top: 0.8rem;
+    font-size: 0.85rem;
+  }
+  .legend-item { display: flex; align-items: center; gap: 0.4rem; }
+  .legend-swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    border: 1px solid rgba(0,0,0,0.15);
+  }
+
+  .tag {
+    display: inline-block;
+    padding: 0.1em 0.55em;
+    border-radius: 3px;
+    font-size: 0.78em;
+    font-weight: 600;
+    font-family: "SF Mono", Menlo, monospace;
+    color: white;
+    vertical-align: middle;
+  }
+  .tag.pub  { background: var(--pub); }
+  .tag.priv { background: var(--priv); }
+  .tag.pkg  { background: var(--pkg); }
+  .tag.core { background: var(--core); }
+  .tag.warn { background: var(--warn); }
+
+  .callout {
+    border-left: 4px solid var(--accent);
+    background: #f0f4fa;
+    padding: 0.8rem 1rem;
+    margin: 1.2rem 0;
+    border-radius: 0 6px 6px 0;
+  }
+  .callout.warn { border-color: var(--warn); background: #fbf3ec; }
+  .callout.good { border-color: var(--accent-2); background: #eef6f1; }
+  .callout strong { display: block; margin-bottom: 0.3rem; }
+
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin: 1.2rem 0;
+  }
+  @media (max-width: 720px) {
+    .two-col { grid-template-columns: 1fr; }
+  }
+
+  .file-tree {
+    font-family: "SF Mono", Menlo, monospace;
+    font-size: 0.88rem;
+    line-height: 1.55;
+    background: var(--code-bg);
+    padding: 1rem 1.2rem;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    white-space: pre;
+    overflow-x: auto;
+  }
+  .file-tree .pub  { color: var(--pub); font-weight: 600; }
+  .file-tree .priv { color: var(--priv); }
+  .file-tree .note { color: var(--muted); font-style: italic; }
+</style>
+</head>
+<body>
+
+<h1>2. Primitive Types</h1>
+
+<h2 id="2-1-integers">2.1 Integers</h2>
+
+<p>Sizes are always explicit. There is no architecture-dependent default integer type.</p>
+
+<table>
+<thead><tr><th>Type</th><th>Width</th><th>Range</th></tr></thead>
+<tbody>
+<tr><td><code>i8</code></td><td>8 bits</td><td>−128 .. 127</td></tr>
+<tr><td><code>i16</code></td><td>16 bits</td><td>−32_768 .. 32_767</td></tr>
+<tr><td><code>i32</code></td><td>32 bits</td><td>−2_147_483_648 .. 2_147_483_647</td></tr>
+<tr><td><code>i64</code></td><td>64 bits</td><td>−2⁶³ .. 2⁶³−1</td></tr>
+<tr><td><code>u8</code></td><td>8 bits</td><td>0 .. 255</td></tr>
+<tr><td><code>u16</code></td><td>16 bits</td><td>0 .. 65_535</td></tr>
+<tr><td><code>u32</code></td><td>32 bits</td><td>0 .. 4_294_967_295</td></tr>
+<tr><td><code>u64</code></td><td>64 bits</td><td>0 .. 2⁶⁴−1</td></tr>
+<tr><td><code>isize</code></td><td>pointer-sized</td><td>platform's signed pointer size</td></tr>
+<tr><td><code>usize</code></td><td>pointer-sized</td><td>platform's unsigned pointer size</td></tr>
+</tbody>
+</table>
+
+<p><code>isize</code> / <code>usize</code> are the only types whose width depends on the target. They are intended for memory offsets, sizes, and collection indices. They are not interchangeable with the fixed-size integers without explicit <code>as</code> casts.</p>
+
+<p>Default integer literal type is <code>i64</code> (see <a href="01-lexical.html">01-lexical.html</a>).</p>
+
+<h3>Arithmetic, overflow, division by zero</h3>
+
+<ul>
+<li>Integer overflow:
+<ul>
+<li><strong>Debug builds</strong>: panics (see <a href="14-panics.html">14-panics.html</a>).</li>
+<li><strong>Release builds</strong>: wraps (two's complement for signed, modular for unsigned).</li>
+</ul>
+</li>
+<li>Integer division by zero: panics in both debug and release.</li>
+<li>Modulo by zero: panics in both debug and release.</li>
+</ul>
+
+<p>Explicit non-default overflow behavior is provided by stdlib functions on each numeric type:</p>
+
+<pre><code>i32.wrapping_add(a, b)
+i32.checked_add(a, b)   // returns i32 | null
+i32.saturating_add(a, b)
+i32.overflowing_add(a, b) // returns (i32, bool)</code></pre>
+
+<p>Same families exist for <code>sub</code>, <code>mul</code>, <code>div</code>, <code>rem</code>, <code>neg</code>, <code>shl</code>, <code>shr</code>.</p>
+
+<h3>Conversions</h3>
+
+<p>All numeric conversions are explicit, via <code>as</code>:</p>
+
+<pre><code>var a: i64 = 1000
+var b: i8  = a as i8   // truncates, never panics
+var c: f64 = a as f64  // exact for small-enough values
+var d: i32 = 3.7 as i32 // truncates toward zero</code></pre>
+
+<p>Truncating <code>as</code> between integer types never panics. <code>f → i</code> truncates toward zero; <code>NaN as i*</code> panics; out-of-range <code>f → i</code> panics.</p>
+
+<h2 id="2-2-floating-point">2.2 Floating point</h2>
+
+<p><code>f32</code> and <code>f64</code>, both IEEE 754. Default float literal type is <code>f64</code>.</p>
+
+<p>There is no implicit promotion between <code>f32</code> and <code>f64</code>; use <code>as</code>.</p>
+
+<p>Float operations follow IEEE 754: division by zero produces ±∞, <code>0.0/0.0</code> produces NaN, comparisons with NaN return false. None of these panic.</p>
+
+<h2 id="2-3-booleans">2.3 Booleans</h2>
+
+<pre><code>bool   // primitive, two values: true and false</code></pre>
+
+<p><code>bool</code> is a primitive type. It is <strong>not</strong> a union of singleton structs. Literals are lowercase <code>true</code> and <code>false</code>.</p>
+
+<p>The only operations on <code>bool</code> are logical: <code>&amp;&amp;</code>, <code>||</code>, <code>!</code>, <code>==</code>, <code>!=</code>. <code>&amp;&amp;</code> and <code>||</code> short-circuit.</p>
+
+<h2 id="2-4-characters">2.4 Characters</h2>
+
+<pre><code>char   // 32-bit Unicode scalar value</code></pre>
+
+<p>A <code>char</code> is exactly one Unicode scalar value, encoded as a 32-bit value. Surrogate code points are not valid <code>char</code> values.</p>
+
+<p><code>char</code> literals use <strong>single quotes</strong> (<code>'a'</code>, <code>'\n'</code>, <code>'\u{1F600}'</code>) and must contain exactly one Unicode scalar value. <code>''</code> (empty) or <code>'ab'</code> (more than one) is a compile error. <code>char</code> and <code>str</code> literals are not interchangeable: <code>"a"</code> is always <code>str</code>, <code>'a'</code> is always <code>char</code>. See <a href="01-lexical.html">01-lexical.html</a>.</p>
+
+<p><code>char</code> does not auto-convert to or from integers; use <code>as</code>:</p>
+
+<pre><code>var ch = 'A'
+var n  = ch as u32  // 65
+var c2 = 65u32 as char  // 'A' (panics if value is not a valid Unicode scalar)</code></pre>
+
+<h2 id="2-5-strings">2.5 Strings</h2>
+
+<pre><code>str   // heap-allocated, immutable, UTF-8</code></pre>
+
+<p><code>str</code> is a managed-heap object containing a UTF-8-encoded byte buffer. It is immutable: all string operations that appear to mutate produce a new <code>str</code>.</p>
+
+<p>String length is conceptually defined two ways:</p>
+
+<ul>
+<li><code>s.byte_size()</code> returns the number of UTF-8 bytes (<code>i64</code>).</li>
+<li><code>s.size()</code> returns the number of Unicode characters (<code>i64</code>); this requires a scan.</li>
+</ul>
+
+<p><code>str</code> indexing is <strong>not</strong> done by integer index because UTF-8 makes that ambiguous. Use <code>s.get(i)</code> to get the <code>i</code>-th character, or <code>s.substring(start, end)</code> for slices. See <a href="18-stdlib.html">18-stdlib.html</a>.</p>
+
+<p><code>+</code> on two <code>str</code> is a shortcut for <code>concat</code>.</p>
+
+<p>String literals support <strong>interpolation</strong>: <code>"Hello $name"</code> or <code>"Hello, ${user.name}, age ${user.age + 1}"</code>. Interpolated values must implement <code>ToStr</code>. See <a href="01-lexical.html#19-string-literals-and-interpolation">01-lexical.md §1.9</a> for the lexical rules and <a href="15-operators.html#1510-stringification--tostr">15-operators.md §15.10</a> for <code>ToStr</code>.</p>
+
+<h2 id="2-6-the-empty-type-null">2.6 The empty type — <code>null</code></h2>
+
+<pre><code>null</code></pre>
+
+<p><code>null</code> is simultaneously the type name and its only value. It is the language's unit type: a function that returns nothing returns <code>null</code>, and a discarded expression evaluates to <code>null</code>.</p>
+
+<pre><code>function side_effect(): null {
+  print("hi")
+}</code></pre>
+
+<p>Writing <code>(): null</code> is rarely necessary because functions without an explicit return type default to <code>null</code>:</p>
+
+<pre><code>function side_effect() {
+  print("hi")
+}</code></pre>
+
+<p><code>null</code> appears in unions to express absence: <code>i64 | null</code> (an <code>i64</code> or nothing).</p>
+
+<p>There is no <code>void</code>. There is no <code>unit</code>. <code>null</code> covers both roles.</p>
+
+<h2 id="2-7-equality-and-ordering">2.7 Equality and ordering</h2>
+
+<p>Primitives have built-in equality (<code>==</code>, <code>!=</code>).</p>
+
+<p>Numeric primitives and <code>char</code> have built-in ordering (<code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code>).</p>
+
+<p><code>bool</code> does not have an ordering operator.</p>
+
+<p><code>str</code> has both: equality is byte-wise; ordering is lexicographic by Unicode scalar values.</p>
+
+<p><code>null</code> only has equality with itself: <code>null == null</code> is <code>true</code>; <code>null != null</code> is <code>false</code>. Ordering of <code>null</code> is not defined.</p>
+
+<p>User types acquire equality and ordering by implementing the <code>Eq</code> and <code>Ord</code> interfaces (see <a href="15-operators.html">15-operators.html</a>).</p>
+
+<h2 id="2-8-default-values">2.8 Default values</h2>
+
+<p>The language does not have implicit default values for primitives — every binding must be explicitly initialized. There is no <code>var x: i32</code>; you must write <code>var x: i32 = 0</code> (or similar). See <a href="06-variables.html">06-variables.html</a>.</p>
+
+<h2 id="2-9-sizes-and-alignment">2.9 Sizes and alignment</h2>
+
+<p>All sizes and alignments below apply to non-<code>extern</code> (managed) values. For <code>extern struct</code> layout, see <a href="19-ffi.html">19-ffi.html</a>.</p>
+
+<table>
+<thead><tr><th>Type</th><th>Size</th><th>Alignment</th></tr></thead>
+<tbody>
+<tr><td><code>i8</code> / <code>u8</code> / <code>bool</code></td><td>1</td><td>1</td></tr>
+<tr><td><code>i16</code> / <code>u16</code></td><td>2</td><td>2</td></tr>
+<tr><td><code>i32</code> / <code>u32</code> / <code>f32</code> / <code>char</code></td><td>4</td><td>4</td></tr>
+<tr><td><code>i64</code> / <code>u64</code> / <code>f64</code></td><td>8</td><td>8</td></tr>
+<tr><td><code>isize</code> / <code>usize</code></td><td>pointer-sized</td><td>pointer-aligned</td></tr>
+<tr><td><code>null</code></td><td>0</td><td>1</td></tr>
+<tr><td><code>str</code></td><td>pointer-sized (heap reference)</td><td>pointer-aligned</td></tr>
+<tr><td>Other heap types (<code>List&lt;T&gt;</code>, <code>Map&lt;K,V&gt;</code>, structs)</td><td>pointer-sized (heap reference)</td><td>pointer-aligned</td></tr>
+</tbody>
+</table>
+
+<p>This is what an inlined field "costs" in a struct. The heap object behind a reference type has its own layout (see <a href="16-memory.html">16-memory.html</a>).</p>
+
+</body>
+</html>

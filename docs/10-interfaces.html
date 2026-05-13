@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>10. Interfaces and Extensions</title>
+<style>
+  :root {
+    --fg: #1b1b1d;
+    --muted: #5a5a60;
+    --bg: #fdfdfc;
+    --accent: #1a4a8a;
+    --accent-2: #2a6f4d;
+    --warn: #b54708;
+    --code-bg: #f4f2ee;
+    --code-fg: #1b1b1d;
+    --border: #e4e1dc;
+    --table-stripe: #f8f7f4;
+    --pub: #2a6f4d;
+    --priv: #b54708;
+    --pkg: #1a4a8a;
+    --core: #6b4ba8;
+  }
+  html { box-sizing: border-box; }
+  *, *::before, *::after { box-sizing: inherit; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color: var(--fg);
+    background: var(--bg);
+    line-height: 1.55;
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 2.5rem 1.5rem 6rem;
+  }
+  h1, h2, h3, h4 {
+    color: var(--fg);
+    line-height: 1.25;
+    margin-top: 2.2rem;
+    margin-bottom: 0.6rem;
+  }
+  h1 { font-size: 2rem; border-bottom: 2px solid var(--border); padding-bottom: 0.4rem; }
+  h2 { font-size: 1.45rem; margin-top: 2.6rem; }
+  h3 { font-size: 1.15rem; color: var(--accent); }
+  h4 { font-size: 1rem; color: var(--muted); }
+  p { margin: 0.7rem 0; }
+  ul, ol { margin: 0.7rem 0; padding-left: 1.6rem; }
+  li { margin: 0.3rem 0; }
+  code {
+    font-family: "SF Mono", Menlo, Consolas, "Courier New", monospace;
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 0.1em 0.35em;
+    border-radius: 3px;
+    font-size: 0.92em;
+  }
+  pre {
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 0.9rem 1rem;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 0.88rem;
+    line-height: 1.5;
+    border: 1px solid var(--border);
+  }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1rem 0;
+    font-size: 0.94rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.5rem 0.7rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th { background: var(--code-bg); font-weight: 600; }
+  tbody tr:nth-child(even) { background: var(--table-stripe); }
+  .lead {
+    font-size: 1.05rem;
+    color: var(--muted);
+    margin-bottom: 1.6rem;
+  }
+  .toc {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1rem 1.2rem;
+    margin: 1.6rem 0 2rem;
+    font-size: 0.94rem;
+  }
+  .toc ol { margin: 0.2rem 0 0; padding-left: 1.3rem; }
+  .toc a { color: var(--accent); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+
+  .diagram {
+    background: #ffffff;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.4rem;
+    margin: 1.4rem 0;
+    overflow-x: auto;
+  }
+  .diagram-caption {
+    font-size: 0.85rem;
+    color: var(--muted);
+    text-align: center;
+    margin-top: 0.6rem;
+    font-style: italic;
+  }
+  svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+  svg text { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; fill: var(--fg); }
+  svg .label { font-family: -apple-system, system-ui, sans-serif; font-size: 12px; }
+  svg .small { font-size: 10px; fill: var(--muted); }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    justify-content: center;
+    margin-top: 0.8rem;
+    font-size: 0.85rem;
+  }
+  .legend-item { display: flex; align-items: center; gap: 0.4rem; }
+  .legend-swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    border: 1px solid rgba(0,0,0,0.15);
+  }
+
+  .tag {
+    display: inline-block;
+    padding: 0.1em 0.55em;
+    border-radius: 3px;
+    font-size: 0.78em;
+    font-weight: 600;
+    font-family: "SF Mono", Menlo, monospace;
+    color: white;
+    vertical-align: middle;
+  }
+  .tag.pub  { background: var(--pub); }
+  .tag.priv { background: var(--priv); }
+  .tag.pkg  { background: var(--pkg); }
+  .tag.core { background: var(--core); }
+  .tag.warn { background: var(--warn); }
+
+  .callout {
+    border-left: 4px solid var(--accent);
+    background: #f0f4fa;
+    padding: 0.8rem 1rem;
+    margin: 1.2rem 0;
+    border-radius: 0 6px 6px 0;
+  }
+  .callout.warn { border-color: var(--warn); background: #fbf3ec; }
+  .callout.good { border-color: var(--accent-2); background: #eef6f1; }
+  .callout strong { display: block; margin-bottom: 0.3rem; }
+
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin: 1.2rem 0;
+  }
+  @media (max-width: 720px) {
+    .two-col { grid-template-columns: 1fr; }
+  }
+
+  .file-tree {
+    font-family: "SF Mono", Menlo, monospace;
+    font-size: 0.88rem;
+    line-height: 1.55;
+    background: var(--code-bg);
+    padding: 1rem 1.2rem;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    white-space: pre;
+    overflow-x: auto;
+  }
+  .file-tree .pub  { color: var(--pub); font-weight: 600; }
+  .file-tree .priv { color: var(--priv); }
+  .file-tree .note { color: var(--muted); font-style: italic; }
+</style>
+</head>
+<body>
+
+<h1>10. Interfaces and Extensions</h1>
+
+<p>Interfaces define behavior contracts. Types acquire methods and interface implementations through <code>extend</code> blocks. The <code>struct</code> declaration itself contains only data.</p>
+
+<h2 id="10-1-interface-declaration">10.1 Interface declaration</h2>
+
+<pre><code>pub interface Named {
+  function name(self): str
+}</code></pre>
+
+<p>An interface is a named, exported-or-not collection of method signatures. Method signatures inside an interface look like function signatures without a body. Semicolons after signatures are optional.</p>
+
+<h3>Multiple methods</h3>
+
+<pre><code>pub interface Shape {
+  function area(self): f64
+  function perimeter(self): f64
+}</code></pre>
+
+<h3>Default implementations</h3>
+
+<p>A method signature may include a body; the body is the default implementation. Implementors can override it.</p>
+
+<pre><code>pub interface Named {
+  function name(self): str
+
+  function greet(self): str {
+    "Hello, " + self.name()
+  }
+}</code></pre>
+
+<h3>Static methods</h3>
+
+<p>A method without a <code>self</code> parameter is a static method. It is called via <code>.</code> on the type (not on an instance):</p>
+
+<pre><code>pub interface Default {
+  function default(): Self
+}
+
+extend i32: Default {
+  function default(): i32 { 0 }
+}
+
+var zero = i32.default()</code></pre>
+
+<h3><code>Self</code> type</h3>
+
+<p>Inside an interface or <code>extend</code> block, <code>Self</code> refers to the implementing type. Useful in static methods and method signatures whose return type is "the same type":</p>
+
+<pre><code>pub interface Clone {
+  function clone(self): Self
+}</code></pre>
+
+<h2 id="10-2-interface-composition">10.2 Interface composition</h2>
+
+<p>An interface can require other interfaces as super-interfaces:</p>
+
+<pre><code>pub interface Printable: Named {
+  function to_string(self): str
+}</code></pre>
+
+<p>Implementing <code>Printable</code> for a type requires that type to also implement <code>Named</code>. Multiple super-interfaces are listed with <code>+</code>:</p>
+
+<pre><code>pub interface Renderable: Printable + Sized {
+  function render(self): str
+}</code></pre>
+
+<h2 id="10-3-self-parameter">10.3 <code>self</code> parameter</h2>
+
+<p>The receiver. Behavior depends on the receiver type:</p>
+
+<ul>
+  <li>For <strong>primitives</strong> (<code>i32</code>, <code>f64</code>, <code>bool</code>, <code>char</code>, etc.) — <code>self</code> is passed <strong>by value</strong> (a copy). Methods cannot mutate the original.</li>
+  <li>For <strong>reference types</strong> (structs, tuples-stored-on-heap, <code>List</code>, <code>Map</code>, <code>str</code>) — <code>self</code> is a reference to the heap object (refcount-managed). Mutation through <code>self.field = ...</code> mutates the shared object.</li>
+</ul>
+
+<p><code>self</code> is always implicitly typed; you do not write a type annotation for it. The compiler types <code>self</code> as <code>Self</code> (the receiver type).</p>
+
+<p>There is no separate <code>&amp;self</code> / <code>&amp;mut self</code> syntax — for managed reference types, mutation is always allowed, and copying requires an explicit <code>.clone()</code>.</p>
+
+<h2 id="10-4-extensions-adding-methods">10.4 Extensions — adding methods</h2>
+
+<p><code>extend</code> adds methods to a type:</p>
+
+<pre><code>struct Person {
+  pub name: str,
+  age: i32,
+}
+
+extend Person {
+  function become_older(self) {
+    self.age = self.age + 1
+  }
+
+  function is_adult(self): bool {
+    self.age &gt;= 18
+  }
+}</code></pre>
+
+<p>Multiple <code>extend</code> blocks for the same type are allowed and combine additively. There must not be two definitions of the same method name.</p>
+
+<h2 id="10-5-extensions-implementing-an-interface">10.5 Extensions — implementing an interface</h2>
+
+<pre><code>extend Person: Named {
+  function name(self): str {
+    self.name
+  }
+}</code></pre>
+
+<p>An <code>extend T: I</code> block must provide every method of <code>I</code> that doesn't have a default. Methods with defaults can be omitted (the default applies) or overridden.</p>
+
+<p>An <code>extend T: I</code> block can also add methods that are not part of <code>I</code>:</p>
+
+<pre><code>extend Person: Printable {
+  function to_string(self): str { ... }
+  // additional, non-interface methods are fine
+  function debug_dump(self): str { ... }
+}</code></pre>
+
+<p>But it's clearer to keep interface impl blocks focused; non-interface methods can go in a plain <code>extend T { ... }</code> block.</p>
+
+<h2 id="10-6-generic-extensions">10.6 Generic extensions</h2>
+
+<p><code>extend</code> blocks can introduce type parameters:</p>
+
+<pre><code>struct Wrapper&lt;T&gt; {
+  pub value: T,
+}
+
+// Applies to every Wrapper&lt;T&gt;
+extend&lt;T&gt; Wrapper&lt;T&gt; {
+  function get(self): T {
+    self.value
+  }
+}
+
+// Specialization — only for Wrapper&lt;i32&gt;
+extend Wrapper&lt;i32&gt; {
+  function double(self): i32 {
+    self.value * 2
+  }
+}
+
+// Generic interface impl
+extend&lt;T&gt; Wrapper&lt;T&gt;: Named {
+  function name(self): str { "Wrapper" }
+}
+
+// Constrained generic impl
+extend&lt;T: Clone&gt; Wrapper&lt;T&gt;: Clone {
+  function clone(self): Wrapper&lt;T&gt; {
+    Wrapper { value: self.value.clone() }
+  }
+}</code></pre>
+
+<h2 id="10-7-extending-primitives">10.7 Extending primitives</h2>
+
+<p>Primitives can be extended just like structs:</p>
+
+<pre><code>extend i32 {
+  function is_even(self): bool {
+    self % 2 == 0
+  }
+}
+
+var x: i32 = 4
+print(x.is_even() as str)</code></pre>
+
+<p>For primitives, <code>self</code> is by value (see 10.3).</p>
+
+<h2 id="10-8-extending-unions-and-aliases">10.8 Extending unions and aliases</h2>
+
+<p>Type aliases (including unions) can be extended:</p>
+
+<pre><code>struct Red;
+struct Blue;
+type Theme = Red | Blue
+
+extend Theme {
+  function is_cool(self): bool {
+    self is Blue
+  }
+}</code></pre>
+
+<p>This adds <code>is_cool</code> to values whose static type is <code>Theme</code> (equivalently, <code>Red | Blue</code>).</p>
+
+<p>Because unions are normalized (order doesn't matter, nested unions flatten), <code>extend (Red | Blue)</code> and <code>extend (Blue | Red)</code> and <code>extend Theme</code> all refer to the same type and stack their methods together.</p>
+
+<p>Methods on tuple aliases and tuple shapes are added to the shape, not the alias name. Because <code>type Point = (i64, i64)</code> and <code>(i64, i64)</code> are the same type, methods added to either are accessible on both. See <a href="05-tuples.html">05-tuples.html</a>.</p>
+
+<h2 id="10-9-orphan-rule">10.9 Orphan rule</h2>
+
+<p>To prevent ambiguous interface implementations across modules, an <code>extend T: I</code> block must originate in <strong>either the type <code>T</code>'s defining module or the interface <code>I</code>'s defining module</strong>.</p>
+
+<pre><code>// utils module
+pub interface Printable { ... }
+
+// types module
+pub struct Foo { ... }
+
+// some_other module
+extend Foo: Printable { ... }   // ERROR — neither Foo nor Printable is local</code></pre>
+
+<p>You can always:</p>
+
+<ul>
+  <li>Implement a local interface for a local type.</li>
+  <li>Implement a local interface for a foreign type.</li>
+  <li>Implement a foreign interface for a local type.</li>
+</ul>
+
+<p>You cannot implement a foreign interface for a foreign type.</p>
+
+<p>This is the standard "orphan rule"; it makes interface coherence local and modules independently compilable.</p>
+
+<h2 id="10-10-coherence">10.10 Coherence</h2>
+
+<p>For any pair (type T, interface I), there must be <strong>exactly one</strong> <code>extend T: I</code> impl visible in any compilation. The orphan rule plus generic overlap rules (see <a href="11-generics.html">11-generics.html</a>) make this enforceable.</p>
+
+<p>If two <code>extend</code> blocks could both apply (e.g. <code>extend&lt;T&gt; List&lt;T&gt;: Named</code> and <code>extend List&lt;i32&gt;: Named</code>), the more specific one wins. See specificity rules in <a href="11-generics.html">11-generics.html</a>.</p>
+
+<h2 id="10-11-interface-objects-dyn-dispatch">10.11 Interface objects (dyn dispatch)</h2>
+
+<p>An interface type used as a value type (parameter, field, variable) is an <strong>interface object</strong> — a fat pointer to a heap value plus a vtable pointer. Calls through an interface object dispatch dynamically.</p>
+
+<pre><code>function print_all(items: List&lt;Printable&gt;) {
+  for x in items {
+    print(x.to_string())   // dynamic dispatch
+  }
+}</code></pre>
+
+<p>Versus generic-bounded (monomorphized):</p>
+
+<pre><code>function print_all&lt;T: Printable&gt;(items: List&lt;T&gt;) {
+  for x in items {
+    print(x.to_string())   // static dispatch (monomorphized)
+  }
+}</code></pre>
+
+<p>See <a href="11-generics.html">11-generics.html</a> for the full story.</p>
+
+<h2 id="10-12-interfaces-and-self-in-interface-objects">10.12 Interfaces and Self in interface objects</h2>
+
+<p>If an interface's method signature returns <code>Self</code> (e.g. <code>Clone.clone(self): Self</code>), it cannot be used as an interface object — the return type would have to be erased to "some Self", which can't be expressed concretely. Such interfaces are called <em>non-object-safe</em>. The compiler reports the error at the point of use:</p>
+
+<pre><code>function bad(x: Clone): Clone { x.clone() }   // ERROR — Clone is not object-safe</code></pre>
+
+<p>To use a non-object-safe interface, use generics:</p>
+
+<pre><code>function ok&lt;T: Clone&gt;(x: T): T { x.clone() }</code></pre>
+
+<p>(In practice, the user-facing rule is: an interface method that mentions <code>Self</code> outside the <code>self</code> parameter is not object-safe.)</p>
+
+<h2 id="10-13-calling-conventions-for-interface-methods">10.13 Calling conventions for interface methods</h2>
+
+<p>Method-resolution order at a call site <code>value.method(args)</code>:</p>
+
+<ol>
+  <li>Inherent methods on the value's concrete type (from <code>extend T { ... }</code> blocks).</li>
+  <li>Methods supplied by any interface implementation visible at the call site.</li>
+</ol>
+
+<p>Ambiguity (two different impls both providing the same method) is a compile error. Disambiguate by calling the method through the interface explicitly:</p>
+
+<pre><code>Printable.to_string(person)</code></pre>
+
+</body>
+</html>

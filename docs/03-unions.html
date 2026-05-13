@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>3. Discriminated Unions</title>
+<style>
+  :root {
+    --fg: #1b1b1d;
+    --muted: #5a5a60;
+    --bg: #fdfdfc;
+    --accent: #1a4a8a;
+    --accent-2: #2a6f4d;
+    --warn: #b54708;
+    --code-bg: #f4f2ee;
+    --code-fg: #1b1b1d;
+    --border: #e4e1dc;
+    --table-stripe: #f8f7f4;
+    --pub: #2a6f4d;
+    --priv: #b54708;
+    --pkg: #1a4a8a;
+    --core: #6b4ba8;
+  }
+  html { box-sizing: border-box; }
+  *, *::before, *::after { box-sizing: inherit; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color: var(--fg);
+    background: var(--bg);
+    line-height: 1.55;
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 2.5rem 1.5rem 6rem;
+  }
+  h1, h2, h3, h4 {
+    color: var(--fg);
+    line-height: 1.25;
+    margin-top: 2.2rem;
+    margin-bottom: 0.6rem;
+  }
+  h1 { font-size: 2rem; border-bottom: 2px solid var(--border); padding-bottom: 0.4rem; }
+  h2 { font-size: 1.45rem; margin-top: 2.6rem; }
+  h3 { font-size: 1.15rem; color: var(--accent); }
+  h4 { font-size: 1rem; color: var(--muted); }
+  p { margin: 0.7rem 0; }
+  ul, ol { margin: 0.7rem 0; padding-left: 1.6rem; }
+  li { margin: 0.3rem 0; }
+  code {
+    font-family: "SF Mono", Menlo, Consolas, "Courier New", monospace;
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 0.1em 0.35em;
+    border-radius: 3px;
+    font-size: 0.92em;
+  }
+  pre {
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 0.9rem 1rem;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 0.88rem;
+    line-height: 1.5;
+    border: 1px solid var(--border);
+  }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1rem 0;
+    font-size: 0.94rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.5rem 0.7rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th { background: var(--code-bg); font-weight: 600; }
+  tbody tr:nth-child(even) { background: var(--table-stripe); }
+  .lead {
+    font-size: 1.05rem;
+    color: var(--muted);
+    margin-bottom: 1.6rem;
+  }
+  .toc {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1rem 1.2rem;
+    margin: 1.6rem 0 2rem;
+    font-size: 0.94rem;
+  }
+  .toc ol { margin: 0.2rem 0 0; padding-left: 1.3rem; }
+  .toc a { color: var(--accent); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+
+  .diagram {
+    background: #ffffff;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.4rem;
+    margin: 1.4rem 0;
+    overflow-x: auto;
+  }
+  .diagram-caption {
+    font-size: 0.85rem;
+    color: var(--muted);
+    text-align: center;
+    margin-top: 0.6rem;
+    font-style: italic;
+  }
+  svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+  svg text { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; fill: var(--fg); }
+  svg .label { font-family: -apple-system, system-ui, sans-serif; font-size: 12px; }
+  svg .small { font-size: 10px; fill: var(--muted); }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    justify-content: center;
+    margin-top: 0.8rem;
+    font-size: 0.85rem;
+  }
+  .legend-item { display: flex; align-items: center; gap: 0.4rem; }
+  .legend-swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    border: 1px solid rgba(0,0,0,0.15);
+  }
+
+  .tag {
+    display: inline-block;
+    padding: 0.1em 0.55em;
+    border-radius: 3px;
+    font-size: 0.78em;
+    font-weight: 600;
+    font-family: "SF Mono", Menlo, monospace;
+    color: white;
+    vertical-align: middle;
+  }
+  .tag.pub  { background: var(--pub); }
+  .tag.priv { background: var(--priv); }
+  .tag.pkg  { background: var(--pkg); }
+  .tag.core { background: var(--core); }
+  .tag.warn { background: var(--warn); }
+
+  .callout {
+    border-left: 4px solid var(--accent);
+    background: #f0f4fa;
+    padding: 0.8rem 1rem;
+    margin: 1.2rem 0;
+    border-radius: 0 6px 6px 0;
+  }
+  .callout.warn { border-color: var(--warn); background: #fbf3ec; }
+  .callout.good { border-color: var(--accent-2); background: #eef6f1; }
+  .callout strong { display: block; margin-bottom: 0.3rem; }
+
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin: 1.2rem 0;
+  }
+  @media (max-width: 720px) {
+    .two-col { grid-template-columns: 1fr; }
+  }
+
+  .file-tree {
+    font-family: "SF Mono", Menlo, monospace;
+    font-size: 0.88rem;
+    line-height: 1.55;
+    background: var(--code-bg);
+    padding: 1rem 1.2rem;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    white-space: pre;
+    overflow-x: auto;
+  }
+  .file-tree .pub  { color: var(--pub); font-weight: 600; }
+  .file-tree .priv { color: var(--priv); }
+  .file-tree .note { color: var(--muted); font-style: italic; }
+</style>
+</head>
+<body>
+
+<h1>3. Discriminated Unions</h1>
+
+<p>A union is a type whose value is exactly one of a fixed set of variants. Variants are separated by <code>|</code>.</p>
+
+<pre><code>type Result = i64 | str | null</code></pre>
+
+<p>A value <code>var r: Result = 42</code> is an <code>i64</code>; the variable's static type is <code>Result</code>, the runtime tag identifies the inhabited variant.</p>
+
+<h2 id="3-1-anonymous-and-named-unions">3.1 Anonymous and named unions</h2>
+
+<p>A union can appear inline anywhere a type can:</p>
+
+<pre><code>function find(id: i64): Person | null { ... }</code></pre>
+
+<p>It can also be aliased with <code>type</code>:</p>
+
+<pre><code>type Maybe&lt;T&gt; = T | null
+function find(id: i64): Maybe&lt;Person&gt; { ... }</code></pre>
+
+<p>These two forms are fully interchangeable; the alias is purely a name. There is no nominal-vs-structural difference: any two unions with the same set of variants are the same type.</p>
+
+<h2 id="3-2-order-does-not-matter">3.2 Order does not matter</h2>
+
+<p>Union variant order is not part of identity:</p>
+
+<pre><code>type A = i64 | str
+type B = str | i64
+// A and B are the same type.</code></pre>
+
+<p>The compiler treats unions as sets of variants.</p>
+
+<h2 id="3-3-duplicate-variants-are-absorbed">3.3 Duplicate variants are absorbed</h2>
+
+<pre><code>type Duped = i64 | i64
+// Equivalent to: type Duped = i64</code></pre>
+
+<p>This matters mostly during substitution into generic types (where two type parameters could collapse to the same concrete type).</p>
+
+<h2 id="3-4-nested-unions-flatten">3.4 Nested unions flatten</h2>
+
+<p>A union expression nested inside another union flattens:</p>
+
+<pre><code>type AB = i64 | str
+type ABC = AB | bool
+// Equivalent to: type ABC = i64 | str | bool</code></pre>
+
+<p>Flattening applies through type aliases as well: there is no nesting of unions at runtime. A value of type <code>ABC</code> carries one tag identifying which of <code>i64</code>, <code>str</code>, <code>bool</code> is inhabited — there is no two-level tag.</p>
+
+<h2 id="3-5-recursive-unions">3.5 Recursive unions</h2>
+
+<p>A type alias may reference itself, <strong>but only through a non-union variant</strong> (typically a struct field that holds the recursive type). A recursive union built only out of unions and the alias name itself reduces to a non-recursive union and is normalized.</p>
+
+<h3>3.5.1 Recursion through a struct field — supported</h3>
+
+<p>The standard pattern for recursive types is to wrap the recursive part in a struct:</p>
+
+<pre><code>struct Cons { head: i64, tail: List }
+type List = null | Cons</code></pre>
+
+<p>Here <code>List</code> recurses through <code>Cons.tail</code>, which is a single non-union variant. The flattening rule does not apply across struct fields, so <code>List</code> is the two-variant union <code>null | Cons</code>, and <code>Cons.tail</code> is itself a <code>List</code>.</p>
+
+<p>Tree example:</p>
+
+<pre><code>struct Branch { left: Tree, right: Tree }
+type Tree = i64 | Branch</code></pre>
+
+<h3>3.5.2 Direct self-reference inside a union expression — normalized away</h3>
+
+<pre><code>type X = i64 | X</code></pre>
+
+<p>After flattening, <code>X = i64 | X = i64 | i64 | X = i64</code>. This is a degenerate self-reference — the alias is normalized to its non-recursive core. The compiler accepts the alias and reports it as equivalent to <code>i64</code>.</p>
+
+<h3>3.5.3 Mutual recursion through union expressions — normalized away</h3>
+
+<pre><code>type X = i64 | Y
+type Y = str | X</code></pre>
+
+<p>Substituting: <code>X = i64 | str | X</code>, <code>Y = str | i64 | Y</code>. Both reduce to <code>i64 | str</code>. The compiler treats both <code>X</code> and <code>Y</code> as the same type <code>i64 | str</code> after normalization.</p>
+
+<p>If you actually want distinct mutually recursive types, wrap one side in a struct (as in 3.5.1).</p>
+
+<h3>3.5.4 Normalization algorithm (informal)</h3>
+
+<p>Given a union alias, the compiler:</p>
+
+<ol>
+<li>Substitutes alias references that resolve to unions, eliminating them.</li>
+<li>Flattens nested union expressions.</li>
+<li>Removes occurrences of the alias being defined from its own RHS (self-absorption rule, since <code>X | X</code> ≡ <code>X</code>).</li>
+<li>Removes duplicate variants.</li>
+<li>Checks that the resulting variant set is finite and non-empty.</li>
+</ol>
+
+<p>After normalization, every union alias has a canonical set of non-union variants.</p>
+
+<h2 id="3-6-variant-identity">3.6 Variant identity</h2>
+
+<p>Two variants in a union are considered the same if they refer to the same nominal type. Structural types (tuples) compare by shape (see <a href="05-tuples.html">05-tuples.html</a>).</p>
+
+<p>So <code>(i64, i64) | (i64, i64)</code> collapses to <code>(i64, i64)</code> after deduplication.</p>
+
+<h2 id="3-7-subtyping-by-union-extension">3.7 Subtyping by union extension</h2>
+
+<p>A union <code>A | B</code> is implicitly a subtype of <code>A | B | C</code>. Values move in this direction without an explicit cast:</p>
+
+<pre><code>var x: i64 = 5
+var y: i64 | str = x   // OK: i64 ⊆ i64 | str
+var z: i64 | str | bool = y // OK: extending the union</code></pre>
+
+<p>Going the other way requires <code>as</code> and may panic at runtime if the value doesn't match (see <a href="12-type-logic.html">12-type-logic.html</a>).</p>
+
+<h2 id="3-8-generic-unions">3.8 Generic unions</h2>
+
+<p>Type parameters are substituted before normalization:</p>
+
+<pre><code>type Result&lt;T, E&gt; = T | E
+
+// Result&lt;i64, str&gt; = i64 | str
+// Result&lt;i64, i64&gt; = i64           (deduplicated)
+// Result&lt;i64 | str, bool&gt; = i64 | str | bool  (flattened)</code></pre>
+
+<p>This composes well with <code>null</code>:</p>
+
+<pre><code>type Maybe&lt;T&gt; = T | null
+// Maybe&lt;i64&gt; = i64 | null
+// Maybe&lt;i64 | null&gt; = i64 | null   (deduplicated)</code></pre>
+
+<p>So <code>Maybe&lt;Maybe&lt;T&gt;&gt;</code> is the same as <code>Maybe&lt;T&gt;</code>: there is no "double-nullable". This is intentional — there is no <code>Some&lt;None&gt;</code> ambiguity. Where the ambiguity actually matters (iterator end signalling, future readiness), use a dedicated wrapper struct (see <a href="18-stdlib.html">18-stdlib.html</a>, <code>Item&lt;T&gt;</code> and <a href="21-async.html">21-async.html</a>, <code>Ready&lt;T&gt;</code>).</p>
+
+<h2 id="3-9-empty-unions-are-not-allowed">3.9 Empty unions are not allowed</h2>
+
+<p>There is no <code>type X = </code> (zero variants). Every union must have at least one variant. (One-variant "unions" are equivalent to the underlying type.)</p>
+
+<h2 id="3-10-pattern-matching-on-unions">3.10 Pattern matching on unions</h2>
+
+<p>See <a href="07-expressions.html">07-expressions.html</a> for <code>match</code> syntax and <a href="12-type-logic.html">12-type-logic.html</a> for <code>is</code>/<code>as</code> and flow narrowing.</p>
+
+<p><code>match</code> over a union must be exhaustive — every variant must be covered, either explicitly or by <code>_</code>. The compiler reports missing variants.</p>
+
+</body>
+</html>

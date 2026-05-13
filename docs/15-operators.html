@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>15. Operators and Operator Overloading</title>
+<style>
+  :root {
+    --fg: #1b1b1d;
+    --muted: #5a5a60;
+    --bg: #fdfdfc;
+    --accent: #1a4a8a;
+    --accent-2: #2a6f4d;
+    --warn: #b54708;
+    --code-bg: #f4f2ee;
+    --code-fg: #1b1b1d;
+    --border: #e4e1dc;
+    --table-stripe: #f8f7f4;
+    --pub: #2a6f4d;
+    --priv: #b54708;
+    --pkg: #1a4a8a;
+    --core: #6b4ba8;
+  }
+  html { box-sizing: border-box; }
+  *, *::before, *::after { box-sizing: inherit; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color: var(--fg);
+    background: var(--bg);
+    line-height: 1.55;
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 2.5rem 1.5rem 6rem;
+  }
+  h1, h2, h3, h4 {
+    color: var(--fg);
+    line-height: 1.25;
+    margin-top: 2.2rem;
+    margin-bottom: 0.6rem;
+  }
+  h1 { font-size: 2rem; border-bottom: 2px solid var(--border); padding-bottom: 0.4rem; }
+  h2 { font-size: 1.45rem; margin-top: 2.6rem; }
+  h3 { font-size: 1.15rem; color: var(--accent); }
+  h4 { font-size: 1rem; color: var(--muted); }
+  p { margin: 0.7rem 0; }
+  ul, ol { margin: 0.7rem 0; padding-left: 1.6rem; }
+  li { margin: 0.3rem 0; }
+  code {
+    font-family: "SF Mono", Menlo, Consolas, "Courier New", monospace;
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 0.1em 0.35em;
+    border-radius: 3px;
+    font-size: 0.92em;
+  }
+  pre {
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 0.9rem 1rem;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 0.88rem;
+    line-height: 1.5;
+    border: 1px solid var(--border);
+  }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1rem 0;
+    font-size: 0.94rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.5rem 0.7rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th { background: var(--code-bg); font-weight: 600; }
+  tbody tr:nth-child(even) { background: var(--table-stripe); }
+  .lead {
+    font-size: 1.05rem;
+    color: var(--muted);
+    margin-bottom: 1.6rem;
+  }
+  .toc {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1rem 1.2rem;
+    margin: 1.6rem 0 2rem;
+    font-size: 0.94rem;
+  }
+  .toc ol { margin: 0.2rem 0 0; padding-left: 1.3rem; }
+  .toc a { color: var(--accent); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+
+  .diagram {
+    background: #ffffff;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.4rem;
+    margin: 1.4rem 0;
+    overflow-x: auto;
+  }
+  .diagram-caption {
+    font-size: 0.85rem;
+    color: var(--muted);
+    text-align: center;
+    margin-top: 0.6rem;
+    font-style: italic;
+  }
+  svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+  svg text { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; fill: var(--fg); }
+  svg .label { font-family: -apple-system, system-ui, sans-serif; font-size: 12px; }
+  svg .small { font-size: 10px; fill: var(--muted); }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    justify-content: center;
+    margin-top: 0.8rem;
+    font-size: 0.85rem;
+  }
+  .legend-item { display: flex; align-items: center; gap: 0.4rem; }
+  .legend-swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    border: 1px solid rgba(0,0,0,0.15);
+  }
+
+  .tag {
+    display: inline-block;
+    padding: 0.1em 0.55em;
+    border-radius: 3px;
+    font-size: 0.78em;
+    font-weight: 600;
+    font-family: "SF Mono", Menlo, monospace;
+    color: white;
+    vertical-align: middle;
+  }
+  .tag.pub  { background: var(--pub); }
+  .tag.priv { background: var(--priv); }
+  .tag.pkg  { background: var(--pkg); }
+  .tag.core { background: var(--core); }
+  .tag.warn { background: var(--warn); }
+
+  .callout {
+    border-left: 4px solid var(--accent);
+    background: #f0f4fa;
+    padding: 0.8rem 1rem;
+    margin: 1.2rem 0;
+    border-radius: 0 6px 6px 0;
+  }
+  .callout.warn { border-color: var(--warn); background: #fbf3ec; }
+  .callout.good { border-color: var(--accent-2); background: #eef6f1; }
+  .callout strong { display: block; margin-bottom: 0.3rem; }
+
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin: 1.2rem 0;
+  }
+  @media (max-width: 720px) {
+    .two-col { grid-template-columns: 1fr; }
+  }
+
+  .file-tree {
+    font-family: "SF Mono", Menlo, monospace;
+    font-size: 0.88rem;
+    line-height: 1.55;
+    background: var(--code-bg);
+    padding: 1rem 1.2rem;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    white-space: pre;
+    overflow-x: auto;
+  }
+  .file-tree .pub  { color: var(--pub); font-weight: 600; }
+  .file-tree .priv { color: var(--priv); }
+  .file-tree .note { color: var(--muted); font-style: italic; }
+</style>
+</head>
+<body>
+
+<h1>15. Operators and Operator Overloading</h1>
+
+<p>Most operators are syntactic sugar for method calls on built-in interfaces. Implementing an interface gives a type the corresponding operator.</p>
+
+<p>The built-in interfaces below live in <code>core:prelude</code> and are auto-imported.</p>
+
+<h2 id="15-1-arithmetic">15.1 Arithmetic</h2>
+
+<pre><code>pub interface Add&lt;Rhs = Self, Output = Self&gt; {
+  function add(self, rhs: Rhs): Output
+}
+
+pub interface Sub&lt;Rhs = Self, Output = Self&gt; {
+  function sub(self, rhs: Rhs): Output
+}
+
+pub interface Mul&lt;Rhs = Self, Output = Self&gt; {
+  function mul(self, rhs: Rhs): Output
+}
+
+pub interface Div&lt;Rhs = Self, Output = Self&gt; {
+  function div(self, rhs: Rhs): Output
+}
+
+pub interface Mod&lt;Rhs = Self, Output = Self&gt; {
+  function mod(self, rhs: Rhs): Output
+}
+
+pub interface Neg&lt;Output = Self&gt; {
+  function neg(self): Output
+}
+</code></pre>
+
+<p>Operator → method:</p>
+
+<table>
+<thead><tr><th>Operator</th><th>Interface</th><th>Method</th></tr></thead>
+<tbody>
+<tr><td><code>a + b</code></td><td><code>Add</code></td><td><code>a.add(b)</code></td></tr>
+<tr><td><code>a - b</code></td><td><code>Sub</code></td><td><code>a.sub(b)</code></td></tr>
+<tr><td><code>a * b</code></td><td><code>Mul</code></td><td><code>a.mul(b)</code></td></tr>
+<tr><td><code>a / b</code></td><td><code>Div</code></td><td><code>a.div(b)</code></td></tr>
+<tr><td><code>a % b</code></td><td><code>Mod</code></td><td><code>a.mod(b)</code></td></tr>
+<tr><td><code>-a</code></td><td><code>Neg</code></td><td><code>a.neg()</code></td></tr>
+</tbody>
+</table>
+
+<p>Primitives <code>i8</code>..<code>i64</code>, <code>u8</code>..<code>u64</code>, <code>f32</code>, <code>f64</code> implement these for matching types. <code>str</code> implements <code>Add&lt;str, str&gt;</code> (concatenation).</p>
+
+<p>Implementing <code>Add</code> for asymmetric types:</p>
+
+<pre><code>extend Vec3: Add&lt;f64, Vec3&gt; {
+  function add(self, k: f64): Vec3 {
+    Vec3 { x: self.x + k, y: self.y + k, z: self.z + k }
+  }
+}
+</code></pre>
+
+<p><code>a + b</code> resolves by matching the types of <code>a</code> and <code>b</code> to the most specific <code>Add</code> impl.</p>
+
+<h2 id="15-2-logical">15.2 Logical</h2>
+
+<pre><code>pub interface Not&lt;Output = Self&gt; {
+  function not(self): Output
+}
+</code></pre>
+
+<table>
+<thead><tr><th>Operator</th><th>Interface</th><th>Method</th></tr></thead>
+<tbody>
+<tr><td><code>!a</code></td><td><code>Not</code></td><td><code>a.not()</code></td></tr>
+</tbody>
+</table>
+
+<p><code>!</code>, <code>&&</code>, <code>||</code> for <code>bool</code> are built-in and <strong>not overloadable</strong>. <code>&&</code> and <code>||</code> short-circuit; they cannot be expressed as method calls (an overload would require eager evaluation).</p>
+
+<p><code>Not</code> does apply to user types — for instance, a <code>bool</code>-like wrapper.</p>
+
+<h2 id="15-3-bitwise">15.3 Bitwise</h2>
+
+<pre><code>pub interface BitAnd&lt;Rhs = Self, Output = Self&gt; { function bitand(self, rhs: Rhs): Output }
+pub interface BitOr&lt;Rhs = Self, Output = Self&gt;  { function bitor(self, rhs: Rhs): Output }
+pub interface BitXor&lt;Rhs = Self, Output = Self&gt; { function bitxor(self, rhs: Rhs): Output }
+pub interface Shl&lt;Rhs = Self, Output = Self&gt;    { function shl(self, rhs: Rhs): Output }
+pub interface Shr&lt;Rhs = Self, Output = Self&gt;    { function shr(self, rhs: Rhs): Output }
+</code></pre>
+
+<table>
+<thead><tr><th>Operator</th><th>Interface</th><th>Method</th></tr></thead>
+<tbody>
+<tr><td><code>a & b</code></td><td><code>BitAnd</code></td><td><code>a.bitand(b)</code></td></tr>
+<tr><td><code>a | b</code></td><td><code>BitOr</code></td><td><code>a.bitor(b)</code></td></tr>
+<tr><td><code>a ^ b</code></td><td><code>BitXor</code></td><td><code>a.bitxor(b)</code></td></tr>
+<tr><td><code>a << b</code></td><td><code>Shl</code></td><td><code>a.shl(b)</code></td></tr>
+<tr><td><code>a >> b</code></td><td><code>Shr</code></td><td><code>a.shr(b)</code></td></tr>
+</tbody>
+</table>
+
+<p>Shift right on signed integers is arithmetic (sign-extending). Shifting by <code>&gt;= width(T)</code> panics in both debug and release.</p>
+
+<p><code>|</code> in type position constructs unions, not bitwise OR. The compiler disambiguates by context — in a type position, <code>|</code> is union; in an expression position, <code>|</code> is <code>BitOr</code>.</p>
+
+<p>There is no separate "logical not" interface — <code>!</code> on a <code>bool</code> is built-in.</p>
+
+<p><code>~</code> (bitwise NOT) is <strong>not</strong> a separate operator. Use <code>BitXor</code> with all-ones or <code>Not</code> on integer types (the language provides <code>Not</code> for primitive ints to mean bitwise inversion).</p>
+
+<pre><code>extend i32: Not&lt;i32&gt; {
+  function not(self): i32 { ... }   // bitwise inversion
+}
+
+var inverted = !mask    // bitwise NOT on integers; logical NOT on bool
+</code></pre>
+
+<h2 id="15-4-equality">15.4 Equality</h2>
+
+<pre><code>pub interface Eq {
+  function eq(self, other: Self): bool
+
+  function ne(self, other: Self): bool {
+    !self.eq(other)
+  }
+}
+</code></pre>
+
+<table>
+<thead><tr><th>Operator</th><th>Interface</th><th>Method</th></tr></thead>
+<tbody>
+<tr><td><code>a == b</code></td><td><code>Eq</code></td><td><code>a.eq(b)</code></td></tr>
+<tr><td><code>a != b</code></td><td><code>Eq</code></td><td><code>a.ne(b)</code></td></tr>
+</tbody>
+</table>
+
+<p>Primitives have built-in <code>Eq</code>. For user types, <code>Eq</code> must be implemented explicitly — there is no implicit field-by-field equality, but the compiler can derive an impl via the <code>@derive(Eq)</code> macro (see <a href="22-macros.html">22-macros.html</a>).</p>
+
+<h2 id="15-5-ordering">15.5 Ordering</h2>
+
+<pre><code>pub type Ordering = Less | Equal | Greater
+pub struct Less;
+pub struct Equal;
+pub struct Greater;
+
+pub interface Ord: Eq {
+  function cmp(self, other: Self): Ordering
+
+  function lt(self, other: Self): bool { self.cmp(other) is Less }
+  function le(self, other: Self): bool {
+    var o = self.cmp(other)
+    o is Less || o is Equal
+  }
+  function gt(self, other: Self): bool { self.cmp(other) is Greater }
+  function ge(self, other: Self): bool {
+    var o = self.cmp(other)
+    o is Greater || o is Equal
+  }
+}
+</code></pre>
+
+<table>
+<thead><tr><th>Operator</th><th>Interface</th><th>Method</th></tr></thead>
+<tbody>
+<tr><td><code>a < b</code></td><td><code>Ord</code></td><td><code>a.lt(b)</code></td></tr>
+<tr><td><code>a <= b</code></td><td><code>Ord</code></td><td><code>a.le(b)</code></td></tr>
+<tr><td><code>a > b</code></td><td><code>Ord</code></td><td><code>a.gt(b)</code></td></tr>
+<tr><td><code>a >= b</code></td><td><code>Ord</code></td><td><code>a.ge(b)</code></td></tr>
+</tbody>
+</table>
+
+<p>Numeric primitives and <code>char</code> implement <code>Ord</code>. <code>str</code> implements <code>Ord</code> (lexicographic by Unicode scalar values). <code>bool</code> does <strong>not</strong> implement <code>Ord</code>. <code>null</code> does not implement <code>Ord</code>.</p>
+
+<h2 id="15-6-indexing">15.6 Indexing</h2>
+
+<pre><code>pub interface Index&lt;Idx, Output&gt; {
+  function index(self, i: Idx): Output
+}
+
+pub interface IndexMut&lt;Idx, Output&gt;: Index&lt;Idx, Output&gt; {
+  function index_mut(self, i: Idx, v: Output)
+}
+</code></pre>
+
+<table>
+<thead><tr><th>Form</th><th>Interface</th><th>Method</th></tr></thead>
+<tbody>
+<tr><td><code>x[i]</code> (read)</td><td><code>Index</code></td><td><code>x.index(i)</code></td></tr>
+<tr><td><code>x[i] = v</code> (write)</td><td><code>IndexMut</code></td><td><code>x.index_mut(i, v)</code></td></tr>
+</tbody>
+</table>
+
+<p>Out-of-bounds behavior is per-type. <code>List&lt;T&gt;</code> and <code>Map&lt;K, V&gt;</code> panic on <code>[]</code> for missing or out-of-range; use <code>.get(i)</code>/<code>.get(k)</code> for the <code>T | null</code> variant.</p>
+
+<p>A type can implement multiple <code>Index&lt;Idx, Output&gt;</code> impls for different <code>Idx</code> types — e.g. a <code>Matrix</code> indexed by both <code>i64</code> and <code>(i64, i64)</code>.</p>
+
+<h2 id="15-7-hashing">15.7 Hashing</h2>
+
+<pre><code>pub interface Hash {
+  function hash(self): u64
+}
+</code></pre>
+
+<p><code>Map&lt;K, V&gt;</code> requires <code>K: Eq + Hash</code>. Implement <code>Hash</code> so that <code>a.eq(b)</code> implies <code>a.hash() == b.hash()</code>.</p>
+
+<p>Primitives implement <code>Hash</code>. <code>str</code> implements <code>Hash</code>. Tuples implement <code>Hash</code> if every component implements <code>Hash</code>.</p>
+
+<h2 id="15-8-cloning">15.8 Cloning</h2>
+
+<pre><code>pub interface Clone {
+  function clone(self): Self
+}
+</code></pre>
+
+<p><code>Clone.clone</code> is the deep-copy entry point used by:</p>
+
+<ul>
+<li>Channel sends when refcount > 1 (see <a href="20-concurrency.html">20-concurrency.html</a>).</li>
+<li><code>Shared.lock</code> returning structured data (see <a href="20-concurrency.html">20-concurrency.html</a>).</li>
+<li>Cross-thread captures during <code>spawn</code> (see <a href="20-concurrency.html">20-concurrency.html</a>).</li>
+<li>Any explicit <code>.clone()</code> call.</li>
+</ul>
+
+<p>User types implement <code>Clone</code> to define their copy semantics. The compiler can derive a deep-copy impl via <code>@derive(Clone)</code>.</p>
+
+<p><code>Clone</code> is <strong>not</strong> auto-implemented for user types. If you try to clone a struct that doesn't implement <code>Clone</code>, the call site fails to compile.</p>
+
+<p>Primitives implement <code>Clone</code> trivially (the copy is the value).</p>
+
+<p><code>Clone.clone</code> must produce a value that's "independent enough" that mutation of one doesn't affect the other in any visible way. Whether the implementation is a true deep copy or a copy-on-write is the implementor's choice; the contract is observable independence.</p>
+
+<h2 id="15-9-drop">15.9 Drop</h2>
+
+<pre><code>pub interface Drop {
+  function drop(self)
+}
+</code></pre>
+
+<p>Called by the runtime just before deallocating an object. Implement this to release foreign resources, log, etc.</p>
+
+<p><code>Drop.drop</code> runs:</p>
+
+<ul>
+<li>When a refcount hits zero through normal scope exit.</li>
+<li>During cycle collection, in unspecified order between cycle members.</li>
+<li>During stack unwinding from a panic.</li>
+</ul>
+
+<p><code>Drop</code> does <strong>not</strong> run when a thread other than main panics on a value still in scope (the runtime aborts that thread; managed memory is reclaimed by the GC but <code>Drop</code> is not guaranteed to run on every object).</p>
+
+<p><code>Drop.drop</code> must not panic (see <a href="14-panics.html">14-panics.html</a>). It runs with <code>self</code> as a reference; you may read or mutate <code>self</code>. You should not resurrect <code>self</code> by stashing it into a long-lived variable, but the language does not prevent it.</p>
+
+<p>See <a href="16-memory.html">16-memory.html</a> for the full drop / GC interaction.</p>
+
+<h2 id="15-10-stringification--tostr">15.10 Stringification — <code>ToStr</code></h2>
+
+<pre><code>pub interface ToStr {
+  function to_str(self): str
+}
+</code></pre>
+
+<p><code>ToStr</code> produces a user-readable string for a value. It is the one interface used by <strong>string interpolation</strong> (see <a href="01-lexical.html#19-string-literals-and-interpolation">01-lexical.md §1.9</a>). The compiler desugars <code>"x = $x"</code> to:</p>
+
+<pre><code>"x = " + x.to_str()
+</code></pre>
+
+<p>Every interpolated value's type must implement <code>ToStr</code> (or implement it via a <code>pub mod</code> chain visible at the interpolation site), otherwise the compile error points at the <code>$x</code> / <code>${...}</code> site.</p>
+
+<h3>Built-in implementations</h3>
+
+<ul>
+<li>Numeric primitives (<code>i8</code>..<code>i64</code>, <code>u8</code>..<code>u64</code>, <code>usize</code>, <code>isize</code>, <code>f32</code>, <code>f64</code>) — decimal representation (matches <code>as str</code> on primitives).</li>
+<li><code>bool</code> — <code>"true"</code> / <code>"false"</code>.</li>
+<li><code>char</code> — a single-character <code>str</code>.</li>
+<li><code>str</code> — identity (<code>s.to_str()</code> is <code>s</code>).</li>
+<li><code>null</code> — <code>"null"</code>.</li>
+<li><code>List&lt;T&gt;</code> — <code>"[a, b, c]"</code> (requires <code>T: ToStr</code>).</li>
+<li><code>Map&lt;K, V&gt;</code> — <code>"{k1: v1, k2: v2}"</code> (requires <code>K: ToStr</code> and <code>V: ToStr</code>).</li>
+<li>Tuples — <code>"(a, b, c)"</code> (requires every component to implement <code>ToStr</code>).</li>
+</ul>
+
+<h3>Relationship to <code>as str</code></h3>
+
+<p>The <code>as str</code> cast (defined in <a href="12-type-logic.html">12-type-logic.html</a>) for numeric primitives produces the same string as <code>ToStr::to_str</code>. For user types, <code>as str</code> is <strong>not</strong> defined unless they implement <code>ToStr</code> — in which case <code>value as str</code> is sugar for <code>value.to_str()</code>. This keeps one stringification path through the type system.</p>
+
+<h3>Auto-derive</h3>
+
+<p><code>@Derive(ToStr)</code> (see <a href="22-macros.html">22-macros.html</a>) synthesizes a field-by-field implementation:</p>
+
+<pre><code>@Derive(ToStr)
+pub struct Person { pub name: str, pub age: i32 }
+
+// Person { name: "Alice", age: 30 } produces:
+// "Person { name: Alice, age: 30 }"
+</code></pre>
+
+<p>The derived form is intended for diagnostics and <code>print</code> debugging. For user-facing formatting (locale-aware numbers, custom separators, etc.), implement <code>ToStr</code> by hand.</p>
+
+<h3>No <code>Display</code> / <code>Debug</code> split</h3>
+
+<p>Some languages distinguish a user-facing <code>Display</code> from a developer-facing <code>Debug</code> (Rust). This spec collapses them into one <code>ToStr</code>. If a project needs the distinction, it can define its own <code>Debug</code> interface as user code — the language doesn't bless one. The rationale: most string output is either logs (<code>Debug</code>-ish) or user UI (which usually goes through a localization layer anyway, where neither built-in is enough). One interface keeps the surface small.</p>
+
+<h2 id="15-11-reprc--disabling-gc-header-for-ffi">15.11 <code>ReprC</code> — disabling GC header for FFI</h2>
+
+<pre><code>pub interface ReprC {
+}
+</code></pre>
+
+<p>Marker interface (no methods). Implementing <code>ReprC</code> on a struct asks the compiler to lay out the struct without the GC header, producing standard C struct layout suitable for FFI.</p>
+
+<p>A <code>ReprC</code> struct loses the ability to be referenced from managed code as a normal heap object — the GC cannot trace it. In practice, prefer using <code>extern struct</code> (see <a href="19-ffi.html">19-ffi.html</a>). <code>ReprC</code> is for the rare case where a struct must be both managed-accessible and C-layout. Cross-tracing rules are unspecified for <code>ReprC</code> structs; mark them only if you understand the implications.</p>
+
+<h2 id="15-12-precedence-summary">15.12 Precedence summary</h2>
+
+<p>The expression-precedence table in <a href="07-expressions.html">07-expressions.html</a> gives the canonical ordering. Calls to overload methods do <strong>not</strong> see their own precedence — precedence is fixed at the operator level.</p>
+
+<p><code>==</code> and <code>!=</code> are non-associative. <code><</code>, <code><=</code>, <code>></code>, <code>>=</code> are also non-associative; <code>a < b < c</code> is a parse error.</p>
+
+<h2 id="15-13-operator-overloading-and-dynamic-dispatch">15.13 Operator overloading and dynamic dispatch</h2>
+
+<p>Operator method calls follow the same monomorphization / dyn-dispatch rules as any other method call (see <a href="11-generics.html">11-generics.html</a>). Expressions involving operators on generic-bounded types compile to monomorphized direct calls. Expressions involving operators on interface-typed values use vtable dispatch.</p>
+
+<h2 id="15-14-no-bespoke-operator-definitions">15.14 No bespoke operator definitions</h2>
+
+<p>You can only overload the operators listed above by implementing the corresponding interface. There is no way to define new operator symbols or to override operator precedence per-type.</p>
+
+</body>
+</html>

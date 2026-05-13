@@ -1,0 +1,50 @@
+{
+  "name": "langc-placeholder",
+  "displayName": "Language (placeholder)",
+  "description": "Editor support for the experimental language",
+  "version": "0.0.1",
+  "publisher": "experimental",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Programming Languages"],
+  "main": "./out/extension.js",
+  "activationEvents": ["onLanguage:lang-placeholder"],
+  "contributes": {
+    "languages": [
+      {
+        "id": "lang-placeholder",
+        "aliases": ["Language (placeholder)"],
+        "extensions": [".lang"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "lang-placeholder",
+        "scopeName": "source.lang",
+        "path": "./syntaxes/grammar.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "Language (placeholder)",
+      "properties": {
+        "langPlaceholder.serverPath": {
+          "type": "string",
+          "default": "langc-lsp-placeholder",
+          "description": "Path to the language server binary."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -w -p ./"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.4.0"
+  }
+}

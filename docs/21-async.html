@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>21. Async</title>
+<style>
+  :root {
+    --fg: #1b1b1d;
+    --muted: #5a5a60;
+    --bg: #fdfdfc;
+    --accent: #1a4a8a;
+    --accent-2: #2a6f4d;
+    --warn: #b54708;
+    --code-bg: #f4f2ee;
+    --code-fg: #1b1b1d;
+    --border: #e4e1dc;
+    --table-stripe: #f8f7f4;
+    --pub: #2a6f4d;
+    --priv: #b54708;
+    --pkg: #1a4a8a;
+    --core: #6b4ba8;
+  }
+  html { box-sizing: border-box; }
+  *, *::before, *::after { box-sizing: inherit; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color: var(--fg);
+    background: var(--bg);
+    line-height: 1.55;
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 2.5rem 1.5rem 6rem;
+  }
+  h1, h2, h3, h4 {
+    color: var(--fg);
+    line-height: 1.25;
+    margin-top: 2.2rem;
+    margin-bottom: 0.6rem;
+  }
+  h1 { font-size: 2rem; border-bottom: 2px solid var(--border); padding-bottom: 0.4rem; }
+  h2 { font-size: 1.45rem; margin-top: 2.6rem; }
+  h3 { font-size: 1.15rem; color: var(--accent); }
+  h4 { font-size: 1rem; color: var(--muted); }
+  p { margin: 0.7rem 0; }
+  ul, ol { margin: 0.7rem 0; padding-left: 1.6rem; }
+  li { margin: 0.3rem 0; }
+  code {
+    font-family: "SF Mono", Menlo, Consolas, "Courier New", monospace;
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 0.1em 0.35em;
+    border-radius: 3px;
+    font-size: 0.92em;
+  }
+  pre {
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 0.9rem 1rem;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 0.88rem;
+    line-height: 1.5;
+    border: 1px solid var(--border);
+  }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1rem 0;
+    font-size: 0.94rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.5rem 0.7rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th { background: var(--code-bg); font-weight: 600; }
+  tbody tr:nth-child(even) { background: var(--table-stripe); }
+  .lead {
+    font-size: 1.05rem;
+    color: var(--muted);
+    margin-bottom: 1.6rem;
+  }
+  .toc {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1rem 1.2rem;
+    margin: 1.6rem 0 2rem;
+    font-size: 0.94rem;
+  }
+  .toc ol { margin: 0.2rem 0 0; padding-left: 1.3rem; }
+  .toc a { color: var(--accent); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+
+  .diagram {
+    background: #ffffff;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.4rem;
+    margin: 1.4rem 0;
+    overflow-x: auto;
+  }
+  .diagram-caption {
+    font-size: 0.85rem;
+    color: var(--muted);
+    text-align: center;
+    margin-top: 0.6rem;
+    font-style: italic;
+  }
+  svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+  svg text { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; fill: var(--fg); }
+  svg .label { font-family: -apple-system, system-ui, sans-serif; font-size: 12px; }
+  svg .small { font-size: 10px; fill: var(--muted); }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    justify-content: center;
+    margin-top: 0.8rem;
+    font-size: 0.85rem;
+  }
+  .legend-item { display: flex; align-items: center; gap: 0.4rem; }
+  .legend-swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    border: 1px solid rgba(0,0,0,0.15);
+  }
+
+  .tag {
+    display: inline-block;
+    padding: 0.1em 0.55em;
+    border-radius: 3px;
+    font-size: 0.78em;
+    font-weight: 600;
+    font-family: "SF Mono", Menlo, monospace;
+    color: white;
+    vertical-align: middle;
+  }
+  .tag.pub  { background: var(--pub); }
+  .tag.priv { background: var(--priv); }
+  .tag.pkg  { background: var(--pkg); }
+  .tag.core { background: var(--core); }
+  .tag.warn { background: var(--warn); }
+
+  .callout {
+    border-left: 4px solid var(--accent);
+    background: #f0f4fa;
+    padding: 0.8rem 1rem;
+    margin: 1.2rem 0;
+    border-radius: 0 6px 6px 0;
+  }
+  .callout.warn { border-color: var(--warn); background: #fbf3ec; }
+  .callout.good { border-color: var(--accent-2); background: #eef6f1; }
+  .callout strong { display: block; margin-bottom: 0.3rem; }
+
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin: 1.2rem 0;
+  }
+  @media (max-width: 720px) {
+    .two-col { grid-template-columns: 1fr; }
+  }
+
+  .file-tree {
+    font-family: "SF Mono", Menlo, monospace;
+    font-size: 0.88rem;
+    line-height: 1.55;
+    background: var(--code-bg);
+    padding: 1rem 1.2rem;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    white-space: pre;
+    overflow-x: auto;
+  }
+  .file-tree .pub  { color: var(--pub); font-weight: 600; }
+  .file-tree .priv { color: var(--priv); }
+  .file-tree .note { color: var(--muted); font-style: italic; }
+</style>
+</head>
+<body>
+
+<h1>21. Async</h1>
+<p>Asynchronous programming is built on <strong>state-machine futures</strong>, an explicit executor, and <code>await</code> as the suspension point. There is no built-in generator (<code>yield</code>) syntax — <code>Iterator&lt;T&gt;</code> and <code>AsyncIterator&lt;T&gt;</code> are implemented by hand.</p>
+<p>The pieces are split across two tiers:</p>
+<ul>
+<li><strong><code>core:prelude</code></strong> (auto-imported) — the <em>shape</em> of async: the <code>Future&lt;T&gt;</code> interface, <code>Ready&lt;T&gt;</code> / <code>Pending</code>, the <code>Context</code> extern struct, <code>AsyncIterator&lt;T&gt;</code>. These are language-semantic; <code>async</code> / <code>await</code> desugar against them.</li>
+<li><strong><code>std:async</code></strong> (explicit import) — the <em>runtime</em> that drives futures: <code>spawn</code>, <code>block_on</code>, <code>timeout</code>, the default executor, the <code>for await</code> desugaring's helpers. Requires an OS.</li>
+</ul>
+<p>A freestanding (no-OS) target can still write <code>async function</code> and <code>await</code>, and define custom <code>Future&lt;T&gt;</code> impls. It just can't <code>spawn</code> or <code>block_on</code> without supplying its own executor.</p>
+<pre><code>import { spawn, block_on, timeout } from "std:async"</code></pre>
+<h2 id="21-1-future-t-core-prelude">21.1 <code>Future&lt;T&gt;</code> (<code>core:prelude</code>)</h2>
+<pre><code>pub struct Pending;
+pub struct Ready&lt;T&gt; { pub value: T }
+
+pub interface Future&lt;Output&gt; {
+  function poll(self, ctx: *Context): Ready&lt;Output&gt; | Pending
+}</code></pre>
+<p>A <code>Future&lt;T&gt;</code> is <strong>inert</strong>: calling <code>poll</code> advances it, but a future that is never polled never runs.</p>
+<p><code>poll</code> returns either <code>Ready&lt;T&gt;</code> (the future completed; <code>value</code> holds the result) or <code>Pending</code> (not yet; try again later — usually after the runtime has been notified through the context's waker).</p>
+<p>Type ergonomics:</p>
+<ul>
+<li>A <code>Future&lt;T&gt;</code> whose output is <code>null</code> (no useful return value) is just <code>Future&lt;null&gt;</code>.</li>
+<li>A <code>Future&lt;T | E&gt;</code> is the standard shape for a fallible async operation.</li>
+</ul>
+<h2 id="21-2-context-and-wakers">21.2 <code>Context</code> and wakers</h2>
+<pre><code>extern struct Context {
+  waker_data: *u8,
+  wake_fn:    extern (*u8) -&gt; null,
+}</code></pre>
+<p>The <code>Context</code> is the bridge between a future and the executor's scheduler:</p>
+<ul>
+<li><code>waker_data</code> is an opaque pointer the runtime uses to identify the task.</li>
+<li><code>wake_fn</code> is the function the future (or an underlying I/O source) calls to tell the runtime "I'm ready to make progress."</li>
+</ul>
+<p>Calling <code>wake_fn(waker_data)</code> schedules the task that originally polled this future for re-polling. A future returning <code>Pending</code> is expected to ensure something will eventually call <code>wake_fn</code> — otherwise the task hangs forever.</p>
+<p>The <code>Context</code> is an extern struct so that event loops written in C (e.g. <code>libuv</code>) can supply waker callbacks natively without language-runtime trampolining.</p>
+<h2 id="21-3-async-function">21.3 <code>async function</code></h2>
+<pre><code>async function fetch_data(url: str): str {
+  var response = await http_get(url)
+  response.body
+}</code></pre>
+<p>The <code>async</code> prefix on a function definition rewrites the function so that its body is compiled into a state machine. Effects:</p>
+<ul>
+<li>The return type <code>T</code> in the source becomes <code>Future&lt;T&gt;</code> in the elaborated type. So <code>fetch_data</code> above has type <code>(str) -&gt; Future&lt;str&gt;</code>.</li>
+<li>The body may use <code>await</code>. Each <code>await</code> is a suspension point; the compiler turns the code between awaits into states of the state machine.</li>
+<li>Calling the function does <strong>not</strong> execute the body; it returns a fresh <code>Future&lt;T&gt;</code>.</li>
+</ul>
+<p>There is no <code>async</code> on struct methods that need to be called through an interface — async interface methods are written with explicit <code>Future&lt;...&gt;</code> return types instead of the <code>async</code> prefix, to keep the trait object representation predictable.</p>
+<pre><code>interface Fetcher {
+  function fetch(self, url: str): Future&lt;str&gt;
+}</code></pre>
+<p>Implementors may use the <code>async</code> prefix on the implementing method body if they like; the return type still appears as <code>Future&lt;str&gt;</code> at the interface level.</p>
+<h2 id="21-4-await">21.4 <code>await</code></h2>
+<pre><code>var v = await fut</code></pre>
+<p><code>await</code> polls the future in the current async context. Semantics:</p>
+<ul>
+<li>If the future's <code>poll</code> returns <code>Ready&lt;T&gt;</code>, <code>await</code> evaluates to the <code>value</code> field.</li>
+<li>If it returns <code>Pending</code>, the current async function suspends, returning <code>Pending</code> from its own <code>poll</code> after recording the inner future's waker.</li>
+</ul>
+<p><code>await</code> is <strong>only valid inside an <code>async function</code> or async closure</strong>. Using it elsewhere is a compile error.</p>
+<p><code>await</code> is also <strong>not valid at module level</strong>. Module-level code can only be compile-time constants.</p>
+<p><code>await</code> does not propagate errors automatically. If <code>fut: Future&lt;T | E&gt;</code> and you <code>await</code> it, the result is <code>T | E</code>; use <code>?</code> (see <a href="13-error-handling.html">13-error-handling.html</a>) to propagate the error variant.</p>
+<pre><code>async function go(url: str): str | NetError {
+  var body = (await http_get(url))?    // ? after the await
+  parse(body)?
+}</code></pre>
+<h2 id="21-5-forgot-to-await-check">21.5 "Forgot to await" check</h2>
+<p>A <code>Future&lt;T&gt;</code> value that is created but never <code>await</code>ed, never passed to <code>spawn</code>, and never returned is suspicious — it represents work that will never run. The compiler emits a <strong>lint</strong> (error by default) on a <code>Future&lt;T&gt;</code> expression whose value is silently discarded:</p>
+<pre><code>async function fetch_data(): str { "data" }
+
+function main() {
+  fetch_data()         // ERROR — Future created but unused
+  spawn(fetch_data())  // OK
+  var f = fetch_data() // OK — bound to a variable
+}</code></pre>
+<p>The rule is conservative: explicitly assigning to <code>_</code> (<code>var _ = fetch_data()</code>) silences the diagnostic, since the user has acknowledged the discard.</p>
+<h2 id="21-6-executor-std-async">21.6 Executor (<code>std:async</code>)</h2>
+<p>The standard executor lives in <code>std:async</code>:</p>
+<pre><code>pub function spawn&lt;T&gt;(fut: Future&lt;T&gt;): JoinHandle&lt;T&gt;
+pub function block_on&lt;T&gt;(fut: Future&lt;T&gt;): T</code></pre>
+<ul>
+<li><code>spawn(fut)</code> schedules a future onto the current runtime. Returns a <code>JoinHandle&lt;T&gt;</code> (same <code>JoinHandle</code> as in <a href="20-concurrency.html">20-concurrency.html</a>; the implementation is unified).</li>
+<li><code>block_on(fut)</code> runs the current thread's mini-runtime until the future completes and returns its result. Typically used at the top of <code>main</code>:</li>
+</ul>
+<pre><code>import { block_on } from "std:async"
+import { println }  from "std:io"
+
+function main() {
+  block_on(async {
+    var r = await some_top_level_task()
+    println(r)
+  })
+}</code></pre>
+<p>The default executor is a work-stealing thread pool with one worker per logical core. The implementation also exposes hooks for custom executors, but they are an extension rather than a core language feature.</p>
+<h3>Where futures actually run</h3>
+<p>A future polled by an executor runs on the executor's worker thread. The future's <code>poll</code> body must not block the OS thread for long — it should return <code>Pending</code> and rely on a waker. Blocking operations (file I/O, synchronous database calls) should be performed via a "blocking task" mechanism the executor provides; this is implementation-defined.</p>
+<h2 id="21-7-async-closures">21.7 Async closures</h2>
+<p>The <code>async</code> prefix can be used on any closure form. The closure's return type becomes <code>Future&lt;T&gt;</code>.</p>
+<pre><code>var f1 = async function(x: i64): str {
+  await sleep(100)
+  x as str
+}
+
+var f2 = async |x| {
+  await sleep(100)
+  x as str
+}
+
+var f3 = async { await fetch(it) }   // implicit `it`, single param</code></pre>
+<p>The type of <code>f1</code>/<code>f2</code>/<code>f3</code> is <code>(i64) -&gt; Future&lt;str&gt;</code> (for some appropriate signature).</p>
+<p>Async closures may capture variables from the enclosing scope under the same rules as ordinary closures (see <a href="09-functions.html">09-functions.html</a>). When passed to <code>spawn</code>, the captured set is subject to the cross-thread isolation rules (see <a href="20-concurrency.html">20-concurrency.html</a>) — captured reference types are deep-cloned at spawn time.</p>
+<p>Async closures cannot be marked <code>extern</code> (they have an environment plus a state machine).</p>
+<h2 id="21-8-cancellation">21.8 Cancellation</h2>
+<p>A future is cancelled by <strong>dropping</strong> it. Dropping a future invokes its <code>Drop</code> impl, which in turn must release any resources it had acquired (open file descriptors, pending I/O registrations, etc.).</p>
+<p><code>select!</code>-style combinators (when supplied by stdlib or a third-party library) typically work by polling multiple futures and dropping the losers when a winner completes.</p>
+<p>There is <strong>no built-in cancellation token</strong>. If you need cooperative cancellation, pass a <code>Shared&lt;bool&gt;</code> or a <code>Receiver&lt;Cancel&gt;</code> to the future and let it check.</p>
+<h2 id="21-9-timeouts">21.9 Timeouts</h2>
+<p>The stdlib provides a <code>timeout</code> combinator:</p>
+<pre><code>pub function timeout&lt;T&gt;(fut: Future&lt;T&gt;, duration_ms: i64): Future&lt;T | TimedOut&gt;
+
+pub struct TimedOut;</code></pre>
+<p><code>timeout</code> produces a future that races <code>fut</code> against a timer. Whichever finishes first wins; the other is dropped.</p>
+<h2 id="21-10-asynciterator-t-core-prelude">21.10 <code>AsyncIterator&lt;T&gt;</code> (<code>core:prelude</code>)</h2>
+<p>Asynchronous iteration uses a parallel interface:</p>
+<pre><code>pub interface AsyncIterator&lt;T&gt; {
+  function next_async(self): Future&lt;Item&lt;T&gt; | Done&gt;
+}</code></pre>
+<p>Each call to <code>next_async</code> returns a future that resolves to either <code>Item&lt;T&gt;</code> (with value) or <code>Done</code>.</p>
+<p>The <code>for await</code> loop iterates an async iterator:</p>
+<pre><code>async function process(stream: AsyncIterator&lt;i64&gt;) {
+  for await n in stream {
+    println(n as str)
+  }
+}</code></pre>
+<p>Desugaring (approximate):</p>
+<pre><code>{
+  var __it = stream
+  loop {
+    match (await __it.next_async()) {
+      Item { value } =&gt; { var n = value; ... loop body ... },
+      Done           =&gt; break,
+    }
+  }
+}</code></pre>
+<p><code>for await</code> is only valid in an async context.</p>
+<h2 id="21-11-streams">21.11 Streams</h2>
+<p>The language does <strong>not</strong> provide built-in generator syntax. Where Rust has <code>gen</code> or Python <code>yield</code>, this language requires explicit <code>AsyncIterator&lt;T&gt;</code> implementations. The <code>yield</code> keyword is reserved but unused.</p>
+<p>To produce a stream, implement the interface by hand. A small example:</p>
+<pre><code>pub struct Ticker {
+  pub current:  i64,
+  pub end:      i64,
+  pub delay_ms: i64,
+}
+
+extend Ticker: AsyncIterator&lt;i64&gt; {
+  function next_async(self): Future&lt;Item&lt;i64&gt; | Done&gt; {
+    async {
+      if self.current &gt;= self.end {
+        Done
+      } else {
+        await sleep(self.delay_ms)
+        var v = self.current
+        self.current = self.current + 1
+        Item { value: v }
+      }
+    }
+  }
+}
+
+async function process() {
+  var t = Ticker { current: 0, end: 5, delay_ms: 100 }
+  for await n in t {
+    println(n as str)
+  }
+}</code></pre>
+<p>This is verbose by design — explicit state machines are easier to reason about and integrate with cancellation.</p>
+<h2 id="21-12-async-and-panics">21.12 Async and panics</h2>
+<p>A future that panics during <code>poll</code> propagates the panic to whoever was driving it:</p>
+<ul>
+<li><code>block_on(fut)</code> — the calling thread panics.</li>
+<li><code>spawn(fut)</code> — the spawned task ends; <code>JoinHandle.join</code> returns <code>Panicked</code>.</li>
+</ul>
+<p>Other in-flight futures on the same executor are unaffected.</p>
+<h2 id="21-13-composition-primitives">21.13 Composition primitives</h2>
+<p>Specific combinators (<code>join</code>, <code>race</code>, <code>select</code>) are stdlib additions and not part of the core language semantics. The minimum guarantees are:</p>
+<ul>
+<li><code>await</code> exists and behaves as described.</li>
+<li><code>spawn</code> exists and returns a <code>JoinHandle</code>.</li>
+<li><code>Future&lt;T&gt;</code> has the trait shape above.</li>
+<li><code>Context</code> interoperates with C event loops.</li>
+</ul>
+<p>Everything above this baseline is library design.</p>
+<h2 id="21-14-summary">21.14 Summary</h2>
+<ul>
+<li><code>Future&lt;T&gt;</code> is an inert state machine.</li>
+<li><code>async function</code> produces one; <code>await</code> drives one inside another.</li>
+<li>Futures must be <code>spawn</code>ed or <code>await</code>ed; ignoring them is a compile error.</li>
+<li>The default executor is a work-stealing pool; <code>block_on</code> runs a top-level future.</li>
+<li><code>AsyncIterator&lt;T&gt;</code> + <code>for await</code> for async streams. No generator syntax.</li>
+<li>Cancellation by drop; timeouts via <code>timeout(...)</code>.</li>
+<li>Async closures with <code>async</code> prefix, including the <code>it</code>-shorthand form.</li>
+</ul>
+
+</body>
+</html>

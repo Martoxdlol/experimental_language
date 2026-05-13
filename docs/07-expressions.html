@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>7. Expressions</title>
+<style>
+  :root {
+    --fg: #1b1b1d;
+    --muted: #5a5a60;
+    --bg: #fdfdfc;
+    --accent: #1a4a8a;
+    --accent-2: #2a6f4d;
+    --warn: #b54708;
+    --code-bg: #f4f2ee;
+    --code-fg: #1b1b1d;
+    --border: #e4e1dc;
+    --table-stripe: #f8f7f4;
+    --pub: #2a6f4d;
+    --priv: #b54708;
+    --pkg: #1a4a8a;
+    --core: #6b4ba8;
+  }
+  html { box-sizing: border-box; }
+  *, *::before, *::after { box-sizing: inherit; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color: var(--fg);
+    background: var(--bg);
+    line-height: 1.55;
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 2.5rem 1.5rem 6rem;
+  }
+  h1, h2, h3, h4 {
+    color: var(--fg);
+    line-height: 1.25;
+    margin-top: 2.2rem;
+    margin-bottom: 0.6rem;
+  }
+  h1 { font-size: 2rem; border-bottom: 2px solid var(--border); padding-bottom: 0.4rem; }
+  h2 { font-size: 1.45rem; margin-top: 2.6rem; }
+  h3 { font-size: 1.15rem; color: var(--accent); }
+  h4 { font-size: 1rem; color: var(--muted); }
+  p { margin: 0.7rem 0; }
+  ul, ol { margin: 0.7rem 0; padding-left: 1.6rem; }
+  li { margin: 0.3rem 0; }
+  code {
+    font-family: "SF Mono", Menlo, Consolas, "Courier New", monospace;
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 0.1em 0.35em;
+    border-radius: 3px;
+    font-size: 0.92em;
+  }
+  pre {
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 0.9rem 1rem;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 0.88rem;
+    line-height: 1.5;
+    border: 1px solid var(--border);
+  }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1rem 0;
+    font-size: 0.94rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.5rem 0.7rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th { background: var(--code-bg); font-weight: 600; }
+  tbody tr:nth-child(even) { background: var(--table-stripe); }
+  .lead {
+    font-size: 1.05rem;
+    color: var(--muted);
+    margin-bottom: 1.6rem;
+  }
+  .toc {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1rem 1.2rem;
+    margin: 1.6rem 0 2rem;
+    font-size: 0.94rem;
+  }
+  .toc ol { margin: 0.2rem 0 0; padding-left: 1.3rem; }
+  .toc a { color: var(--accent); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+
+  .diagram {
+    background: #ffffff;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.4rem;
+    margin: 1.4rem 0;
+    overflow-x: auto;
+  }
+  .diagram-caption {
+    font-size: 0.85rem;
+    color: var(--muted);
+    text-align: center;
+    margin-top: 0.6rem;
+    font-style: italic;
+  }
+  svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+  svg text { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; fill: var(--fg); }
+  svg .label { font-family: -apple-system, system-ui, sans-serif; font-size: 12px; }
+  svg .small { font-size: 10px; fill: var(--muted); }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    justify-content: center;
+    margin-top: 0.8rem;
+    font-size: 0.85rem;
+  }
+  .legend-item { display: flex; align-items: center; gap: 0.4rem; }
+  .legend-swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    border: 1px solid rgba(0,0,0,0.15);
+  }
+
+  .tag {
+    display: inline-block;
+    padding: 0.1em 0.55em;
+    border-radius: 3px;
+    font-size: 0.78em;
+    font-weight: 600;
+    font-family: "SF Mono", Menlo, monospace;
+    color: white;
+    vertical-align: middle;
+  }
+  .tag.pub  { background: var(--pub); }
+  .tag.priv { background: var(--priv); }
+  .tag.pkg  { background: var(--pkg); }
+  .tag.core { background: var(--core); }
+  .tag.warn { background: var(--warn); }
+
+  .callout {
+    border-left: 4px solid var(--accent);
+    background: #f0f4fa;
+    padding: 0.8rem 1rem;
+    margin: 1.2rem 0;
+    border-radius: 0 6px 6px 0;
+  }
+  .callout.warn { border-color: var(--warn); background: #fbf3ec; }
+  .callout.good { border-color: var(--accent-2); background: #eef6f1; }
+  .callout strong { display: block; margin-bottom: 0.3rem; }
+
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin: 1.2rem 0;
+  }
+  @media (max-width: 720px) {
+    .two-col { grid-template-columns: 1fr; }
+  }
+
+  .file-tree {
+    font-family: "SF Mono", Menlo, monospace;
+    font-size: 0.88rem;
+    line-height: 1.55;
+    background: var(--code-bg);
+    padding: 1rem 1.2rem;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    white-space: pre;
+    overflow-x: auto;
+  }
+  .file-tree .pub  { color: var(--pub); font-weight: 600; }
+  .file-tree .priv { color: var(--priv); }
+  .file-tree .note { color: var(--muted); font-style: italic; }
+</style>
+</head>
+<body>
+
+<h1>7. Expressions</h1>
+
+<p>The language is expression-oriented: most constructs produce a value.</p>
+
+<h2 id="7-1-block-expressions">7.1 Block expressions</h2>
+
+<p>A block <code>{ ... }</code> is a sequence of statements ending in an optional trailing expression. The block evaluates to the trailing expression, or to <code>null</code> if there is none.</p>
+
+<pre><code>var v = {
+  var x = 10
+  var y = 20
+  x + y        // no `;` — this is the block's value
+}
+// v == 30</code></pre>
+
+<p>Adding <code>;</code> to the last expression turns it into a statement and makes the block evaluate to <code>null</code>:</p>
+
+<pre><code>var v = {
+  var x = 10
+  x + 1;       // `;` discards the value
+}
+// v == null</code></pre>
+
+<p>Blocks introduce a new lexical scope (see <a href="06-variables.html">06-variables.html</a>).</p>
+
+<h2 id="7-2-if-expression">7.2 <code>if</code> expression</h2>
+
+<p><code>if</code> is an expression. Parentheses around the condition are <strong>not</strong> required and not conventional. Parens are only needed when the surrounding syntax would otherwise be ambiguous (see 7.2 "Struct-literal ambiguity in headers" below).</p>
+
+<pre><code>var status = if age &gt;= 18 {
+  "Adult"
+} else {
+  "Minor"
+}</code></pre>
+
+<p>Chains:</p>
+
+<pre><code>var grade =
+  if score &gt;= 90 { "A" }
+  else if score &gt;= 80 { "B" }
+  else if score &gt;= 70 { "C" }
+  else { "F" }</code></pre>
+
+<h3>Statement form</h3>
+
+<p>The <code>else</code> branch is required when the <code>if</code> expression's value is used. Without <code>else</code>, the value of <code>if</code> is <code>null</code> and the type of both branches must unify (with <code>null</code> as an automatic completion):</p>
+
+<pre><code>if x &gt; 0 {
+  print("positive")
+}
+// Same as:
+//   if x &gt; 0 { print("positive") } else { null }</code></pre>
+
+<h3>Type of the result</h3>
+
+<p>The type of an <code>if</code> expression is the union of its branch types (after normalization). Both branches contribute; if they agree, the result type is exactly that type.</p>
+
+<pre><code>var v = if cond { 1 } else { "hi" }   // v: i64 | str</code></pre>
+
+<h3>Condition</h3>
+
+<p>The condition must be of type <code>bool</code>. There is no implicit truthiness for integers, strings, or pointers.</p>
+
+<p><code>if v is T { ... }</code> is a special case for flow narrowing: see <a href="12-type-logic.html">12-type-logic.html</a>.</p>
+
+<h3>Struct-literal ambiguity in headers</h3>
+
+<p><code>if</code>, <code>while</code>, <code>for ... in ...</code>, and <code>match</code> scrutinees normally use <strong>bare headers</strong> — no parentheses. The only case where parens are needed is when the top-level expression of the header would otherwise be ambiguous with a struct literal (also written <code>Name { ... }</code>), because the parser cannot tell where the header ends and the body begins.</p>
+
+<p>To disambiguate, wrap the offending expression in parens:</p>
+
+<pre><code>// ambiguous — REJECTED:
+//   for n in Range { current: 0, end: 5 } { print(n as str) }
+
+// explicit — OK:
+for n in (Range { current: 0, end: 5 }) {
+  print(n as str)
+}</code></pre>
+
+<p>Struct literals nested inside parentheses, function calls, indexing, or other contexts are unaffected. This restriction only applies to the bare top-level expression directly before the body block.</p>
+
+<h2 id="7-3-match-expression">7.3 <code>match</code> expression</h2>
+
+<p><code>match</code> is the structured way to dispatch on a value. It works on any type, but is most useful for unions. Arms are separated by <code>,</code>.</p>
+
+<pre><code>match value {
+  Pattern1 =&gt; expr1,
+  Pattern2 =&gt; expr2,
+  ...
+  _        =&gt; default_expr,
+}</code></pre>
+
+<p>A trailing <code>,</code> after the last arm is allowed and conventional. If an arm's body is a block, the <code>,</code> is still required:</p>
+
+<pre><code>match value {
+  i64 n =&gt; {
+    print("number")
+    n * 2
+  },
+  str s =&gt; 0,
+}</code></pre>
+
+<h3>Patterns</h3>
+
+<p>Supported pattern forms:</p>
+
+<table>
+<thead><tr><th>Pattern</th><th>Matches</th></tr></thead>
+<tbody>
+<tr><td><code>_</code></td><td>Anything (no binding)</td></tr>
+<tr><td><code>name</code></td><td>Anything; binds value to <code>name</code> (only when the static type of the scrutinee is monomorphic)</td></tr>
+<tr><td><code>i64</code> (etc.)</td><td>A value of this primitive type</td></tr>
+<tr><td><code>i64 n</code></td><td>A value of this primitive type, bound to <code>n</code></td></tr>
+<tr><td><code>42</code></td><td>The literal <code>42</code> of the scrutinee's integer type</td></tr>
+<tr><td><code>"hello"</code></td><td>The literal string <code>"hello"</code></td></tr>
+<tr><td><code>true</code> / <code>false</code></td><td>Literal booleans</td></tr>
+<tr><td><code>null</code></td><td>The <code>null</code> value</td></tr>
+<tr><td><code>'a'</code></td><td>The literal character <code>'a'</code></td></tr>
+<tr><td><code>Red</code></td><td>The unit struct <code>Red</code></td></tr>
+<tr><td><code>Some(n)</code> (tuple-struct pattern)</td><td>A tuple struct, destructuring positionally</td></tr>
+<tr><td><code>Person { name, age }</code></td><td>A record struct, destructuring named fields</td></tr>
+<tr><td><code>Person { name, .. }</code></td><td>A record struct, ignoring other fields</td></tr>
+<tr><td><code>Person { name: "Alice", .. }</code></td><td>Record struct with a literal field pattern</td></tr>
+<tr><td><code>(a, b)</code></td><td>A tuple, destructuring positionally</td></tr>
+<tr><td><code>(0, y)</code></td><td>A tuple with a literal component</td></tr>
+<tr><td><code>(a, ..)</code></td><td>A tuple, ignoring trailing positions</td></tr>
+<tr><td><code>(a, ..rest)</code></td><td>A tuple, binding the trailing positions to <code>rest</code> as a sub-tuple</td></tr>
+<tr><td><code>[a, b, c]</code></td><td>A list of exactly three elements</td></tr>
+<tr><td><code>[]</code></td><td>An empty list</td></tr>
+<tr><td><code>[head, ..tail]</code></td><td>A non-empty list; <code>head</code> is element 0, <code>tail</code> is a <code>List&lt;T&gt;</code> of the rest</td></tr>
+<tr><td><code>[a, b, ..]</code></td><td>A list of length ≥ 2; trailing elements ignored</td></tr>
+<tr><td><code>[..init, last]</code></td><td>A non-empty list; <code>init</code> is a <code>List&lt;T&gt;</code> of all but the last, <code>last</code> is the last element</td></tr>
+<tr><td><code>[a, ..mid, z]</code></td><td>A list of length ≥ 2; <code>a</code> is first, <code>z</code> is last, <code>mid</code> is a <code>List&lt;T&gt;</code> of the middle</td></tr>
+<tr><td><code>T x</code></td><td>The variant <code>T</code> of the scrutinee's union, bound to <code>x</code> (an irrefutable form for unions)</td></tr>
+<tr><td><code>P1 | P2</code></td><td>Either pattern (or-pattern); both must bind the same names with the same types if any</td></tr>
+</tbody>
+</table>
+
+<h3>List and tuple rest patterns</h3>
+
+<p><code>..</code> in a tuple or list pattern stands for "the remaining positions." It may appear <strong>at most once</strong> per pattern, and may carry a binding name:</p>
+
+<ul>
+  <li><code>..</code> (no name) — discards the rest.</li>
+  <li><code>..rest</code> (with name) — binds the rest:
+    <ul>
+      <li>In a <strong>tuple</strong> pattern, <code>rest</code> is a sub-tuple of the unmatched positions. Its type is statically determined by what the source tuple has left.</li>
+      <li>In a <strong>list</strong> pattern, <code>rest</code> is a <code>List&lt;T&gt;</code> containing the unmatched elements. The compiler emits the necessary slicing.</li>
+    </ul>
+  </li>
+</ul>
+
+<p>List patterns work with any value of type <code>List&lt;T&gt;</code>. They do not work on arbitrary <code>Iterator&lt;T&gt;</code> — iterators don't have a known length and aren't randomly addressable.</p>
+
+<p>Guards:</p>
+
+<pre><code>match n {
+  i64 x if x &gt; 0 =&gt; "positive",
+  i64 x if x &lt; 0 =&gt; "negative",
+  i64 _          =&gt; "zero",
+}</code></pre>
+
+<p>Guards are arbitrary boolean expressions evaluated after the structural pattern matches.</p>
+
+<h3>Exhaustiveness</h3>
+
+<p><code>match</code> must cover every possible value of the scrutinee's static type. The compiler checks this:</p>
+
+<pre><code>match color {        // color: Red | Green | Blue
+  Red   =&gt; 1,
+  Green =&gt; 2,
+                     // ERROR: non-exhaustive — missing Blue
+}</code></pre>
+
+<p>Add <code>_ =&gt; default</code> to catch the rest. For unions, listing every variant satisfies exhaustiveness without a wildcard.</p>
+
+<p>For primitive types like <code>i64</code>, exhaustiveness requires a <code>_</code> arm (you cannot enumerate every integer).</p>
+
+<p>For structs, matching with <code>_ =&gt; ...</code> or <code>Person { .. } =&gt; ...</code> is exhaustive.</p>
+
+<h3>Reachability</h3>
+
+<p>Arms are tried top-to-bottom. The compiler warns on unreachable arms (an arm whose pattern is fully covered by earlier arms).</p>
+
+<h3>Type of the result</h3>
+
+<p>The result type of <code>match</code> is the union of all arm body types (after normalization).</p>
+
+<h3>Binding modes</h3>
+
+<p>Bindings in patterns are by-reference for reference-type fields (no clone), by-value for primitives. The bound name is a regular <code>var</code> and is mutable inside the arm body.</p>
+
+<h2 id="7-4-operator-expressions">7.4 Operator expressions</h2>
+
+<p>Standard precedence, highest to lowest (loosely):</p>
+
+<table>
+<thead><tr><th>Precedence</th><th>Operators</th><th>Associativity</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><code>.</code> <code>()</code> <code>[]</code> <code>?</code> (postfix)</td><td>left</td></tr>
+<tr><td>2</td><td>unary <code>-</code> <code>!</code> <code>~</code></td><td>right</td></tr>
+<tr><td>3</td><td><code>as</code> <code>is</code></td><td>left</td></tr>
+<tr><td>4</td><td><code>*</code> <code>/</code> <code>%</code></td><td>left</td></tr>
+<tr><td>5</td><td><code>+</code> <code>-</code></td><td>left</td></tr>
+<tr><td>6</td><td><code>&lt;&lt;</code> <code>&gt;&gt;</code></td><td>left</td></tr>
+<tr><td>7</td><td><code>&amp;</code></td><td>left</td></tr>
+<tr><td>8</td><td><code>^</code></td><td>left</td></tr>
+<tr><td>9</td><td><code>|</code></td><td>left</td></tr>
+<tr><td>10</td><td><code>==</code> <code>!=</code> <code>&lt;</code> <code>&lt;=</code> <code>&gt;</code> <code>&gt;=</code></td><td>non-associative</td></tr>
+<tr><td>11</td><td><code>&amp;&amp;</code></td><td>left</td></tr>
+<tr><td>12</td><td><code>||</code></td><td>left</td></tr>
+<tr><td>13</td><td><code>=</code> (assignment statement, not expression)</td><td>—</td></tr>
+</tbody>
+</table>
+
+<p><code>==</code> and <code>!=</code> are non-associative: <code>a == b == c</code> is a parse error. Use explicit grouping or chained comparisons.</p>
+
+<p><code>as</code> and <code>is</code> bind tighter than arithmetic: <code>x + y as i32</code> parses as <code>x + (y as i32)</code>.</p>
+
+<h2 id="7-5-call-expression">7.5 Call expression</h2>
+
+<pre><code>foo(a, b, c)
+list.push(x)
+Map.new&lt;str, i64&gt;()    // static method (no receiver)</code></pre>
+
+<p><code>.</code> is used for both member access (on a value: <code>person.name</code>) and static/namespaced access (on a type or module: <code>Type.function()</code>, <code>Module.name</code>). There is no separate <code>::</code> operator.</p>
+
+<h2 id="7-6-method-call-expression">7.6 Method-call expression</h2>
+
+<pre><code>person.greet()
+person.set_age(30)</code></pre>
+
+<p>The receiver <code>person</code> is passed as <code>self</code>. Method resolution looks for methods on the type, then any <code>extend</code> impls of interfaces, with overlap rules from <a href="11-generics.html">11-generics.html</a>.</p>
+
+<h2 id="7-7-index-expression">7.7 Index expression</h2>
+
+<pre><code>list[0]
+map["key"]</code></pre>
+
+<p>Calls <code>Index.index</code> (read) or <code>IndexMut.index_mut</code> (write); see <a href="15-operators.html">15-operators.html</a>. The element types come from the interface implementation. Out-of-bounds behavior is implementation-defined per type — collections return <code>T | null</code> from <code>get</code>/<code>set</code> but <code>[]</code> panics on out-of-bounds for <code>List&lt;T&gt;</code> and panics on missing key for <code>Map&lt;K, V&gt;</code>.</p>
+
+<h2 id="7-8-statements">7.8 Statements</h2>
+
+<p>Statements terminate with <code>;</code>:</p>
+
+<ul>
+  <li><code>var &lt;name&gt; [: T] = expr ;</code> — binding</li>
+  <li><code>&lt;lvalue&gt; = expr ;</code> — assignment</li>
+  <li><code>return expr ;</code> — early function exit</li>
+  <li><code>break [expr] ;</code> — exit a loop (see <a href="08-control-flow.html">08-control-flow.html</a>)</li>
+  <li><code>continue ;</code> — next loop iteration</li>
+  <li><code>expr ;</code> — expression statement; result is discarded</li>
+</ul>
+
+<p>The last expression in a block may omit <code>;</code> to be the block's value.</p>
+
+</body>
+</html>

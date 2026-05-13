@@ -1,0 +1,918 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>23. CLI and Toolchain</title>
+<style>
+  :root {
+    --fg: #1b1b1d;
+    --muted: #5a5a60;
+    --bg: #fdfdfc;
+    --accent: #1a4a8a;
+    --accent-2: #2a6f4d;
+    --warn: #b54708;
+    --code-bg: #f4f2ee;
+    --code-fg: #1b1b1d;
+    --border: #e4e1dc;
+    --table-stripe: #f8f7f4;
+    --pub: #2a6f4d;
+    --priv: #b54708;
+    --pkg: #1a4a8a;
+    --core: #6b4ba8;
+  }
+  html { box-sizing: border-box; }
+  *, *::before, *::after { box-sizing: inherit; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color: var(--fg);
+    background: var(--bg);
+    line-height: 1.55;
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 2.5rem 1.5rem 6rem;
+  }
+  h1, h2, h3, h4 {
+    color: var(--fg);
+    line-height: 1.25;
+    margin-top: 2.2rem;
+    margin-bottom: 0.6rem;
+  }
+  h1 { font-size: 2rem; border-bottom: 2px solid var(--border); padding-bottom: 0.4rem; }
+  h2 { font-size: 1.45rem; margin-top: 2.6rem; }
+  h3 { font-size: 1.15rem; color: var(--accent); }
+  h4 { font-size: 1rem; color: var(--muted); }
+  p { margin: 0.7rem 0; }
+  ul, ol { margin: 0.7rem 0; padding-left: 1.6rem; }
+  li { margin: 0.3rem 0; }
+  code {
+    font-family: "SF Mono", Menlo, Consolas, "Courier New", monospace;
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 0.1em 0.35em;
+    border-radius: 3px;
+    font-size: 0.92em;
+  }
+  pre {
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 0.9rem 1rem;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 0.88rem;
+    line-height: 1.5;
+    border: 1px solid var(--border);
+  }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1rem 0;
+    font-size: 0.94rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.5rem 0.7rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th { background: var(--code-bg); font-weight: 600; }
+  tbody tr:nth-child(even) { background: var(--table-stripe); }
+  .lead {
+    font-size: 1.05rem;
+    color: var(--muted);
+    margin-bottom: 1.6rem;
+  }
+  .toc {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1rem 1.2rem;
+    margin: 1.6rem 0 2rem;
+    font-size: 0.94rem;
+  }
+  .toc ol { margin: 0.2rem 0 0; padding-left: 1.3rem; }
+  .toc a { color: var(--accent); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+
+  .diagram {
+    background: #ffffff;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.4rem;
+    margin: 1.4rem 0;
+    overflow-x: auto;
+  }
+  .diagram-caption {
+    font-size: 0.85rem;
+    color: var(--muted);
+    text-align: center;
+    margin-top: 0.6rem;
+    font-style: italic;
+  }
+  svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+  svg text { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; fill: var(--fg); }
+  svg .label { font-family: -apple-system, system-ui, sans-serif; font-size: 12px; }
+  svg .small { font-size: 10px; fill: var(--muted); }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    justify-content: center;
+    margin-top: 0.8rem;
+    font-size: 0.85rem;
+  }
+  .legend-item { display: flex; align-items: center; gap: 0.4rem; }
+  .legend-swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    border: 1px solid rgba(0,0,0,0.15);
+  }
+
+  .tag {
+    display: inline-block;
+    padding: 0.1em 0.55em;
+    border-radius: 3px;
+    font-size: 0.78em;
+    font-weight: 600;
+    font-family: "SF Mono", Menlo, monospace;
+    color: white;
+    vertical-align: middle;
+  }
+  .tag.pub  { background: var(--pub); }
+  .tag.priv { background: var(--priv); }
+  .tag.pkg  { background: var(--pkg); }
+  .tag.core { background: var(--core); }
+  .tag.warn { background: var(--warn); }
+
+  .callout {
+    border-left: 4px solid var(--accent);
+    background: #f0f4fa;
+    padding: 0.8rem 1rem;
+    margin: 1.2rem 0;
+    border-radius: 0 6px 6px 0;
+  }
+  .callout.warn { border-color: var(--warn); background: #fbf3ec; }
+  .callout.good { border-color: var(--accent-2); background: #eef6f1; }
+  .callout strong { display: block; margin-bottom: 0.3rem; }
+
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin: 1.2rem 0;
+  }
+  @media (max-width: 720px) {
+    .two-col { grid-template-columns: 1fr; }
+  }
+
+  .file-tree {
+    font-family: "SF Mono", Menlo, monospace;
+    font-size: 0.88rem;
+    line-height: 1.55;
+    background: var(--code-bg);
+    padding: 1rem 1.2rem;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    white-space: pre;
+    overflow-x: auto;
+  }
+  .file-tree .pub  { color: var(--pub); font-weight: 600; }
+  .file-tree .priv { color: var(--priv); }
+  .file-tree .note { color: var(--muted); font-style: italic; }
+</style>
+</head>
+<body>
+
+<h1>23. CLI and Toolchain</h1>
+<p>This chapter specifies the command-line interface and toolchain layout. The placeholder binary name is <code>lang</code>; the final name is not yet decided.</p>
+<h2 id="23-0-shape">23.0 Shape</h2>
+<p>One binary, subcommands. Two layers:</p>
+<ul>
+<li><strong>Front-end as a library</strong> (<code>liblangc</code>): lexer, parser, resolver, type-checker, IR lowering, codegen driver, formatter, doc extractor.</li>
+<li><strong>Driver binary</strong> (<code>lang</code>): argument parsing, project loading, dependency resolution, orchestration, file I/O, process spawning (linker, debuggers).</li>
+</ul>
+<p>Every subcommand below is a thin orchestrator over <code>liblangc</code> + a small set of helpers. The same library is what an LSP, an external build system, or a third-party tool would embed.</p>
+<h2 id="23-1-global-flags">23.1 Global flags</h2>
+<p>These apply to every subcommand.</p>
+<table>
+<thead><tr>
+<th>Flag</th>
+<th>Purpose</th>
+</tr></thead>
+<tbody>
+<tr>
+<td><code>--manifest &lt;path&gt;</code></td>
+<td>Override <code>project.toml</code> location. Default: walk upward from cwd.</td>
+</tr>
+<tr>
+<td><code>--target-dir &lt;path&gt;</code></td>
+<td>Override build output root. Default: <code>&lt;project&gt;/target/</code>.</td>
+</tr>
+<tr>
+<td><code>--profile &lt;name&gt;</code></td>
+<td>Named build profile (<code>debug</code>, <code>release</code>, or any user-defined). Default: <code>debug</code>.</td>
+</tr>
+<tr>
+<td><code>--target &lt;triple&gt;</code></td>
+<td>Cross-compile target. Default: host.</td>
+</tr>
+<tr>
+<td><code>--jobs &lt;N&gt;</code>, <code>-j &lt;N&gt;</code></td>
+<td>Parallelism. Default: physical cores.</td>
+</tr>
+<tr>
+<td><code>--offline</code></td>
+<td>Forbid network access (registry, git).</td>
+</tr>
+<tr>
+<td><code>--frozen</code></td>
+<td><code>--offline</code> + refuse to update the lockfile.</td>
+</tr>
+<tr>
+<td><code>--locked</code></td>
+<td>Allow reads but refuse to write the lockfile.</td>
+</tr>
+<tr>
+<td><code>--config &lt;key=value&gt;</code></td>
+<td>Override one config setting (repeatable).</td>
+</tr>
+<tr>
+<td><code>--color &lt;auto|always|never&gt;</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>--message-format &lt;human|json|short&gt;</code></td>
+<td>Diagnostic output format; <code>json</code> is the LSP/IDE feed.</td>
+</tr>
+<tr>
+<td><code>--verbose</code>, <code>-v</code> / <code>-vv</code> / <code>-vvv</code></td>
+<td>Driver chatter level.</td>
+</tr>
+<tr>
+<td><code>--quiet</code>, <code>-q</code></td>
+<td>Suppress non-error output.</td>
+</tr>
+<tr>
+<td><code>--no-default-features</code>, <code>--features &lt;list&gt;</code></td>
+<td>Conditional compilation toggles (see §23.10).</td>
+</tr>
+<tr>
+<td><code>--cfg &lt;key[=value]&gt;</code></td>
+<td>Ad-hoc compile-time <code>cfg</code> flag.</td>
+</tr>
+<tr>
+<td><code>--sysroot &lt;path&gt;</code></td>
+<td>Override the built-in stdlib location (see §23.6).</td>
+</tr>
+<tr>
+<td><code>--toolchain &lt;name&gt;</code></td>
+<td>Pin a specific installed toolchain (see §23.13).</td>
+</tr>
+<tr>
+<td><code>--help</code>, <code>-h</code> / <code>--version</code>, <code>-V</code></td>
+<td>Standard.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="23-2-subcommand-map">23.2 Subcommand map</h2>
+<pre><code>lang new        &lt;path&gt; [--lib|--bin|--lib+bins]   create a new project
+lang init       [--lib|--bin|--lib+bins]          init in the cwd
+lang build                                        compile to the default artifact
+lang check                                        parse + typecheck, no codegen
+lang run        [-- args...]                      build (if bin) + execute
+lang test       [filter] [--bench]                build + run tests
+lang bench      [filter]                          build + run benches
+lang fmt        [paths...]                        format files
+lang lint       [paths...]                        run lints
+lang fix                                          apply auto-fixable lints / migrations
+lang doc        [--open]                          generate API docs
+lang repl       [--script file]                   interactive REPL
+lang lsp                                          start the language server (stdio)
+lang explain    &lt;error-code&gt;                      long-form diagnostic explanation
+lang expand     [--macro &lt;name&gt;]                  print macro-expanded source
+
+lang emit       &lt;stage&gt; [paths...]                dump a specific compilation stage (§23.4)
+lang inspect    &lt;thing&gt;                           introspection (types, modules, deps)
+lang clean      [--profile &lt;p&gt;] [--target &lt;t&gt;]    delete build artifacts
+
+lang add        &lt;pkg&gt;[@&lt;ver&gt;] [--dev]             add a dependency
+lang remove     &lt;pkg&gt;                             remove a dependency
+lang update     [&lt;pkg&gt;] [--precise &lt;ver&gt;]         refresh the lockfile
+lang tree       [--depth N] [--duplicates]        print the resolved dep graph
+lang why        &lt;pkg&gt;                             why is &lt;pkg&gt; in the graph?
+lang vendor     [--path &lt;dir&gt;]                    copy all deps into the project
+lang lock       [--check]                         regenerate / validate the lockfile
+
+lang search     &lt;query&gt;                           search the registry
+lang publish    [--dry-run]                       publish to the registry
+lang yank       &lt;pkg&gt;@&lt;ver&gt;                       yank a published version
+lang login      / logout                          registry credentials
+lang audit                                        check deps against vulnerability DB
+
+lang toolchain  list|install|default|remove|run   manage toolchain versions (§23.13)
+lang target     list|add|remove                   manage installed cross-targets
+lang sysroot    show|build                        inspect / rebuild the stdlib (§23.6)
+lang ffi        bindgen|cbindgen|check|layout     FFI binding generation &amp; validation (§23.12)
+
+lang script     &lt;file&gt;                            run a single .lang file shebang-style
+lang completions &lt;shell&gt;                          emit shell completion script
+lang config     get|set|list                      read/write user/project config
+lang env                                          print the effective build environment
+lang version    [--all]                           version (driver, frontend, linker, …)
+lang self       update|uninstall                  manage the `lang` install itself</code></pre>
+<h2 id="23-3-lang-build-the-main-path">23.3 <code>lang build</code> — the main path</h2>
+<pre><code>lang build [--bin &lt;name&gt;] [--lib] [--all-targets]
+           [--emit &lt;kinds&gt;] [--link-args &lt;…&gt;]
+           [--out-dir &lt;path&gt;] [--keep-temps]
+           [--lto &lt;off|thin|fat&gt;] [--strip &lt;none|debug|all&gt;]
+           [--debug-info &lt;none|line|full&gt;] [--codegen-units N]
+           [--panic &lt;unwind|abort&gt;] [--threads &lt;N&gt;]</code></pre>
+<p>Output layout under <code>target/</code>:</p>
+<pre><code>target/
+  &lt;profile&gt;/                e.g. debug/, release/, custom-foo/
+    &lt;triple&gt;/               e.g. x86_64-darwin/
+      bin/&lt;name&gt;            executables
+      lib&lt;name&gt;.{a,dylib}   libraries
+      deps/                 per-crate object &amp; metadata
+      build/                build-script outputs
+      incremental/          incremental compilation cache
+      examples/, tests/, benches/
+  cache/                    content-addressed: parser ASTs, type tables, codegen IR
+  doc/                      output of `lang doc`
+  tmp/                      transient files when --keep-temps is set</code></pre>
+<p><code>build</code> is idempotent and incremental: hashes of (source bytes + manifest + toolchain version + cfg set + dep fingerprints) key into <code>target/cache</code>.</p>
+<h2 id="23-4-lang-emit-intermediate-stage-artifacts">23.4 <code>lang emit</code> — intermediate-stage artifacts</h2>
+<p>This is the "show me the lexer / parser / IR" entry point. It pulls from the pipeline without altering the normal build cache.</p>
+<pre><code>lang emit &lt;stages&gt; [&lt;file&gt;|&lt;module&gt;|--all] [-o &lt;out&gt;] [--format &lt;fmt&gt;]</code></pre>
+<p><code>&lt;stages&gt;</code> is a comma-separated list (or <code>all</code>). The stages, in pipeline order:</p>
+<table>
+<thead><tr>
+<th>Stage key</th>
+<th>What it produces</th>
+<th>Default format</th>
+</tr></thead>
+<tbody>
+<tr>
+<td><code>tokens</code></td>
+<td>Lexer token stream</td>
+<td>one token per line, or <code>json</code></td>
+</tr>
+<tr>
+<td><code>cst</code></td>
+<td>Concrete syntax tree (lossless, with trivia)</td>
+<td><code>s-expr</code> / <code>json</code></td>
+</tr>
+<tr>
+<td><code>ast</code></td>
+<td>Abstract syntax tree (post-desugar of literals etc.)</td>
+<td><code>s-expr</code> / <code>json</code></td>
+</tr>
+<tr>
+<td><code>resolved-ast</code></td>
+<td>AST with names resolved (every identifier → symbol id)</td>
+<td><code>json</code></td>
+</tr>
+<tr>
+<td><code>mod-graph</code></td>
+<td>Module-tree dot graph</td>
+<td><code>dot</code> / <code>json</code></td>
+</tr>
+<tr>
+<td><code>import-graph</code></td>
+<td>Import edges between modules</td>
+<td><code>dot</code> / <code>json</code></td>
+</tr>
+<tr>
+<td><code>types</code></td>
+<td>Type-checked AST with inferred types</td>
+<td><code>json</code> / annotated source</td>
+</tr>
+<tr>
+<td><code>hir</code></td>
+<td>High-level IR (post-typeck, generics still abstract)</td>
+<td><code>text</code></td>
+</tr>
+<tr>
+<td><code>mono</code></td>
+<td>Generics monomorphized</td>
+<td><code>text</code></td>
+</tr>
+<tr>
+<td><code>mir</code></td>
+<td>Mid-level IR (CFG, after borrow/RC analysis)</td>
+<td><code>text</code></td>
+</tr>
+<tr>
+<td><code>lir</code></td>
+<td>Low-level IR (machine-ish, pre-codegen)</td>
+<td><code>text</code></td>
+</tr>
+<tr>
+<td><code>llvm-ir</code> / <code>cranelift-ir</code></td>
+<td>Backend IR</td>
+<td><code>.ll</code> / text</td>
+</tr>
+<tr>
+<td><code>asm</code></td>
+<td>Target assembly</td>
+<td><code>.s</code></td>
+</tr>
+<tr>
+<td><code>obj</code></td>
+<td>Native object file(s)</td>
+<td><code>.o</code></td>
+</tr>
+<tr>
+<td><code>archive</code></td>
+<td>Static archive</td>
+<td><code>.a</code></td>
+</tr>
+<tr>
+<td><code>dylib</code></td>
+<td>Dynamic library</td>
+<td><code>.so</code> / <code>.dylib</code> / <code>.dll</code></td>
+</tr>
+<tr>
+<td><code>bc</code></td>
+<td>LLVM bitcode (if LLVM backend)</td>
+<td><code>.bc</code></td>
+</tr>
+<tr>
+<td><code>metadata</code></td>
+<td>Crate metadata (public surface, types, generics)</td>
+<td><code>.langmeta</code> (compact binary)</td>
+</tr>
+<tr>
+<td><code>docs-json</code></td>
+<td>Doc model (input to <code>lang doc</code>)</td>
+<td><code>json</code></td>
+</tr>
+<tr>
+<td><code>deps-make</code></td>
+<td>Make-style <code>.d</code> dep file</td>
+<td><code>text</code></td>
+</tr>
+<tr>
+<td><code>coverage-map</code></td>
+<td>Source-coverage map</td>
+<td><code>json</code></td>
+</tr>
+</tbody>
+</table>
+<p>Examples:</p>
+<pre><code>lang emit tokens src/util/log.lang
+lang emit ast,types --format json src/lib.lang -o ast.json
+lang emit obj --all -o target/objs/        # one .o per module
+lang emit llvm-ir,asm --release src/main.lang
+lang emit mod-graph --format dot | dot -Tpng &gt; modules.png</code></pre>
+<p><code>lang emit obj</code> together with <code>lang emit metadata</code> is the <strong>separate-compilation contract</strong>: a third-party build system can drive per-module compilation and call the system linker itself. That is the seam for "compile to objects I can link later".</p>
+<h2 id="23-5-lang-inspect-introspection-over-the-resolved-program">23.5 <code>lang inspect</code> — introspection over the resolved program</h2>
+<p>A read-only query interface backed by the same frontend as <code>lang lsp</code>. Useful in CI, scripts, and IDE plugins that aren't full LSP clients.</p>
+<pre><code>lang inspect module      &lt;path&gt;             metadata, submodules, pub set
+lang inspect symbol      &lt;fq-name&gt;          definition site, type, doc, references
+lang inspect type        &lt;expr-or-name&gt;     resolved type, layout, size, align
+lang inspect deps        [--depth N]        full resolved dep graph
+lang inspect features                       active feature set
+lang inspect cfg                            effective cfg keys/values
+lang inspect manifest                       fully-resolved manifest (after profile/cfg merge)
+lang inspect targets                        list of build targets in this package
+lang inspect coverage    &lt;run-id&gt;           coverage from a prior `test --coverage`</code></pre>
+<p>All output streams cleanly under <code>--message-format json</code>.</p>
+<h2 id="23-6-standard-library-replacement-sysroot-and-core-std">23.6 Standard library replacement — <code>--sysroot</code> and <code>core:</code> / <code>std:</code></h2>
+<h3>Default behavior</h3>
+<p>The toolchain ships a prebuilt sysroot per installed target:</p>
+<pre><code>~/.lang/toolchains/&lt;channel&gt;/lib/sysroot/&lt;triple&gt;/
+  core/                  source + prebuilt .langmeta + .a
+  std/                   source + prebuilt .langmeta + .a
+  manifest.toml          versions, supported targets, ABI hash</code></pre>
+<p>The driver locates the sysroot by:</p>
+<ol>
+<li><code>--sysroot &lt;path&gt;</code> CLI override.</li>
+<li><code>[build] sysroot = "..."</code> in the project manifest.</li>
+<li><code>LANG_SYSROOT</code> env var.</li>
+<li>The active toolchain's default.</li>
+</ol>
+<h3>Replacing the stdlib</h3>
+<p>Two distinct things to allow replacing:</p>
+<table>
+<thead><tr>
+<th>You want…</th>
+<th>Mechanism</th>
+</tr></thead>
+<tbody>
+<tr>
+<td>A different <code>core:</code> (e.g. freestanding, custom allocator interfaces)</td>
+<td><code>[build] sysroot = "&lt;path&gt;"</code>, where <code>&lt;path&gt;/core/manifest.toml</code> declares it provides <code>core</code>.</td>
+</tr>
+<tr>
+<td>A different <code>std:</code> (e.g. embedded <code>std</code> shim)</td>
+<td>Same, providing <code>std</code>.</td>
+</tr>
+<tr>
+<td>Build the sysroot <strong>from source</strong> (e.g. with custom features)</td>
+<td><code>lang sysroot build --features &lt;…&gt; --target &lt;triple&gt;</code> — analogous to Rust's <code>-Z build-std</code>.</td>
+</tr>
+<tr>
+<td>Drop <code>std:</code> entirely (freestanding)</td>
+<td>Manifest <code>[package] no-std = true</code>. Importing <code>std:*</code> becomes a hard error; <code>core:</code> remains.</td>
+</tr>
+<tr>
+<td>Pin a specific sysroot per dependency</td>
+<td>Manifest <code>[dependencies.foo] sysroot = "..."</code> (rare; mainly for FFI-shim crates).</td>
+</tr>
+</tbody>
+</table>
+<p>A sysroot is a <strong>versioned, ABI-tagged artifact</strong>. The driver refuses to link an object compiled against sysroot ABI <code>X</code> into a binary linking sysroot ABI <code>Y</code> (mismatch → diagnostic with the two hashes).</p>
+<p><code>core:prelude</code> auto-import (see <a href="17-modules.html#178-built-in-modules--core-and-std">17-modules.md §17.8</a>) is implemented as an implicit <code>import * from "core:prelude"</code> prepended by the resolver. Replaceable sysroots replace the <em>content</em> but not the <em>injection</em>.</p>
+<h3>Subcommands</h3>
+<pre><code>lang sysroot show                                 prints the resolved sysroot path
+lang sysroot show --json                          full manifest + ABI hash
+lang sysroot build [--features …] [--target …]    rebuild from source into target/sysroot/
+lang sysroot verify                               sanity-check that core/std link cleanly</code></pre>
+<h2 id="23-7-how-dependencies-and-libraries-load">23.7 How dependencies and libraries load</h2>
+<h3>Background — how Rust does it</h3>
+<p>Rust separates <strong>where source comes from</strong> from <strong>where compiled artifacts live</strong>. Three locations matter:</p>
+<ol>
+<li><strong><code>CARGO_HOME</code></strong> (default <code>~/.cargo/</code>): user-global state.<ul>
+<li><code>registry/index/&lt;registry-host&gt;/</code> — sparse-index cache (since 1.70 this replaces the old full git clone of the index).</li>
+<li><code>registry/cache/&lt;registry-host&gt;/</code> — downloaded <code>.crate</code> tarballs.</li>
+<li><code>registry/src/&lt;registry-host&gt;/</code> — extracted source trees (read-only; this is what the compiler reads).</li>
+<li><code>git/</code> — checkouts of git dependencies, keyed by URL + rev hash.</li>
+<li><code>bin/</code> — installed binaries from <code>cargo install</code>.</li>
+<li><code>config.toml</code> — user-global Cargo config (registry mirrors, build settings, credentials path).</li>
+<li><code>credentials.toml</code> — registry tokens.</li>
+</ul></li>
+<li><strong><code>target/</code></strong> (per-project): compiled artifacts, lockfile-driven, never shared across projects by default. <code>target/&lt;profile&gt;/deps/lib&lt;crate&gt;-&lt;hash&gt;.rlib</code> is one compiled dep. The hash is a fingerprint of (source + features + profile + rustc version + dep fingerprints) — that is how Cargo achieves "rebuild only what changed" and "different projects don't poison each other".</li>
+<li><strong><code>RUSTUP_HOME</code></strong> (default <code>~/.rustup/</code>): toolchains themselves.<ul>
+<li><code>toolchains/&lt;channel&gt;/bin/{rustc,cargo,…}</code> — the compiler binaries.</li>
+<li><code>toolchains/&lt;channel&gt;/lib/rustlib/&lt;triple&gt;/lib/lib{core,std,…}-&lt;hash&gt;.rlib</code> — the <strong>sysroot</strong>. This is how <code>use std::…</code> resolves: rustc has <code>--sysroot</code> baked into its config and finds <code>libstd</code> there.</li>
+</ul></li>
+</ol>
+<p>The resolution flow for <code>use foo;</code>:</p>
+<ol>
+<li>Cargo reads <code>Cargo.toml</code>, resolves the dep graph against <code>Cargo.lock</code>, downloads any missing crates to <code>CARGO_HOME/registry/src/</code>, and tells rustc: "the crate named <code>foo</code> is at this path, here is its <code>--extern foo=&lt;path-to-rlib&gt;</code>".</li>
+<li>rustc never searches a <code>node_modules</code>-like directory at compile time. It only ever looks at what <code>--extern</code> flags it was given, plus the sysroot.</li>
+<li>The lockfile pins exact versions. The build is reproducible given the same lockfile + toolchain + sysroot.</li>
+</ol>
+<p>Key properties that fall out:</p>
+<ul>
+<li><strong>No nested copies.</strong> Each version of each crate is downloaded once into <code>CARGO_HOME</code> and compiled (per profile / features / target) once into <code>target/</code>.</li>
+<li><strong>One version per (name, semver-compatible range) in a build.</strong> Cargo's resolver unifies <code>^1.2</code> and <code>^1.4</code> → <code>1.4</code>. Two majors of the same crate <strong>can</strong> coexist (<code>foo</code> 1.x and <code>foo</code> 2.x both linked, distinguished by symbol mangling). This is fundamentally different from npm.</li>
+<li><strong>Lockfile is the source of truth, manifest is the constraint.</strong> <code>Cargo.toml</code> says "I want <code>foo ^1.2</code>"; <code>Cargo.lock</code> says "we resolved to <code>foo 1.4.7</code>".</li>
+<li><strong>No runtime path resolution.</strong> By the time the binary runs, all dependency code is statically embedded (or dynamically linked at known paths). There is no <code>require()</code> walk.</li>
+</ul>
+<h3>Why <code>node_modules</code> is a problem</h3>
+<ul>
+<li>Filesystem nesting (pre-npm-3) or hoisting + phantom deps (npm 3+) — both leak un-declared deps into your code.</li>
+<li>Resolution happens at <em>runtime</em> via <code>require</code> / <code>import</code> walking parent dirs. Slow, ambiguous, and a security surface (typosquatting + transitive execution).</li>
+<li>One copy per (parent, name) in old npm, hoisted in new npm — same package can be loaded multiple times under different paths and fail <code>instanceof</code> checks.</li>
+<li><code>postinstall</code> scripts run untrusted code on <code>npm install</code>. Cargo deliberately doesn't have this; build scripts only run when you actually build a project that uses the crate.</li>
+<li>Lockfile (<code>package-lock.json</code>) historically diverged from <code>node_modules</code> state. pnpm and yarn pnp fix parts of this with content-addressed stores + symlinks / virtual FS, but the model is still walk-based at runtime.</li>
+</ul>
+<p>The good idea in node is the content-addressed global cache (pnpm). The bad ideas are runtime path resolution, hoisting, and install-time scripts.</p>
+<h3>This language's model</h3>
+<p>Adopt the Rust model with two refinements:</p>
+<ol>
+<li><strong>Sparse HTTP registry index by default</strong> (no giant git clone — Rust learned this the hard way).</li>
+<li><strong>Content-addressed global cache, hardlinked into project</strong> (pnpm's good idea) — saves disk and makes "compile from source" cheap. The compiler still receives explicit <code>--extern</code> flags; the filesystem layout is an implementation detail.</li>
+</ol>
+<p>Concretely:</p>
+<pre><code>~/.lang/
+  toolchains/&lt;channel&gt;/                  toolchain binaries + sysroot (§23.6)
+  registry/
+    index/&lt;registry-host&gt;/               sparse-index cache
+    src/&lt;registry-host&gt;/&lt;pkg&gt;/&lt;ver&gt;/     extracted source (content-addressed)
+    cache/&lt;registry-host&gt;/&lt;pkg&gt;/&lt;ver&gt;/   raw tarballs
+  git/&lt;url-hash&gt;/&lt;rev&gt;/                  git deps
+  bin/                                   `lang install` targets
+  config.toml                            user-global config
+  credentials.toml                       registry tokens
+
+&lt;project&gt;/
+  project.toml                           manifest
+  project.lock                           lockfile (committed for bins, optional for libs)
+  target/                                build artifacts (§23.3)
+  .lang/                                 per-project local state (vendoring opt-in)</code></pre>
+<p>Resolution flow at build time:</p>
+<ol>
+<li>Driver reads <code>project.toml</code>, computes the dep graph, resolves against <code>project.lock</code> (writing it on first build or after <code>lang update</code>).</li>
+<li>Missing packages: fetch into <code>~/.lang/registry/</code>.</li>
+<li>Compile each <code>(pkg, version, profile, features, target)</code> once into <code>target/deps/</code>, fingerprinted exactly like Cargo. Hardlink from the content-addressed source dir; never copy.</li>
+<li>Pass explicit <code>--extern pkg=&lt;path-to-metadata&gt;</code> to each module compilation. The compiler <strong>never</strong> walks the filesystem looking for packages. The <code>pkg:</code> prefix in source resolves only through <code>--extern</code>.</li>
+</ol>
+<p>Path forms (see <a href="17-modules.html#174-path-forms">17-modules.md §17.4</a>) map cleanly:</p>
+<table>
+<thead><tr>
+<th>Source syntax</th>
+<th>Compiler input</th>
+</tr></thead>
+<tbody>
+<tr>
+<td><code>import "x/y"</code></td>
+<td>absolute in current crate → known file</td>
+</tr>
+<tr>
+<td><code>import "./x"</code></td>
+<td>relative in current crate → known file</td>
+</tr>
+<tr>
+<td><code>import "pkg:foo/bar"</code></td>
+<td><code>--extern foo=&lt;meta&gt;</code>, then lookup <code>bar</code> in foo's pub tree</td>
+</tr>
+<tr>
+<td><code>import "core:prelude"</code></td>
+<td>sysroot</td>
+</tr>
+<tr>
+<td><code>import "std:io"</code></td>
+<td>sysroot</td>
+</tr>
+</tbody>
+</table>
+<h3>Lockfile rules</h3>
+<ul>
+<li>Binary packages: <code>project.lock</code> <strong>must</strong> be committed.</li>
+<li>Library packages: <code>project.lock</code> is generated for the lib's own dev/test builds but is <strong>ignored by consumers</strong>.</li>
+<li><code>--locked</code> / <code>--frozen</code> / <code>--offline</code> give CI / reproducibility levers (see §23.1).</li>
+<li><code>lang lock --check</code> is the CI gate: fails if a build would mutate the lockfile.</li>
+</ul>
+<h3>Vendoring (for air-gapped or supply-chain-locked environments)</h3>
+<pre><code>lang vendor --path third_party/      copy all resolved deps into third_party/
+                                     write [source.vendored-sources] override into config</code></pre>
+<p>After <code>vendor</code>, the project builds with no network and no <code>~/.lang/registry</code> reads. Identical model to <code>cargo vendor</code>.</p>
+<h3>Workspaces</h3>
+<p><code>project.toml</code> at the root with <code>[workspace] members = ["crates/*", "tools/foo"]</code>. One <code>target/</code>, one lockfile, shared dep resolution. Each member has its own <code>project.toml</code> declaring its kind (<code>binary</code> / <code>library</code> / <code>library+bins</code>).</p>
+<h2 id="23-8-manifest-project-toml">23.8 Manifest — <code>project.toml</code></h2>
+<p>The parts the CLI consults:</p>
+<pre><code>[package]
+name = "myapp"
+version = "0.3.1"
+kind = "binary"                # or "library", "library+bins"
+entry = "src/main.lang"
+edition = "2026"               # language edition pin; CLI rejects mismatch
+license = "MIT"
+authors = [...]
+description = "..."
+repository = "..."
+no-std = false                 # if true, std: imports are forbidden
+sysroot = "..."                # optional override
+default-features = ["json"]
+
+[bins]                         # only when kind = "library+bins"
+files = ["src/bin/foo.lang", "src/bin/bar.lang"]
+
+[dependencies]
+serde = "1.2"
+http = { version = "0.4", features = ["tls"] }
+foo-local = { path = "../foo" }
+bar-git = { git = "https://...", rev = "abc123" }
+plugin = { registry = "internal" }
+
+[dev-dependencies]
+test-utils = "0.1"
+
+[build-dependencies]
+codegen = "0.5"
+
+[features]
+json = ["dep:serde"]
+tls = []
+default = ["json"]
+
+[profile.debug]
+opt-level = 0
+debug-info = "full"
+panic = "unwind"
+incremental = true
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+debug-info = "line"
+strip = "debug"
+panic = "abort"
+codegen-units = 1
+
+[profile.bench]
+inherits = "release"
+debug-info = "full"
+
+[target.x86_64-linux-gnu]
+linker = "lld"
+langflags = []                 # per-target extra flags
+
+[registries]
+internal = { index = "https://internal-registry/index" }
+
+[build]
+target-dir = "target"
+jobs = 0                       # 0 = auto
+
+[scripts]                      # `lang run-script &lt;name&gt;`
+ci = "lang fmt --check &amp;&amp; lang lint &amp;&amp; lang test"</code></pre>
+<p><code>lang config get/set</code> reads/writes the user-global <code>~/.lang/config.toml</code> with the same schema; project manifest wins on conflict; CLI <code>--config</code> wins over both.</p>
+<h2 id="23-9-build-profiles">23.9 Build profiles</h2>
+<ul>
+<li><code>debug</code>, <code>release</code> are predefined; both fully overridable in the manifest.</li>
+<li>User-defined profiles inherit via <code>inherits = "release"</code>. Activated with <code>--profile &lt;name&gt;</code>.</li>
+<li>Profile + target triple + feature set form the fingerprint key — switching profiles never invalidates the other profile's cache.</li>
+</ul>
+<h2 id="23-10-features-and-cfg">23.10 Features and cfg</h2>
+<p>Two layers:</p>
+<ul>
+<li><strong>Features</strong>: declared in the manifest, additive booleans that gate optional code and optional deps. Resolved at dep-resolution time; the resolver unifies the feature set across the graph.</li>
+<li><strong>cfg</strong>: arbitrary compile-time predicates: <code>cfg(target_os = "linux")</code>, <code>cfg(feature = "json")</code>, <code>cfg(debug_assertions)</code>, <code>cfg(any(unix, windows))</code>. Source uses <code>#[cfg(...)]</code> attributes; CLI exposes <code>--cfg key=value</code>.</li>
+</ul>
+<p>CLI levers:</p>
+<pre><code>--features a,b,c
+--no-default-features
+--all-features
+--cfg my_flag
+--cfg target_endian=little</code></pre>
+<p><code>lang inspect cfg</code> prints the effective set.</p>
+<h2 id="23-11-cross-compilation-and-targets">23.11 Cross-compilation and targets</h2>
+<pre><code>lang target list                          installed targets
+lang target add aarch64-linux-musl        download/build the sysroot for that triple
+lang target remove &lt;triple&gt;
+lang build --target aarch64-linux-musl</code></pre>
+<p>Per-target manifest section (<code>[target.&lt;triple&gt;]</code>) sets linker, link args, runner (for <code>lang test</code> on a foreign target via QEMU, etc.).</p>
+<p>Freestanding / no-OS targets (e.g. <code>thumbv7em-none-eabi</code>) imply <code>no-std = true</code> automatically; importing <code>std:*</code> fails at resolve time with a target-specific diagnostic.</p>
+<h2 id="23-12-ffi-and-linking">23.12 FFI and linking</h2>
+<p><a href="19-ffi.html">19-ffi.html</a> defines the source-level FFI surface. The CLI layer covers three concerns: declaring which native libraries to link, generating bindings from C headers, and emitting C headers for exported functions.</p>
+<h3>Manifest — <code>[package.links]</code> and <code>[package.ffi]</code></h3>
+<pre><code>[package.links]
+zlib    = { lib = "z",      kind = "dynamic", version = "&gt;=1.2" }
+mylib   = { lib = "mylib",  kind = "static",  path = "vendor/libmylib.a" }
+crypto  = { lib = "crypto", kind = "dynamic" }
+
+[package.ffi]
+# Bindings auto-generated from C headers, regenerated when the header changes.
+bindings = [
+  { header    = "vendor/zlib.h",
+    output    = "src/bindings/zlib.lang",
+    allowlist = ["inflate*", "deflate*"] },
+  { header = "vendor/mylib.h",
+    output = "src/bindings/mylib.lang" },
+]
+
+# Headers auto-generated from this crate's pub extern functions.
+exports = [
+  { module = "lib", output = "target/include/mylib.h" },
+]</code></pre>
+<p><code>@Link(lib = "name")</code> in source refers to a <code>[package.links]</code> entry by name. A function declaring only <code>@Symbol("...")</code> with no <code>@Link</code> resolves from the host process (libc, platform symbols).</p>
+<p><code>lang build</code> runs <code>bindgen</code> automatically for any <code>[package.ffi.bindings]</code> entry whose header is newer than its output. Likewise for <code>[package.ffi.exports]</code> and <code>cbindgen</code>.</p>
+<h3><code>lang ffi</code> subcommands</h3>
+<pre><code>lang ffi bindgen &lt;header&gt; [--output &lt;file&gt;] [--allowlist &lt;pat&gt;] [--blocklist &lt;pat&gt;]
+                          [--types-only] [--lang-edition &lt;year&gt;]
+        Generate extern struct, extern type, extern function, and extern var
+        declarations plus pub var constants from a C header. C enums lower to a
+        type alias + pub var constants; C unions lower to @Union extern struct.
+        Powered by libclang. Output is deterministic — safe to commit.
+
+lang ffi cbindgen [--module &lt;path&gt;] [--output &lt;file&gt;] [--lang &lt;c|c++&gt;]
+                  [--header-guard &lt;name&gt;]
+        Emit a C header declaring every pub extern function and pub extern struct
+        reachable from &lt;module&gt;. Round-trips with bindgen.
+
+lang ffi check [--against &lt;header&gt;] [--strict]
+        Verify this crate's extern signatures match the named C header.
+        Reports missing symbols, changed argument types, struct layout diffs.
+        Exit 0 if clean, 1 on drift. CI gate.
+
+lang ffi layout [&lt;type&gt;] [--target &lt;triple&gt;] [--format &lt;human|json&gt;]
+        Print size, alignment, and field offsets for one or all extern struct types
+        in the current crate, computed for the named target. Debugging ABI mismatches.</code></pre>
+<p>Examples:</p>
+<pre><code>lang ffi bindgen vendor/zlib.h --output src/bindings/zlib.lang --allowlist "inflate*"
+lang ffi cbindgen --module lib --output target/include/mylib.h
+lang ffi check --against vendor/zlib.h
+lang ffi layout Sockaddr --target aarch64-apple-darwin</code></pre>
+<h3>Build scripts</h3>
+<p>For native libraries whose build process must run before the main build (autoconf, cmake, generated headers), declare a build script:</p>
+<pre><code>[build-script]
+file = "build.lang"           # compiled and run before the main build, emits link directives</code></pre>
+<p>A build script writes directives on stdout that the driver consumes:</p>
+<pre><code>lang:link-lib=dylib=z
+lang:link-search=native=/opt/lib
+lang:rerun-if-changed=vendor/libmylib.a
+lang:emit-cfg=has_openssl
+lang:ffi-bindgen=vendor/generated.h:src/bindings/generated.lang</code></pre>
+<p>Same model as Cargo build scripts, with the same security caveat: build scripts are arbitrary code. The driver:</p>
+<ul>
+<li>Does not run build scripts under <code>lang check</code>.</li>
+<li>Sandboxes them when possible (filesystem read-only outside <code>OUT_DIR</code>).</li>
+<li>Prints a clear "running build script for <pkg>" line so they are never silent.</li>
+</ul>
+<h2 id="23-13-toolchain-management">23.13 Toolchain management</h2>
+<pre><code>lang toolchain list
+lang toolchain install stable
+lang toolchain install nightly-2026-05-01
+lang toolchain default stable
+lang toolchain run nightly -- build
+lang toolchain remove &lt;name&gt;</code></pre>
+<p>Project-pin file at <code>&lt;project&gt;/.lang-toolchain.toml</code>:</p>
+<pre><code>[toolchain]
+channel = "stable"
+components = ["fmt", "lsp", "src"]
+targets = ["x86_64-linux-gnu", "aarch64-apple-darwin"]</code></pre>
+<p><code>lang</code> is itself a <strong>proxy</strong> that dispatches to the active toolchain's real binary — same shape as <code>rustup</code>. This is what lets multiple projects on one machine use different language versions without conflict.</p>
+<h2 id="23-14-testing-benching-fuzzing-coverage">23.14 Testing, benching, fuzzing, coverage</h2>
+<pre><code>lang test                                run all tests
+lang test mymod::                        filter by path
+lang test --bench                        include benches
+lang test --coverage                     emit coverage map; `lang inspect coverage` reads it
+lang bench
+lang fuzz &lt;target&gt; [--time 60s]          if a fuzz subcommand ships</code></pre>
+<p>Test output formats: <code>--format human|json|junit|tap</code>.</p>
+<h2 id="23-15-lsp-and-editor-integration">23.15 LSP and editor integration</h2>
+<pre><code>lang lsp                                  speaks LSP over stdio
+lang lsp --port 9999                      TCP (debugging only)
+lang lsp --log &lt;path&gt;                     diagnostic log</code></pre>
+<p>The same <code>liblangc</code> powers it. <code>--message-format json</code> on <code>build</code> / <code>check</code> / <code>emit</code> is the IDE feed when LSP isn't an option.</p>
+<h2 id="23-16-macro-expansion-and-debugging">23.16 Macro expansion and debugging</h2>
+<pre><code>lang expand src/main.lang                 print fully macro-expanded source
+lang expand --macro my_macro              only expand that macro
+lang expand --stage parse|typeck          expansion at different pipeline points</code></pre>
+<p>This is non-negotiable for a language with macros (see <a href="22-macros.html">22-macros.html</a>). The macro author and the macro user both need to see post-expansion source to debug.</p>
+<h2 id="23-17-docs">23.17 Docs</h2>
+<pre><code>lang doc                                  generate target/doc/&lt;pkg&gt;/index.html
+lang doc --open
+lang doc --emit json                      structured doc model (target/doc-json/)
+lang doc --private                        include non-pub items
+lang doc --examples                       run examples as tests too</code></pre>
+<p>The doc model is <code>liblangc</code>'s public API — third-party doc tools can consume <code>docs-json</code> (§23.4) instead of re-parsing.</p>
+<h2 id="23-18-repl-and-scripting">23.18 REPL and scripting</h2>
+<pre><code>lang repl                                  interactive
+lang repl --load src/lib.lang              with a module pre-loaded
+lang script foo.lang                       single-file run, no manifest needed
+                                           uses an implicit project with no deps</code></pre>
+<p>For shebang use: <code>#!/usr/bin/env -S lang script</code> at the top of <code>.lang</code> files.</p>
+<h2 id="23-19-config-precedence-highest-wins">23.19 Config precedence (highest wins)</h2>
+<ol>
+<li>CLI <code>--config key=value</code> and <code>--feature</code> etc.</li>
+<li>Environment variables (<code>LANG_*</code>).</li>
+<li><code>&lt;project&gt;/.lang/config.toml</code> (per-project, not committed).</li>
+<li><code>project.toml</code>.</li>
+<li><code>~/.lang/config.toml</code>.</li>
+<li>Built-in defaults.</li>
+</ol>
+<p><code>lang env</code> prints the fully resolved configuration with each value's source. Critical for "why did the build do that?" debugging.</p>
+<h2 id="23-20-exit-codes">23.20 Exit codes</h2>
+<p>Every subcommand follows the same convention.</p>
+<table>
+<thead><tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr></thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>Success</td>
+</tr>
+<tr>
+<td>1</td>
+<td>Generic failure (the subcommand's normal "didn't work")</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Usage / argument error</td>
+</tr>
+<tr>
+<td>101</td>
+<td>Internal compiler error (ICE) — emit a bug-report prompt</td>
+</tr>
+<tr>
+<td>130</td>
+<td>Interrupted (SIGINT)</td>
+</tr>
+<tr>
+<td>Custom</td>
+<td>Test failures pass the test runner's count</td>
+</tr>
+</tbody>
+</table>
+<h2 id="23-21-things-easy-to-miss">23.21 Things easy to miss</h2>
+<p>A checklist of small things that bite later if not designed in early.</p>
+<ul>
+<li><strong>Stable diagnostic codes</strong> (<code>E0123</code>) — wire <code>lang explain E0123</code> from day one; users come to rely on stable codes for grep, suppressing, and CI rules.</li>
+<li><strong>Determinism flag</strong>: <code>--deterministic</code> forbids timestamps, ASLR'd hashes, parallel-codegen reordering. Reproducible-build people will thank you.</li>
+<li><strong><code>--print</code> introspection</strong>: rustc-style <code>lang --print sysroot|target-list|cfg|target-features|file-names</code>. Build-system integrations live on this.</li>
+<li><strong>Color / no-color env vars</strong>: respect <code>NO_COLOR</code>, <code>CLICOLOR</code>, <code>CLICOLOR_FORCE</code>.</li>
+<li><strong>CI-friendly progress</strong>: <code>--message-format short</code> for grep, <code>json</code> for parsers, plain human elsewhere; never emit ANSI control codes in non-TTY without <code>--color always</code>.</li>
+<li><strong>Editor save-on-format</strong>: <code>lang fmt --check</code> for CI, <code>lang fmt --emit stdout</code> for editor "format on save" without writing.</li>
+<li><strong><code>--dry-run</code></strong> for <code>publish</code>, <code>update</code>, <code>clean</code>, <code>vendor</code>, <code>remove</code>. Every destructive command should have it.</li>
+<li><strong><code>lang clean</code></strong> must accept granularity: <code>--profile</code>, <code>--target</code>, <code>--package</code>, <code>--doc</code>. Wiping the whole <code>target/</code> is annoying when you've got a half-hour LLVM build cached.</li>
+<li><strong>First-class plugins / external subcommands</strong>: <code>lang foo</code> falls back to <code>lang-foo</code> on <code>$PATH</code>. Lets community tools ship without core changes.</li>
+<li><strong>Hook points for build scripts vs. proc macros vs. plugins</strong> should be three distinct, documented mechanisms — don't conflate them like npm conflates <code>postinstall</code> with everything.</li>
+<li><strong><code>lang audit</code></strong> — wire it to a vulnerability DB endpoint from day one; retrofitting security tooling is painful.</li>
+<li><strong><code>lang self update</code></strong> — the toolchain manages itself. If you don't ship this, users will fall behind and the ecosystem will fragment.</li>
+<li><strong>Standard <code>OUT_DIR</code> env var</strong> for build scripts and the standard set of <code>LANG_*</code> envs the compiler exports — document these in this chapter and in <a href="19-ffi.html">19-ffi.html</a> so they're a stable contract.</li>
+<li><strong>"What would change" resolver mode</strong>: <code>lang update --dry-run --verbose</code> printing the diff of <code>project.lock</code>.</li>
+<li><strong>Single-file ABI for shipping libraries</strong>: pick <code>.langmeta</code> (compact, versioned, includes the public surface + generics + cfg gates). Document its compatibility policy explicitly — "metadata is stable across patch versions, may break across minors, definitely breaks across editions" — or the ecosystem will fight you.</li>
+<li><strong>Shell completions</strong>: <code>lang completions bash|zsh|fish|powershell|nushell</code> — small effort, large ergonomics win.</li>
+</ul>
+
+</body>
+</html>

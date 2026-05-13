@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>14. Panics</title>
+<style>
+  :root {
+    --fg: #1b1b1d;
+    --muted: #5a5a60;
+    --bg: #fdfdfc;
+    --accent: #1a4a8a;
+    --accent-2: #2a6f4d;
+    --warn: #b54708;
+    --code-bg: #f4f2ee;
+    --code-fg: #1b1b1d;
+    --border: #e4e1dc;
+    --table-stripe: #f8f7f4;
+    --pub: #2a6f4d;
+    --priv: #b54708;
+    --pkg: #1a4a8a;
+    --core: #6b4ba8;
+  }
+  html { box-sizing: border-box; }
+  *, *::before, *::after { box-sizing: inherit; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color: var(--fg);
+    background: var(--bg);
+    line-height: 1.55;
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 2.5rem 1.5rem 6rem;
+  }
+  h1, h2, h3, h4 {
+    color: var(--fg);
+    line-height: 1.25;
+    margin-top: 2.2rem;
+    margin-bottom: 0.6rem;
+  }
+  h1 { font-size: 2rem; border-bottom: 2px solid var(--border); padding-bottom: 0.4rem; }
+  h2 { font-size: 1.45rem; margin-top: 2.6rem; }
+  h3 { font-size: 1.15rem; color: var(--accent); }
+  h4 { font-size: 1rem; color: var(--muted); }
+  p { margin: 0.7rem 0; }
+  ul, ol { margin: 0.7rem 0; padding-left: 1.6rem; }
+  li { margin: 0.3rem 0; }
+  code {
+    font-family: "SF Mono", Menlo, Consolas, "Courier New", monospace;
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 0.1em 0.35em;
+    border-radius: 3px;
+    font-size: 0.92em;
+  }
+  pre {
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 0.9rem 1rem;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 0.88rem;
+    line-height: 1.5;
+    border: 1px solid var(--border);
+  }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1rem 0;
+    font-size: 0.94rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.5rem 0.7rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th { background: var(--code-bg); font-weight: 600; }
+  tbody tr:nth-child(even) { background: var(--table-stripe); }
+  .lead {
+    font-size: 1.05rem;
+    color: var(--muted);
+    margin-bottom: 1.6rem;
+  }
+  .toc {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1rem 1.2rem;
+    margin: 1.6rem 0 2rem;
+    font-size: 0.94rem;
+  }
+  .toc ol { margin: 0.2rem 0 0; padding-left: 1.3rem; }
+  .toc a { color: var(--accent); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+
+  .diagram {
+    background: #ffffff;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.4rem;
+    margin: 1.4rem 0;
+    overflow-x: auto;
+  }
+  .diagram-caption {
+    font-size: 0.85rem;
+    color: var(--muted);
+    text-align: center;
+    margin-top: 0.6rem;
+    font-style: italic;
+  }
+  svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+  svg text { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; fill: var(--fg); }
+  svg .label { font-family: -apple-system, system-ui, sans-serif; font-size: 12px; }
+  svg .small { font-size: 10px; fill: var(--muted); }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    justify-content: center;
+    margin-top: 0.8rem;
+    font-size: 0.85rem;
+  }
+  .legend-item { display: flex; align-items: center; gap: 0.4rem; }
+  .legend-swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    border: 1px solid rgba(0,0,0,0.15);
+  }
+
+  .tag {
+    display: inline-block;
+    padding: 0.1em 0.55em;
+    border-radius: 3px;
+    font-size: 0.78em;
+    font-weight: 600;
+    font-family: "SF Mono", Menlo, monospace;
+    color: white;
+    vertical-align: middle;
+  }
+  .tag.pub  { background: var(--pub); }
+  .tag.priv { background: var(--priv); }
+  .tag.pkg  { background: var(--pkg); }
+  .tag.core { background: var(--core); }
+  .tag.warn { background: var(--warn); }
+
+  .callout {
+    border-left: 4px solid var(--accent);
+    background: #f0f4fa;
+    padding: 0.8rem 1rem;
+    margin: 1.2rem 0;
+    border-radius: 0 6px 6px 0;
+  }
+  .callout.warn { border-color: var(--warn); background: #fbf3ec; }
+  .callout.good { border-color: var(--accent-2); background: #eef6f1; }
+  .callout strong { display: block; margin-bottom: 0.3rem; }
+
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin: 1.2rem 0;
+  }
+  @media (max-width: 720px) {
+    .two-col { grid-template-columns: 1fr; }
+  }
+
+  .file-tree {
+    font-family: "SF Mono", Menlo, monospace;
+    font-size: 0.88rem;
+    line-height: 1.55;
+    background: var(--code-bg);
+    padding: 1rem 1.2rem;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    white-space: pre;
+    overflow-x: auto;
+  }
+  .file-tree .pub  { color: var(--pub); font-weight: 600; }
+  .file-tree .priv { color: var(--priv); }
+  .file-tree .note { color: var(--muted); font-style: italic; }
+</style>
+</head>
+<body>
+
+<h1>14. Panics</h1>
+
+<p>A panic terminates the current thread immediately. Panics are <strong>not catchable</strong>: there is no <code>try</code>/<code>catch</code>, no <code>recover</code>, no way to convert a panic into a value in the panicking thread. Panics exist only for programming errors and irrecoverable conditions; expected failure modes use <code>T | Error</code> and <code>?</code> (see <a href="13-error-handling.html">13-error-handling.html</a>).</p>
+
+<h2 id="14-1-explicit-panic">14.1 Explicit panic</h2>
+
+<pre><code>pub function panic(message: str): never</code></pre>
+
+<p><code>panic(msg)</code> triggers a panic with the given message.</p>
+
+<p>The declared return type <code>never</code> means the function does not return. A <code>panic(...)</code> call can appear anywhere any value is expected, because <code>never</code> is a subtype of every type.</p>
+
+<pre><code>function require_positive(n: i64): i64 {
+  if n &lt;= 0 {
+    panic("expected positive, got " + (n as str))
+  }
+  n
+}</code></pre>
+
+<p>There is also <code>panic_with(value: T)</code> for cases where a structured panic value is useful, but the language never inspects the value — it's only available to a debugger or platform-provided handler.</p>
+
+<h2 id="14-2-panic-sources">14.2 Panic sources</h2>
+
+<p>The following operations panic on failure:</p>
+
+<table>
+<thead><tr><th>Source</th><th>When</th></tr></thead>
+<tbody>
+<tr><td><code>panic(...)</code></td><td>Always</td></tr>
+<tr><td><code>as</code> between union variants</td><td>When the value isn't the requested variant</td></tr>
+<tr><td><code>as</code> from float to int</td><td>When the float is NaN or out of the target's range</td></tr>
+<tr><td><code>as</code> from int to <code>char</code></td><td>When the value isn't a valid Unicode scalar (<code>0..=0x10FFFF</code> excluding surrogates)</td></tr>
+<tr><td>Integer division <code>/</code></td><td>When the divisor is <code>0</code></td></tr>
+<tr><td>Integer modulo <code>%</code></td><td>When the divisor is <code>0</code></td></tr>
+<tr><td>Integer overflow</td><td>In <strong>debug</strong> builds (release builds wrap; see 14.5)</td></tr>
+<tr><td>Shift overflow (<code>&lt;&lt;</code>, <code>&gt;&gt;</code> by ≥ width)</td><td>Always (both debug and release)</td></tr>
+<tr><td><code>[]</code> indexing on <code>List&lt;T&gt;</code></td><td>When the index is out of range</td></tr>
+<tr><td><code>[]</code> indexing on <code>Map&lt;K, V&gt;</code></td><td>When the key is missing</td></tr>
+<tr><td><code>Buffer.set(i, v)</code> does <strong>not</strong> panic</td><td>(silent no-op when out of range; matches stdlib pattern)</td></tr>
+<tr><td>Stack overflow</td><td>Always (best-effort detection)</td></tr>
+<tr><td>Heap allocation failure</td><td>Always (the allocator panics on OOM)</td></tr>
+<tr><td>FFI: dereferencing a <code>*T</code> returned where <code>*T | null</code> would have been correct</td><td>Always</td></tr>
+<tr><td>Dropping an object whose <code>Drop</code> impl panics</td><td>The thread aborts (no recovery)</td></tr>
+</tbody>
+</table>
+
+<p>Truncating integer-to-integer <code>as</code> casts do <strong>not</strong> panic — they truncate silently. Use <code>checked_*</code> functions if you want to detect loss of precision.</p>
+
+<h2 id="14-3-behavior-of-a-panicking-thread">14.3 Behavior of a panicking thread</h2>
+
+<p>A panic in thread T:</p>
+
+<ol>
+  <li>The panic site stops executing further code in T.</li>
+  <li>The runtime walks T's stack, executing <code>Drop.drop</code> for in-scope managed objects in reverse order of construction.</li>
+  <li>T is marked as terminated.</li>
+  <li>The panic message and (in debug builds) a stack trace are written to stderr.</li>
+</ol>
+
+<p>After T terminates:</p>
+
+<ul>
+  <li>If T is the <strong>main thread</strong>: the program aborts. All non-main threads are stopped without their stacks being unwound (best-effort drop only on cleanup).</li>
+  <li>If T is a <strong>spawned thread</strong>: only T dies. Joining T via the runtime's join API (see <a href="20-concurrency.html">20-concurrency.html</a>) returns a "panicked" status that the joiner can react to.</li>
+</ul>
+
+<h2 id="14-4-drop-during-a-panic">14.4 Drop during a panic</h2>
+
+<p><code>Drop</code> implementations should not panic. If a <code>Drop</code> impl panics during normal collection, the second panic immediately aborts the entire process — there is no double-unwind support.</p>
+
+<p>A <code>Drop</code> impl during stack unwinding (already inside a panic) that itself panics: the process aborts.</p>
+
+<p>This is the standard "no double panic" rule. It is the user's responsibility to keep <code>Drop</code> impls infallible.</p>
+
+<h2 id="14-5-integer-overflow">14.5 Integer overflow</h2>
+
+<p>Two modes:</p>
+
+<ul>
+  <li><strong>Debug builds</strong>: every integer arithmetic operation that overflows panics.</li>
+  <li><strong>Release builds</strong>: signed and unsigned arithmetic wraps modularly (two's complement for signed).</li>
+</ul>
+
+<p>To opt out of either default, use explicit stdlib functions:</p>
+
+<table>
+<thead><tr><th>Function</th><th>Behavior</th></tr></thead>
+<tbody>
+<tr><td><code>i32.wrapping_add(a, b)</code></td><td>Wraps (matches release default).</td></tr>
+<tr><td><code>i32.checked_add(a, b)</code></td><td>Returns <code>i32 | null</code> (<code>null</code> on overflow).</td></tr>
+<tr><td><code>i32.saturating_add(a, b)</code></td><td>Clamps to <code>i32.MIN</code> / <code>i32.MAX</code>.</td></tr>
+<tr><td><code>i32.overflowing_add(a, b)</code></td><td>Returns <code>(i32, bool)</code> (wrapped value, did_overflow).</td></tr>
+</tbody>
+</table>
+
+<p>Same families exist on every integer type for <code>add</code>, <code>sub</code>, <code>mul</code>, <code>div</code>, <code>rem</code>, <code>neg</code>, <code>shl</code>, <code>shr</code>.</p>
+
+<p>The asymmetry between debug and release matches Rust's choice and is intentional: debug surfaces bugs; release prioritizes speed. Programs that need defined behavior in release should use <code>wrapping_*</code> or <code>checked_*</code> explicitly.</p>
+
+<h2 id="14-6-float-behavior">14.6 Float behavior</h2>
+
+<p>Floats follow IEEE 754. None of the standard operations panic:</p>
+
+<ul>
+  <li>Division by zero produces <code>+inf</code>, <code>-inf</code>, or <code>NaN</code>.</li>
+  <li>Out-of-range arithmetic produces <code>+inf</code>, <code>-inf</code>, or <code>NaN</code>.</li>
+  <li>NaN comparisons return <code>false</code>.</li>
+</ul>
+
+<p><code>f as i*</code> panics for NaN and out-of-range values.</p>
+
+<h2 id="14-7-catchable-boundaries-between-threads">14.7 Catchable boundaries between threads</h2>
+
+<p>Spawned threads are the unit of fault isolation. A worker thread that panics can be observed by its spawner via the join API:</p>
+
+<pre><code>var handle = spawn(function() { ... })
+var result = handle.join()
+match result {
+  Joined { value }     =&gt; print("ok: " + value),
+  Panicked { message } =&gt; print("worker died: " + message),
+}</code></pre>
+
+<p><code>Joined&lt;T&gt;</code> and <code>Panicked</code> are unit/wrapper structs provided by stdlib.</p>
+
+<p>This is the only way to "recover" from a panic: by isolating the fallible code in its own thread and joining.</p>
+
+<h2 id="14-8-style">14.8 Style</h2>
+
+<ul>
+  <li>Use <code>panic(...)</code> for invariants you believe are unbreakable (the value should never be possible).</li>
+  <li>Use <code>T | Error</code> and <code>?</code> for expected failure paths (user input, network errors, missing keys you intend to handle).</li>
+  <li>Reserve <code>as</code> between union variants for paths you have already narrowed with <code>is</code>/<code>match</code>; otherwise prefer <code>match</code>.</li>
+  <li>Do not use panics for control flow.</li>
+</ul>
+
+</body>
+</html>
