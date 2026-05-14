@@ -376,6 +376,16 @@ prove the value is not aliased; otherwise it falls back to <strong>Clone</strong
   type; no <code>Clone</code> impl → compile error at the channel declaration.
 </div>
 
+<div class="callout warn">
+  <strong><code>channel&lt;dynamic&gt;</code> is rejected</strong>
+  <code>dynamic</code> does not implement <code>Clone</code> (see
+  <a href="12-type-logic.html#dynamic">12-type-logic §5</a>), so the <code>T: Clone</code>
+  bound on channels can't be satisfied. For heterogeneous messages, define a union of the
+  expected variants (<code>channel&lt;Event | Command | Ack&gt;()</code>) so the compiler can
+  validate <code>Clone</code> for each. The same applies to <code>spawn</code> capture of
+  <code>dynamic</code> bindings.
+</div>
+
 <!-- =========================================================== -->
 <h2 id="shared">4. <code>Shared&lt;T&gt;</code></h2>
 

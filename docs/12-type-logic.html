@@ -69,6 +69,7 @@
     <li><a href="#as"><code>as</code> — narrowing &amp; conversion</a></li>
     <li><a href="#combo">Combining <code>is</code> and <code>as</code></a></li>
     <li><a href="#flow">Flow narrowing</a></li>
+    <li><a href="#dynamic"><code>dynamic</code> — the universal union</a></li>
     <li><a href="#limits">Limits of narrowing</a></li>
     <li><a href="#ex">Examples</a></li>
   </ol>
@@ -263,7 +264,112 @@ if v is i64 {
 }</code></pre>
 
 <!-- =========================================================== -->
-<h2 id="limits">5. Limits of narrowing</h2>
+<h2 id="dynamic">5. <code>dynamic</code> — the universal union</h2>
+
+<p><code>dynamic</code> is a built-in type that holds any value, of any type, primitive or
+reference. Conceptually it is the union of every type in the program —
+<code>T1 | T2 | … | TN</code> — written as a single named type with no pipe enumeration.
+It exists for the cases where static typing has nothing useful to say: deserialised payloads,
+plugin boundaries, ad-hoc heterogeneous collections.</p>
+
+<div class="diagram">
+  <svg viewBox="0 0 920 320" role="img" aria-label="dynamic — what works and what doesn't">
+    <g transform="translate(20, 20)">
+      <rect width="440" height="280" rx="8" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
+      <text x="14" y="22" font-weight="700" fill="#2a6f4d">Allowed on dynamic</text>
+      <text x="14" y="50" font-size="11">— Implicit widening from any type:</text>
+      <text x="14" y="68" font-size="11">    var d: dynamic = 42i32</text>
+      <text x="14" y="86" font-size="11">    var d: dynamic = Person { ... }</text>
+      <text x="14" y="114" font-size="11">— is / as to narrow to a concrete type:</text>
+      <text x="14" y="132" font-size="11">    if d is i32 { use(d) }</text>
+      <text x="14" y="150" font-size="11">    var p = d as Person</text>
+      <text x="14" y="178" font-size="11">— is against an interface:</text>
+      <text x="14" y="196" font-size="11">    if d is ToStr { print(d.to_str()) }</text>
+      <text x="14" y="224" font-size="11">— match with a wildcard arm:</text>
+      <text x="14" y="242" font-size="11">    match d { i32 n =&gt; ..., _ =&gt; ... }</text>
+      <text x="14" y="270" font-size="11">— Passing to a parameter typed dynamic.</text>
+    </g>
+
+    <g transform="translate(480, 20)">
+      <rect width="420" height="280" rx="8" fill="#fbf3ec" stroke="#b54708" stroke-width="2"/>
+      <text x="14" y="22" font-weight="700" fill="#b54708">Rejected on dynamic</text>
+      <text x="14" y="50" font-size="11">— Field access:     d.field</text>
+      <text x="14" y="68" font-size="11">— Method calls:     d.method()</text>
+      <text x="14" y="86" font-size="11">— Arithmetic:       d + 1</text>
+      <text x="14" y="104" font-size="11">— Equality:         d == other</text>
+      <text x="14" y="122" font-size="11">— Interpolation:    "value: $d"</text>
+      <text x="14" y="140" font-size="11">— Implicit narrowing: var p: Person = d</text>
+      <text x="14" y="170" font-size="11" font-weight="700">Why</text>
+      <text x="14" y="190" font-size="11">A binding typed dynamic has no statically-known</text>
+      <text x="14" y="208" font-size="11">shape. The compiler can't pick a method, a field</text>
+      <text x="14" y="226" font-size="11">offset, or a Clone / ToStr impl. Narrow first.</text>
+      <text x="14" y="254" font-size="11">Errors point at the offending site and suggest</text>
+      <text x="14" y="272" font-size="11">an is / as fix.</text>
+    </g>
+  </svg>
+  <div class="diagram-caption"><code>dynamic</code> is opaque at compile time. Anything you'd do with it goes through a runtime type check.</div>
+</div>
+
+<h3>Boxing primitives</h3>
+
+<p>When a primitive (<code>i32</code>, <code>f64</code>, <code>bool</code>, <code>char</code>,
+<code>null</code>, …) is widened to <code>dynamic</code>, the runtime wraps it in a
+heap-allocated <strong>box</strong> with the standard two-word object header. The box's type
+pointer identifies the boxed primitive (<code>i32</code>-box, <code>f64</code>-box, …);
+narrowing back with <code>as</code> reads the header and unwraps the value. See
+<a href="16-memory.html#layout">16-memory §3</a>.</p>
+
+<div class="callout">
+  <strong>Box identity is implementation-defined</strong>
+  Two <code>42i32 as dynamic</code> expressions may produce the same heap object (small-integer
+  cache) or two distinct boxes. <code>==</code> after narrowing back to the primitive is
+  well-defined; identity comparison on the boxes themselves is not exposed. Don't rely on it.
+</div>
+
+<h3>What <code>dynamic</code> does <em>not</em> implement</h3>
+
+<p>The type <code>dynamic</code> itself does not implement <code>ToStr</code>,
+<code>Clone</code>, <code>Eq</code>, <code>Hash</code>, <code>Ord</code>, or <code>Drop</code>.
+Calling <code>.to_str()</code> on a <code>dynamic</code> binding is a compile error;
+<code>channel&lt;dynamic&gt;</code> is rejected because <code>T: Clone</code> can't be
+satisfied. The pattern is always to narrow first:</p>
+
+<pre><code>function describe(d: dynamic): str {
+  if d is ToStr {
+    d.to_str()                  // d: ToStr in this branch
+  } else {
+    "&lt;no string form&gt;"
+  }
+}</code></pre>
+
+<h3>Match on <code>dynamic</code></h3>
+
+<p>A <code>match</code> against a <code>dynamic</code> scrutinee is never exhaustive — every
+type in the program is in scope. The compiler requires a wildcard arm:</p>
+
+<pre><code>function tag(d: dynamic): str {
+  match d {
+    i32 n      =&gt; "int $n",
+    f64 x      =&gt; "float $x",
+    str s      =&gt; "string $s",
+    Person p   =&gt; "person ${p.name}",
+    _          =&gt; "other"
+  }
+}</code></pre>
+
+<p>A <code>dynamic as dynamic</code> cast is a no-op, accepted for generic code that
+parameterises over the target type.</p>
+
+<div class="callout warn">
+  <strong><code>dynamic</code> is an escape hatch — not the default</strong>
+  Static types catch bugs, document intent, and unlock zero-cost dispatch. Reach for
+  <code>dynamic</code> at boundaries (decoded JSON, plugin APIs, debug logging) and narrow
+  back as soon as possible. A function that takes <code>dynamic</code> in and returns
+  <code>dynamic</code> out is almost always wrong.
+</div>
+
+<!-- =========================================================== -->
+<h2 id="limits">6. Limits of narrowing</h2>
 
 <div class="callout warn">
   <strong>What flow narrowing does <em>not</em> do</strong>
@@ -276,7 +382,7 @@ if v is i64 {
 </div>
 
 <!-- =========================================================== -->
-<h2 id="ex">6. Examples</h2>
+<h2 id="ex">7. Examples</h2>
 
 <pre><code>function process(input: i64 | str | null) {
   if input is null { return }

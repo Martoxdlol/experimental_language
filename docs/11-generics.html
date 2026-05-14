@@ -237,6 +237,14 @@ var back = p as Person          // narrow — checks tag, panics on mismatch</co
   The compiler rejects this at use sites; use a generic bound instead. See <a href="10-interfaces.html#dyn">10-interfaces §8</a>.
 </div>
 
+<div class="callout">
+  <strong>Heterogeneous containers via <code>dynamic</code></strong>
+  <code>List&lt;dynamic&gt;</code>, <code>Map&lt;str, dynamic&gt;</code>, etc. are valid generic
+  instantiations — <code>dynamic</code> is just another type to the type system. Use them when
+  elements really do need to be of different types; narrow each element with
+  <code>is</code>/<code>as</code> on read. See <a href="12-type-logic.html#dynamic">12-type-logic §5</a>.
+</div>
+
 <!-- =========================================================== -->
 <h2 id="structif">6. Generic structs &amp; interfaces</h2>
 

@@ -82,6 +82,7 @@
     <li><a href="#null">The empty type — <code>null</code></a></li>
     <li><a href="#cmp">Equality &amp; ordering</a></li>
     <li><a href="#size">Sizes &amp; alignment</a></li>
+    <li><a href="#dynamic">The universal type — <code>dynamic</code></a></li>
   </ol>
 </div>
 
@@ -458,6 +459,26 @@ layout, see <a href="19-ffi.html">19-ffi</a>).</p>
   </svg>
   <div class="diagram-caption">Field sizes for inlined values. Heap types contribute a pointer; the object lives elsewhere.</div>
 </div>
+
+<!-- =========================================================== -->
+<h2 id="dynamic">10. The universal type — <code>dynamic</code></h2>
+
+<p><code>dynamic</code> is a built-in type that holds any value. Conceptually it is the union
+of every type in the program — assigned to with implicit widening, narrowed back with
+<code>is</code> or <code>as</code>. The compiler rejects field access, method calls, arithmetic,
+equality, and interpolation directly on <code>dynamic</code> — narrow first.</p>
+
+<pre><code>var d: dynamic = 42i32              // primitive widens; runtime boxes it
+var d: dynamic = Person { ... }     // reference widens; same pointer
+
+if d is i32 { use(d) }              // narrow inside the branch
+var p = d as Person                 // panic if wrong type</code></pre>
+
+<p>At storage, <code>dynamic</code> is a single managed pointer. Primitives stored in a
+<code>dynamic</code> are wrapped in a heap-allocated <strong>box</strong> with the standard
+object header (see <a href="16-memory.html#layout">16-memory §3</a>). Full semantics —
+narrowing, what's allowed/rejected, match exhaustiveness, interaction with interfaces — are in
+<a href="12-type-logic.html#dynamic">12-type-logic §5</a>.</p>
 
 </body>
 </html>

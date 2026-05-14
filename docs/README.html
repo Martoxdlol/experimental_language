@@ -342,7 +342,7 @@ assumes the ones it points back to.</p>
   <a class="chapter-card flow" href="09-functions.html"><span class="num">09 · Computation</span><span class="title">Functions &amp; closures</span><span class="desc"><code>function</code>, arrow closures <code>(x) =&gt; …</code>, trailing closures, implicit <code>it</code>, function types.</span></a>
   <a class="chapter-card flow" href="10-interfaces.html"><span class="num">10 · Computation</span><span class="title">Interfaces &amp; extensions</span><span class="desc"><code>interface</code>, <code>extend</code>, <code>Self</code>, defaults, orphan rule.</span></a>
   <a class="chapter-card flow" href="11-generics.html"><span class="num">11 · Computation</span><span class="title">Generics</span><span class="desc">Monomorphization, dynamic dispatch, overlap rules.</span></a>
-  <a class="chapter-card flow" href="12-type-logic.html"><span class="num">12 · Computation</span><span class="title">Type logic</span><span class="desc"><code>is</code>, <code>as</code>, flow typing, narrowing.</span></a>
+  <a class="chapter-card flow" href="12-type-logic.html"><span class="num">12 · Computation</span><span class="title">Type logic</span><span class="desc"><code>is</code>, <code>as</code>, flow typing, narrowing, <code>dynamic</code>.</span></a>
 
   <a class="chapter-card system" href="13-error-handling.html"><span class="num">13 · System</span><span class="title">Error handling</span><span class="desc"><code>T | E</code>, <code>?</code>, <code>Try</code> interface.</span></a>
   <a class="chapter-card system" href="14-panics.html"><span class="num">14 · System</span><span class="title">Panics</span><span class="desc"><code>panic</code>, panic sources, integer overflow.</span></a>
@@ -369,7 +369,7 @@ and how it asks you to organise code. Each maps to a specific chapter.</p>
 <div class="pillar-grid">
   <div class="pillar">
     <h4>Type system</h4>
-    <p>Nominal structs, structural tuples, discriminated unions <em>everywhere</em>.</p>
+    <p>Nominal structs, structural tuples, discriminated unions <em>everywhere</em>. <code>dynamic</code> as an opt-out escape hatch — widening is implicit, access requires <code>is</code>/<code>as</code> narrowing.</p>
   </div>
   <div class="pillar orange">
     <h4>Memory</h4>

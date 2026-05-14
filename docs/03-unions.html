@@ -132,6 +132,15 @@ function find(id: i64): Person | null { ... }      // inline
 type Maybe&lt;T&gt; = T | null                            // alias
 function find(id: i64): Maybe&lt;Person&gt; { ... }</code></pre>
 
+<div class="callout">
+  <strong>The universal union — <code>dynamic</code></strong>
+  There is also a built-in type <code>dynamic</code>, conceptually the union of <em>every</em>
+  type in the program — but written as a single name, not a pipe enumeration. It exists for
+  boundary code (decoded JSON, plugin APIs, heterogeneous collections) and uses the same
+  <code>is</code>/<code>as</code> narrowing as ordinary unions. Full rules in
+  <a href="12-type-logic.html#dynamic">12-type-logic §5</a>.
+</div>
+
 <!-- =========================================================== -->
 <h2 id="norm">2. Normalization — order, duplicates, flattening</h2>
 

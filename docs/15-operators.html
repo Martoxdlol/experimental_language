@@ -333,6 +333,15 @@ resources, log, etc.</p>
   release method <em>explicitly</em> — the language provides no scope-exit hook.
 </div>
 
+<div class="callout">
+  <strong><code>dynamic</code> does not implement <code>Drop</code></strong>
+  The type <code>dynamic</code> itself has no impl. A value <em>stored in</em> a
+  <code>dynamic</code> still runs its underlying <code>Drop</code> when the GC reclaims it —
+  the box's type pointer points at the real type's descriptor. You just can't call
+  <code>.drop()</code> through the <code>dynamic</code> binding without narrowing first. See
+  <a href="12-type-logic.html#dynamic">12-type-logic §5</a>.
+</div>
+
 <!-- =========================================================== -->
 <h2 id="tostr">10. Stringification — <code>ToStr</code></h2>
 
@@ -400,6 +409,15 @@ pub struct Person { pub name: str, pub age: i32 }
 
 <p>For numeric primitives, <code>value as str</code> is sugar for <code>value.to_str()</code> —
 keeping one stringification path through the type system.</p>
+
+<div class="callout">
+  <strong><code>dynamic</code> does not implement <code>ToStr</code></strong>
+  Interpolating a <code>dynamic</code> binding (<code>"$d"</code>) is a compile error. Narrow
+  first — usually <code>if d is ToStr { … }</code> — and call <code>to_str()</code> in the
+  branch. The same applies to <code>Clone</code>, <code>Eq</code>, <code>Hash</code>, and
+  <code>Ord</code>: none of them dispatch through <code>dynamic</code>. See
+  <a href="12-type-logic.html#dynamic">12-type-logic §5</a>.
+</div>
 
 <!-- =========================================================== -->
 <h2 id="repr">11. <code>ReprC</code> — disabling object header for FFI</h2>

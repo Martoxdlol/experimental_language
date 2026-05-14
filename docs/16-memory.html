@@ -202,6 +202,20 @@ field access does not need to skip the header.</p>
   thin pointer. See <a href="11-generics.html">11-generics §dispatch</a>.
 </div>
 
+<h3>Primitive boxes for <code>dynamic</code></h3>
+
+<p>Primitives (<code>i32</code>, <code>f64</code>, <code>bool</code>, <code>char</code>,
+<code>null</code>, …) carry no header on their own — they live inline. When a primitive is
+widened to <code>dynamic</code> (see <a href="12-type-logic.html#dynamic">12-type-logic §5</a>),
+the runtime wraps the value in a heap-allocated <strong>box</strong> with the standard two-word
+object header. The type pointer identifies the boxed primitive (<code>i32</code>-box,
+<code>f64</code>-box, …); the payload sits immediately after, just like any struct field.</p>
+
+<p>Narrowing back via <code>as i32</code> reads the type pointer to confirm and returns the
+payload. Boxes themselves participate in tracing like any other managed object. Whether the
+runtime interns common boxes (small integers, common chars) is implementation-defined; box
+identity is not exposed to the language.</p>
+
 <!-- =========================================================== -->
 <h2 id="tracing">4. Tracing GC — Immix &amp; StickyImmix</h2>
 
