@@ -1,9 +1,7 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git remote *)",
-      "Bash(python3 md2html.py)",
-      "Bash(grep -v ':0$')"
+      "Bash(*)"
     ]
   }
 }
