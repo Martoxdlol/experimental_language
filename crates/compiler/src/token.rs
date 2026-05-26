@@ -144,7 +144,7 @@ impl Keyword {
     }
 }
 
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum TokenKind {
     // -------- Identifiers & keywords --------
     Ident,
@@ -225,7 +225,7 @@ pub enum TokenKind {
     Eof,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Copy, Clone, Debug)]
 pub struct Token {
     pub kind: TokenKind,
     pub span: Span,

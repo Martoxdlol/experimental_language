@@ -165,9 +165,12 @@ extend i32: Not&lt;i32&gt; {
 }</code></pre>
 
 <div class="callout">
-  <strong>No separate <code>~</code> operator</strong>
-  Bitwise NOT is <code>!</code> for integer types (via <code>Not</code> impl) and logical NOT for
-  <code>bool</code>. The compiler picks based on the operand type.
+  <strong>Bitwise NOT is <code>!</code>; <code>~</code> is an accepted synonym</strong>
+  The canonical NOT operator is <code>!</code>. On integers it resolves to the
+  <code>Not</code> impl (bitwise NOT); on <code>bool</code> it is logical NOT — the
+  compiler picks based on the operand type. The lexer also recognises <code>~</code>
+  for users coming from C / Rust; <code>~x</code> on an integer is desugared to
+  <code>!x</code> in the parser. Prefer <code>!</code> in new code.
 </div>
 
 <!-- =========================================================== -->

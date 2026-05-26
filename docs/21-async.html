@@ -237,6 +237,18 @@ extend MyFetcher: Fetcher {
   <code>(await http_get(url))?</code>.
 </div>
 
+<div class="callout">
+  <strong>Precedence</strong>
+  <code>await</code> is a prefix unary operator at the same tier as
+  <code>-</code> / <code>!</code> (row 2 in the
+  <a href="07-expressions.html#op">precedence table</a>). It binds <em>looser</em>
+  than postfix <code>?</code>, <code>.</code>, <code>(...)</code>, <code>[...]</code>,
+  which is why <code>await x?</code> means <code>await (x?)</code> and the
+  propagating form needs parens: <code>(await x)?</code>. <code>await x.field</code>
+  parses as <code>await (x.field)</code>; <code>await f(a, b)</code> parses as
+  <code>await (f(a, b))</code>.
+</div>
+
 <!-- =========================================================== -->
 <h2 id="forgot">5. "Forgot to await" lint</h2>
 

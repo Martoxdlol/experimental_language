@@ -117,11 +117,14 @@ The block evaluates to the trailing expression, or to <code>null</code> if there
 <p>Blocks introduce a new lexical scope (see <a href="06-variables.html#scope">06-variables §3</a>).</p>
 
 <div class="callout">
-  <strong>Block vs trailing closure</strong>
-  A <code>{ ... }</code> immediately following a call <code>f(...)</code>, an identifier callable,
-  or <code>]</code> is parsed as a <strong>trailing closure</strong> (sugar for passing it as the
-  last argument — see <a href="09-functions.html#trail">09-functions §6</a>). Anywhere else a
-  <code>{ ... }</code> is a plain block expression.
+  <strong>Block vs trailing closure vs struct literal</strong>
+  A <code>{ ... }</code> immediately following a call <code>f(...)</code>, a method
+  reference <code>x.method</code>, or an index <code>x[i]</code> is parsed as a
+  <strong>trailing closure</strong> (sugar for passing it as the last argument — see
+  <a href="09-functions.html#trail">09-functions §6</a>). Following a bare type-name
+  identifier the <code>{ ... }</code> is a <strong>struct literal</strong>
+  (<code>Foo { x: 1 }</code>) when the brace's contents look like fields. Anywhere
+  else a <code>{ ... }</code> is a plain block expression.
 </div>
 
 <!-- =========================================================== -->
@@ -331,7 +334,7 @@ can't tell where the header ends and the body begins — so both forms must be w
   <thead><tr><th>Prec</th><th>Operators</th><th>Associativity</th></tr></thead>
   <tbody>
     <tr><td>1</td><td><code>.</code> <code>()</code> <code>[]</code> <code>?</code> (postfix)</td><td>left</td></tr>
-    <tr><td>2</td><td>unary <code>-</code> <code>!</code> <code>~</code></td><td>right</td></tr>
+    <tr><td>2</td><td>unary <code>-</code> <code>!</code> <code>~</code> <code>&amp;</code> <code>*</code> <code>await</code></td><td>right</td></tr>
     <tr><td>3</td><td><code>as</code> <code>is</code></td><td>left</td></tr>
     <tr><td>4</td><td><code>*</code> <code>/</code> <code>%</code></td><td>left</td></tr>
     <tr><td>5</td><td><code>+</code> <code>-</code></td><td>left</td></tr>

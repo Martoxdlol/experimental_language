@@ -308,15 +308,21 @@ people
 
 <h3>How the parser picks the form</h3>
 <ol>
-  <li>A <code>{</code> immediately following a call <code>f(...)</code>, an identifier callable, or
-      <code>]</code> begins a <strong>trailing closure</strong> — that block becomes the last
-      argument.</li>
-  <li>Inside that block, the parser attempts to parse a parameter list followed by <code>=&gt;</code>.
-      If it succeeds, those are the closure's parameters. Otherwise the block is the body — it
-      may reference <code>it</code> when the expected arity is 1; for arity 0 the body has no
-      <code>it</code>; for arity ≥ 2 an explicit param list is required.</li>
-  <li>A <code>{</code> elsewhere (after <code>=</code>, after <code>return</code>, in operator
-      position, etc.) is a <strong>block expression</strong>, not a closure.</li>
+  <li>A <code>{</code> immediately following a call <code>f(...)</code>, a method
+      reference <code>x.method</code>, or an index <code>x[i]</code> begins a
+      <strong>trailing closure</strong> — that block becomes the last argument.</li>
+  <li>A <code>{</code> immediately following a bare type-name identifier
+      (<code>Foo { ... }</code> or <code>Foo&lt;T&gt; { ... }</code>) is a
+      <strong>struct literal</strong> when the brace contents look like fields
+      (<code>name:</code> / <code>name,</code> / <code>name }</code> / <code>..base</code>
+      / empty); otherwise the <code>{</code> doesn't continue the expression.</li>
+  <li>Inside a trailing-closure block, the parser attempts to parse a parameter list
+      followed by <code>=&gt;</code>. If it succeeds, those are the closure's parameters.
+      Otherwise the block is the body — it may reference <code>it</code> when the
+      expected arity is 1; for arity 0 the body has no <code>it</code>; for arity ≥ 2
+      an explicit param list is required.</li>
+  <li>A <code>{</code> elsewhere (after <code>=</code>, after <code>return</code>, in
+      operator position, etc.) is a <strong>block expression</strong>, not a closure.</li>
 </ol>
 
 <!-- =========================================================== -->

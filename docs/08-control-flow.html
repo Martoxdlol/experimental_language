@@ -166,6 +166,14 @@ for Entry { key, value } in user_ages {
   </ul>
 </div>
 
+<div class="callout">
+  <strong>Async iterators — <code>for await</code></strong>
+  Inside an <code>async</code> body the loop accepts an async iterator:
+  <pre style="margin-top: 0.5rem;"><code>for await n in stream { print(n as str) }</code></pre>
+  This drives <code>AsyncIterator&lt;T&gt;.next_async()</code> and desugars to a polled
+  loop. See <a href="21-async.html#asyncfor"><code>for await</code> in 21-async</a>.
+</div>
+
 <!-- =========================================================== -->
 <h2 id="while">2. <code>while</code> loop</h2>
 

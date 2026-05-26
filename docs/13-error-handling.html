@@ -303,7 +303,7 @@ layer's short text; <code>cause(self)</code> walks the chain.</p>
   pub message: str,
 }
 
-pub union IoErrorKind =
+pub type IoErrorKind =
     NotFound | PermissionDenied
   | ConnectionRefused | TimedOut
   | UnexpectedEof | Interrupted
@@ -498,7 +498,7 @@ pub struct IoError {
   pub kind:    IoErrorKind,
   pub message: str,
 }
-pub union IoErrorKind = NotFound | PermissionDenied | Other
+pub type IoErrorKind = NotFound | PermissionDenied | Other
 
 pub struct ParseError {
   pub message:  str,
@@ -530,7 +530,7 @@ pub struct AppError {
   pub kind:    AppErrorKind,
   pub message: str,
 }
-pub union AppErrorKind = Io | Parse | Validation | Other
+pub type AppErrorKind = Io | Parse | Validation | Other
 
 extend AppError: Error {
   function message(self): str          { self.message }

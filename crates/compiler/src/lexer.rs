@@ -415,6 +415,13 @@ impl<'src> Lexer<'src> {
                     saw_digit = true;
                     self.pos += 1;
                 }
+                // `i` / `u` / `f` after at least one digit start a numeric
+                // suffix (e.g. `0xFFu32`, `0b1011i8`). For hex `f` is a
+                // hex digit and was already taken above, so reaching here
+                // means it's a suffix start.
+                Some(b) if saw_digit && matches!(b, b'i' | b'u' | b'f') => {
+                    break;
+                }
                 Some(b) if b.is_ascii_alphanumeric() => {
                     // A digit not valid for this base, e.g. `0b2` or `0xZ`.
                     self.error(LexErrorKind::InvalidDigit, self.pos, self.pos + 1);
