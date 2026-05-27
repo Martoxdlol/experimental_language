@@ -1,5 +1,7 @@
 /goal implement the programming language end to end. Follow the design. Do not take shortcuts. Read docs and respect choices, ask questions if things are not clear. We are building a programming language at the same level of rust. NOT A DEMO, A FULL WORKING PROGRAMMING LANGUAGE. Backend in cranelift with ALL proposed and designed features working 100% with good design. NO SHORTCUTS. Do tests, continue with the project. Always do good practices and make sure the design is fast and efficient.
 
+/goal analyze project structure, read source files, rethink project structure and reorganize if needed to prevent organization & structural issues. Ensure no regressions.
+
 /goal refactor channel implementation. Make channels async and non-blocking. Ensure they work with the async runtime. Update docs to reflect this. Update example. Update any code or anything needed.
 
 /goal refactor threads api. Ensure it uses async and it is non-blocking. Update docs to reflect this. Update example. Update any code or anything needed.
