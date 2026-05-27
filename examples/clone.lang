@@ -1,0 +1,37 @@
+// `Clone` (docs/10, docs/15 §8) — deep-copy entry point.
+//
+// `@Derive(Clone)` synthesises a field-by-field deep copy. Primitives and `str`
+// clone trivially (immutable values can be shared); nested structs recurse
+// through their own `Clone` impl, so mutating a clone never affects the
+// original. Builtin `List`/`Map` of immutable elements clone their storage.
+
+@Derive(Clone)
+struct Point { x: i64, y: i64 }
+
+@Derive(Clone)
+struct Line { from: Point, to: Point }
+
+// A generic function bounded by `Clone` can clone any qualifying argument.
+function duplicate<T: Clone>(value: T): T {
+  value.clone()
+}
+
+function main() {
+  // A deep copy is independent of its source.
+  var a: Line = Line { from: Point { x: 0, y: 0 }, to: Point { x: 3, y: 4 } };
+  var b: Line = a.clone();
+  b.to.x = 99;
+  println("a.to.x = " + (a.to.x as str));   // 3 — unaffected
+  println("b.to.x = " + (b.to.x as str));   // 99
+
+  // Through a `T: Clone` bound, builtins clone intrinsically.
+  println("int  = " + (duplicate<i64>(7) as str));
+  println("str  = " + duplicate<str>("hello"));
+
+  // A cloned list is independent of the original.
+  var xs: List<i64> = [1, 2, 3];
+  var ys: List<i64> = xs.clone();
+  ys.push(4);
+  println("xs.size = " + (xs.size() as str)); // 3
+  println("ys.size = " + (ys.size() as str)); // 4
+}

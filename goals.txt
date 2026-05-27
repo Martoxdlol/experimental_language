@@ -1,0 +1,11 @@
+/goal implement the programming language end to end. Follow the design. Do not take shortcuts. Read docs and respect choices, ask questions if things are not clear. We are building a programming language at the same level of rust. NOT A DEMO, A FULL WORKING PROGRAMMING LANGUAGE. Backend in cranelift with ALL proposed and designed features working 100% with good design. NO SHORTCUTS. Do tests, continue with the project. Always do good practices and make sure the design is fast and efficient.
+
+/goal refactor channel implementation. Make channels async and non-blocking. Ensure they work with the async runtime. Update docs to reflect this. Update example. Update any code or anything needed.
+
+/goal refactor threads api. Ensure it uses async and it is non-blocking. Update docs to reflect this. Update example. Update any code or anything needed.
+
+/goal refactor async features. Ensure there isn't any blocking feature and everything is async. Remove block_on support and add keyword 'spawn' instead of function (similar to go's 'go' keyword). Update docs to reflect this. Update example. Update any code or anything needed. Make async implicit like JS (less control).
+
+/goal apply optimizations to the backend. You can use possible-optimizations.txt as a reference but be smart and apply common logical optimization to the compiler and backend logic.
+
+/goal implement fully working LSP + VS Code extension. Make it fully featured and as efficient as possible. 

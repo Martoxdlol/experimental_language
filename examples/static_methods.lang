@@ -1,0 +1,41 @@
+// Static methods (docs/10 §10): functions in an `extend`/`interface` block that
+// take no `self`, called as `Type.method(args)` — the `.` analogue of Rust's
+// `Type::method(args)`. There is no `static` keyword; absence of `self` is the
+// signal.
+
+struct Point { x: i64, y: i64 }
+
+extend Point {
+  // Associated "constructors" — no `self`, called on the type.
+  function origin(): Point { Point { x: 0, y: 0 } }
+  function at(x: i64, y: i64): Point { Point { x: x, y: y } }
+  // An ordinary instance method, for contrast.
+  function manhattan(self): i64 { self.x + self.y }
+}
+
+// An interface can declare a static method (returning `Self`), the way Rust's
+// `Default::default` works.
+interface Default {
+  function default(): Self;
+}
+
+struct Config { verbose: i64, level: i64 }
+extend Config: Default {
+  function default(): Config { Config { verbose: 0, level: 1 } }
+}
+
+// Generic code can call a static method through a bound: `T.default()` resolves
+// to whatever concrete type `T` is instantiated with (monomorphized).
+function build<T: Default>(): T {
+  T.default()
+}
+
+function main() {
+  var o: Point = Point.origin();
+  var p: Point = Point.at(3, 4);
+  println("origin manhattan = " + (o.manhattan() as str));
+  println("p manhattan = " + (p.manhattan() as str));
+
+  var c: Config = build<Config>();
+  println("config level = " + (c.level as str));
+}

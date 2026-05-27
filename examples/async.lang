@@ -1,0 +1,107 @@
+// Async / await (docs/21).
+//
+// An `async` function returns a `Future<Output>`: calling it does NOT run the
+// body — it builds an inert state-machine future. `block_on` drives a future to
+// completion on the current thread (the executor of `std:async`).
+//
+// `await` drives an inner future from within an async body: the compiler turns
+// the body into a state machine that suspends at each `await` (returning
+// `Pending`) and resumes when the awaited future is ready. `yield_now()` is a
+// future that suspends exactly once — it forces a real park/resume cycle.
+
+// An async function. The body's trailing value is the future's Output.
+function answer(): Future<i64> async {
+  40 + 2
+}
+
+// A managed (str) Output works too; it survives GC across the poll machinery.
+function greet(name: str): Future<str> async {
+  "hello, " + name
+}
+
+function answer_value(): i64 {
+  42
+}
+
+// An async stream: `AsyncIterator<T>` whose `next_async` yields then produces.
+struct Range { current: i64, end: i64 }
+
+extend Range: AsyncIterator<i64> {
+  function next_async(self): Future<Item<i64> | Done> {
+    async {
+      if self.current >= self.end {
+        Done {}
+      } else {
+        var _ = await sleep(1);
+        var v: i64 = self.current;
+        self.current = self.current + 1;
+        Item { value: v }
+      }
+    }
+  }
+}
+
+function sum_range(r: Range): Future<i64> async {
+  var total: i64 = 0;
+  for await n in r {
+    total = total + n;
+  }
+  total
+}
+
+// `await` chains futures. `compute` awaits two inner futures and combines them.
+function compute(): Future<i64> async {
+  var a: i64 = await answer();
+  var b: i64 = await greet_len("world");
+  a + b
+}
+
+function greet_len(name: str): Future<i64> async {
+  var g: str = await greet(name);
+  g.size()
+}
+
+// A genuinely-suspending future: `yield_now()` returns Pending once. Looping
+// over it suspends and resumes the state machine repeatedly.
+function tick(n: i64): Future<i64> async {
+  var sum: i64 = 0;
+  var i: i64 = 0;
+  while i < n {
+    var _ = await yield_now();
+    sum = sum + i;
+    i = i + 1;
+  }
+  sum
+}
+
+function main() {
+  // Drive an async function to completion.
+  var a: i64 = block_on(answer());
+  println("answer = ${a}");
+
+  var g: str = block_on(greet("async world"));
+  println(g);
+
+  // A bare `async { … }` block is a zero-arg inline future literal. It captures
+  // enclosing locals by value.
+  var base: i64 = 100;
+  var computed: i64 = block_on(async { base + answer_value() });
+  println("computed = ${computed}");
+
+  // `await` chaining: answer() = 42, greet_len("world") = len("hello, world") = 12.
+  println("compute = ${block_on(compute())}");
+
+  // Genuine suspension: 0 + 1 + 2 + 3 = 6, across four park/resume cycles.
+  println("tick = ${block_on(tick(4))}");
+
+  // `for await` over an async stream: 0 + 1 + 2 + 3 + 4 = 10.
+  var r = Range { current: 0, end: 5 };
+  println("stream = ${block_on(sum_range(r))}");
+
+  // `spawn` drives a future on a worker thread; `join` collects the result.
+  var h: JoinHandle<i64> = spawn(tick(5));
+  match h.join() {
+    Joined<i64> j => println("spawned = ${j.value}"),
+    Panicked p => println("spawned panicked"),
+  }
+}

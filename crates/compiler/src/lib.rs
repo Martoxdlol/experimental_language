@@ -3,11 +3,14 @@
 
 pub mod ast;
 pub mod diag;
+pub mod ids;
 pub mod lexer;
 pub mod parse_diag;
 pub mod parser;
+pub mod sema;
 pub mod span;
 pub mod token;
+pub mod ty;
 
 pub use diag::{LexError, LexErrorKind};
 pub use lexer::lex;

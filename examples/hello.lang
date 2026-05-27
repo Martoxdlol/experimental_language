@@ -1,0 +1,10 @@
+// A working program with string interpolation. Run: lang run examples/hello.lang
+function fib(n: i64): i64 {
+  if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
+}
+
+function main() {
+  var name = "world";
+  println("hello, $name");
+  println("fib(20) = ${fib(20)}");
+}

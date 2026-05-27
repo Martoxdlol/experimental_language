@@ -1,0 +1,12 @@
+[package]
+name = "runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# `rlib` for the in-process JIT (the `backend` crate links it as a normal
+# dependency); `staticlib` for native `lang build` output, where the system
+# linker links the emitted object against `libruntime.a`.
+[lib]
+crate-type = ["rlib", "staticlib"]

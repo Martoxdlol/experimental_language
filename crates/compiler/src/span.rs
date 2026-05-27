@@ -57,6 +57,13 @@ impl Span {
         Self { file, lo: pos, hi: pos }
     }
 
+    /// A placeholder span with no real source location, for diagnostics that
+    /// originate outside any source file (e.g. backend/link driver errors).
+    #[inline]
+    pub fn dummy() -> Self {
+        Self { file: FileId(0), lo: BytePos::ZERO, hi: BytePos::ZERO }
+    }
+
     #[inline]
     pub fn len(self) -> u32 {
         self.hi.0 - self.lo.0
@@ -162,6 +169,12 @@ impl SourceMap {
 
     pub fn file(&self, id: FileId) -> &SourceFile {
         &self.files[id.0 as usize]
+    }
+
+    /// Number of real source files loaded. A `FileId` at or beyond this is a
+    /// virtual file (the prelude, or `@Derive`-synthesised code) with no text.
+    pub fn file_count(&self) -> usize {
+        self.files.len()
     }
 
     pub fn slice(&self, span: Span) -> &str {

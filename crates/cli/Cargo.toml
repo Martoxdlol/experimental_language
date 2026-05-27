@@ -6,8 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "langc-placeholder"
+name = "lang"
 path = "src/main.rs"
 
 [dependencies]
 compiler.workspace = true
+backend = { path = "../backend" }
+clap = { version = "4", features = ["derive"] }

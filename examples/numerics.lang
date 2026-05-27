@@ -1,0 +1,31 @@
+// Numeric helper namespaces (docs/18 §10, docs/14 §5): constants and the
+// explicit overflow-arithmetic families on primitive integer/float types,
+// called as `i32.MAX`, `i32.wrapping_add(a, b)`, `f64.is_nan(x)`, …
+
+function describe(r: i32 | null): str {
+  match r { i32 v => v as str, null => "overflow" }
+}
+
+function main() {
+  // Limits.
+  println("i32 range: " + (i32.MIN as str) + " .. " + (i32.MAX as str));
+  println("u8.MAX = " + (u8.MAX as str));
+
+  var big: i32 = 2147483647;          // i32::MAX
+
+  // wrapping: two's-complement wrap.
+  println("wrapping = " + (i32.wrapping_add(big, 1) as str));   // MIN
+  // saturating: clamp to the bound.
+  println("saturating = " + (i32.saturating_add(big, 100) as str)); // MAX
+  // checked: null on overflow.
+  println("checked(MAX+1) = " + describe(i32.checked_add(big, 1)));
+  println("checked(40+2) = " + describe(i32.checked_add(40, 2)));
+  // overflowing: (value, did_overflow).
+  var ov: (i32, bool) = i32.overflowing_mul(100000, 100000);
+  println("overflowing = (" + (ov.0 as str) + ", " + (ov.1 as str) + ")");
+
+  // Float constants and predicates.
+  var zero: f64 = 0.0;
+  println("0/0 is_nan = " + (f64.is_nan(zero / zero) as str));
+  println("INFINITY finite = " + (f64.is_finite(f64.INFINITY) as str));
+}

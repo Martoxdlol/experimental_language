@@ -1,0 +1,23 @@
+// Structs and methods. Run: lang run examples/structs.lang
+struct Point { x: i64, y: i64 }
+struct Person { name: str, age: i64 }
+
+extend Point {
+  function manhattan(self): i64 {
+    var ax: i64 = if self.x < 0 { 0 - self.x } else { self.x };
+    var ay: i64 = if self.y < 0 { 0 - self.y } else { self.y };
+    ax + ay
+  }
+  function shifted(self, dx: i64, dy: i64): Point {
+    Point { x: self.x + dx, y: self.y + dy }
+  }
+}
+
+function main() {
+  var origin = Point { x: 0, y: 0 };
+  var p = origin.shifted(3, -4);
+  println("manhattan = " + (p.manhattan() as str));
+
+  var alice = Person { name: "Alice", age: 30 };
+  println(alice.name + " is " + (alice.age as str));
+}

@@ -1,0 +1,19 @@
+// Generic List<T>. Run: lang run examples/lists.lang
+function sum(xs: List<i64>): i64 {
+  var i: i64 = 0;
+  var total: i64 = 0;
+  while i < xs.size() {
+    total = total + xs[i];
+    i = i + 1;
+  }
+  total
+}
+
+function main() {
+  var nums = [10, 20, 30, 40];
+  nums.push(50);
+  println("count = ${nums.size()}");
+  println("sum   = ${sum(nums)}");
+  var names: List<str> = ["Alice", "Bob"];
+  println("first = " + names[0]);
+}

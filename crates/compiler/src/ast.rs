@@ -212,9 +212,6 @@ pub struct InterfaceItem {
 pub struct InterfaceMember {
     pub docs: Vec<DocComment>,
     pub attrs: Vec<Attribute>,
-    /// `static function foo(...)` — also true for any method without a `self`
-    /// param so the consumer doesn't have to look at the params.
-    pub is_static_keyword: bool,
     pub function: FunctionSig,
     pub default_body: Option<Block>,
     pub span: Span,
@@ -272,8 +269,6 @@ pub struct ExtendMember {
     pub docs: Vec<DocComment>,
     pub attrs: Vec<Attribute>,
     pub visibility: Visibility,
-    /// True if declared with `static function …`.
-    pub is_static_keyword: bool,
     pub function: FunctionItem,
     pub span: Span,
 }
@@ -431,6 +426,8 @@ pub enum ExprKind {
     Paren(Box<Expr>),
     /// `[a, b, c]`
     List(Vec<Expr>),
+    /// `{ k1: v1, k2: v2, ..base }` — a map literal.
+    MapLit(Vec<MapItem>),
     /// `Foo { x: 1, y: 2, ..base }`
     StructLit {
         path: TypePath,
@@ -514,6 +511,15 @@ pub struct FieldInit {
     /// `None` = field-init shorthand `Foo { x }`.
     pub value: Option<Expr>,
     pub span: Span,
+}
+
+/// One item inside a map literal `{ ... }`.
+#[derive(Clone, Eq, PartialEq, Debug)]
+pub enum MapItem {
+    /// `key: value`
+    Entry { key: Box<Expr>, value: Box<Expr>, span: Span },
+    /// `..base` — merge another map; rightmost wins on collision.
+    Spread(Box<Expr>),
 }
 
 #[derive(Clone, Eq, PartialEq, Debug)]

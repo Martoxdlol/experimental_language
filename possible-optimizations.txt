@@ -1,0 +1,13 @@
+1. empty structs don't need to be allocated at all. We can just keep the union tag to be used as enum option.
+
+2. final structs can be allocated in the stack and passed by value or by ref when the function doesn't make it outlive the original instance lifetime
+
+3. we can monomorphize dynamic dispatch in some cases (treat them as generics)
+
+4. we can avoid type tags or reduce complexity on trivial code paths (monomorphized dynamic dispatch can generate this trivial paths)
+
+5. apply automatic inlining to functions called only once or small functions (using heuristics)
+
+6. remove all unused code (functions structs, interfaces, etc.)
+
+7. When compiling a binary, use a stdlib splitted in very small parts so we only include the used std functions (if possible remove use remove unused simbols of stdlib for the final binary)

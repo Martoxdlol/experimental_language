@@ -392,7 +392,7 @@ prove the value is not aliased; otherwise it falls back to <strong>Clone</strong
 <pre><code>pub struct Shared&lt;T&gt; { ... }
 
 extend&lt;T&gt; Shared&lt;T&gt; {
-  static function new(value: T): Shared&lt;T&gt;
+  function new(value: T): Shared&lt;T&gt;
   function lock&lt;R&gt;(self, body: (T) =&gt; R): R
   function try_lock&lt;R&gt;(self, body: (T) =&gt; R): R | LockBusy
 }

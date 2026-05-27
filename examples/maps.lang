@@ -1,0 +1,53 @@
+// Map<K, V> — a hash map with str or integer keys (docs/18 §6).
+
+function main() {
+  // Map literal: keys commit the parse on the first `key:`.
+  var inventory: Map<str, i64> = { "apples": 3, "pears": 7 };
+  inventory.set("plums", 12);
+  inventory.set("apples", 4);              // replaces, does not grow
+
+  println("kinds   = ${inventory.size()}");
+  match inventory.get("pears") {
+    i64 n => println("pears   = ${n}"),
+    null  => println("no pears"),
+  };
+  println("has plums: ${inventory.contains("plums")}");
+
+  match inventory.remove("apples") {
+    i64 n => println("ate ${n} apples"),
+    null  => println("no apples"),
+  };
+  println("kinds   = ${inventory.size()}");
+
+  // keys()/values() snapshot into Lists you can iterate.
+  var scores: Map<i64, i64> = { 1: 10, 2: 20, 3: 30 };
+  var total = 0;
+  for v in scores.values() { total = total + v; }
+  println("total   = ${total}");
+
+  // `..spread` merges maps; the rightmost binding wins on collision.
+  var defaults: Map<str, i64> = { "port": 8080, "tls": 0 };
+  var override: Map<str, i64> = { "port": 9090 };
+  var config: Map<str, i64> = { ..defaults, ..override };
+  println("port    = ${config.get("port") as i64}");
+
+  // The empty-map constructor (a bare `{}` is a block, not a map).
+  var seen = Map<str, i64>();
+  println("empty   = ${seen.is_empty()}");
+
+  // Indexing: `map[k]` reads (panics on a missing key) and `map[k] = v` writes.
+  var ages: Map<str, i64> = { "ada": 36 };
+  ages["bob"] = 42;
+  ages["ada"] = 37;
+  println("ada     = ${ages["ada"]}");
+
+  // `for entry in map` yields an `Entry<K, V>` with `key` and `value`.
+  var names = "";
+  var sum = 0;
+  for e in ages {
+    names = names + e.key + " ";
+    sum = sum + e.value;
+  }
+  println("names   = ${names}");
+  println("age sum = ${sum}");
+}

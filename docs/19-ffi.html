@@ -559,11 +559,11 @@ table; on evacuation, it rewrites the table slot — the cookie value never chan
 <pre><code>pub struct Handle&lt;T&gt;;     // release explicitly; Drop is async best-effort
 
 extend&lt;T&gt; Handle {
-  static function acquire(value: T): Handle&lt;T&gt;
+  function acquire(value: T): Handle&lt;T&gt;
   function raw(self): u64                          // opaque cookie for foreign storage
   function release(self)                           // explicit release; also runs on Drop
 
-  static function resolve&lt;T&gt;(cookie: u64): T       // panics on stale cookie
+  function resolve&lt;T&gt;(cookie: u64): T       // panics on stale cookie
 }</code></pre>
 
 <div class="diagram">

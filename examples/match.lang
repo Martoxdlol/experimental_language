@@ -1,0 +1,27 @@
+// Discriminated unions + match. Run: lang run examples/match.lang
+struct Circle { radius: f64 }
+struct Rect { w: f64, h: f64 }
+type Shape = Circle | Rect;
+
+function area(s: Shape): f64 {
+  match s {
+    Circle c => 3.14159 * c.radius * c.radius,
+    Rect r   => r.w * r.h,
+  }
+}
+
+function describe(x: i64 | str | null): str {
+  match x {
+    i64 n => "int " + (n as str),
+    str s => "string " + s,
+    null  => "nothing",
+  }
+}
+
+function main() {
+  println("circle area = " + (area(Circle { radius: 2.0 }) as str));
+  println("rect area = " + (area(Rect { w: 3.0, h: 4.0 }) as str));
+  println(describe(42));
+  println(describe("hello"));
+  println(describe(null));
+}

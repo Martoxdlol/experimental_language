@@ -623,10 +623,6 @@ print("Total: ${items.size() + 1}")</code></pre>
   A small number of identifiers are reserved only in specific positions and otherwise
   parse as ordinary identifiers:
   <ul style="margin-top: 0.4rem;">
-    <li><code>static</code> — recognised before <code>function</code> inside
-        <code>interface</code> and <code>extend</code> bodies (e.g.
-        <code>static function new(): Self</code>). Equivalent to declaring the method
-        with no <code>self</code> parameter; both forms are accepted.</li>
     <li><code>from</code> — recognised after the name list of a named import
         (<code>import { a, b } from "lib"</code>).</li>
     <li><code>it</code> — implicit single parameter inside a trailing-closure body

@@ -623,13 +623,6 @@ impl<'src> Parser<'src> {
         let start = self.peek_span();
         let docs = self.collect_outer_docs();
         let attrs = self.parse_attributes();
-        // `static function ...` shorthand for "no self".
-        let is_static = matches!(self.peek_kind(), TokenKind::Ident)
-            && self.slice(self.peek_span()) == "static"
-            && matches!(self.peek_kind_at(1), TokenKind::Kw(Keyword::Function));
-        if is_static {
-            self.bump();
-        }
         if !self.at_kw(Keyword::Function) {
             let span = self.peek_span();
             self.error(ParseError::new(
@@ -668,7 +661,6 @@ impl<'src> Parser<'src> {
         Some(InterfaceMember {
             docs,
             attrs,
-            is_static_keyword: is_static,
             function: FunctionSig {
                 name,
                 generics,
@@ -762,12 +754,6 @@ impl<'src> Parser<'src> {
         let docs = self.collect_outer_docs();
         let attrs = self.parse_attributes();
         let (vis, _) = self.parse_visibility();
-        let is_static = matches!(self.peek_kind(), TokenKind::Ident)
-            && self.slice(self.peek_span()) == "static"
-            && matches!(self.peek_kind_at(1), TokenKind::Kw(Keyword::Function));
-        if is_static {
-            self.bump();
-        }
         if !self.at_kw(Keyword::Function) {
             let span = self.peek_span();
             self.error(ParseError::new(
@@ -789,7 +775,6 @@ impl<'src> Parser<'src> {
             docs,
             attrs,
             visibility: vis,
-            is_static_keyword: is_static,
             function,
             span: start.join(end),
         })
@@ -2001,9 +1986,13 @@ impl<'src> Parser<'src> {
             }
             TokenKind::Kw(Keyword::Function) => self.parse_anon_function(),
             TokenKind::LBrace => {
-                let block = self.parse_block();
-                let span = block.span;
-                Expr { kind: ExprKind::Block(block), span }
+                if self.peek_is_map_literal() {
+                    self.parse_map_literal()
+                } else {
+                    let block = self.parse_block();
+                    let span = block.span;
+                    Expr { kind: ExprKind::Block(block), span }
+                }
             }
             TokenKind::LBracket => self.parse_list_literal(),
             TokenKind::LParen => self.parse_paren_or_closure_or_tuple(),
@@ -2361,6 +2350,52 @@ impl<'src> Parser<'src> {
             }
             _ => false,
         }
+    }
+
+    /// At a `{`: decide whether this opens a map literal rather than a block.
+    /// Rule (docs/18 §6): `{}` is the empty block; a leading `..` spread, or a
+    /// `<key-expression> :`, commits to a map literal.
+    fn peek_is_map_literal(&mut self) -> bool {
+        let cp = self.checkpoint();
+        self.bump(); // `{`
+        let verdict = match self.peek_kind() {
+            TokenKind::RBrace => false,      // `{}` is the empty block
+            TokenKind::DotDot => true,       // `{ ..base }` is a map spread
+            _ => {
+                let _ = self.parse_expr(Restrict { no_struct_lit: true });
+                self.at(TokenKind::Colon)
+            }
+        };
+        self.restore(cp);
+        verdict
+    }
+
+    fn parse_map_literal(&mut self) -> Expr {
+        let lbrace = self.bump(); // `{`
+        let mut items = Vec::new();
+        while !self.at(TokenKind::RBrace) && !self.at(TokenKind::Eof) {
+            if self.at(TokenKind::DotDot) {
+                self.bump();
+                let base = self.parse_expr(Restrict::default());
+                items.push(MapItem::Spread(Box::new(base)));
+            } else {
+                let key = self.parse_expr(Restrict { no_struct_lit: true });
+                self.expect(TokenKind::Colon, "`:`");
+                let value = self.parse_expr(Restrict::default());
+                let span = key.span.join(value.span);
+                items.push(MapItem::Entry {
+                    key: Box::new(key),
+                    value: Box::new(value),
+                    span,
+                });
+            }
+            if self.eat(TokenKind::Comma).is_none() {
+                break;
+            }
+        }
+        let rbrace = self.expect(TokenKind::RBrace, "`}`");
+        let end = rbrace.map(|t| t.span).unwrap_or_else(|| self.peek_span());
+        Expr { kind: ExprKind::MapLit(items), span: lbrace.span.join(end) }
     }
 
     fn parse_struct_literal(&mut self) -> Expr {

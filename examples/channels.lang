@@ -1,0 +1,39 @@
+// Channels (docs/20 §2): typed message-passing between threads. `channel<T>()`
+// returns a `(Sender<T>, Receiver<T>)` pair; `send` enqueues, `recv` blocks for
+// the next message. Endpoints are thread-safe handles, so a `Sender` can be
+// captured into a spawned worker.
+
+function produce(tx: Sender<i64>, n: i64) {
+  var i: i64 = 1;
+  while i <= n {
+    tx.send(i * i);   // send the squares 1, 4, 9, ...
+    i = i + 1;
+  }
+}
+
+function main() {
+  var pair: (Sender<i64>, Receiver<i64>) = channel<i64>();
+  var tx: Sender<i64> = pair.0;
+  var rx: Receiver<i64> = pair.1;
+
+  // A worker thread produces; the main thread consumes.
+  var worker: JoinHandle<i64> = Thread.spawn(() => { produce(tx, 5); 0 });
+
+  var total: i64 = 0;
+  var got: i64 = 0;
+  while got < 5 {
+    total = total + rx.recv();
+    got = got + 1;
+  }
+  match worker.join() {
+    Joined<i64> j => {},
+    Panicked p => println("worker panicked"),
+  }
+  println("sum of squares 1..5 = " + (total as str));   // 1+4+9+16+25 = 55
+
+  // `try_recv` polls without blocking: `T | null`.
+  match rx.try_recv() {
+    i64 n => println("unexpected: " + (n as str)),
+    null => println("channel empty, as expected"),
+  }
+}

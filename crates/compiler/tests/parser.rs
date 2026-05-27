@@ -318,10 +318,14 @@ fn extend_with_interface_impl() {
 }
 
 #[test]
-fn extend_static_function_keyword() {
-    let m = parse_ok("extend Wrapper { static function new(): Wrapper { Wrapper {} } }");
+fn extend_static_function_is_just_a_function_without_self() {
+    // There is no `static` keyword: a method with no `self` parameter is static.
+    let m = parse_ok("extend Wrapper { function new(): Wrapper { Wrapper {} } }");
     match &m.items[0].kind {
-        ItemKind::Extend(e) => assert!(e.members[0].is_static_keyword),
+        ItemKind::Extend(e) => {
+            let params = &e.members[0].function.params;
+            assert!(params.iter().all(|p| !matches!(p.kind, ParamKind::SelfParam)));
+        }
         _ => panic!(),
     }
 }
@@ -1650,7 +1654,7 @@ import { Println } from \"core:io\";
 pub struct Point { pub x: f64, pub y: f64 }
 
 extend Point {
-    static function origin(): Point { Point { x: 0.0, y: 0.0 } }
+    function origin(): Point { Point { x: 0.0, y: 0.0 } }
     function magnitude(self): f64 { self.x * self.x + self.y * self.y }
 }
 

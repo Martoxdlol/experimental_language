@@ -1,0 +1,15 @@
+// The `geometry` submodule. Its own `mod vec;` loads geometry/vec.lang.
+mod vec;
+
+import { Vec2, length_sq } from "geometry/vec";
+
+pub struct Rect { w: i64, h: i64 }
+
+pub function area(r: Rect): i64 { r.w * r.h }
+
+// `secret` is not `pub`, so importers cannot name it — but this module can.
+function secret(): i64 { 42 }
+
+pub function diagonal_sq(r: Rect): i64 {
+  length_sq(Vec2 { x: r.w, y: r.h })
+}

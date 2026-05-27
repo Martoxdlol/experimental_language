@@ -74,6 +74,7 @@
     <li><a href="#orphan">Orphan rule &amp; coherence</a></li>
     <li><a href="#dyn">Interface objects (dyn dispatch)</a></li>
     <li><a href="#callconv">Method resolution</a></li>
+    <li><a href="#static">Static methods</a></li>
   </ol>
 </div>
 
@@ -149,7 +150,7 @@ pub interface Named2 {
   }
 }
 
-// Static method (no self) + Self type
+// Static method (no self) + Self type — see §10
 pub interface Default {
   function default(): Self
 }
@@ -434,6 +435,65 @@ function ok&lt;T: Clone&gt;(x: T): T { x.clone() }      // OK</code></pre>
 Disambiguate by calling through the interface explicitly:</p>
 
 <pre><code>Printable.to_string(person)</code></pre>
+
+<!-- =========================================================== -->
+<h2 id="static">10. Static methods</h2>
+
+<p>A method declared in an <code>extend</code> or <code>interface</code> block
+<em>without</em> a <code>self</code> parameter is a <strong>static method</strong>
+(an associated function). There is <em>no</em> <code>static</code> keyword — the
+absence of <code>self</code> is the whole signal. It belongs to the type rather
+than to a value, and is called with the type on the left of the dot — the
+<code>.</code> analogue of Rust's <code>Type::method(args)</code>.</p>
+
+<pre><code>struct Point { x: i64, y: i64 }
+
+extend Point {
+  function origin(): Point { Point { x: 0, y: 0 } }   // no self → static
+  function at(x: i64, y: i64): Point { Point { x: x, y: y } }
+  function manhattan(self): i64 { self.x + self.y }   // has self → instance
+}
+
+var o = Point.origin()        // static call on the type
+var p = Point.at(3, 4)
+var m = p.manhattan()         // instance call on a value</code></pre>
+
+<div class="callout">
+  <strong>No keyword — <code>self</code> is the distinction.</strong> A function
+  with a leading <code>self</code> parameter is an instance method; one without is
+  static. A static method may not be called on a value, and an instance method may
+  not be called on the type — both are compile errors.
+</div>
+
+<h3>Static methods through a generic bound</h3>
+
+<p>An interface may declare static methods (often returning <code>Self</code>).
+Generic code calls them on the type parameter, and the compiler monomorphizes the
+call to the concrete implementation — exactly like an instance interface method,
+but with no receiver:</p>
+
+<pre><code>interface Default {
+  function default(): Self          // no self → a static requirement
+}
+
+struct Config { level: i64 }
+extend Config: Default {
+  function default(): Config { Config { level: 1 } }
+}
+
+function build&lt;T: Default&gt;(): T {
+  T.default()          // resolves to the concrete type's impl at each instantiation
+}
+
+var c = build&lt;Config&gt;()   // c == Config { level: 1 }</code></pre>
+
+<div class="callout">
+  <strong>Constructor shorthand.</strong> For any type <code>T</code> exposing a
+  <code>new</code> static method, <code>T(args)</code> is sugar for
+  <code>T.new(args)</code> in value position (see <a href="09-functions.html">09-functions</a> §10).
+  Tuple structs are <em>not</em> rewritten — <code>Pair(1, 2)</code> is always
+  direct construction.
+</div>
 
 </body>
 </html>
