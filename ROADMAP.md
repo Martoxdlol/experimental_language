@@ -308,9 +308,11 @@ The tracing GC is functionally complete for single-threaded programs.
       no AST item, special-cased). Runtime is a growable `Vec<i64>` of 8-byte
       slots; codegen widens each element to `i64` (uextend) and narrows on read.
       Supports `[a, b, c]` literals (incl. empty with annotation), `xs[i]` /
-      `xs[i] = v` (panic OOB), and methods `push`/`size`/`is_empty`/`set`.
-      7 backend + (checker) tests; `examples/lists.otter`. (`.get` → `T|null`,
-      `for`-in iteration, float/large elements: follow-ups.)
+      `xs[i] = v` (panic OOB), and methods `push`/`size`/`is_empty`/`set`/
+      `clear`/`pop`/`insert`/`remove` (`pop`/`remove` → `T|null`, boxed-union
+      pattern; `insert` shifts + panics if `i > size`) + `get`/`map`/`filter`/
+      `each`/`fold`. 7 backend + (checker) + 4 CLI tests; `examples/lists.otter`.
+      (TODO `docs/18`: `contains`/`index_of` — need `Eq` dispatch.)
 - [x] **`for x in xs`** over a `List<T>`: lowered to an index loop (size/get),
       pattern binding per element, with `break`/`continue` (via the loop stack).
       `for await` rejected; general `Iterator` protocol is a follow-up. 4 tests.
@@ -320,9 +322,10 @@ The tracing GC is functionally complete for single-threaded programs.
       `results.operator_methods[op_span]`; codegen emits a method call. 4 tests.
 - [x] **`str` methods + content comparison**: `size`/`byte_size`/`is_empty`/
       `contains`/`starts_with`/`ends_with`/`substring`/`to_upper`/`to_lower`/
-      `trim` (runtime intrinsics; checker `check_str_method`). Fixed a real bug:
-      `==`/`!=`/`<`/… on `str` now compare *content* (lang_str_eq/cmp), not
-      pointer identity. 5 tests.
+      `trim`/`repeat`/`replace`/`index_of` (→ `i64|null`) (runtime intrinsics;
+      checker `check_str_method`). Fixed a real bug: `==`/`!=`/`<`/… on `str` now
+      compare *content* (lang_str_eq/cmp), not pointer identity. 8 tests.
+      (TODO `docs/18`: `split(): List<str>`, `chars(): Iterator<char>`.)
 - [x] **`List.get(i): E | null`** — bounds-checked, returns a boxed union
       (establishes the union-returning-method codegen pattern). 3 tests.
 - [x] **`Map<K, V>`** (`docs/18` §6): open-addressing hash table (a `KIND_MAP`
@@ -647,14 +650,86 @@ The tracing GC is functionally complete for single-threaded programs.
       sub-expressions (today it must be a statement / trailing / `return` operand
       / `for await`), and `for await` over an interface `AsyncIterator` object or
       a non-variable stream expression.
-- [~] FFI (`docs/19`): **extern functions over the C ABI work** — primitives
-      and raw pointers (`*T`), called by their real symbol name (JIT resolves via
-      `dlsym`, native via the linker). Checker records each extern function's
-      lowered signature (`results.extern_sigs`); backend `gen_extern_call`
-      declares a C-ABI import and calls it; `clty_of` maps `*T` → machine
-      pointer. 2 CLI tests (libc `abs`, JIT==native parity). TODO: extern struct
-      layout + decorators (`@Align`/`@Union`/`@CallConv`/`@Link`), opaque-type
-      handles, `extern var`, fixed arrays, address-of to produce `*T` values.
+- [~] FFI (`docs/19`): **extern functions + extern structs + raw pointers work.**
+      *Extern functions* over the C ABI: primitives and raw pointers (`*T`),
+      called by their real symbol name (JIT resolves via `dlsym`, native via the
+      linker); checker records each lowered signature (`results.extern_sigs`),
+      backend `gen_extern_call` declares a C-ABI import; `clty_of` maps `*T` →
+      machine pointer. **Extern structs (`docs/19` §3)**: header-less, C-ABI
+      laid out, **stack-allocated** (no GC involvement — fields are scalars /
+      raw pointers, validated `ReprC` by the checker). Construction, field
+      access/mutation, and the **layout decorators `@Packed(N)` / `@Align(N)` /
+      `@Union`** all work (over-aligned `@Align(N>16)` is honored by
+      over-allocating + rounding the base pointer). **`&place`** (address-of) on
+      an extern-struct place yields its `*T` address (no pin needed for stack
+      values); **`*p`** dereferences a raw pointer — identity for a
+      pointer-to-extern-struct, a scalar load otherwise — and **`*p = v`** stores
+      a scalar; both **panic on null** (exit 101). **`*A as *B`** (and
+      `*T ↔ usize/isize`) pointer reinterpret casts are no-ops. The canonical
+      C out-pointer pattern works against real libc (`memcpy(&dst, &src, n)`),
+      JIT + native byte-identical, GC-stress clean. `examples/ffi.otter`; 14 CLI
+      tests. **`extern var` (`docs/19` §4)**: a C global, read and written
+      through an imported writable data symbol (`extern_var_addr`); the checker
+      resolves it as an assignable place; tested against libc `optind`
+      (read = 1, then write-back); JIT + native parity; 2 CLI tests.
+      **Fixed-size arrays `[T; N]` (`docs/19` §4)**: valid as extern struct
+      fields; laid out inline (`N * size(T)`, element alignment); `arr[i]`
+      reads/writes elements (no bounds check, raw FFI); `&arr[i]` is an element
+      address (fillable by a C function); extern struct literals may omit fields
+      (the C block is zero-filled on construct, so an array field with no literal
+      form starts at zero). JIT + native + GC-stress parity; 3 CLI tests +
+      `examples/ffi.otter` (`Sockaddr { family, data: [u8;14] }`). **Opaque
+      `extern type` handles (`docs/19` §4)**: an incomplete C handle used only
+      behind a pointer (`*File`, `**Sqlite3`). The `*Named(ExternType)` → machine
+      pointer path round-trips through C (verified with libc `tmpfile`/`fileno`/
+      `fclose`, JIT + native); dereferencing to an opaque value is rejected (no
+      value representation). 2 CLI tests. **Null-pointer optimization (NPO,
+      `docs/19` §2)**: a `*T | null` union is laid out as a single *raw* nullable
+      pointer (`null` == `0x0`), NOT a `{type_id, data}` box — and crucially is
+      NOT GC-traced (it points into foreign/unmanaged memory). Widening is the
+      identity (`null` → `0`), `is null`/`is *T` are null/non-null tests, `as`
+      reinterprets, and `if p is null { … } else { … }` flow-narrows. This makes
+      C functions returning nullable pointers (libc `malloc(): *T | null`) work
+      with real null-checks + heap writes. JIT + native + GC-stress parity; 3 CLI
+      tests + `examples/ffi.otter`. `match`/`?` on an NPO union are rejected
+      (use the `is null` check). **Foreign allocation (`docs/19` §5)** — the
+      full family: `Foreign.alloc<T>()` / `alloc_zeroed<T>()` (`sizeof(T)`
+      bytes), `alloc_flex<T, E>(n)` (`sizeof(T) + n*sizeof(E)`, flexible array
+      member), `realloc<T>(p, new_size)` (resize preserving bytes), and
+      `free(p)`. All return a raw `*T | null` (NPO). The runtime
+      (`runtime/foreign.rs`) wraps the system allocator with a size header (so
+      `free`/`realloc` recover the layout); fields are written through `*p`.
+      Recognized as builtins (like `Shared.new`); JIT + native + GC-stress
+      parity (foreign blocks are never traced); 4 CLI tests + `examples/ffi.otter`.
+      **String marshaling (`docs/19` §6)**: `CString.from_str(s): *u8` copies a
+      `str` into a fresh NUL-terminated C string on the foreign heap (free with
+      `Foreign.free`); `CStr.to_str(p): str` copies a C string back into a
+      managed `str`. Verified against libc `strlen`/`puts`; JIT + native +
+      GC-stress parity (the `to_str` allocation survives); 2 CLI tests +
+      `examples/ffi.otter`. **Loudly rejected**: extern-struct-by-value return,
+      `&` on non-extern-struct scalars, deref of an opaque type, `match`/`?` on
+      `*T | null`. **Nested extern structs
+      (`docs/19` §3)**: an `extern struct` field of another extern struct is laid
+      out *inline* (its bytes, not a pointer): `field_size_align` returns the
+      inner C-layout size/align, construction byte-copies the inner value in
+      (`copy_bytes`, 8/4/2/1-byte chunks), field access yields the address of the
+      inline bytes, and scalar / whole-struct mutation both work. Correct offsets
+      (`stime` at +16, `maxrss` at +32 in a `Rusage`-shaped struct) prove inline
+      layout. JIT + native + GC-stress parity; 1 CLI test + `examples/ffi.otter`.
+      **`@Link(lib = "…")` (`docs/19` §13)**: directs symbol resolution — the
+      JIT `dlopen`s the library so `dlsym` finds the symbol, and the native build
+      passes `-l<lib>` to `cc`. The checker collects the libs
+      (`results.link_libs`, de-duped) from extern-function `@Link` attrs.
+      Verified against zlib `crc32` ("hello" → 907060870), JIT + native +
+      GC-stress; 1 CLI test. **`@Transparent` ABI newtype (`docs/19` §3)**: a
+      single-field struct (`struct Num(i32)`) whose runtime representation and C
+      ABI are exactly its field's — no heap box. `transparent_inner` makes
+      `clty_of`/`is_managed_ptr` see through it; construction returns the inner
+      value, `.0` is the identity. Verified via libc `abs(Num(-5)) == 5` (proving
+      the i32 ABI); JIT + native + GC-stress; 2 CLI tests. TODO: `@CallConv`/
+      `@Variadic` function decorators (the latter blocked by Cranelift's lack of
+      portable varargs-ABI support), a managed `CString` handle type with `Drop`
+      + `Buffer`.
 - [~] `@Derive` + procedural macros (`docs/22`): **`@Derive(Eq)`, `@Derive(Ord)`,
       `@Derive(ToStr)`, `@Derive(Clone)`, and `@Derive(Hash)` work** — a source-level desugaring
       (`sema/derive::expand_derives`, run in `analyze`/`analyze_multi` before

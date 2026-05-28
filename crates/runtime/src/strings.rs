@@ -199,6 +199,41 @@ pub unsafe extern "C" fn lang_str_trim(s: *const LangStr) -> *const LangStr {
     make_str(unsafe { s_str(s) }.trim().as_bytes())
 }
 
+/// `s.index_of(needle)` (`docs/18`): the byte index of the first occurrence of
+/// `needle`, or `-1` if absent (codegen turns `-1` into the `null` variant).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lang_str_index_of(s: *const LangStr, needle: *const LangStr) -> i64 {
+    let hay = unsafe { s_str(s) };
+    let n = unsafe { s_str(needle) };
+    match hay.find(&*n) {
+        Some(i) => i as i64,
+        None => -1,
+    }
+}
+
+/// `s.repeat(n)` (`docs/18`): the string repeated `n` times (`n <= 0` → empty).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lang_str_repeat(s: *const LangStr, n: i64) -> *const LangStr {
+    let count = if n < 0 { 0 } else { n as usize };
+    make_str(unsafe { s_str(s) }.repeat(count).as_bytes())
+}
+
+/// `s.replace(old, new)` (`docs/18`): every non-overlapping occurrence of `old`
+/// replaced with `new`. The result String is built before allocating, so the
+/// managed inputs need not survive `make_str`'s safepoint.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lang_str_replace(
+    s: *const LangStr,
+    old: *const LangStr,
+    new: *const LangStr,
+) -> *const LangStr {
+    let base = unsafe { s_str(s) };
+    let from = unsafe { s_str(old) };
+    let to = unsafe { s_str(new) };
+    let out = base.replace(&*from, &*to);
+    make_str(out.as_bytes())
+}
+
 fn write_str(s: *const LangStr, newline: bool) {
     let bytes = unsafe { str_bytes(s) };
     let stdout = std::io::stdout();

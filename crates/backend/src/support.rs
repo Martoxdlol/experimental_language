@@ -464,6 +464,10 @@ pub(crate) fn clty_of(analysis: &Analysis, ty: Ty) -> Option<ClType> {
         TyKind::Char => Some(types::I32),
         // `str` is a managed reference — a pointer (to a runtime `LangStr`).
         TyKind::Str => Some(PTR),
+        // A `@Transparent` newtype has its inner field's representation/ABI.
+        TyKind::Named { .. } if transparent_inner(analysis, ty).is_some() => {
+            clty_of(analysis, transparent_inner(analysis, ty).unwrap())
+        }
         // Structs are managed references (a pointer to the field block); an
         // interface object is a pointer to a `{vtable, data}` fat-pointer box.
         TyKind::Named { def, .. }
@@ -556,7 +560,12 @@ pub(crate) struct Layout {
     pub(crate) names: Vec<String>,
     pub(crate) offsets: Vec<u32>,
     pub(crate) cltys: Vec<Option<ClType>>,
+    /// The (lowered) type of each field — lets field access distinguish an
+    /// inline aggregate (a nested extern struct) from a scalar.
+    pub(crate) tys: Vec<Ty>,
     pub(crate) size: u32,
+    /// The aggregate's alignment (a power of two), for stack-slot allocation.
+    pub(crate) align: u32,
     /// Byte offsets of fields that hold managed pointers (the GC trace map).
     pub(crate) ptr_offsets: Vec<u32>,
 }
@@ -587,14 +596,40 @@ pub(crate) fn is_immutable_value_codegen(analysis: &Analysis, ty: Ty) -> bool {
 /// (including `List`) are. Foreign (`extern`) structs are not managed.
 pub(crate) fn is_managed_ptr(analysis: &Analysis, ty: Ty) -> bool {
     match analysis.tcx.kind(ty) {
-        TyKind::Str | TyKind::Tuple(_) | TyKind::Union(_) | TyKind::Dynamic => true,
+        TyKind::Str | TyKind::Tuple(_) | TyKind::Dynamic => true,
+        // A `*T | null` union is laid out as a *raw* nullable pointer (NPO,
+        // `docs/19` §2), not a managed `{type_id, data}` box — the collector
+        // must NOT trace it (it points into foreign/unmanaged memory or is null).
+        // Every other union is a managed box.
+        TyKind::Union(_) => npo_union(analysis, ty).is_none(),
         // A closure value is a pointer to a managed environment.
         TyKind::Func { is_extern: false, .. } => true,
+        // A `@Transparent` newtype is managed iff its inner field is.
+        TyKind::Named { .. } if transparent_inner(analysis, ty).is_some() => {
+            is_managed_ptr(analysis, transparent_inner(analysis, ty).unwrap())
+        }
         TyKind::Named { def, .. } => {
             matches!(analysis.program.def(*def).kind, DefKind::Struct | DefKind::Interface)
         }
         _ => false,
     }
+}
+
+/// If `ty` is a null-pointer-optimized union — exactly `{ *T, null }` — return
+/// its pointer variant `*T`. Such a union is represented at runtime as a single
+/// raw nullable pointer (`null` == `0x0`), with no `{type_id, data}` box
+/// (`docs/19` §2). Returns `None` for every other union.
+pub(crate) fn npo_union(analysis: &Analysis, ty: Ty) -> Option<Ty> {
+    if let TyKind::Union(members) = analysis.tcx.kind(ty) {
+        if members.len() == 2 {
+            let has_null = members.iter().any(|m| matches!(analysis.tcx.kind(*m), TyKind::Null));
+            let ptr = members.iter().find(|m| matches!(analysis.tcx.kind(**m), TyKind::Ptr(_)));
+            if has_null {
+                return ptr.copied();
+            }
+        }
+    }
+    None
 }
 
 /// Compute a field-block layout from named, lowered field types. Field offsets
@@ -606,6 +641,7 @@ pub(crate) fn layout_of_fields(analysis: &Analysis, fields: &[(String, Ty)]) -> 
     let mut offsets = Vec::new();
     let mut cltys = Vec::new();
     let mut names = Vec::new();
+    let mut tys = Vec::new();
     let mut ptr_offsets = Vec::new();
     let mut max_align = 1u32;
     for (name, ty) in fields {
@@ -618,13 +654,179 @@ pub(crate) fn layout_of_fields(analysis: &Analysis, fields: &[(String, Ty)]) -> 
         offsets.push(offset);
         cltys.push(ct);
         names.push(name.clone());
+        tys.push(*ty);
         if is_managed_ptr(analysis, *ty) {
             ptr_offsets.push(offset);
         }
         offset += size;
         max_align = max_align.max(align);
     }
-    Layout { names, offsets, cltys, size: align_up(offset, max_align).max(1), ptr_offsets }
+    Layout {
+        names,
+        offsets,
+        cltys,
+        tys,
+        size: align_up(offset, max_align).max(1),
+        align: max_align,
+        ptr_offsets,
+    }
+}
+
+/// If `ty` is a `@Transparent` single-field struct (`docs/19` §3), return its
+/// inner field type (with the struct's generic args substituted). A transparent
+/// struct has the same runtime representation and ABI as its one field.
+pub(crate) fn transparent_inner(analysis: &Analysis, ty: Ty) -> Option<Ty> {
+    let TyKind::Named { def, args } = analysis.tcx.kind(ty) else { return None };
+    let d = analysis.program.def(*def);
+    if !matches!(d.kind, DefKind::Struct | DefKind::ExternStruct) {
+        return None;
+    }
+    if !d.attrs.iter().any(|a| a.name.name == "Transparent") {
+        return None;
+    }
+    let inner = match analysis.results.struct_fields.get(def)? {
+        StructFields::Tuple(ts) if ts.len() == 1 => ts[0],
+        StructFields::Record(fs) if fs.len() == 1 => fs[0].1,
+        _ => return None,
+    };
+    // Substitute the struct's generic params (usually none for a newtype).
+    let ssubst: HashMap<DefId, Ty> =
+        d.generics.iter().copied().zip(args.iter().copied()).collect();
+    Some(resolve_shallow(analysis, inner, &ssubst))
+}
+
+/// Whether `ty` is a nested `extern struct` (laid out *inline* inside another
+/// extern struct, not as a pointer) — `docs/19` §3.
+pub(crate) fn is_extern_struct_ty(analysis: &Analysis, ty: Ty) -> bool {
+    matches!(
+        analysis.tcx.kind(ty),
+        TyKind::Named { def, .. } if analysis.program.def(*def).kind == DefKind::ExternStruct
+    )
+}
+
+/// The C-ABI layout decorators on an `extern struct` def (`docs/19` §3),
+/// read off its `attrs`.
+#[derive(Default)]
+pub(crate) struct ExternRepr {
+    /// `@Packed(N)` — cap each field's alignment at `N` (bare `@Packed` = 1).
+    pub(crate) packed: Option<u32>,
+    /// `@Align(N)` — a minimum alignment for the whole struct.
+    pub(crate) min_align: Option<u32>,
+    /// `@Union` — all fields share offset 0; size = max field size.
+    pub(crate) is_union: bool,
+}
+
+/// Read the first positive integer literal among an attribute's positional
+/// arguments (e.g. the `8` in `@Packed(8)`), if any.
+fn attr_int_arg(attr: &Attribute) -> Option<u32> {
+    for a in &attr.args {
+        if let AttrArg::Positional(e) = a {
+            if let ExprKind::Int(lit) = &e.kind {
+                let digits: String = lit.raw.chars().filter(|c| *c != '_').collect();
+                if let Ok(n) = digits.parse::<u32>() {
+                    return Some(n);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Collect the FFI layout decorators declared on an `extern struct` def.
+pub(crate) fn extern_repr(analysis: &Analysis, def: DefId) -> ExternRepr {
+    let mut repr = ExternRepr::default();
+    for attr in &analysis.program.def(def).attrs {
+        match attr.name.name.as_str() {
+            "Packed" => repr.packed = Some(attr_int_arg(attr).unwrap_or(1)),
+            "Align" => repr.min_align = attr_int_arg(attr),
+            "Union" => repr.is_union = true,
+            _ => {}
+        }
+    }
+    repr
+}
+
+/// The byte size and alignment of an extern-struct field type (`docs/19`):
+/// a scalar / raw pointer (via its Cranelift type), or a fixed array
+/// `[T; N]` (`N * size(T)`, aligned like `T`).
+pub(crate) fn field_size_align(analysis: &Analysis, ty: Ty) -> (u32, u32) {
+    match analysis.tcx.kind(ty) {
+        TyKind::Array { elem, len } => {
+            let (es, ea) = field_size_align(analysis, *elem);
+            (es.saturating_mul(*len as u32), ea)
+        }
+        // A nested `extern struct` is embedded *inline*, occupying its own C
+        // layout's bytes (not a pointer) — `docs/19` §3.
+        TyKind::Named { def, args }
+            if analysis.program.def(*def).kind == DefKind::ExternStruct =>
+        {
+            let l = compute_layout(analysis, *def, args);
+            (l.size, l.align)
+        }
+        _ => match clty_of(analysis, ty) {
+            Some(c) => (c.bytes(), c.bytes().max(1)),
+            None => (0, 1),
+        },
+    }
+}
+
+/// Compute the C-ABI layout of an extern struct's flat field block (no object
+/// header, no GC trace map), honoring `@Packed`/`@Align`/`@Union` (`docs/19`
+/// §3). Fields are scalars, raw pointers, or fixed arrays (validated by the
+/// checker), so the trace map is always empty. An array field's `clty` is
+/// `None` (it is not loaded as a whole value — only indexed).
+pub(crate) fn extern_layout_of_fields(
+    analysis: &Analysis,
+    fields: &[(String, Ty)],
+    repr: &ExternRepr,
+) -> Layout {
+    let mut offsets = Vec::new();
+    let mut cltys = Vec::new();
+    let mut names = Vec::new();
+    let mut tys = Vec::new();
+    let mut offset = 0u32;
+    let mut max_align = 1u32;
+    let mut union_size = 0u32;
+    for (name, fty) in fields.iter() {
+        // A nested extern struct (and a fixed array) is an inline aggregate, not
+        // a scalar — it has no whole-value Cranelift type (accessed by address /
+        // index, never loaded as one value).
+        let ct = if is_extern_struct_ty(analysis, *fty)
+            || matches!(analysis.tcx.kind(*fty), TyKind::Array { .. })
+        {
+            None
+        } else {
+            clty_of(analysis, *fty)
+        };
+        let (size, mut align) = field_size_align(analysis, *fty);
+        if let Some(p) = repr.packed {
+            align = align.min(p.max(1));
+        }
+        let off = if repr.is_union { 0 } else { align_up(offset, align) };
+        offsets.push(off);
+        cltys.push(ct);
+        names.push(name.clone());
+        tys.push(*fty);
+        if repr.is_union {
+            union_size = union_size.max(size);
+        } else {
+            offset = off + size;
+        }
+        max_align = max_align.max(align);
+    }
+    if let Some(m) = repr.min_align {
+        max_align = max_align.max(m.max(1));
+    }
+    let raw = if repr.is_union { union_size } else { offset };
+    Layout {
+        names,
+        offsets,
+        cltys,
+        tys,
+        size: align_up(raw, max_align).max(1),
+        align: max_align,
+        ptr_offsets: Vec::new(),
+    }
 }
 
 /// The field-block layout of a (non-generic) struct, by its recorded fields.
@@ -644,6 +846,12 @@ pub(crate) fn compute_layout(analysis: &Analysis, def: DefId, args: &[Ty]) -> La
         .into_iter()
         .map(|(n, t)| (n, resolve_shallow(analysis, t, &ssubst)))
         .collect();
+    // An `extern struct` uses the C ABI: a flat, header-less field block whose
+    // offsets honor the layout decorators (`docs/19` §3).
+    if analysis.program.def(def).kind == DefKind::ExternStruct {
+        let repr = extern_repr(analysis, def);
+        return extern_layout_of_fields(analysis, &resolved, &repr);
+    }
     layout_of_fields(analysis, &resolved)
 }
 

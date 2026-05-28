@@ -124,6 +124,12 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     }
 
     pub(crate) fn gen_cast(&mut self, inner: &Expr, from: Ty, to: Ty) -> CgResult<Option<Value>> {
+        // `*T | null` (NPO) casts are no-ops on the raw pointer (`docs/19` §2):
+        // `(*T | null) as *T` reinterprets, and `*T as (*T | null)` is identity.
+        if npo_union(self.cx.analysis, from).is_some() || npo_union(self.cx.analysis, to).is_some() {
+            let v = self.gen_expr(inner)?;
+            return Ok(Some(v.unwrap_or_else(|| self.b.ins().iconst(PTR, 0))));
+        }
         // Narrowing a union/`dynamic`: the operand is a box; check its type id.
         if matches!(self.cx.analysis.tcx.kind(from), TyKind::Union(_) | TyKind::Dynamic) {
             let ptr = self.gen_expr(inner)?.ok_or_else(|| {
@@ -313,6 +319,19 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     /// `v is T` — a runtime tag check on a union/`dynamic`, an interface object's
     /// stored type id, or a static answer for a concrete operand.
     pub(crate) fn gen_is(&mut self, inner: &Expr, from: Ty, to: Ty) -> CgResult<Option<Value>> {
+        // `*T | null` (NPO): the value is a raw pointer, so `is null` is a null
+        // test and `is *T` is a non-null test (`docs/19` §2).
+        if npo_union(self.cx.analysis, from).is_some() {
+            let v = self.gen_expr(inner)?;
+            let p = v.unwrap_or_else(|| self.b.ins().iconst(PTR, 0));
+            let zero = self.b.ins().iconst(PTR, 0);
+            let cc = if matches!(self.cx.analysis.tcx.kind(to), TyKind::Null) {
+                IntCC::Equal
+            } else {
+                IntCC::NotEqual
+            };
+            return Ok(Some(self.b.ins().icmp(cc, p, zero)));
+        }
         if matches!(self.cx.analysis.tcx.kind(from), TyKind::Union(_) | TyKind::Dynamic) {
             let ptr = self.gen_expr(inner)?.ok_or_else(|| {
                 CodegenError::new(inner.span, "`is` operand has no value")

@@ -14,6 +14,7 @@
 
 pub mod async_rt;
 pub mod channels;
+pub mod foreign;
 pub mod gc;
 pub mod hash;
 pub mod list;

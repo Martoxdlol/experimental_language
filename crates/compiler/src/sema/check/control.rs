@@ -16,6 +16,16 @@ impl<'a> Checker<'a> {
         if self.tcx.is_error(raw_et) {
             return self.tcx.error;
         }
+        // `?` on a `*T | null` (NPO) raw pointer is not supported (it has no
+        // tagged box to partition) — use an explicit null check (`docs/19` §2).
+        if self.is_npo_union(raw_et) {
+            self.emit(q_span, SemaErrorKind::Message(
+                "`?` on a nullable pointer `*T | null` is not supported; \
+                 check it explicitly with `if p is null { … }` (`docs/19` §2)"
+                    .into(),
+            ));
+            return self.tcx.error;
+        }
         // `?` classifies each variant of the operand into success / direct
         // failure / converted failure (via `FromResidual`).
         //   * **Union operand:** every variant is a *candidate failure* —
@@ -234,6 +244,16 @@ impl<'a> Checker<'a> {
         expected: Option<Ty>,
     ) -> Ty {
         let sty = self.check_expr(scrutinee, None);
+        // A `*T | null` (NPO) value is a raw nullable pointer, not a tagged box,
+        // so `match` cannot dispatch on it yet — use `if p is *T { … }` /
+        // `if p is null { … }` flow narrowing instead (`docs/19` §2).
+        if self.is_npo_union(sty) {
+            self.emit(span, SemaErrorKind::Message(
+                "`match` on a nullable pointer `*T | null` is not yet supported; \
+                 use `if p is null { … } else { … }` (`docs/19` §2)"
+                    .into(),
+            ));
+        }
         let mut body_tys = Vec::new();
         for arm in arms {
             self.push_scope();

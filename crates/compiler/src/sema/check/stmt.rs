@@ -89,6 +89,15 @@ impl<'a> Checker<'a> {
                     ty
                 }
                 None => {
+                    // Not a local: an `extern var` C global is an assignable
+                    // place (`docs/19` §4). Resolve it as a module value.
+                    let module = self.current_module();
+                    if let Some(def) = self.prog.resolve_value_in(module, &name.name) {
+                        if self.prog.def(def).kind == DefKind::ExternVar {
+                            self.results.resolutions.insert(target.span, ValueRes::Global(def));
+                            return self.value_def_ty(def);
+                        }
+                    }
                     self.emit(target.span, SemaErrorKind::UnknownValue {
                         name: name.name.clone(),
                     });
@@ -103,6 +112,9 @@ impl<'a> Checker<'a> {
                 self.check_tuple_index(receiver, *index, *index_span)
             }
             ExprKind::Index { receiver, index } => self.check_index(receiver, index),
+            // `*p = v` — assign through a raw pointer (`docs/19` §2). The pointee
+            // type is what the assigned value must satisfy.
+            ExprKind::Deref { expr: inner, star_span } => self.check_deref(inner, *star_span),
             _ => self.check_expr(target, None),
         }
     }

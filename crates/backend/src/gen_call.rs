@@ -15,6 +15,60 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         if self.cx.analysis.results.shared_news.contains(&span) {
             return self.gen_shared_new(args, span);
         }
+        // `Foreign.alloc<T>()` / `alloc_zeroed<T>()` (`docs/19` §5): a foreign
+        // (unmanaged) allocation of `sizeof(T)` bytes; the result is the raw
+        // `*T | null` (NPO) pointer.
+        if let Some(&(t, zeroed)) = self.cx.analysis.results.foreign_allocs.get(&span) {
+            let size = self.sizeof_ty(t);
+            let sz = self.b.ins().iconst(types::I64, size as i64);
+            let f = if zeroed { "lang_foreign_alloc_zeroed" } else { "lang_foreign_alloc" };
+            return Ok(self.call_intrinsic(f, &[types::I64], Some(PTR), &[sz]));
+        }
+        // `Foreign.alloc_flex<T, E>(n)` (`docs/19` §5): `sizeof(T) + n*sizeof(E)`.
+        if let Some(&(t, e)) = self.cx.analysis.results.foreign_flex.get(&span) {
+            let base = self.sizeof_ty(t) as i64;
+            let esz = self.sizeof_ty(e) as i64;
+            let n = self.gen_expr(&args[0])?.ok_or_else(|| {
+                CodegenError::new(args[0].span, "alloc_flex count has no value")
+            })?;
+            let extra = self.b.ins().imul_imm(n, esz);
+            let base_v = self.b.ins().iconst(types::I64, base);
+            let total = self.b.ins().iadd(base_v, extra);
+            return Ok(self.call_intrinsic("lang_foreign_alloc", &[types::I64], Some(PTR), &[total]));
+        }
+        // `Foreign.realloc<T>(p, new_size)` (`docs/19` §5).
+        if self.cx.analysis.results.foreign_reallocs.contains(&span) {
+            let p = self.gen_expr(&args[0])?.ok_or_else(|| {
+                CodegenError::new(args[0].span, "realloc pointer has no value")
+            })?;
+            let sz = self.gen_expr(&args[1])?.ok_or_else(|| {
+                CodegenError::new(args[1].span, "realloc size has no value")
+            })?;
+            return Ok(self.call_intrinsic(
+                "lang_foreign_realloc", &[PTR, types::I64], Some(PTR), &[p, sz],
+            ));
+        }
+        // `Foreign.free(p)` (`docs/19` §5): free a foreign allocation.
+        if self.cx.analysis.results.foreign_frees.contains(&span) {
+            let p = self.gen_expr(&args[0])?.ok_or_else(|| {
+                CodegenError::new(args[0].span, "free argument has no value")
+            })?;
+            self.call_intrinsic("lang_foreign_free", &[PTR], None, &[p]);
+            return Ok(None);
+        }
+        // `CString.from_str(s)` / `CStr.to_str(p)` (`docs/19` §6): str ↔ C string.
+        if self.cx.analysis.results.cstring_from_strs.contains(&span) {
+            let s = self.gen_expr(&args[0])?.ok_or_else(|| {
+                CodegenError::new(args[0].span, "from_str argument has no value")
+            })?;
+            return Ok(self.call_intrinsic("lang_cstring_from_str", &[PTR], Some(PTR), &[s]));
+        }
+        if self.cx.analysis.results.cstr_to_strs.contains(&span) {
+            let p = self.gen_expr(&args[0])?.ok_or_else(|| {
+                CodegenError::new(args[0].span, "to_str argument has no value")
+            })?;
+            return Ok(self.call_intrinsic("lang_cstr_to_str", &[PTR], Some(PTR), &[p]));
+        }
         if self.cx.analysis.results.yield_nows.contains(&span) {
             let prog = &self.cx.analysis.program;
             let ready_tid = 1000 + prog.ready_def.index() as i64;

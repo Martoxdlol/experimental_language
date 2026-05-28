@@ -184,6 +184,15 @@ impl<'a> Checker<'a> {
             self.expect(it, kt, index.span);
             return vt;
         }
+        // A fixed-size FFI array `[T; N]` (`docs/19` §4): `arr[i]` reads/writes
+        // element `T` (no bounds check — raw FFI). Used on extern struct fields.
+        if let TyKind::Array { elem, .. } = self.tcx.kind(rty) {
+            let elem = *elem;
+            let i64t = self.tcx.int(IntTy::I64);
+            let it = self.check_expr(index, Some(i64t));
+            self.expect(it, i64t, index.span);
+            return elem;
+        }
         self.emit(receiver.span, SemaErrorKind::Message(format!(
             "type `{}` cannot be indexed with `[]`", self.display(rty)
         )));
@@ -222,6 +231,22 @@ impl<'a> Checker<'a> {
             "set" => {
                 check_args(self, &[i64t, elem]);
                 self.tcx.null
+            }
+            "clear" => {
+                check_args(self, &[]);
+                self.tcx.null
+            }
+            "pop" => {
+                check_args(self, &[]);
+                self.tcx.mk_union([elem, self.tcx.null])
+            }
+            "insert" => {
+                check_args(self, &[i64t, elem]);
+                self.tcx.null
+            }
+            "remove" => {
+                check_args(self, &[i64t]);
+                self.tcx.mk_union([elem, self.tcx.null])
             }
             // Higher-order methods take a closure (often written as a trailing
             // closure with an implicit `it`).
@@ -313,6 +338,18 @@ impl<'a> Checker<'a> {
             "to_upper" | "to_lower" | "trim" => {
                 check(self, &[]);
                 str_ty
+            }
+            "repeat" => {
+                check(self, &[i64t]);
+                str_ty
+            }
+            "replace" => {
+                check(self, &[str_ty, str_ty]);
+                str_ty
+            }
+            "index_of" => {
+                check(self, &[str_ty]);
+                self.tcx.mk_union([i64t, self.tcx.null])
             }
             other => {
                 self.emit(name.span, SemaErrorKind::Message(format!(
@@ -859,6 +896,158 @@ impl<'a> Checker<'a> {
         let elem = self.check_expr(&args[0], None);
         self.results.shared_news.insert(span);
         self.tcx.mk_named(self.prog.shared_def, vec![elem])
+    }
+
+    /// `Foreign.alloc<T>()` / `alloc_zeroed<T>()` / `free(p)` (`docs/19` §5):
+    /// manual foreign-heap allocation. `alloc` returns `*T | null` (NPO);
+    /// `free` takes a raw pointer and returns `null`.
+    pub(crate) fn check_foreign_builtin(
+        &mut self,
+        method: &str,
+        generics: &[Type],
+        args: &[Expr],
+        span: Span,
+    ) -> Ty {
+        match method {
+            "alloc" | "alloc_zeroed" => {
+                if generics.len() != 1 {
+                    self.emit(span, SemaErrorKind::Message(format!(
+                        "`Foreign.{method}` needs exactly one type argument, e.g. \
+                         `Foreign.{method}<Pair>()` (`docs/19` §5)"
+                    )));
+                    return self.tcx.error;
+                }
+                if !args.is_empty() {
+                    self.emit(span, SemaErrorKind::ArgCount { expected: 0, found: args.len() });
+                }
+                let env = self.local_env();
+                let t = self.lower_ty(&generics[0], &env);
+                // The element must be C-ABI-compatible (it lives on the foreign
+                // heap), or an extern struct.
+                if !self.is_repr_c(t) && !self.is_extern_struct(t) {
+                    self.emit(span, SemaErrorKind::Message(format!(
+                        "`Foreign.{method}` requires a C-ABI (`ReprC`) type argument, \
+                         got `{}` (`docs/19` §5)",
+                        self.display(t)
+                    )));
+                    return self.tcx.error;
+                }
+                self.results.foreign_allocs.insert(span, (t, method == "alloc_zeroed"));
+                // `*T | null` — a raw nullable pointer (NPO).
+                let ptr = self.tcx.mk_ptr(t);
+                self.tcx.mk_union([ptr, self.tcx.null])
+            }
+            "free" => {
+                if args.len() != 1 {
+                    self.emit(span, SemaErrorKind::ArgCount { expected: 1, found: args.len() });
+                    return self.tcx.null;
+                }
+                let at = self.check_expr(&args[0], None);
+                if !matches!(self.tcx.kind(at), TyKind::Ptr(_)) && !self.is_npo_union(at) {
+                    self.emit(args[0].span, SemaErrorKind::Message(format!(
+                        "`Foreign.free` expects a raw pointer `*T`, got `{}`",
+                        self.display(at)
+                    )));
+                }
+                self.results.foreign_frees.insert(span);
+                self.tcx.null
+            }
+            "realloc" => {
+                if generics.len() != 1 {
+                    self.emit(span, SemaErrorKind::Message(
+                        "`Foreign.realloc` needs one type argument, e.g. \
+                         `Foreign.realloc<Pair>(p, n)` (`docs/19` §5)".into(),
+                    ));
+                    return self.tcx.error;
+                }
+                if args.len() != 2 {
+                    self.emit(span, SemaErrorKind::ArgCount { expected: 2, found: args.len() });
+                    return self.tcx.error;
+                }
+                let env = self.local_env();
+                let t = self.lower_ty(&generics[0], &env);
+                let ptr_t = self.tcx.mk_ptr(t);
+                let pt = self.check_expr(&args[0], Some(ptr_t));
+                if !matches!(self.tcx.kind(pt), TyKind::Ptr(_)) && !self.is_npo_union(pt) {
+                    self.emit(args[0].span, SemaErrorKind::Message(format!(
+                        "`Foreign.realloc` expects a raw pointer `*T`, got `{}`", self.display(pt)
+                    )));
+                }
+                let usize_t = self.tcx.int(IntTy::Usize);
+                let szt = self.check_expr(&args[1], Some(usize_t));
+                self.expect(szt, usize_t, args[1].span);
+                self.results.foreign_reallocs.insert(span);
+                self.tcx.mk_union([ptr_t, self.tcx.null])
+            }
+            "alloc_flex" => {
+                if generics.len() != 2 {
+                    self.emit(span, SemaErrorKind::Message(
+                        "`Foreign.alloc_flex` needs two type arguments, e.g. \
+                         `Foreign.alloc_flex<Msg, u8>(n)` (`docs/19` §5)".into(),
+                    ));
+                    return self.tcx.error;
+                }
+                if args.len() != 1 {
+                    self.emit(span, SemaErrorKind::ArgCount { expected: 1, found: args.len() });
+                    return self.tcx.error;
+                }
+                let env = self.local_env();
+                let t = self.lower_ty(&generics[0], &env);
+                let e = self.lower_ty(&generics[1], &env);
+                for (ty, n) in [(t, 0), (e, 1)] {
+                    if !self.is_repr_c(ty) && !self.is_extern_struct(ty) {
+                        self.emit(span, SemaErrorKind::Message(format!(
+                            "`Foreign.alloc_flex` type argument {} (`{}`) must be C-ABI \
+                             (`ReprC`) (`docs/19` §5)", n + 1, self.display(ty)
+                        )));
+                    }
+                }
+                let usize_t = self.tcx.int(IntTy::Usize);
+                let ct = self.check_expr(&args[0], Some(usize_t));
+                self.expect(ct, usize_t, args[0].span);
+                self.results.foreign_flex.insert(span, (t, e));
+                let ptr_t = self.tcx.mk_ptr(t);
+                self.tcx.mk_union([ptr_t, self.tcx.null])
+            }
+            other => {
+                self.emit(span, SemaErrorKind::Message(format!(
+                    "`Foreign` has no method `{other}`; expected `alloc`, \
+                     `alloc_zeroed`, or `free` (`docs/19` §5)"
+                )));
+                self.tcx.error
+            }
+        }
+    }
+
+    /// `CString.from_str(s): *u8` (`docs/19` §6): marshal a `str` into a fresh
+    /// NUL-terminated C string on the foreign heap. The caller owns the buffer
+    /// and releases it with `Foreign.free`.
+    pub(crate) fn check_cstring_from_str(&mut self, args: &[Expr], span: Span) -> Ty {
+        if args.len() != 1 {
+            self.emit(span, SemaErrorKind::ArgCount { expected: 1, found: args.len() });
+            return self.tcx.error;
+        }
+        let at = self.check_expr(&args[0], Some(self.tcx.str));
+        self.expect(at, self.tcx.str, args[0].span);
+        self.results.cstring_from_strs.insert(span);
+        self.tcx.mk_ptr(self.tcx.int(IntTy::U8))
+    }
+
+    /// `CStr.to_str(p): str` (`docs/19` §6): copy a NUL-terminated C string
+    /// (any raw pointer) into a managed `str`.
+    pub(crate) fn check_cstr_to_str(&mut self, args: &[Expr], span: Span) -> Ty {
+        if args.len() != 1 {
+            self.emit(span, SemaErrorKind::ArgCount { expected: 1, found: args.len() });
+            return self.tcx.error;
+        }
+        let at = self.check_expr(&args[0], None);
+        if !matches!(self.tcx.kind(at), TyKind::Ptr(_)) {
+            self.emit(args[0].span, SemaErrorKind::Message(format!(
+                "`CStr.to_str` expects a raw pointer `*T`, got `{}`", self.display(at)
+            )));
+        }
+        self.results.cstr_to_strs.insert(span);
+        self.tcx.str
     }
 
     /// `Shared<T>` builtin methods (`docs/20` §4): `lock`/`try_lock` run a

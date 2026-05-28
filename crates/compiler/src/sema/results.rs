@@ -176,6 +176,28 @@ pub struct CheckResults {
     /// `Shared.new(v)` calls (`docs/20` §4), keyed by the call span. Codegen
     /// allocates a runtime mutex cell and wraps it in a `Shared<T>` handle.
     pub shared_news: std::collections::HashSet<Span>,
+    /// `Foreign.alloc<T>()` / `alloc_zeroed<T>()` calls (`docs/19` §5), keyed by
+    /// the call span → (`T`, `zeroed`). Codegen emits a `lang_foreign_alloc`
+    /// of `sizeof(T)` bytes; the result is a raw `*T | null` (NPO).
+    pub foreign_allocs: HashMap<Span, (Ty, bool)>,
+    /// `Foreign.free(p)` calls (`docs/19` §5), keyed by the call span. Codegen
+    /// emits `lang_foreign_free` on the raw pointer argument.
+    pub foreign_frees: std::collections::HashSet<Span>,
+    /// `Foreign.realloc<T>(p, new_size)` calls (`docs/19` §5). Codegen emits
+    /// `lang_foreign_realloc(p, new_size)`.
+    pub foreign_reallocs: std::collections::HashSet<Span>,
+    /// `Foreign.alloc_flex<T, E>(extra_count)` calls (`docs/19` §5), keyed by
+    /// span → (`T`, `E`). Codegen allocates `sizeof(T) + extra_count*sizeof(E)`.
+    pub foreign_flex: HashMap<Span, (Ty, Ty)>,
+    /// `CString.from_str(s)` calls (`docs/19` §6): marshal a `str` into a
+    /// NUL-terminated C string on the foreign heap (returns `*u8`).
+    pub cstring_from_strs: std::collections::HashSet<Span>,
+    /// `CStr.to_str(p)` calls (`docs/19` §6): copy a C string into a `str`.
+    pub cstr_to_strs: std::collections::HashSet<Span>,
+    /// Libraries named by `@Link(lib = "…")` on extern functions (`docs/19`
+    /// §13), in first-seen order. Native builds pass `-l<lib>`; the JIT
+    /// `dlopen`s each so the symbols resolve.
+    pub link_libs: Vec<String>,
     /// `channel<T>()` calls (`docs/20` §2), keyed by the call span. Codegen
     /// allocates a runtime channel and builds the `(Sender<T>, Receiver<T>)`
     /// tuple; the element type is read from the recorded result type.

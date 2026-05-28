@@ -1551,6 +1551,682 @@ fn ffi_extern_call_native_matches_jit() {
 }
 
 #[test]
+fn ffi_extern_struct_memcpy_round_trip() {
+    // `docs/19` §2/§3: an `extern struct` is C-laid-out and stack-allocated;
+    // `&value` is its address (no pin needed). A C `memcpy` fills it via an
+    // out-pointer, then fields read the written bytes; `field = v` mutates.
+    let src = "extern struct Pair { a: i64, b: i64 }\n\
+               extern function memcpy(dst: *Pair, src: *Pair, n: u64): *Pair;\n\
+               function main() {\n\
+                 var x = Pair { a: 10, b: 20 };\n\
+                 var y = Pair { a: 0, b: 0 };\n\
+                 memcpy(&y, &x, 16u64);\n\
+                 println(\"${y.a} ${y.b}\");\n\
+                 y.a = 99;\n\
+                 println(\"${y.a}\");\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "10 20\n99\n");
+}
+
+#[test]
+fn ffi_extern_struct_survives_gc_stress() {
+    // Stack-allocated extern structs and their raw pointers must not perturb the
+    // GC (their fields are scalars / pointers, never traced). Interleave managed
+    // `str` interpolation so collections fire mid-program.
+    let src = "extern struct Pair { a: i64, b: i64 }\n\
+               extern function memcpy(dst: *Pair, src: *Pair, n: u64): *Pair;\n\
+               function main() {\n\
+                 var total = 0;\n\
+                 var i = 0;\n\
+                 while i < 200 {\n\
+                   var x = Pair { a: i, b: i + 1 };\n\
+                   var y = Pair { a: 0, b: 0 };\n\
+                   memcpy(&y, &x, 16u64);\n\
+                   var s = \"iter ${y.a}/${y.b}\";\n\
+                   total = total + y.a + y.b;\n\
+                   i = i + 1;\n\
+                 }\n\
+                 println(\"${total}\");\n\
+               }";
+    let (out, err, ok) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
+    assert!(ok, "stderr: {err}");
+    // sum over i in 0..200 of (i + i+1) = sum(2i+1) = 200^2 = 40000.
+    assert_eq!(out, "40000\n");
+}
+
+#[test]
+fn ffi_packed_decorator_changes_layout() {
+    // `docs/19` §3: `@Packed` caps field alignment, shifting offsets. The same
+    // 8 source bytes read different `y` values under packed vs natural layout.
+    let src = "extern struct Pair { a: i64, b: i64 }\n\
+               extern function memcpy(dst: *u8, src: *u8, n: u64): *u8;\n\
+               @Packed\n\
+               extern struct Packed { x: u8, y: u32 }\n\
+               extern struct Unpacked { x: u8, y: u32 }\n\
+               function main() {\n\
+                 var src = Pair { a: 0x0807060504030201, b: 0 };\n\
+                 var p = Packed { x: 0, y: 0 };\n\
+                 var u = Unpacked { x: 0, y: 0 };\n\
+                 memcpy((&p) as *u8, (&src) as *u8, 8u64);\n\
+                 memcpy((&u) as *u8, (&src) as *u8, 8u64);\n\
+                 println(\"${p.x} ${p.y}\");\n\
+                 println(\"${u.x} ${u.y}\");\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    // packed: y at offset 1 → bytes 2,3,4,5 (LE) = 0x05040302 = 84148994.
+    // natural: y at offset 4 → bytes 5,6,7,8 (LE) = 0x08070605 = 134678021.
+    assert_eq!(out, "1 84148994\n1 134678021\n");
+}
+
+#[test]
+fn ffi_align_decorator_over_aligns() {
+    // `docs/19` §3: `@Align(64)` over-aligns the struct beyond the stack's
+    // natural alignment; the address is a multiple of 64.
+    let src = "@Align(64)\n\
+               extern struct CacheLine { v: i64 }\n\
+               function main() {\n\
+                 var c = CacheLine { v: 7 };\n\
+                 var addr = (&c) as usize;\n\
+                 println(\"${addr % 64usize}\");\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "0\n");
+}
+
+#[test]
+fn ffi_union_decorator_overlays_fields() {
+    // `docs/19` §3: `@Union` overlays all fields at offset 0. Writing the `f32`
+    // field and reading the `u32` field yields the float's bit pattern.
+    let src = "@Union\n\
+               extern struct FloatBits { f: f32, i: u32 }\n\
+               function main() {\n\
+                 var fb = FloatBits { f: 1.0f32 };\n\
+                 println(\"${fb.i}\");\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    // IEEE-754 bits of 1.0f32 = 0x3F800000 = 1065353216.
+    assert_eq!(out, "1065353216\n");
+}
+
+#[test]
+fn ffi_pointer_deref_load_and_store() {
+    // `docs/19` §2: `*p` reads through a raw pointer; `*p = v` writes. A
+    // pointer reinterpret (`as`) aliases the first field as a scalar.
+    let src = "extern struct Pair { a: i64, b: i64 }\n\
+               function main() {\n\
+                 var x = Pair { a: 7, b: 8 };\n\
+                 var pi = (&x) as *i64;\n\
+                 println(\"${*pi}\");\n\
+                 *pi = 42;\n\
+                 println(\"${x.a}\");\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "7\n42\n");
+}
+
+#[test]
+fn ffi_null_deref_panics() {
+    // `docs/19` §2: dereferencing a null pointer panics (exit 101).
+    let src = "extern struct Pair { a: i64, b: i64 }\n\
+               function main() {\n\
+                 var p = 0usize as *Pair;\n\
+                 println(\"before\");\n\
+                 println(\"${(*p).a}\");\n\
+                 println(\"after\");\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(!ok);
+    assert_eq!(out, "before\n");
+    assert!(err.contains("null pointer"), "stderr: {err}");
+}
+
+#[test]
+fn ffi_extern_struct_native_matches_jit() {
+    // The whole extern-struct surface must behave identically JIT and native.
+    let src = "extern struct Pair { a: i64, b: i64 }\n\
+               extern function memcpy(dst: *Pair, src: *Pair, n: u64): *Pair;\n\
+               @Union\n\
+               extern struct FloatBits { f: f32, i: u32 }\n\
+               function main() {\n\
+                 var x = Pair { a: 3, b: 4 };\n\
+                 var y = Pair { a: 0, b: 0 };\n\
+                 memcpy(&y, &x, 16u64);\n\
+                 var fb = FloatBits { f: 2.0f32 };\n\
+                 println(\"${y.a + y.b} ${fb.i}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    // 3+4=7; bits of 2.0f32 = 0x40000000 = 1073741824.
+    assert_eq!(nat, "7 1073741824\n");
+}
+
+#[test]
+fn ffi_extern_var_read_and_write() {
+    // `docs/19` §4: an `extern var` is a C global. `optind` (from getopt) is
+    // defined by libc and initialized to 1 before any getopt call; reading it
+    // yields 1, and assigning writes through the global.
+    let src = "extern var optind: i32;\n\
+               function main() {\n\
+                 println(\"${optind}\");\n\
+                 optind = 5i32;\n\
+                 println(\"${optind}\");\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "1\n5\n");
+}
+
+#[test]
+fn ffi_extern_var_native_matches_jit() {
+    let src = "extern var optind: i32;\n\
+               function main() { optind = 9i32; println(\"${optind}\"); }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    assert_eq!(nat, "9\n");
+}
+
+#[test]
+fn ffi_fixed_array_field_get_set_and_zero_init() {
+    // `docs/19` §4: a fixed array `[T; N]` is a valid extern struct field;
+    // `arr[i]` reads/writes elements; an omitted field zero-inits the C block.
+    let src = "extern struct Buf { len: u8, data: [u8; 4] }\n\
+               function main() {\n\
+                 var b = Buf { len: 0u8 };\n\
+                 println(\"${b.data[0]} ${b.data[3]}\");\n\
+                 b.data[0] = 65u8;\n\
+                 b.data[3] = 90u8;\n\
+                 b.len = 2u8;\n\
+                 println(\"${b.data[0]} ${b.data[3]} len=${b.len}\");\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "0 0\n65 90 len=2\n");
+}
+
+#[test]
+fn ffi_fixed_array_element_address_memcpy() {
+    // `&arr[i]` is the address of a fixed-array element — pass it to a C
+    // function. `memcpy` fills the array from a known byte pattern.
+    let src = "extern struct Buf { len: u8, data: [u8; 4] }\n\
+               extern struct Word { v: i64 }\n\
+               extern function memcpy(dst: *u8, src: *u8, n: u64): *u8;\n\
+               function main() {\n\
+                 var w = Word { v: 0x04030201 };\n\
+                 var b = Buf { len: 0u8 };\n\
+                 memcpy((&b.data[0]) as *u8, (&w) as *u8, 4u64);\n\
+                 println(\"${b.data[0]} ${b.data[1]} ${b.data[2]} ${b.data[3]}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    assert_eq!(nat, "1 2 3 4\n");
+}
+
+#[test]
+fn ffi_fixed_array_survives_gc_stress() {
+    let src = "extern struct Buf { tag: u32, data: [i64; 3] }\n\
+               function main() {\n\
+                 var total = 0;\n\
+                 var i = 0;\n\
+                 while i < 150 {\n\
+                   var b = Buf { tag: 0u32 };\n\
+                   b.data[0] = i;\n\
+                   b.data[1] = i + 1;\n\
+                   b.data[2] = i + 2;\n\
+                   var s = \"row ${b.data[0]}\";\n\
+                   total = total + b.data[0] + b.data[1] + b.data[2];\n\
+                   i = i + 1;\n\
+                 }\n\
+                 println(\"${total}\");\n\
+               }";
+    let (out, err, ok) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
+    assert!(ok, "stderr: {err}");
+    // sum over i in 0..150 of (3i+3) = 3*(sum i) + 450 = 3*11175 + 450 = 33975.
+    assert_eq!(out, "33975\n");
+}
+
+#[test]
+fn stdlib_str_index_of() {
+    // `docs/18`: `str.index_of(s): i64 | null` — byte index or null if absent.
+    let src = "function main() {\n\
+                 var i = \"hello world\".index_of(\"world\");\n\
+                 if i is i64 { println(\"${i as i64}\"); }\n\
+                 println(\"${\"abc\".index_of(\"z\") is null}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    assert_eq!(nat, "6\ntrue\n");
+}
+
+#[test]
+fn stdlib_list_insert_and_remove() {
+    // `docs/18`: `List.insert(i, v)` shifts right; `List.remove(i): T | null`.
+    let src = "function main() {\n\
+                 var xs = [1, 2, 4];\n\
+                 xs.insert(2, 3);\n\
+                 println(\"${xs[0]} ${xs[1]} ${xs[2]} ${xs[3]}\");\n\
+                 var r = xs.remove(0);\n\
+                 if r is i64 { println(\"${r as i64} ${xs.size()}\"); }\n\
+                 println(\"${xs.remove(99) is null}\");\n\
+               }";
+    let (out, err, ok) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "1 2 3 4\n1 3\ntrue\n");
+}
+
+#[test]
+fn stdlib_str_repeat_and_replace() {
+    // `docs/18`: `str.repeat(n)` and `str.replace(old, new)`.
+    let src = "function main() {\n\
+                 println(\"ab\".repeat(3));\n\
+                 println(\"a,b,a\".replace(\"a\", \"X\"));\n\
+                 println(\"x\".repeat(0));\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    assert_eq!(nat, "ababab\nX,b,X\n\n");
+}
+
+#[test]
+fn stdlib_list_pop_and_clear() {
+    // `docs/18`: `List.pop(): T | null` and `List.clear()`.
+    let src = "function main() {\n\
+                 var xs = [10, 20, 30];\n\
+                 var last = xs.pop();\n\
+                 if last is i64 { println(\"${last as i64} ${xs.size()}\"); }\n\
+                 xs.clear();\n\
+                 println(\"${xs.size()}\");\n\
+                 var empty: List<i64> = [];\n\
+                 println(\"${empty.pop() is null}\");\n\
+               }";
+    let (out, err, ok) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "30 2\n0\ntrue\n");
+}
+
+#[test]
+fn ffi_transparent_newtype_has_inner_abi() {
+    // `docs/19` §3: a `@Transparent` newtype has its single field's
+    // representation and ABI — `Num(-5)` is just an `i32`, so it can be passed
+    // to libc `abs` (declared over `Num`), and `.0` reads the inner value.
+    let src = "@Transparent\n\
+               struct Num(i32)\n\
+               extern function abs(n: Num): i32;\n\
+               function main() {\n\
+                 var x = Num(-5i32);\n\
+                 println(\"${x.0}\");\n\
+                 println(\"${abs(x)}\");\n\
+                 println(\"${abs(Num(-42i32))}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    assert_eq!(nat, "-5\n5\n42\n");
+}
+
+#[test]
+fn check_rejects_transparent_multi_field() {
+    let src = "@Transparent\nstruct Bad(i32, i32)\nfunction main() {}";
+    let (_, err, ok) = lang("check", src);
+    assert!(!ok);
+    assert!(err.contains("exactly one field"), "stderr: {err}");
+}
+
+#[test]
+fn ffi_link_decorator_resolves_library_symbol() {
+    // `docs/19` §13: `@Link(lib = "z")` makes a symbol from zlib resolvable —
+    // the JIT `dlopen`s `libz`, the native build links `-lz`. `crc32` of
+    // "hello" is the deterministic 0x3610A686 = 907060870.
+    let src = "@Link(lib = \"z\")\n\
+               extern function crc32(crc: u64, buf: *u8, len: u32): u64;\n\
+               function main() {\n\
+                 var s = CString.from_str(\"hello\");\n\
+                 println(\"${crc32(0u64, s, 5u32)}\");\n\
+                 Foreign.free(s);\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    assert_eq!(nat, "907060870\n");
+}
+
+#[test]
+fn ffi_nested_extern_structs() {
+    // `docs/19` §3: a nested `extern struct` field is laid out *inline* (its
+    // bytes, not a pointer). Construction byte-copies it in; field access reads
+    // through the inline offset; scalar and whole-struct mutation both work.
+    // (Correct offsets prove inline layout: `stime` at +16, `maxrss` at +32.)
+    let src = "extern struct Timeval { sec: i64, usec: i64 }\n\
+               extern struct Rusage { utime: Timeval, stime: Timeval, maxrss: i64 }\n\
+               function main() {\n\
+                 var u = Rusage {\n\
+                   utime: Timeval { sec: 5, usec: 100 },\n\
+                   stime: Timeval { sec: 7, usec: 200 },\n\
+                   maxrss: 999,\n\
+                 };\n\
+                 println(\"${u.utime.sec} ${u.stime.usec} ${u.maxrss}\");\n\
+                 u.utime.sec = 42;\n\
+                 u.stime = Timeval { sec: 11, usec: 22 };\n\
+                 println(\"${u.utime.sec} ${u.stime.sec} ${u.stime.usec}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    assert_eq!(nat, "5 200 999\n42 11 22\n");
+}
+
+#[test]
+fn ffi_foreign_realloc_and_alloc_flex() {
+    // `docs/19` §5: `Foreign.realloc<T>(p, new_size)` resizes a foreign block
+    // preserving its bytes; `Foreign.alloc_flex<T, E>(n)` allocates
+    // `sizeof(T) + n*sizeof(E)` (a flexible array member).
+    let src = "extern struct Hdr { kind: u32, length: u32, data: *u8 }\n\
+               function main() {\n\
+                 var p = Foreign.alloc<i64>();\n\
+                 if p is null { println(\"oom\"); } else {\n\
+                   *p = 12345;\n\
+                   var q = Foreign.realloc<i64>(p, 64usize);\n\
+                   if q is null { println(\"oom\"); } else {\n\
+                     println(\"keep=${*q}\");\n\
+                     Foreign.free(q);\n\
+                   }\n\
+                 }\n\
+                 var m = Foreign.alloc_flex<Hdr, u8>(8usize);\n\
+                 if m is null { println(\"oom\"); } else {\n\
+                   (*m).kind = 7u32;\n\
+                   println(\"kind=${(*m).kind}\");\n\
+                   Foreign.free(m);\n\
+                 }\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    assert_eq!(nat, "keep=12345\nkind=7\n");
+}
+
+#[test]
+fn ffi_cstring_marshaling_round_trip() {
+    // `docs/19` §6: `CString.from_str` marshals a `str` into a NUL-terminated C
+    // string (passed to libc `strlen`), and `CStr.to_str` copies a C string
+    // back into a managed `str`.
+    let src = "extern function strlen(s: *u8): u64;\n\
+               function main() {\n\
+                 var p = CString.from_str(\"hello, C\");\n\
+                 println(\"len=${strlen(p)}\");\n\
+                 var back = CStr.to_str(p);\n\
+                 println(\"eq=${back == \"hello, C\"}\");\n\
+                 Foreign.free(p);\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    assert_eq!(nat, "len=8\neq=true\n");
+}
+
+#[test]
+fn ffi_cstring_survives_gc_stress() {
+    // `CStr.to_str` allocates a managed `str`; round-trip under stress.
+    let src = "extern function strlen(s: *u8): u64;\n\
+               function main() {\n\
+                 var total = 0;\n\
+                 var i = 0;\n\
+                 while i < 200 {\n\
+                   var p = CString.from_str(\"item ${i}\");\n\
+                   var back = CStr.to_str(p);\n\
+                   total = total + (strlen(p) as i64) + back.size();\n\
+                   Foreign.free(p);\n\
+                   i = i + 1;\n\
+                 }\n\
+                 println(\"${total}\");\n\
+               }";
+    let (out, err, ok) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "2980\n");
+}
+
+#[test]
+fn ffi_foreign_alloc_free_round_trip() {
+    // `docs/19` §5: `Foreign.alloc<T>()` allocates `sizeof(T)` bytes on the
+    // foreign heap and returns a raw `*T | null` (NPO). Write fields through the
+    // pointer, read them back, then `Foreign.free`. `alloc_zeroed` zeroes.
+    let src = "extern struct Pair { a: i64, b: i64 }\n\
+               function main() {\n\
+                 var p = Foreign.alloc<Pair>();\n\
+                 if p is null { println(\"oom\"); }\n\
+                 else {\n\
+                   (*p).a = 11;\n\
+                   (*p).b = 22;\n\
+                   println(\"${(*p).a} ${(*p).b}\");\n\
+                   Foreign.free(p);\n\
+                 }\n\
+                 var q = Foreign.alloc_zeroed<Pair>();\n\
+                 if q is null { println(\"oom\"); }\n\
+                 else { println(\"z ${(*q).a} ${(*q).b}\"); Foreign.free(q); }\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    assert_eq!(nat, "11 22\nz 0 0\n");
+}
+
+#[test]
+fn ffi_foreign_alloc_survives_gc_stress() {
+    // Foreign allocations are unmanaged (raw `*T | null`); the collector must
+    // not trace them. Churn managed `str`s while holding a foreign pointer.
+    let src = "extern struct Cell { v: i64 }\n\
+               function main() {\n\
+                 var sum = 0;\n\
+                 var i = 0;\n\
+                 while i < 200 {\n\
+                   var c = Foreign.alloc<Cell>();\n\
+                   if c is null { } else {\n\
+                     (*c).v = i;\n\
+                     var s = \"n ${i}\";\n\
+                     sum = sum + (*c).v;\n\
+                     Foreign.free(c);\n\
+                   }\n\
+                   i = i + 1;\n\
+                 }\n\
+                 println(\"${sum}\");\n\
+               }";
+    let (out, err, ok) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
+    assert!(ok, "stderr: {err}");
+    // sum over 0..200 = 19900.
+    assert_eq!(out, "19900\n");
+}
+
+#[test]
+fn check_rejects_foreign_alloc_without_type_arg() {
+    let src = "function main() { var p = Foreign.alloc(); }";
+    let (_, err, ok) = lang("check", src);
+    assert!(!ok);
+    assert!(err.contains("type argument"), "stderr: {err}");
+}
+
+#[test]
+fn ffi_npo_nullable_pointer_malloc_round_trip() {
+    // `docs/19` §2: `*T | null` is laid out as a raw nullable pointer (NPO).
+    // libc `malloc` returns `*Pair | null`; an `if p is null` check narrows it,
+    // and a heap write through the (reinterpreted) pointer round-trips.
+    let src = "extern struct Pair { a: i64, b: i64 }\n\
+               extern function malloc(n: usize): *Pair | null;\n\
+               extern function free(p: *Pair);\n\
+               function main() {\n\
+                 var p = malloc(16usize);\n\
+                 if p is null {\n\
+                   println(\"oom\");\n\
+                 } else {\n\
+                   *((p) as *i64) = 42;\n\
+                   println(\"a=${(*p).a}\");\n\
+                   free(p);\n\
+                 }\n\
+                 var z: *Pair | null = 0usize as *Pair;\n\
+                 println(\"znull=${z is null}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    assert_eq!(nat, "a=42\nznull=true\n");
+}
+
+#[test]
+fn ffi_npo_pointer_survives_gc_stress() {
+    // An NPO `*T | null` value is a RAW pointer (into a stack extern struct
+    // here), not a managed box — the collector must not trace it. Hold it live
+    // across many managed allocations under stress.
+    let src = "extern struct Pair { a: i64, b: i64 }\n\
+               function main() {\n\
+                 var x = Pair { a: 100, b: 200 };\n\
+                 var p: *Pair | null = &x;\n\
+                 var total = 0;\n\
+                 var i = 0;\n\
+                 while i < 300 {\n\
+                   var s = \"iter ${i}\";\n\
+                   if p is null { total = total + 0; } else { total = total + (*p).a; }\n\
+                   i = i + 1;\n\
+                 }\n\
+                 println(\"${total}\");\n\
+               }";
+    let (out, err, ok) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "30000\n");
+}
+
+#[test]
+fn check_rejects_match_on_nullable_pointer() {
+    // `match` on an NPO `*T | null` is not yet supported — use `if p is null`.
+    let src = "extern struct P { a: i64 }\n\
+               extern function malloc(n: usize): *P | null;\n\
+               function main() {\n\
+                 var p = malloc(8usize);\n\
+                 match p { null => println(\"n\"), x => println(\"x\") }\n\
+               }";
+    let (_, err, ok) = lang("check", src);
+    assert!(!ok);
+    assert!(err.contains("nullable pointer"), "stderr: {err}");
+}
+
+#[test]
+fn ffi_opaque_type_handle_round_trips() {
+    // `docs/19` §4: an `extern type` is an opaque C handle, used only behind a
+    // pointer. `tmpfile()` returns a `*File`, which round-trips back to C
+    // (`fileno`/`fclose`) — JIT and native.
+    let src = "extern type File;\n\
+               extern function tmpfile(): *File;\n\
+               extern function fileno(f: *File): i32;\n\
+               extern function fclose(f: *File): i32;\n\
+               function main() {\n\
+                 var f = tmpfile();\n\
+                 println(\"${fileno(f) >= 0i32}\");\n\
+                 println(\"${fclose(f) == 0i32}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    assert_eq!(nat, "true\ntrue\n");
+}
+
+#[test]
+fn check_rejects_deref_of_opaque_type() {
+    // An opaque `extern type` has no value representation — it cannot be
+    // dereferenced to a value, only passed around as `*T`.
+    let src = "extern type File;\n\
+               extern function tmpfile(): *File;\n\
+               function main() { var f = tmpfile(); var x = *f; }";
+    let (_, err, ok) = lang("check", src);
+    assert!(!ok);
+    assert!(err.contains("opaque extern type"), "stderr: {err}");
+}
+
+#[test]
+fn check_rejects_non_repr_c_extern_field() {
+    // `docs/19` §3: extern struct fields must be C-ABI-compatible. A `str`
+    // (managed) field has no sound C layout.
+    let src = "extern struct Bad { name: str }\n\
+               function main() {}";
+    let (_, err, ok) = lang("check", src);
+    assert!(!ok);
+    assert!(err.contains("C-ABI-compatible"), "stderr: {err}");
+}
+
+#[test]
+fn check_rejects_extern_struct_by_value_return() {
+    // Returning an extern struct by value would dangle (stack pointer escapes).
+    let src = "extern struct Pair { a: i64, b: i64 }\n\
+               function make(): Pair { Pair { a: 1, b: 2 } }\n\
+               function main() {}";
+    let (_, err, ok) = lang("check", src);
+    assert!(!ok);
+    assert!(err.contains("by value is not yet supported"), "stderr: {err}");
+}
+
+#[test]
+fn check_rejects_address_of_non_extern() {
+    // `&` is currently limited to extern struct places.
+    let src = "function main() { var n = 5; var p = &n; }";
+    let (_, err, ok) = lang("check", src);
+    assert!(!ok);
+    assert!(err.contains("address-of"), "stderr: {err}");
+}
+
+#[test]
+fn check_rejects_deref_of_non_pointer() {
+    // `*` requires a raw pointer operand.
+    let src = "function main() { var n = 5; var m = *n; }";
+    let (_, err, ok) = lang("check", src);
+    assert!(!ok);
+    assert!(err.contains("raw pointer"), "stderr: {err}");
+}
+
+
+#[test]
+fn check_rejects_union_on_managed_struct() {
+    // The C-layout decorators only apply to `extern struct`.
+    let src = "@Union\n\
+               struct Bad { a: i64, b: i64 }\n\
+               function main() {}";
+    let (_, err, ok) = lang("check", src);
+    assert!(!ok);
+    assert!(err.contains("only valid on an `extern struct`"), "stderr: {err}");
+}
+
+#[test]
 fn derive_eq_synthesizes_struct_equality() {
     // `docs/22` §11: `@Derive(Eq)` synthesises field-by-field `eq`; `==`/`!=`
     // then work on the struct (record, tuple, and unit forms).

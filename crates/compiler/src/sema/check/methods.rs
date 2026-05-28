@@ -805,6 +805,108 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// Whether `def` is an `extern struct` carrying the `@Union` decorator.
+    pub(crate) fn is_union_extern_struct(&self, def: DefId) -> bool {
+        self.prog.def(def).kind == DefKind::ExternStruct
+            && self.prog.def(def).attrs.iter().any(|a| a.name.name == "Union")
+    }
+
+    /// Whether `ty` is an `extern struct` nominal type (`docs/19` §3).
+    pub(crate) fn is_extern_struct(&self, ty: Ty) -> bool {
+        if let TyKind::Named { def, .. } = self.tcx.kind(ty) {
+            return self.prog.def(*def).kind == DefKind::ExternStruct;
+        }
+        false
+    }
+
+    /// `&place` — address-of (`docs/19` §2). Currently restricted to an
+    /// addressable place of `extern struct` type (the canonical `&out` C
+    /// out-pointer pattern); the result is a raw `*T`. `&` on scalars or
+    /// managed values is rejected loudly until spill / pin support lands.
+    pub(crate) fn check_ref(&mut self, operand: &Expr, amp_span: Span) -> Ty {
+        let ty = self.check_expr(operand, None);
+        if self.tcx.is_error(ty) {
+            return self.tcx.error;
+        }
+        // `&out` — an addressable `extern struct` place; result `*T`.
+        let extern_place = matches!(
+            &operand.kind,
+            ExprKind::Ident(_) | ExprKind::SelfExpr | ExprKind::Deref { .. } | ExprKind::Paren(_)
+        ) && self.is_extern_struct(ty);
+        // `&arr[i]` — the address of a fixed-array element; result `*Elem`.
+        let array_elem = if let ExprKind::Index { receiver, .. } = &operand.kind {
+            let rty = self.results.expr_types.get(&receiver.span).copied()
+                .unwrap_or(self.tcx.error);
+            matches!(self.tcx.kind(rty), TyKind::Array { .. })
+        } else {
+            false
+        };
+        if !extern_place && !array_elem {
+            self.emit(amp_span, SemaErrorKind::Message(
+                "`&` (address-of) is currently supported only for an `extern struct` \
+                 place (`&out`) or a fixed-array element (`&arr[i]`) (`docs/19`)"
+                    .into(),
+            ));
+            return self.tcx.error;
+        }
+        self.tcx.mk_ptr(ty)
+    }
+
+    /// Whether `ty` is a null-pointer-optimized union — exactly `{ *T, null }`
+    /// — laid out as a single raw nullable pointer (`docs/19` §2).
+    pub(crate) fn is_npo_union(&self, ty: Ty) -> bool {
+        if let TyKind::Union(members) = self.tcx.kind(ty) {
+            if members.len() == 2 {
+                let has_null = members.iter().any(|m| matches!(self.tcx.kind(*m), TyKind::Null));
+                let has_ptr = members.iter().any(|m| matches!(self.tcx.kind(*m), TyKind::Ptr(_)));
+                return has_null && has_ptr;
+            }
+        }
+        false
+    }
+
+    /// Whether `ty` is an opaque `extern type` (`docs/19` §4) — an incomplete
+    /// type usable only behind a pointer (`*T`), never by value.
+    pub(crate) fn is_opaque_extern(&self, ty: Ty) -> bool {
+        if let TyKind::Named { def, .. } = self.tcx.kind(ty) {
+            return self.prog.def(*def).kind == DefKind::ExternType;
+        }
+        false
+    }
+
+    /// `*ptr` — pointer dereference (`docs/19` §2). The operand must be a raw
+    /// `*T`; the result is `T`. Dereferencing null panics at runtime.
+    pub(crate) fn check_deref(&mut self, operand: &Expr, star_span: Span) -> Ty {
+        let ty = self.check_expr(operand, None);
+        if self.tcx.is_error(ty) {
+            return self.tcx.error;
+        }
+        match self.tcx.kind(ty) {
+            TyKind::Ptr(inner) => {
+                let inner = *inner;
+                // An opaque `extern type` is incomplete — it has no size or
+                // layout, so it can only be passed around as `*T`, never
+                // dereferenced to a value (`docs/19` §4).
+                if self.is_opaque_extern(inner) {
+                    self.emit(star_span, SemaErrorKind::Message(format!(
+                        "cannot dereference a pointer to the opaque extern type `{}`; \
+                         an opaque type has no value representation (`docs/19` §4)",
+                        self.display(inner)
+                    )));
+                    return self.tcx.error;
+                }
+                inner
+            }
+            _ => {
+                self.emit(star_span, SemaErrorKind::Message(format!(
+                    "cannot dereference a value of type `{}`; `*` expects a raw pointer `*T`",
+                    self.display(ty)
+                )));
+                self.tcx.error
+            }
+        }
+    }
+
     pub(crate) fn check_binary(
         &mut self,
         op: BinaryOp,

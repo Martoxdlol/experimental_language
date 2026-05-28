@@ -128,6 +128,8 @@ impl<'a> Checker<'a> {
                 self.check_match(scrutinee, arms, expr.span, expected)
             }
             ExprKind::Try { expr: inner, q_span } => self.check_try(inner, *q_span),
+            ExprKind::Ref { expr: inner, amp_span } => self.check_ref(inner, *amp_span),
+            ExprKind::Deref { expr: inner, star_span } => self.check_deref(inner, *star_span),
             ExprKind::Await { expr: inner, kw_span } => self.check_await(inner, *kw_span),
             ExprKind::Spawn { expr: inner, kw_span } => self.check_spawn(inner, *kw_span),
             ExprKind::AsyncBlock(block) => self.check_async_block(block, expected, expr.span),
@@ -510,7 +512,11 @@ impl<'a> Checker<'a> {
             // box or an interface object) to a single concrete variant, codegen
             // must unbox at this use — both layouts carry the payload at offset 8.
             if let Some(&narrowed) = self.narrowings.get(&id) {
-                let was_boxed = matches!(self.tcx.kind(ty), TyKind::Union(_) | TyKind::Dynamic)
+                // A `*T | null` (NPO) value is a raw pointer, not a box, so
+                // narrowing it to `*T` needs no unbox — the representation is
+                // unchanged (`docs/19` §2).
+                let was_boxed = (matches!(self.tcx.kind(ty), TyKind::Union(_) | TyKind::Dynamic)
+                    && !self.is_npo_union(ty))
                     || self.is_interface(ty);
                 let now_single = !matches!(self.tcx.kind(narrowed), TyKind::Union(_) | TyKind::Dynamic)
                     && !self.is_interface(narrowed);
@@ -618,6 +624,18 @@ impl<'a> Checker<'a> {
         // Interface object up/down-casts: `concrete as Iface` (upcast) and
         // `iface as Concrete` (downcast, checked at runtime).
         if self.implements_dyn(from, to) || self.implements_dyn(to, from) {
+            return true;
+        }
+        // Raw-pointer reinterpretation: `*A as *B` is a no-op at runtime — the
+        // user vouches for the layout (`docs/19` §2). A pointer also converts
+        // to/from a pointer-width integer (`usize`/`isize`).
+        let from_ptr = matches!(self.tcx.kind(from), TyKind::Ptr(_));
+        let to_ptr = matches!(self.tcx.kind(to), TyKind::Ptr(_));
+        if from_ptr && to_ptr {
+            return true;
+        }
+        let is_ptr_int = |t: Ty| matches!(self.tcx.kind(t), TyKind::Int(IntTy::Usize | IntTy::Isize));
+        if (from_ptr && is_ptr_int(to)) || (to_ptr && is_ptr_int(from)) {
             return true;
         }
         // Union narrowing: every variant of `to` is a variant of `from`.
@@ -804,6 +822,26 @@ impl<'a> Checker<'a> {
                     && self.lookup(&recv.name).is_none()
                 {
                     return self.check_shared_new(args, span);
+                }
+            }
+        }
+        // `Foreign.alloc<T>()` / `Foreign.alloc_zeroed<T>()` / `Foreign.free(p)`
+        // (`docs/19` §5): manual foreign-heap allocation.
+        if let ExprKind::Field { receiver, name } = &callee.kind {
+            if let ExprKind::Ident(recv) = &receiver.kind {
+                if recv.name == "Foreign" && self.lookup(&recv.name).is_none() {
+                    return self.check_foreign_builtin(&name.name, _generics, args, span);
+                }
+                // `CString.from_str(s)` / `CStr.to_str(p)` (`docs/19` §6).
+                if recv.name == "CString" && name.name == "from_str"
+                    && self.lookup(&recv.name).is_none()
+                {
+                    return self.check_cstring_from_str(args, span);
+                }
+                if recv.name == "CStr" && name.name == "to_str"
+                    && self.lookup(&recv.name).is_none()
+                {
+                    return self.check_cstr_to_str(args, span);
                 }
             }
         }

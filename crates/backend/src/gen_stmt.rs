@@ -89,6 +89,17 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     pub(crate) fn gen_assign(&mut self, target: &Expr, val: Option<Value>) -> CgResult<()> {
         match &target.kind {
             ExprKind::Ident(_) => {
+                // Assigning to an `extern var` C global (`docs/19` §4) stores
+                // through its imported data symbol.
+                if let Some(ValueRes::Global(def)) = self.cx.analysis.results.resolution(target.span) {
+                    if self.cx.analysis.program.def(def).kind == DefKind::ExternVar {
+                        let addr = self.extern_var_addr(def);
+                        if let Some(v) = val {
+                            self.b.ins().store(MemFlags::trusted(), v, addr, 0);
+                        }
+                        return Ok(());
+                    }
+                }
                 let local = self.resolve_local(target.span)?;
                 if let Some(v) = val {
                     self.write_local(local, v, target.span)?;
@@ -103,6 +114,19 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 self.gen_field_store(receiver, &index.to_string(), val)
             }
             ExprKind::Index { receiver, index } => self.gen_index_store(receiver, index, val),
+            // `*p = v` — store a scalar through a raw pointer (`docs/19` §2).
+            ExprKind::Deref { expr: inner, .. } => {
+                let p = self.gen_expr(inner)?.ok_or_else(|| {
+                    CodegenError::new(inner.span, "dereference operand has no value")
+                })?;
+                let zero = self.b.ins().iconst(PTR, 0);
+                let is_null = self.b.ins().icmp(IntCC::Equal, p, zero);
+                self.guard_panic(is_null, "dereference of a null pointer");
+                if let Some(v) = val {
+                    self.b.ins().store(MemFlags::trusted(), v, p, 0);
+                }
+                Ok(())
+            }
             _ => Err(CodegenError::new(target.span, "assignment target not yet lowerable")),
         }
     }

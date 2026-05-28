@@ -178,11 +178,29 @@ impl<'a> Checker<'a> {
                 self.expect(bt, result, base.span);
             }
             None => {
-                for (n, _) in &declared {
-                    if !seen.contains(n) {
+                // A `@Union` extern struct (`docs/19` §3) overlays all fields at
+                // offset 0; the user initializes exactly one (and tracks which is
+                // active), so the all-fields-present rule does not apply.
+                if self.is_union_extern_struct(def) {
+                    if seen.len() != 1 {
                         self.emit(span, SemaErrorKind::Message(format!(
-                            "missing field `{}` in `{}`", n, path.name.name
+                            "a `@Union` extern struct literal must initialize exactly one \
+                             field, but `{}` initializes {}",
+                            path.name.name, seen.len()
                         )));
+                    }
+                } else if self.prog.def(def).kind == DefKind::ExternStruct {
+                    // A (non-union) extern struct literal may omit fields; the
+                    // construction zero-fills the C byte block, so omitted fields
+                    // (including fixed arrays, which have no literal form) start
+                    // at zero (`docs/19` §4).
+                } else {
+                    for (n, _) in &declared {
+                        if !seen.contains(n) {
+                            self.emit(span, SemaErrorKind::Message(format!(
+                                "missing field `{}` in `{}`", n, path.name.name
+                            )));
+                        }
                     }
                 }
             }

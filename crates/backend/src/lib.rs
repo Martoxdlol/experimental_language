@@ -87,12 +87,22 @@ fn register_runtime_symbols(b: &mut JITBuilder) {
     b.symbol("lang_shared_try_lock", runtime::shared::lang_shared_try_lock as *const u8);
     b.symbol("lang_exit", runtime::lang_exit as *const u8);
     b.symbol("lang_abort", runtime::lang_abort as *const u8);
+    b.symbol("lang_foreign_alloc", runtime::foreign::lang_foreign_alloc as *const u8);
+    b.symbol("lang_foreign_alloc_zeroed", runtime::foreign::lang_foreign_alloc_zeroed as *const u8);
+    b.symbol("lang_foreign_free", runtime::foreign::lang_foreign_free as *const u8);
+    b.symbol("lang_foreign_realloc", runtime::foreign::lang_foreign_realloc as *const u8);
+    b.symbol("lang_cstring_from_str", runtime::foreign::lang_cstring_from_str as *const u8);
+    b.symbol("lang_cstr_to_str", runtime::foreign::lang_cstr_to_str as *const u8);
     b.symbol("lang_list_new", runtime::lang_list_new as *const u8);
     b.symbol("lang_list_push", runtime::lang_list_push as *const u8);
     b.symbol("lang_list_size", runtime::lang_list_size as *const u8);
     b.symbol("lang_list_get", runtime::lang_list_get as *const u8);
     b.symbol("lang_list_set", runtime::lang_list_set as *const u8);
     b.symbol("lang_list_clone", runtime::lang_list_clone as *const u8);
+    b.symbol("lang_list_clear", runtime::lang_list_clear as *const u8);
+    b.symbol("lang_list_pop", runtime::lang_list_pop as *const u8);
+    b.symbol("lang_list_insert", runtime::lang_list_insert as *const u8);
+    b.symbol("lang_list_remove", runtime::lang_list_remove as *const u8);
     b.symbol("lang_map_new", runtime::lang_map_new as *const u8);
     b.symbol("lang_map_set", runtime::lang_map_set as *const u8);
     b.symbol("lang_map_get", runtime::lang_map_get as *const u8);
@@ -116,6 +126,9 @@ fn register_runtime_symbols(b: &mut JITBuilder) {
     b.symbol("lang_str_to_upper", runtime::lang_str_to_upper as *const u8);
     b.symbol("lang_str_to_lower", runtime::lang_str_to_lower as *const u8);
     b.symbol("lang_str_trim", runtime::lang_str_trim as *const u8);
+    b.symbol("lang_str_repeat", runtime::lang_str_repeat as *const u8);
+    b.symbol("lang_str_replace", runtime::lang_str_replace as *const u8);
+    b.symbol("lang_str_index_of", runtime::lang_str_index_of as *const u8);
     b.symbol("lang_str_concat", runtime::lang_str_concat as *const u8);
     b.symbol("lang_hash_i64", runtime::hash::lang_hash_i64 as *const u8);
     b.symbol("lang_hash_str", runtime::hash::lang_hash_str as *const u8);
@@ -285,7 +298,31 @@ fn run_codegen<M: Module>(
 }
 
 /// Compile every lowerable function in `analysis` and return a runnable [`Jit`].
+/// `dlopen` each library named by `@Link(lib = "…")` (`docs/19` §13) so its
+/// symbols become visible to the JIT's `dlsym(RTLD_DEFAULT)` lookup. (Native
+/// builds instead pass `-l<lib>` to the linker — see the CLI.)
+fn dlopen_link_libs(analysis: &Analysis) {
+    if analysis.results.link_libs.is_empty() {
+        return;
+    }
+    // RTLD_NOW (2) | RTLD_GLOBAL (8) — resolve now, export symbols process-wide.
+    const FLAGS: i32 = 2 | 8;
+    unsafe extern "C" {
+        fn dlopen(filename: *const std::os::raw::c_char, flag: std::os::raw::c_int) -> *mut std::os::raw::c_void;
+    }
+    let ext = if cfg!(target_os = "macos") { "dylib" } else { "so" };
+    for lib in &analysis.results.link_libs {
+        let name = format!("lib{lib}.{ext}\0");
+        // SAFETY: a NUL-terminated path; a failed open just leaves the symbol
+        // unresolved (the call will error later) — best-effort, like the linker.
+        unsafe {
+            dlopen(name.as_ptr() as *const std::os::raw::c_char, FLAGS);
+        }
+    }
+}
+
 pub fn compile(analysis: &Analysis) -> CgResult<Jit> {
+    dlopen_link_libs(analysis);
     let isa = make_isa(target_lexicon::Triple::host(), false);
     let mut builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
     register_runtime_symbols(&mut builder);

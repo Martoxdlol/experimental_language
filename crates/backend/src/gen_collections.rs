@@ -48,9 +48,57 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         }
     }
 
+    /// The address of an aggregate field used as a place — the base struct
+    /// pointer plus the field's byte offset (no load). Used to index into a
+    /// fixed-array extern-struct field, `s.data[i]` (`docs/19` §4).
+    pub(crate) fn aggregate_field_addr(&mut self, place: &Expr) -> CgResult<Value> {
+        let (recv, fname): (&Expr, String) = match &place.kind {
+            ExprKind::Field { receiver, name } => (receiver, name.name.clone()),
+            ExprKind::TupleIndex { receiver, index, .. } => (receiver, index.to_string()),
+            _ => return Err(CodegenError::new(
+                place.span,
+                "fixed-array access is only supported on an extern struct field",
+            )),
+        };
+        let r_ty = self.cx.analysis.results.expr_ty(recv.span)
+            .unwrap_or(self.cx.analysis.tcx.error);
+        let layout = self.layout_for_ty(r_ty).ok_or_else(|| {
+            CodegenError::new(recv.span, "array-field receiver is not a struct")
+        })?;
+        let base = self.gen_expr(recv)?.ok_or_else(|| {
+            CodegenError::new(recv.span, "receiver has no value")
+        })?;
+        let idx = layout.index_of(&fname).ok_or_else(|| {
+            CodegenError::new(place.span, "unknown array field")
+        })?;
+        Ok(self.b.ins().iadd_imm(base, layout.offsets[idx] as i64))
+    }
+
+    /// The element Cranelift type and size of a fixed-array type `[T; N]`.
+    pub(crate) fn array_elem_clty(&self, arr_ty: Ty) -> Option<ClType> {
+        if let TyKind::Array { elem, .. } = self.cx.analysis.tcx.kind(arr_ty).clone() {
+            let elem = resolve_shallow(self.cx.analysis, elem, &self.subst);
+            return clty_of(self.cx.analysis, elem);
+        }
+        None
+    }
+
     pub(crate) fn gen_index_load(&mut self, receiver: &Expr, index: &Expr) -> CgResult<Option<Value>> {
         let rty = self.cx.analysis.results.expr_ty(receiver.span)
             .unwrap_or(self.cx.analysis.tcx.error);
+        // A fixed-size FFI array `[T; N]` field — `arr[i]` loads element `T`.
+        if matches!(self.cx.analysis.tcx.kind(rty), TyKind::Array { .. }) {
+            let ct = self.array_elem_clty(rty).ok_or_else(|| {
+                CodegenError::new(receiver.span, "array element has no scalar type")
+            })?;
+            let base = self.aggregate_field_addr(receiver)?;
+            let idx = self.gen_expr(index)?.ok_or_else(|| {
+                CodegenError::new(index.span, "index has no value")
+            })?;
+            let scaled = self.b.ins().imul_imm(idx, ct.bytes() as i64);
+            let addr = self.b.ins().iadd(base, scaled);
+            return Ok(Some(self.b.ins().load(ct, MemFlags::trusted(), addr, 0)));
+        }
         // `map[key]` — panics on a missing key.
         if let Some((kt, vt)) = self.map_kv_of(rty) {
             let map = self.gen_expr(receiver)?.ok_or_else(|| {
@@ -79,6 +127,22 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     pub(crate) fn gen_index_store(&mut self, receiver: &Expr, index: &Expr, val: Option<Value>) -> CgResult<()> {
         let rty = self.cx.analysis.results.expr_ty(receiver.span)
             .unwrap_or(self.cx.analysis.tcx.error);
+        // A fixed-size FFI array `[T; N]` field — `arr[i] = v` stores element `T`.
+        if matches!(self.cx.analysis.tcx.kind(rty), TyKind::Array { .. }) {
+            let ct = self.array_elem_clty(rty).ok_or_else(|| {
+                CodegenError::new(receiver.span, "array element has no scalar type")
+            })?;
+            let base = self.aggregate_field_addr(receiver)?;
+            let idx = self.gen_expr(index)?.ok_or_else(|| {
+                CodegenError::new(index.span, "index has no value")
+            })?;
+            let scaled = self.b.ins().imul_imm(idx, ct.bytes() as i64);
+            let addr = self.b.ins().iadd(base, scaled);
+            if let Some(v) = val {
+                self.b.ins().store(MemFlags::trusted(), v, addr, 0);
+            }
+            return Ok(());
+        }
         // `map[key] = v` — insert or replace.
         if let Some((kt, vt)) = self.map_kv_of(rty) {
             let map = self.gen_expr(receiver)?.ok_or_else(|| {
@@ -137,6 +201,84 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 let raw = self.elem_to_i64(v, elem, args[1].span)?;
                 self.call_intrinsic("lang_list_set", &[PTR, types::I64, types::I64], None, &[list, idx, raw]);
                 Ok(None)
+            }
+            "clear" => {
+                self.call_intrinsic("lang_list_clear", &[PTR], None, &[list]);
+                Ok(None)
+            }
+            // `pop(): E | null` — remove + return the last element (boxed union).
+            "pop" => {
+                let size = self.call_intrinsic("lang_list_size", &[PTR], Some(types::I64), &[list])
+                    .expect("size");
+                let zero = self.b.ins().iconst(types::I64, 0);
+                let nonempty = self.b.ins().icmp(IntCC::SignedGreaterThan, size, zero);
+
+                let then_bb = self.b.create_block();
+                let else_bb = self.b.create_block();
+                let merge = self.b.create_block();
+                self.b.append_block_param(merge, PTR);
+                self.b.ins().brif(nonempty, then_bb, &[], else_bb, &[]);
+                self.term = true;
+
+                self.switch(then_bb);
+                let raw = self.call_intrinsic("lang_list_pop", &[PTR], Some(types::I64), &[list])
+                    .expect("pop");
+                let ev = self.i64_to_elem(raw, elem, receiver.span)?;
+                let boxed = self.box_value(ev, elem);
+                self.b.ins().jump(merge, &[boxed.into()]);
+                self.term = true;
+
+                self.switch(else_bb);
+                let null_box = self.box_value(None, self.cx.analysis.tcx.null);
+                self.b.ins().jump(merge, &[null_box.into()]);
+                self.term = true;
+
+                self.switch(merge);
+                Ok(Some(self.b.block_params(merge)[0]))
+            }
+            "insert" => {
+                let idx = self.gen_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "index has no value")
+                })?;
+                let v = self.gen_expr(&args[1])?;
+                let raw = self.elem_to_i64(v, elem, args[1].span)?;
+                self.call_intrinsic("lang_list_insert", &[PTR, types::I64, types::I64], None, &[list, idx, raw]);
+                Ok(None)
+            }
+            // `remove(i): E | null` — bounds-checked; result is a boxed union.
+            "remove" => {
+                let idx = self.gen_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "index has no value")
+                })?;
+                let size = self.call_intrinsic("lang_list_size", &[PTR], Some(types::I64), &[list])
+                    .expect("size");
+                let zero = self.b.ins().iconst(types::I64, 0);
+                let ge0 = self.b.ins().icmp(IntCC::SignedGreaterThanOrEqual, idx, zero);
+                let lt = self.b.ins().icmp(IntCC::SignedLessThan, idx, size);
+                let in_range = self.b.ins().band(ge0, lt);
+
+                let then_bb = self.b.create_block();
+                let else_bb = self.b.create_block();
+                let merge = self.b.create_block();
+                self.b.append_block_param(merge, PTR);
+                self.b.ins().brif(in_range, then_bb, &[], else_bb, &[]);
+                self.term = true;
+
+                self.switch(then_bb);
+                let raw = self.call_intrinsic("lang_list_remove", &[PTR, types::I64], Some(types::I64), &[list, idx])
+                    .expect("remove");
+                let ev = self.i64_to_elem(raw, elem, receiver.span)?;
+                let boxed = self.box_value(ev, elem);
+                self.b.ins().jump(merge, &[boxed.into()]);
+                self.term = true;
+
+                self.switch(else_bb);
+                let null_box = self.box_value(None, self.cx.analysis.tcx.null);
+                self.b.ins().jump(merge, &[null_box.into()]);
+                self.term = true;
+
+                self.switch(merge);
+                Ok(Some(self.b.block_params(merge)[0]))
             }
             // `get(i): E | null` — bounds-checked; result is a boxed union.
             "get" => {
@@ -671,6 +813,47 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                     _ => "lang_str_trim",
                 };
                 Ok(self.call_intrinsic(func, &[PTR], Some(PTR), &[s]))
+            }
+            "repeat" => {
+                let n = arg_str(self, 0)?;
+                Ok(self.call_intrinsic("lang_str_repeat", &[PTR, types::I64], Some(PTR), &[s, n]))
+            }
+            "replace" => {
+                let from = arg_str(self, 0)?;
+                let to = arg_str(self, 1)?;
+                Ok(self.call_intrinsic(
+                    "lang_str_replace", &[PTR, PTR, PTR], Some(PTR), &[s, from, to],
+                ))
+            }
+            // `index_of(needle): i64 | null` — runtime returns the byte index or
+            // `-1`; box the index or the `null` variant accordingly.
+            "index_of" => {
+                let needle = arg_str(self, 0)?;
+                let raw = self.call_intrinsic("lang_str_index_of", &[PTR, PTR], Some(types::I64), &[s, needle])
+                    .expect("index_of");
+                let zero = self.b.ins().iconst(types::I64, 0);
+                let found = self.b.ins().icmp(IntCC::SignedGreaterThanOrEqual, raw, zero);
+
+                let then_bb = self.b.create_block();
+                let else_bb = self.b.create_block();
+                let merge = self.b.create_block();
+                self.b.append_block_param(merge, PTR);
+                self.b.ins().brif(found, then_bb, &[], else_bb, &[]);
+                self.term = true;
+
+                self.switch(then_bb);
+                let i64t = self.cx.analysis.tcx.int(compiler::ty::IntTy::I64);
+                let boxed = self.box_value(Some(raw), i64t);
+                self.b.ins().jump(merge, &[boxed.into()]);
+                self.term = true;
+
+                self.switch(else_bb);
+                let null_box = self.box_value(None, self.cx.analysis.tcx.null);
+                self.b.ins().jump(merge, &[null_box.into()]);
+                self.term = true;
+
+                self.switch(merge);
+                Ok(Some(self.b.block_params(merge)[0]))
             }
             other => Err(CodegenError::new(
                 receiver.span,

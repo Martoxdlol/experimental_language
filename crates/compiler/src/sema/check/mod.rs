@@ -98,6 +98,7 @@ impl<'a> Checker<'a> {
     pub fn check_program(&mut self) {
         self.collect_struct_layouts();
         self.collect_impls();
+        self.validate_extern_structs();
         for id in 0..self.prog.defs.len() {
             let def = DefId(id as u32);
             match self.prog.def(def).kind {
@@ -131,6 +132,116 @@ impl<'a> Checker<'a> {
             None => self.tcx.null,
         };
         self.results.extern_sigs.insert(def, (ptys, rty));
+        // `@Link(lib = "z")` / `@Link("z")` (`docs/19` §13): record the library
+        // to link (native) / `dlopen` (JIT). De-duplicated, first-seen order.
+        for attr in self.prog.def(def).attrs.clone() {
+            if attr.name.name != "Link" {
+                continue;
+            }
+            for a in &attr.args {
+                let value = match a {
+                    crate::ast::AttrArg::Named { name, value, .. } if name.name == "lib" => value,
+                    crate::ast::AttrArg::Positional(e) => e,
+                    _ => continue,
+                };
+                if let crate::ast::ExprKind::Str(s) = &value.kind {
+                    // A library name is a plain (non-interpolated) string literal.
+                    let lib = match s.parts.as_slice() {
+                        [] => Some(String::new()),
+                        [crate::ast::StringPart::Text { text, .. }] => Some(text.clone()),
+                        _ => None,
+                    };
+                    if let Some(lib) = lib {
+                        if !lib.is_empty() && !self.results.link_libs.contains(&lib) {
+                            self.results.link_libs.push(lib);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Whether `ty` is a C-ABI-compatible (`ReprC`) field type for an extern
+    /// struct (`docs/19` §3): the numeric primitives, `bool`/`char`, raw
+    /// pointers `*T`, C function pointers, fixed arrays `[T; N]`, and *nested*
+    /// extern structs (embedded inline). `str`, managed structs, tuples,
+    /// unions, and closures are not C-ABI-compatible.
+    pub(crate) fn is_repr_c(&self, ty: Ty) -> bool {
+        match self.tcx.kind(ty) {
+            TyKind::Int(_)
+            | TyKind::Float(_)
+            | TyKind::Bool
+            | TyKind::Char
+            | TyKind::Ptr(_)
+            // A C function pointer — `extern (..) => R`.
+            | TyKind::Func { is_extern: true, .. } => true,
+            // A fixed-size array `[T; N]` whose element is itself ReprC
+            // (`docs/19` §4) — only valid as an extern field.
+            TyKind::Array { elem, .. } => self.is_repr_c(*elem),
+            // A nested `extern struct` — embedded inline (`docs/19` §3).
+            TyKind::Named { def, .. } => self.prog.def(*def).kind == DefKind::ExternStruct,
+            _ => false,
+        }
+    }
+
+    /// Enforce that every `extern struct` field is C-ABI-compatible
+    /// (`docs/19` §3). An incompatible field would have no sound C layout.
+    pub(crate) fn validate_extern_structs(&mut self) {
+        use crate::sema::results::StructFields as SF;
+        for id in 0..self.prog.defs.len() {
+            let def = DefId(id as u32);
+            let kind = self.prog.def(def).kind;
+            if !matches!(kind, DefKind::Struct | DefKind::ExternStruct) {
+                continue;
+            }
+            let is_extern = kind == DefKind::ExternStruct;
+            let span = self.prog.def(def).span;
+            let name = self.prog.def(def).name.clone();
+            // `@Transparent` (ABI newtype, `docs/19` §3): the struct must have
+            // exactly one field, whose representation/ABI it inherits.
+            if self.prog.def(def).attrs.iter().any(|a| a.name.name == "Transparent") {
+                match self.results.struct_fields.get(&def) {
+                    Some(SF::Tuple(ts)) if ts.len() == 1 => {}
+                    Some(SF::Tuple(ts)) => self.emit(span, SemaErrorKind::Message(format!(
+                        "`@Transparent` requires exactly one field, but `{}` has {} \
+                         (`docs/19` §3)", name, ts.len()
+                    ))),
+                    _ => self.emit(span, SemaErrorKind::Message(format!(
+                        "`@Transparent` requires a single-field tuple struct, e.g. \
+                         `@Transparent struct {}(i32)` (`docs/19` §3)", name
+                    ))),
+                }
+            }
+            // The C-layout decorators only apply to `extern struct` (`docs/19` §3).
+            if !is_extern {
+                for a in &self.prog.def(def).attrs {
+                    if matches!(a.name.name.as_str(), "Packed" | "Align" | "Union") {
+                        self.emit(a.span, SemaErrorKind::Message(format!(
+                            "`@{}` is only valid on an `extern struct` (`docs/19` §3)",
+                            a.name.name
+                        )));
+                    }
+                }
+                continue;
+            }
+            let fields: Vec<(String, Ty)> = match self.results.struct_fields.get(&def) {
+                Some(SF::Record(fs)) => fs.clone(),
+                Some(SF::Tuple(ts)) => {
+                    ts.iter().enumerate().map(|(i, t)| (i.to_string(), *t)).collect()
+                }
+                _ => Vec::new(),
+            };
+            for (fname, fty) in fields {
+                if !self.is_repr_c(fty) {
+                    self.emit(span, SemaErrorKind::Message(format!(
+                        "field `{}` of `extern struct {}` has type `{}`, which is not \
+                         C-ABI-compatible; extern struct fields must be numeric, `bool`, \
+                         `char`, or a raw pointer `*T` (`docs/19` §3)",
+                        fname, name, self.display(fty)
+                    )));
+                }
+            }
+        }
     }
 
     /// Build the interface-implementation table: for every `extend Target: I…`

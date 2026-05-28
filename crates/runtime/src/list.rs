@@ -90,6 +90,64 @@ pub unsafe extern "C" fn lang_list_size(h: *mut u8) -> i64 {
     unsafe { lfield(h, L_LEN) as i64 }
 }
 
+/// `xs.clear()` (`docs/18`): drop all elements (length → 0; capacity kept).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lang_list_clear(h: *mut u8) {
+    unsafe { lset(h, L_LEN, 0) };
+}
+
+/// Remove the last element, decrement the length, and return its raw slot.
+/// The caller (codegen) guards `len > 0` before calling.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lang_list_pop(h: *mut u8) -> i64 {
+    let len = unsafe { lfield(h, L_LEN) } as usize;
+    let buf = unsafe { lfield(h, L_BUF) } as *const i64;
+    let v = unsafe { buf.add(len - 1).read() };
+    unsafe { lset(h, L_LEN, (len - 1) as u64) };
+    v
+}
+
+/// `xs.insert(i, v)` (`docs/18`): shift `[i..len]` right and insert `v` at `i`.
+/// Panics if `i > len`. `v` may be an unrooted managed pointer, so pause GC
+/// across the (possibly growing) shift.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lang_list_insert(h: *mut u8, i: i64, v: i64) {
+    gc::pause();
+    let len = unsafe { lfield(h, L_LEN) } as usize;
+    if i < 0 || i as usize > len {
+        eprintln!("panic: list insert index {i} out of range (len {len})");
+        std::process::exit(101);
+    }
+    let cap = unsafe { lfield(h, L_CAP) } as usize;
+    if len == cap {
+        unsafe { list_grow(h) };
+    }
+    let buf = unsafe { lfield(h, L_BUF) } as *mut i64;
+    let idx = i as usize;
+    unsafe {
+        // Shift the tail right by one (overlapping copy, moving backwards).
+        std::ptr::copy(buf.add(idx), buf.add(idx + 1), len - idx);
+        buf.add(idx).write(v);
+        lset(h, L_LEN, (len + 1) as u64);
+    }
+    gc::resume();
+}
+
+/// Remove and return the element at `i`, shifting `[i+1..len]` left. The caller
+/// (codegen) guards `0 <= i < len`. No allocation, so no GC pause is needed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lang_list_remove(h: *mut u8, i: i64) -> i64 {
+    let len = unsafe { lfield(h, L_LEN) } as usize;
+    let buf = unsafe { lfield(h, L_BUF) } as *mut i64;
+    let idx = i as usize;
+    unsafe {
+        let v = buf.add(idx).read();
+        std::ptr::copy(buf.add(idx + 1), buf.add(idx), len - idx - 1);
+        lset(h, L_LEN, (len - 1) as u64);
+        v
+    }
+}
+
 /// Indexed read; panics out of range (`docs/18` — `[]` panics, `.get` is the
 /// fallible form).
 ///

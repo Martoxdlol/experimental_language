@@ -20,6 +20,19 @@ impl<'a> Checker<'a> {
             Some(t) => self.lower_ty(t, &env),
             None => self.tcx.null,
         };
+        // Returning an `extern struct` by value is not yet supported: its value
+        // is a pointer into the caller's frame, so it would dangle. Pass it
+        // through a `*T` out-pointer parameter instead (`docs/19` §2).
+        if self.is_extern_struct(ret_ty) {
+            self.emit(
+                f.return_type.as_ref().map_or(self.prog.def(def).span, |t| t.span),
+                SemaErrorKind::Message(
+                    "returning an `extern struct` by value is not yet supported; \
+                     pass it through a `*T` out-pointer parameter (`docs/19`)"
+                        .into(),
+                ),
+            );
+        }
         // An `async` function declares its return type as `Future<Output>`; the
         // body itself yields `Output` (`docs/21` §3). Inside the body `await` is
         // allowed and `return e` returns `Output`. We record the output for

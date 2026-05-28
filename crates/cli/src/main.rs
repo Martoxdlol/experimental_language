@@ -240,6 +240,10 @@ fn build_executable(map: &SourceMap, analysis: &Analysis, exe: &Path) -> ExitCod
     } else {
         cmd.args(["-lpthread", "-ldl", "-lm"]);
     }
+    // Libraries requested via `@Link(lib = "…")` (`docs/19` §13).
+    for lib in &analysis.results.link_libs {
+        cmd.arg(format!("-l{lib}"));
+    }
 
     match cmd.status() {
         Ok(s) if s.success() => {

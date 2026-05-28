@@ -121,6 +121,9 @@ pub struct Def {
     /// For item-level defs, a clone of the AST so later phases reach the
     /// signature and body without borrowing the original tree.
     pub item: Option<ItemKind>,
+    /// The decorators written above the item (`@Align(N)`, `@Packed`, …).
+    /// FFI layout decorators (`docs/19` §3) are read off here by the backend.
+    pub attrs: Vec<Attribute>,
     /// Generic parameter defs declared directly on this def, in order.
     pub generics: Vec<DefId>,
     /// For a `GenericParam` def, its interface bounds (`T: A + B`) as written.
@@ -658,6 +661,7 @@ impl Program {
             public,
             span,
             item: None,
+            attrs: Vec::new(),
             generics: Vec::new(),
             param_bounds: Vec::new(),
             is_static: false,
@@ -835,6 +839,7 @@ impl Program {
     ) {
         let module = explicit_module.unwrap_or(self.defs[owner.index()].module);
         self.defs[owner.index()].item = Some(item.kind.clone());
+        self.defs[owner.index()].attrs = item.attrs.clone();
         let gen_defs = self.collect_generics(module, owner, generics);
         self.defs[owner.index()].generics = gen_defs;
     }
@@ -976,7 +981,15 @@ impl Program {
                     item.span,
                 );
                 self.register_name(module, &s.name.name, def, DefKind::ExternStruct, s.name.span);
-                self.attach_item(def, item, &s.generics, None);
+                // Store the bare `StructItem` (not the `Extern(..)` wrapper) so the
+                // existing struct machinery — `record_fields`, `tuple_fields`,
+                // `collect_struct_layouts` — works on extern structs transparently;
+                // the `ExternStruct` def kind + decorators (`attrs`) carry the C-ABI
+                // distinction (`docs/19` §3).
+                self.defs[def.index()].item = Some(ItemKind::Struct(s.clone()));
+                self.defs[def.index()].attrs = item.attrs.clone();
+                let gen_defs = self.collect_generics(module, def, &s.generics);
+                self.defs[def.index()].generics = gen_defs;
                 self.collect_struct_fields(module, def, &s.kind);
             }
             ExternItem::OpaqueType(name) => {

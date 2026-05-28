@@ -26,7 +26,11 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     pub(crate) fn result_is_managed_ref(&self, span: Span) -> bool {
         let a = self.cx.analysis;
         match a.results.adjustment(span) {
-            Some(Adjust::Widen(_)) => true, // a `{type_id,data}` box is managed
+            // Widening to a `*T | null` (NPO) yields a raw nullable pointer, not
+            // a managed box — the collector must not trace it (`docs/19` §2).
+            Some(Adjust::Widen(t)) => {
+                npo_union(a, resolve_shallow(a, t, &self.subst)).is_none()
+            }
             Some(Adjust::WidenDyn(_)) => true, // a `{vtable,data}` box is managed
             Some(Adjust::Unbox(t)) => is_managed_ptr(a, resolve_shallow(a, t, &self.subst)),
             None => {
@@ -40,7 +44,14 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     /// value: box on widen, unbox on narrow.
     pub(crate) fn apply_adjustment(&mut self, span: Span, v: Option<Value>) -> CgResult<Option<Value>> {
         match self.cx.analysis.results.adjustment(span) {
-            Some(Adjust::Widen(_)) => {
+            Some(Adjust::Widen(target)) => {
+                // Widening into a `*T | null` (NPO) union is the identity on the
+                // raw pointer; `null` becomes a 0 pointer (`docs/19` §2).
+                let tgt = resolve_shallow(self.cx.analysis, target, &self.subst);
+                if npo_union(self.cx.analysis, tgt).is_some() {
+                    let p = v.unwrap_or_else(|| self.b.ins().iconst(PTR, 0));
+                    return Ok(Some(p));
+                }
                 // `expr_ty(span)` is the pre-widening ("raw") type, which equals
                 // the target union only when the value is already boxed.
                 let from = self.cx.analysis.results.expr_ty(span)
@@ -48,6 +59,14 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 Ok(Some(self.apply_widen(v, from)))
             }
             Some(Adjust::Unbox(target)) => {
+                // Narrowing a `*T | null` (NPO) value is the identity — the value
+                // already *is* the raw pointer (there is no box to load from).
+                let src = self.cx.analysis.results.expr_ty(span)
+                    .unwrap_or(self.cx.analysis.tcx.error);
+                let src = resolve_shallow(self.cx.analysis, src, &self.subst);
+                if npo_union(self.cx.analysis, src).is_some() {
+                    return Ok(v);
+                }
                 let ptr = v.expect("unbox target is a boxed pointer");
                 match clty_of(self.cx.analysis, target) {
                     Some(ct) => Ok(Some(self.b.ins().load(ct, MemFlags::trusted(), ptr, 8))),
@@ -416,6 +435,17 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                     // type matters (e.g. once boxed into a union). Represent it
                     // as a null pointer placeholder.
                     Some(ValueRes::StructCtor(_)) => Ok(Some(self.b.ins().iconst(PTR, 0))),
+                    // An `extern var` — a C global (`docs/19` §4). Read through
+                    // its imported data symbol.
+                    Some(ValueRes::Global(def))
+                        if self.cx.analysis.program.def(def).kind == DefKind::ExternVar =>
+                    {
+                        let addr = self.extern_var_addr(def);
+                        match clty_of(self.cx.analysis, ty) {
+                            Some(ct) => Ok(Some(self.b.ins().load(ct, MemFlags::trusted(), addr, 0))),
+                            None => Ok(None),
+                        }
+                    }
                     _ => Err(CodegenError::new(expr.span, "value reference not yet lowerable")),
                 }
             }
@@ -508,6 +538,8 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             }
             ExprKind::Match { scrutinee, arms } => self.gen_match(scrutinee, arms, ty),
             ExprKind::Try { expr: inner, q_span } => self.gen_try(inner, *q_span, ty),
+            ExprKind::Ref { expr: inner, .. } => self.gen_ref(inner),
+            ExprKind::Deref { expr: inner, .. } => self.gen_deref(inner, ty),
             ExprKind::While { cond, body } => self.gen_while(cond, body),
             ExprKind::For { pattern, in_async, iter, body } => {
                 if *in_async {
@@ -656,6 +688,70 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             And | Or => unreachable!(),
         };
         Ok(Some(out))
+    }
+
+    /// The address of an `extern var` C global (`docs/19` §4), via an imported,
+    /// writable data symbol named by its real (unmangled) symbol name. The JIT
+    /// resolves it with `dlsym`; the native linker resolves it against libc.
+    pub(crate) fn extern_var_addr(&mut self, def: DefId) -> Value {
+        let name = self.cx.analysis.program.def(def).name.clone();
+        let data_id = self
+            .module
+            .declare_data(&name, Linkage::Import, true, false)
+            .expect("declare extern var");
+        let gv = self.module.declare_data_in_func(data_id, self.b.func);
+        self.b.ins().global_value(PTR, gv)
+    }
+
+    /// `&place` — address-of (`docs/19` §2). The checker restricts the operand
+    /// to an addressable `extern struct` place, whose runtime value already *is*
+    /// the address of its stack-allocated byte block, so `&` is the identity on
+    /// that value (no pin needed for stack values).
+    pub(crate) fn gen_ref(&mut self, inner: &Expr) -> CgResult<Option<Value>> {
+        // `&arr[i]` — the address of a fixed-array element (`docs/19` §4).
+        if let ExprKind::Index { receiver, index } = &inner.kind {
+            let rty = self.cx.analysis.results.expr_ty(receiver.span)
+                .unwrap_or(self.cx.analysis.tcx.error);
+            if matches!(self.cx.analysis.tcx.kind(rty), TyKind::Array { .. }) {
+                let ct = self.array_elem_clty(rty).ok_or_else(|| {
+                    CodegenError::new(receiver.span, "array element has no scalar type")
+                })?;
+                let base = self.aggregate_field_addr(receiver)?;
+                let idx = self.gen_expr(index)?.ok_or_else(|| {
+                    CodegenError::new(index.span, "index has no value")
+                })?;
+                let scaled = self.b.ins().imul_imm(idx, ct.bytes() as i64);
+                return Ok(Some(self.b.ins().iadd(base, scaled)));
+            }
+        }
+        // Otherwise an extern struct place: its value already is the address.
+        let v = self.gen_expr(inner)?.ok_or_else(|| {
+            CodegenError::new(inner.span, "address-of operand has no value")
+        })?;
+        Ok(Some(v))
+    }
+
+    /// `*ptr` — pointer dereference (`docs/19` §2). Panics on null. For a raw
+    /// pointer to an `extern struct` the result is the same address (the value
+    /// representation is the pointer); for a pointer to a scalar it loads the
+    /// pointee. `result_ty` is the (checker-recorded) pointee type.
+    pub(crate) fn gen_deref(&mut self, inner: &Expr, result_ty: Ty) -> CgResult<Option<Value>> {
+        let p = self.gen_expr(inner)?.ok_or_else(|| {
+            CodegenError::new(inner.span, "dereference operand has no value")
+        })?;
+        let zero = self.b.ins().iconst(PTR, 0);
+        let is_null = self.b.ins().icmp(IntCC::Equal, p, zero);
+        self.guard_panic(is_null, "dereference of a null pointer");
+        let rty = resolve_shallow(self.cx.analysis, result_ty, &self.subst);
+        if let TyKind::Named { def, .. } = self.cx.analysis.tcx.kind(rty) {
+            if self.is_extern_struct_def(*def) {
+                return Ok(Some(p));
+            }
+        }
+        match clty_of(self.cx.analysis, rty) {
+            Some(ct) => Ok(Some(self.b.ins().load(ct, MemFlags::trusted(), p, 0))),
+            None => Ok(None),
+        }
     }
 
     /// Emit a guarded panic: when `cond` (an `I8` boolean) is true, call
