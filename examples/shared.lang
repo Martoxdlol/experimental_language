@@ -21,8 +21,10 @@ function main() {
   var b: Shared<Counter> = state.clone();
   var h1: JoinHandle<i64> = Thread.spawn(() => { bump(a, 5000); 0 });
   var h2: JoinHandle<i64> = Thread.spawn(() => { bump(b, 5000); 0 });
-  match h1.join() { Joined<i64> j => {}, Panicked p => {} }
-  match h2.join() { Joined<i64> j => {}, Panicked p => {} }
+  // `join()` is async (docs/20 §1 / docs/21); `block_on` drives the future
+  // here rather than parking the calling OS thread.
+  match block_on(h1.join()) { Joined<i64> j => {}, Panicked p => {} }
+  match block_on(h2.join()) { Joined<i64> j => {}, Panicked p => {} }
 
   // No lost updates: the mutex serialized every increment.
   var total: i64 = state.lock((c) => c.value);

@@ -75,12 +75,10 @@ fn register_runtime_symbols(b: &mut JITBuilder) {
     b.symbol("lang_async_sleep", runtime::async_rt::lang_async_sleep as *const u8);
     b.symbol("lang_async_spawn", runtime::threads::lang_async_spawn as *const u8);
     b.symbol("lang_thread_spawn", runtime::threads::lang_thread_spawn as *const u8);
-    b.symbol("lang_thread_join", runtime::threads::lang_thread_join as *const u8);
-    b.symbol("lang_thread_panicked", runtime::threads::lang_thread_panicked as *const u8);
-    b.symbol("lang_thread_message", runtime::threads::lang_thread_message as *const u8);
+    b.symbol("lang_thread_join_future", runtime::threads::lang_thread_join_future as *const u8);
     b.symbol("lang_channel_new", runtime::channels::lang_channel_new as *const u8);
     b.symbol("lang_chan_send", runtime::channels::lang_chan_send as *const u8);
-    b.symbol("lang_chan_recv", runtime::channels::lang_chan_recv as *const u8);
+    b.symbol("lang_chan_recv_future", runtime::channels::lang_chan_recv_future as *const u8);
     b.symbol("lang_chan_try_recv", runtime::channels::lang_chan_try_recv as *const u8);
     b.symbol("lang_shared_new", runtime::shared::lang_shared_new as *const u8);
     b.symbol("lang_shared_lock", runtime::shared::lang_shared_lock as *const u8);

@@ -94,13 +94,13 @@ import { Shared, channel } from "std:sync"</code></pre>
       <g transform="translate(20, 60)" font-size="11">
         <text y="0">var (tx, rx) = channel&lt;T&gt;()</text>
         <text y="22">tx.send(value)</text>
-        <text y="40">var v = rx.recv()</text>
+        <text y="40">var v = await rx.recv()</text>
       </g>
 
       <text x="20" y="140" font-size="11">— typed FIFO</text>
-      <text x="20" y="156" font-size="11">— MPSC default, MPMC available</text>
+      <text x="20" y="156" font-size="11">— send non-blocking, recv async</text>
       <text x="20" y="172" font-size="11">— move when locally unique, else Clone</text>
-      <text x="20" y="188" font-size="11">— Receiver is Iterator&lt;T&gt;</text>
+      <text x="20" y="188" font-size="11">— MPSC default, MPMC available</text>
     </g>
 
     <g transform="translate(320, 20)">
@@ -148,18 +148,42 @@ import { Shared, channel } from "std:sync"</code></pre>
 pub struct JoinHandle&lt;R&gt; { ... }
 
 extend&lt;R&gt; JoinHandle&lt;R&gt; {
-  function join(self): Joined&lt;R&gt; | Panicked
+  function join(self): Future&lt;Joined&lt;R&gt; | Panicked&gt;   // async — await it
   function detach(self): null
 }
 
 pub struct Joined&lt;R&gt; { pub value: R }
 pub struct Panicked  { pub message: str }</code></pre>
 
+<div class="callout good">
+  <strong><code>join</code> is async and non-blocking.</strong>
+  <code>join()</code> does <em>not</em> park the calling OS thread. It returns a
+  <code>Future&lt;Joined&lt;R&gt; | Panicked&gt;</code> (see <a href="21-async.html">async</a>)
+  that you <code>await</code> inside an async body, or drive with
+  <code>block_on</code> from synchronous code. Polling the future checks whether
+  the worker has finished: if so, it resolves to
+  <code>Joined&lt;R&gt; { value }</code> (or <code>Panicked { message }</code>);
+  otherwise it registers the executor's waker and reports <code>Pending</code>
+  so the <em>task</em> suspends while the joining thread is free to interleave
+  other work. When the worker finishes, it invokes the stored wakers, which
+  re-poll the awaiting task.
+</div>
+
+<pre><code>// Drive a join from sync code, or await it inside an async body.
+var r: Joined&lt;R&gt; | Panicked = block_on(h.join());
+
+function collect(h: JoinHandle&lt;R&gt;): Future&lt;R&gt; async {
+  match await h.join() {                  // suspends until the worker finishes
+    Joined&lt;R&gt; j => j.value,
+    Panicked p  => panic("worker: " + p.message),
+  }
+}</code></pre>
+
 <div class="callout">
   <strong>Two flavors of spawn</strong>
   <code>Thread.spawn</code> runs a synchronous closure. For <code>Future&lt;T&gt;</code> work,
   use <code>spawn(fut)</code> from <a href="21-async.html">21-async</a>. Both return the same
-  <code>JoinHandle&lt;R&gt;</code> type.
+  <code>JoinHandle&lt;R&gt;</code> type, and both are joined the same async way.
 </div>
 
 <h3>Cross-thread capture — isolation rules</h3>
@@ -264,22 +288,41 @@ pub struct Panicked  { pub message: str }</code></pre>
 <h3>Sender / Receiver API</h3>
 
 <pre><code>extend&lt;T&gt; Sender&lt;T&gt; {
-  function send(self, value: T): null | ChannelClosed
+  function send(self, value: T): null | ChannelClosed   // non-blocking
 }
 
 extend&lt;T&gt; Receiver&lt;T&gt; {
-  function recv(self): T | ChannelClosed
-  function try_recv(self): T | null | ChannelClosed
+  function recv(self): Future&lt;T&gt;            // async — await it
+  function try_recv(self): T | null         // non-blocking poll
 }
 
 pub struct ChannelClosed;</code></pre>
 
-<p>Bounded variants block when full. <code>Receiver&lt;T&gt;</code> implements
-<code>Iterator&lt;T&gt;</code>:</p>
+<div class="callout good">
+  <strong>Channels are async and non-blocking.</strong>
+  <code>send</code> enqueues onto an unbounded queue and returns at once — it
+  never blocks. <code>recv()</code> does <em>not</em> park the calling OS thread:
+  it returns a <code>Future&lt;T&gt;</code> (see <a href="21-async.html">async</a>)
+  that you <code>await</code>. Polling the future pops the next message if one is
+  ready; otherwise it registers the executor's waker and reports
+  <code>Pending</code>, so the <em>task</em> suspends and the thread is free to
+  run other work. A later <code>send</code> wakes the waiter, which re-polls. This
+  is what lets channels compose with the async runtime.
+</div>
 
-<pre><code>for msg in rx {
+<pre><code>// Drive a recv with the executor, or await it inside an async body.
+var v: T = block_on(rx.recv());
+
+function consume(rx: Receiver&lt;T&gt;): Future&lt;null&gt; async {
+  var msg: T = await rx.recv();   // suspends until a message arrives
   process(msg)
 }</code></pre>
+
+<p><code>try_recv</code> is the synchronous escape hatch: it polls the queue once
+without a future, returning <code>T | null</code> (<code>null</code> when empty).
+Bounded variants apply back-pressure by making <code>send</code> async too.
+<code>Receiver&lt;T&gt;</code> will implement <code>AsyncIterator&lt;T&gt;</code> so a
+<code>for await msg in rx</code> loop drains it.</p>
 
 <!-- =========================================================== -->
 <h2 id="zerocopy">3. Zero-copy on send</h2>
@@ -459,7 +502,7 @@ covers the common cases. For lock-free patterns, drop down to FFI atomics.</p>
       <text x="140" y="22" text-anchor="middle" font-weight="700" fill="#1a4a8a">Thread A</text>
       <text x="14" y="60" font-size="11">var p = ...</text>
       <text x="14" y="86" font-size="11" fill="#2a6f4d">tx.send(p)</text>
-      <text x="14" y="160" font-size="11" fill="#2a6f4d">rx.recv()</text>
+      <text x="14" y="160" font-size="11" fill="#2a6f4d">await rx.recv()</text>
       <text x="14" y="186" font-size="11">var ...</text>
     </g>
 
@@ -481,7 +524,7 @@ covers the common cases. For lock-free patterns, drop down to FFI atomics.</p>
       <rect width="280" height="220" rx="8" fill="#f3eefa" stroke="#6b4ba8" stroke-width="2"/>
       <text x="140" y="22" text-anchor="middle" font-weight="700" fill="#6b4ba8">Thread B</text>
       <text x="14" y="60" class="small">(no view of p)</text>
-      <text x="14" y="86" font-size="11" fill="#2a6f4d">rx.recv()</text>
+      <text x="14" y="86" font-size="11" fill="#2a6f4d">await rx.recv()</text>
       <text x="14" y="106" font-size="11">var q = ...</text>
       <text x="14" y="160" font-size="11" fill="#2a6f4d">tx.send(q)</text>
       <text x="14" y="186" class="small">(no view of q)</text>
@@ -523,13 +566,21 @@ function main() {
   var (tx, rx) = channel&lt;i64&gt;()
   var h1 = Thread.spawn { producer(tx) }
   var h2 = Thread.spawn { consumer(rx) }
-  h1.join()
-  h2.join()
+  // `join()` is async — drive each handle with `block_on`, or await them
+  // inside an `async { … }` block that the executor runs concurrently.
+  block_on(h1.join())
+  block_on(h2.join())
 }</code></pre>
 
 <pre><code>// Shared counter incremented by many threads
 import { Thread, JoinHandle } from "std:thread"
 import { Shared } from "std:sync"
+
+function gather(handles: List&lt;JoinHandle&lt;null&gt;&gt;): Future&lt;null&gt; async {
+  // Awaiting each `join()` suspends the task (instead of parking the OS
+  // thread) until that worker finishes.
+  for h in handles { var _ = await h.join() }
+}
 
 function main() {
   var state = Shared.new(0i64)
@@ -542,7 +593,7 @@ function main() {
       }
     })
   }
-  for h in handles { h.join() }
+  block_on(gather(handles))
   println(state.lock { it } as str)
 }</code></pre>
 

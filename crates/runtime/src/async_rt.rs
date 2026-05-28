@@ -64,7 +64,10 @@ extern "C" fn wake_thunk(data: *mut u8) {
 /// is a `poll` function with the ABI documented at the module level.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lang_block_on(fut: *mut u8, pending_tid: i64) -> i64 {
-    let waker = ThreadWaker { woken: Mutex::new(false), cv: Condvar::new() };
+    let waker = ThreadWaker {
+        woken: Mutex::new(false),
+        cv: Condvar::new(),
+    };
     let waker_ptr = &waker as *const ThreadWaker as *mut u8;
 
     // `fut` lives only in this (native) frame, which the collector does not
@@ -80,7 +83,10 @@ pub unsafe extern "C" fn lang_block_on(fut: *mut u8, pending_tid: i64) -> i64 {
             unsafe { std::mem::transmute(poll_addr) };
         let data = unsafe { ((fut as usize + 8) as *const usize).read() } as *mut u8;
 
-        let mut ctx = Context { waker_data: waker_ptr, wake_fn: wake_thunk };
+        let mut ctx = Context {
+            waker_data: waker_ptr,
+            wake_fn: wake_thunk,
+        };
         let result = poll(data, &mut ctx);
 
         // The poll result is a `Ready<Out> | Pending` union box: type_id @0.
@@ -286,11 +292,14 @@ extern "C" fn sleep_poll(data: *mut u8, ctx: *mut Context) -> *mut u8 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lang_async_sleep(ms: i64, ready_tid: i64, pending_tid: i64) -> *mut u8 {
     let id = SLEEP_NEXT.fetch_add(1, Ordering::Relaxed);
-    sleep_registry().lock().unwrap().insert(id, std::sync::Arc::new(SleepCell {
-        ms,
-        started: AtomicBool::new(false),
-        fired: AtomicBool::new(false),
-    }));
+    sleep_registry().lock().unwrap().insert(
+        id,
+        std::sync::Arc::new(SleepCell {
+            ms,
+            started: AtomicBool::new(false),
+            fired: AtomicBool::new(false),
+        }),
+    );
     gc::pause();
     let data = unsafe { gc::alloc(sleep_data_desc()) };
     unsafe {

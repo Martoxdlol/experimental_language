@@ -432,8 +432,12 @@ impl<'a> Checker<'a> {
         self.tcx.mk_named(self.prog.join_handle_def, vec![r])
     }
 
-    /// `JoinHandle<R>.join(): Joined<R> | Panicked` and `.detach(): null`
-    /// (`docs/20` §1).
+    /// `JoinHandle<R>.join(): Future<Joined<R> | Panicked>` and
+    /// `.detach(): null` (`docs/20` §1).
+    ///
+    /// `join` is **async and non-blocking** (`docs/21`): you `await` the
+    /// returned future (or drive it with `block_on`) instead of parking the
+    /// calling OS thread. The future resolves when the worker finishes.
     pub(crate) fn check_join_handle_method(&mut self, r: Ty, name: &Ident, args: &[Expr], span: Span) -> Ty {
         if !args.is_empty() {
             self.emit(span, SemaErrorKind::ArgCount { expected: 0, found: args.len() });
@@ -446,7 +450,8 @@ impl<'a> Checker<'a> {
                 self.results.thread_joins.insert(span, r);
                 let joined = self.tcx.mk_named(self.prog.joined_def, vec![r]);
                 let panicked = self.tcx.mk_named(self.prog.panicked_def, Vec::new());
-                self.tcx.mk_union([joined, panicked])
+                let union = self.tcx.mk_union([joined, panicked]);
+                self.tcx.mk_named(self.prog.future_def, vec![union])
             }
             "detach" => self.tcx.null,
             other => {
@@ -734,10 +739,13 @@ impl<'a> Checker<'a> {
                 self.tcx.null
             }
             (false, "recv") => {
+                // Async + non-blocking (`docs/20` §2 / `docs/21`): `recv()` builds
+                // a `Future<T>` you `await` (or drive with `block_on`) rather than
+                // parking the calling thread.
                 if !args.is_empty() {
                     self.emit(span, SemaErrorKind::ArgCount { expected: 0, found: args.len() });
                 }
-                elem
+                self.tcx.mk_named(self.prog.future_def, vec![elem])
             }
             (false, "try_recv") => {
                 if !args.is_empty() {

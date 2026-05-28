@@ -98,9 +98,10 @@ function main() {
   var r = Range { current: 0, end: 5 };
   println("stream = ${block_on(sum_range(r))}");
 
-  // `spawn` drives a future on a worker thread; `join` collects the result.
+  // `spawn` drives a future on a worker thread; `join()` is itself async, so
+  // we `block_on` the resulting future (or `await` it inside an async body).
   var h: JoinHandle<i64> = spawn(tick(5));
-  match h.join() {
+  match block_on(h.join()) {
     Joined<i64> j => println("spawned = ${j.value}"),
     Panicked p => println("spawned panicked"),
   }

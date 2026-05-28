@@ -693,7 +693,8 @@ fn drop_finalizer_runs_on_collection() {
 #[test]
 fn shared_mutex_serializes_concurrent_increments() {
     // `docs/20` §4: `Shared<T>` is a mutex. Two threads each increment a shared
-    // counter 5000 times under `lock`; no updates are lost.
+    // counter 5000 times under `lock`; no updates are lost. `join()` is async,
+    // so `block_on` drives each handle's `Future<Joined<R> | Panicked>`.
     let src = "struct Counter { value: i64 }\n\
                function bump(s: Shared<Counter>, n: i64) {\n\
                  var i: i64 = 0;\n\
@@ -705,8 +706,8 @@ fn shared_mutex_serializes_concurrent_increments() {
                  var b: Shared<Counter> = state.clone();\n\
                  var h1: JoinHandle<i64> = Thread.spawn(() => { bump(a, 5000); 0 });\n\
                  var h2: JoinHandle<i64> = Thread.spawn(() => { bump(b, 5000); 0 });\n\
-                 match h1.join() { Joined<i64> j => {}, Panicked p => {} }\n\
-                 match h2.join() { Joined<i64> j => {}, Panicked p => {} }\n\
+                 match block_on(h1.join()) { Joined<i64> j => {}, Panicked p => {} }\n\
+                 match block_on(h2.join()) { Joined<i64> j => {}, Panicked p => {} }\n\
                  println((state.lock((c) => c.value)) as str);\n\
                }";
     let (out, err, ok) = lang("run", src);
@@ -732,25 +733,62 @@ fn shared_try_lock_returns_value_or_lock_busy() {
 
 #[test]
 fn channel_cross_thread_producer_consumer() {
-    // `docs/20` §2: a worker thread sends over a channel; main receives. The
+    // `docs/20` §2: a worker thread sends over a channel; main consumes
+    // asynchronously. `recv()` is a `Future<T>` — `await`ing it suspends the
+    // task (driven here by `block_on`) instead of blocking the thread. The
     // `Sender` is captured into the spawned closure (a thread-safe handle).
     let src = "function produce(tx: Sender<i64>) {\n\
                  var i: i64 = 1;\n\
                  while i <= 5 { tx.send(i * 10); i = i + 1; }\n\
+               }\n\
+               function consume(rx: Receiver<i64>): Future<i64> async {\n\
+                 var total: i64 = 0; var n: i64 = 0;\n\
+                 while n < 5 { var m: i64 = await rx.recv(); total = total + m; n = n + 1; }\n\
+                 total\n\
                }\n\
                function main() {\n\
                  var pair: (Sender<i64>, Receiver<i64>) = channel<i64>();\n\
                  var tx: Sender<i64> = pair.0;\n\
                  var rx: Receiver<i64> = pair.1;\n\
                  var h: JoinHandle<i64> = Thread.spawn(() => { produce(tx); 0 });\n\
-                 var total: i64 = 0; var n: i64 = 0;\n\
-                 while n < 5 { total = total + rx.recv(); n = n + 1; }\n\
-                 match h.join() { Joined<i64> j => {}, Panicked p => {} }\n\
+                 var total: i64 = block_on(consume(rx));\n\
+                 match block_on(h.join()) { Joined<i64> j => {}, Panicked p => {} }\n\
                  println(total as str);\n\
                }";
     let (out1, err, ok) = lang("run", src);
     assert!(ok, "stderr: {err}");
     assert_eq!(out1, "150\n"); // 10+20+30+40+50
+    let (out2, _, ok2) = lang_env("run", src, &[("LANG_GC", "stress")]);
+    assert!(ok2);
+    assert_eq!(out1, out2, "GC stress changed the channel result");
+}
+
+#[test]
+fn channel_async_recv_of_managed_element_survives_gc_stress() {
+    // `docs/20` §2: an async `recv()` of a *managed* element (`str`). The
+    // message rides the channel queue (pinned as a GC root) and is moved into
+    // the future's `Ready<str>` traced value slot when polled — so a collection
+    // anywhere in the hand-off must not free it. The consumer awaits each recv.
+    let src = "function produce(tx: Sender<str>) {\n\
+                 tx.send(\"a\"); tx.send(\"b\"); tx.send(\"c\");\n\
+               }\n\
+               function consume(rx: Receiver<str>): Future<str> async {\n\
+                 var acc: str = \"\"; var n: i64 = 0;\n\
+                 while n < 3 { var m: str = await rx.recv(); acc = acc + m; n = n + 1; }\n\
+                 acc\n\
+               }\n\
+               function main() {\n\
+                 var pair: (Sender<str>, Receiver<str>) = channel<str>();\n\
+                 var tx: Sender<str> = pair.0;\n\
+                 var rx: Receiver<str> = pair.1;\n\
+                 var h: JoinHandle<i64> = Thread.spawn(() => { produce(tx); 0 });\n\
+                 var acc: str = block_on(consume(rx));\n\
+                 match block_on(h.join()) { Joined<i64> j => {}, Panicked p => {} }\n\
+                 println(acc);\n\
+               }";
+    let (out1, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out1, "abc\n");
     let (out2, _, ok2) = lang_env("run", src, &[("LANG_GC", "stress")]);
     assert!(ok2);
     assert_eq!(out1, out2, "GC stress changed the channel result");
@@ -815,7 +853,8 @@ fn calling_instance_method_statically_errors() {
 #[test]
 fn thread_spawn_join_returns_result() {
     // `docs/20` §1: `Thread.spawn(() => R)` runs a closure on a new OS thread;
-    // `join()` blocks and yields `Joined<R> | Panicked`.
+    // `join()` is async — it returns a `Future<Joined<R> | Panicked>` driven
+    // here by `block_on` (or awaitable inside an async body).
     let src = "function take(r: Joined<i64> | Panicked): i64 {\n\
                  match r { Joined<i64> j => j.value, Panicked p => 0 - 1 }\n\
                }\n\
@@ -826,7 +865,7 @@ fn thread_spawn_join_returns_result() {
                    while i < 1000 { s = s + i; i = i + 1; }\n\
                    s + base\n\
                  });\n\
-                 println(take(h.join()) as str);\n\
+                 println(take(block_on(h.join())) as str);\n\
                }";
     let (out, err, ok) = lang("run", src);
     assert!(ok, "stderr: {err}");
@@ -836,7 +875,9 @@ fn thread_spawn_join_returns_result() {
 #[test]
 fn many_threads_under_gc_stress() {
     // Several workers each allocate heavily; the result must be deterministic
-    // and memory-safe under `LANG_GC=stress` (stop-the-world coordination).
+    // and memory-safe under `LANG_GC=stress` (stop-the-world coordination). An
+    // async gatherer awaits each `join()` in turn so the main task suspends
+    // (rather than parking the OS thread) between worker completions.
     let src = "function work(id: i64): i64 {\n\
                  var acc: i64 = 0; var i: i64 = 0;\n\
                  while i < 3000 { var s: str = \"n-\" + (i as str); acc = acc + s.size(); i = i + 1; }\n\
@@ -845,11 +886,17 @@ fn many_threads_under_gc_stress() {
                function take(r: Joined<i64> | Panicked): i64 {\n\
                  match r { Joined<i64> j => j.value, Panicked p => 0 }\n\
                }\n\
+               function gather(a: JoinHandle<i64>, b: JoinHandle<i64>, c: JoinHandle<i64>): Future<i64> async {\n\
+                 var ra: Joined<i64> | Panicked = await a.join();\n\
+                 var rb: Joined<i64> | Panicked = await b.join();\n\
+                 var rc: Joined<i64> | Panicked = await c.join();\n\
+                 take(ra) + take(rb) + take(rc)\n\
+               }\n\
                function main() {\n\
                  var a: JoinHandle<i64> = Thread.spawn(() => work(1));\n\
                  var b: JoinHandle<i64> = Thread.spawn(() => work(2));\n\
                  var c: JoinHandle<i64> = Thread.spawn(() => work(3));\n\
-                 println((take(a.join()) + take(b.join()) + take(c.join())) as str);\n\
+                 println(block_on(gather(a, b, c)) as str);\n\
                }";
     let (out1, err, ok) = lang("run", src);
     assert!(ok, "stderr: {err}");
@@ -1469,7 +1516,8 @@ fn await_inside_async_block() {
 #[test]
 fn async_spawn_drives_futures_on_workers() {
     // `spawn(fut)` runs a future to completion on a worker thread and returns a
-    // `JoinHandle<T>`; `.join()` yields `Joined<T> | Panicked`.
+    // `JoinHandle<T>`. `.join()` is async — it yields a
+    // `Future<Joined<T> | Panicked>`, driven here by `block_on`.
     let src = "function work(n: i64): Future<i64> async { var _ = await yield_now(); n * n }\n\
                function result_of(r: Joined<i64> | Panicked): i64 {\n\
                  match r { Joined<i64> j => j.value, Panicked p => 0 - 1, }\n\
@@ -1477,8 +1525,8 @@ fn async_spawn_drives_futures_on_workers() {
                function main() {\n\
                  var h: JoinHandle<i64> = spawn(work(6));\n\
                  var h2: JoinHandle<i64> = spawn(work(7));\n\
-                 println(result_of(h.join()) as str);\n\
-                 println(result_of(h2.join()) as str);\n\
+                 println(result_of(block_on(h.join())) as str);\n\
+                 println(result_of(block_on(h2.join())) as str);\n\
                }";
     let (out, err, ok) = lang("run", src);
     assert!(ok, "stderr: {err}");

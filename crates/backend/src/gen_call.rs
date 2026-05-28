@@ -437,8 +437,12 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         Ok(Some(ptr))
     }
 
-    /// Lower `JoinHandle<R>.join()` (`docs/20` §1): block on the worker, then
-    /// build `Joined<R> { value } | Panicked { message }` from the result.
+    /// Lower `JoinHandle<R>.join()` (`docs/20` §1): build the async, non-
+    /// blocking `Future<Joined<R> | Panicked>` whose poll function (in the
+    /// runtime) reports `Pending` until the worker finishes and then resolves
+    /// to `Joined<R> { value } | Panicked { message }`. Awaiting (or
+    /// `block_on`-ing) the future drives it to completion without parking the
+    /// calling OS thread (`docs/21`).
     pub(crate) fn gen_thread_join(&mut self, receiver: &Expr, span: Span) -> CgResult<Option<Value>> {
         let r = self.cx.analysis.results.thread_joins.get(&span).copied()
             .unwrap_or(self.cx.analysis.tcx.error);
@@ -451,71 +455,33 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         let id = self.b.ins().load(types::I64, MemFlags::trusted(), jh, id_off);
         // The handle is consumed by `join`; unpin it from the global roots.
         self.call_intrinsic("lang_gc_unpin", &[PTR], None, &[jh]);
-        let result = self
-            .call_intrinsic("lang_thread_join", &[types::I64], Some(types::I64), &[id])
-            .expect("join result");
-        let panicked = self
-            .call_intrinsic("lang_thread_panicked", &[types::I64], Some(types::I64), &[id])
-            .expect("panicked flag");
 
-        // The `Joined<R> | Panicked` union and its (checker-interned) variants.
-        let union_ty = self.cx.analysis.results.expr_ty(span)
-            .unwrap_or(self.cx.analysis.tcx.error);
-        let joined_def = self.cx.analysis.program.joined_def;
-        let panicked_def = self.cx.analysis.program.panicked_def;
-        let variants = self.cx.analysis.tcx.variants(union_ty);
-        let find = |want: DefId| {
-            variants.iter().copied().find(|t| {
-                matches!(self.cx.analysis.tcx.kind(*t), TyKind::Named { def, .. } if *def == want)
-            }).unwrap_or(self.cx.analysis.tcx.error)
-        };
-        let joined_ty = find(joined_def);
-        let panicked_ty = find(panicked_def);
-
-        let joined_bb = self.b.create_block();
-        let panic_bb = self.b.create_block();
-        let merge = self.b.create_block();
-        self.b.append_block_param(merge, PTR);
-        let zero = self.b.ins().iconst(types::I64, 0);
-        let is_panic = self.b.ins().icmp(IntCC::NotEqual, panicked, zero);
-        self.b.ins().brif(is_panic, panic_bb, &[], joined_bb, &[]);
-        self.term = true;
-
-        // joined: `Joined<R> { value }` (narrow the word result to `R`), boxed.
-        self.switch(joined_bb);
-        let val = self.i64_to_elem(result, r, span)?;
+        // Tids the runtime's `thread_join_poll` needs to build the result box:
+        // the outer `Ready<Out> | Pending` union tags + the inner
+        // `Joined<R> | Panicked` variant tags. Tids follow the language-wide
+        // `1000 + def.index()` convention.
+        let prog = &self.cx.analysis.program;
+        let ready_tid = 1000 + prog.ready_def.index() as i64;
+        let pending_tid = 1000 + prog.pending_def.index() as i64;
+        let joined_tid = 1000 + prog.joined_def.index() as i64;
+        let panicked_tid = 1000 + prog.panicked_def.index() as i64;
+        let rt = self.b.ins().iconst(types::I64, ready_tid);
+        let pt = self.b.ins().iconst(types::I64, pending_tid);
+        let jt = self.b.ins().iconst(types::I64, joined_tid);
+        let pkt = self.b.ins().iconst(types::I64, panicked_tid);
+        // GC needs to know whether the `Joined<R>.value` slot should be traced.
         let r_res = resolve_shallow(self.cx.analysis, r, &self.subst);
-        if is_managed_ptr(self.cx.analysis, r_res) {
-            if let Some(v) = val {
-                self.mark_root(v);
-            }
-        }
-        let jlayout = self.struct_layout(joined_def, &[r]);
-        let jptr = self.alloc_struct(&jlayout);
-        if let Some(v) = val {
-            let off = jlayout.offsets[jlayout.index_of("value").unwrap_or(0)] as i32;
-            self.b.ins().store(MemFlags::trusted(), v, jptr, off);
-        }
-        let boxed_j = self.box_value(Some(jptr), joined_ty);
-        self.b.ins().jump(merge, &[boxed_j.into()]);
-        self.term = true;
-
-        // panicked: `Panicked { message }`, boxed.
-        self.switch(panic_bb);
-        let msg = self
-            .call_intrinsic("lang_thread_message", &[types::I64], Some(PTR), &[id])
-            .expect("panic message");
-        self.mark_root(msg);
-        let plyt = self.struct_layout(panicked_def, &[]);
-        let pptr = self.alloc_struct(&plyt);
-        let moff = plyt.offsets[plyt.index_of("message").unwrap_or(0)] as i32;
-        self.b.ins().store(MemFlags::trusted(), msg, pptr, moff);
-        let boxed_p = self.box_value(Some(pptr), panicked_ty);
-        self.b.ins().jump(merge, &[boxed_p.into()]);
-        self.term = true;
-
-        self.switch(merge);
-        Ok(Some(self.b.block_params(merge)[0]))
+        let is_ptr = is_managed_ptr(self.cx.analysis, r_res) as i64;
+        let ip = self.b.ins().iconst(types::I64, is_ptr);
+        let fut = self
+            .call_intrinsic(
+                "lang_thread_join_future",
+                &[types::I64, types::I64, types::I64, types::I64, types::I64, types::I64],
+                Some(PTR),
+                &[id, rt, pt, jt, pkt, ip],
+            )
+            .expect("join future");
+        Ok(Some(fut))
     }
 
     /// Lower `channel<T>()` (`docs/20` §2): allocate a runtime channel and build
@@ -569,9 +535,24 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     {
         let chan = self.gen_channel_id(receiver)?;
         if method == "recv" {
-            let raw = self.call_intrinsic("lang_chan_recv", &[types::I64], Some(types::I64), &[chan])
-                .expect("recv value");
-            return self.i64_to_elem(raw, elem, span);
+            // Async recv: build a `Future<T>` interface-object box. The runtime
+            // future's `poll` pops a message (→ `Ready<T>`) or registers the
+            // executor waker and reports `Pending` (`docs/20` §2 / `docs/21`).
+            let prog = &self.cx.analysis.program;
+            let ready_tid = 1000 + prog.ready_def.index() as i64;
+            let pending_tid = 1000 + prog.pending_def.index() as i64;
+            let rt = self.b.ins().iconst(types::I64, ready_tid);
+            let pt = self.b.ins().iconst(types::I64, pending_tid);
+            let resolved = resolve_shallow(self.cx.analysis, elem, &self.subst);
+            let is_ptr = is_managed_ptr(self.cx.analysis, resolved) as i64;
+            let ip = self.b.ins().iconst(types::I64, is_ptr);
+            let fut = self.call_intrinsic(
+                "lang_chan_recv_future",
+                &[types::I64, types::I64, types::I64, types::I64],
+                Some(PTR),
+                &[chan, rt, pt, ip],
+            ).expect("recv future");
+            return Ok(Some(fut));
         }
         // try_recv: returns `T | null` — null when the queue is empty.
         let slot = self.b.create_sized_stack_slot(StackSlotData::new(
