@@ -147,17 +147,15 @@ fn drive(path: &Path, stage: Stage, release: bool) -> ExitCode {
     };
 
     // 5. Run `main`, with the tracing GC enabled (programs are single-threaded).
-    match jit.func_ptr("main") {
-        Some(ptr) => {
-            backend::set_gc_enabled(true);
-            let main: extern "C" fn() = unsafe { std::mem::transmute(ptr) };
-            main();
-            ExitCode::SUCCESS
-        }
-        None => {
-            eprintln!("error: no `main` function to run");
-            ExitCode::FAILURE
-        }
+    // `run_main` handles both sync and `async function main` (`docs/21` §6):
+    // for the latter, the constructed root future is driven by the runtime
+    // executor internally — the user never names `block_on`.
+    backend::set_gc_enabled(true);
+    if unsafe { jit.run_main() } {
+        ExitCode::SUCCESS
+    } else {
+        eprintln!("error: no `main` function to run");
+        ExitCode::FAILURE
     }
 }
 

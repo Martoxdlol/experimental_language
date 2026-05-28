@@ -1475,6 +1475,15 @@ impl<'src> Parser<'src> {
                     span,
                 }
             }
+            TokenKind::Kw(Keyword::Spawn) => {
+                self.bump();
+                let operand = self.parse_unary(restrict);
+                let span = start.join(operand.span);
+                Expr {
+                    kind: ExprKind::Spawn { expr: Box::new(operand), kw_span: start },
+                    span,
+                }
+            }
             _ => self.parse_cast(restrict),
         }
     }
@@ -1578,6 +1587,17 @@ impl<'src> Parser<'src> {
                         TokenKind::Ident => {
                             let tok = self.bump();
                             let name = self.ident_from(tok);
+                            let span = expr.span.join(name.span);
+                            expr = Expr {
+                                kind: ExprKind::Field { receiver: Box::new(expr), name },
+                                span,
+                            };
+                        }
+                        // `Thread.spawn(...)`: allow `spawn` after `.` as a
+                        // field name even though it is a reserved keyword.
+                        TokenKind::Kw(Keyword::Spawn) => {
+                            let tok = self.bump();
+                            let name = Ident::new("spawn", tok.span);
                             let span = expr.span.join(name.span);
                             expr = Expr {
                                 kind: ExprKind::Field { receiver: Box::new(expr), name },
@@ -2586,6 +2606,7 @@ fn can_start_expr(k: TokenKind) -> bool {
                 | Keyword::Break
                 | Keyword::Continue
                 | Keyword::Await
+                | Keyword::Spawn
         ),
         LParen | LBracket | LBrace => true,
         Minus | Bang | Tilde | Amp | Star => true,

@@ -694,20 +694,20 @@ fn drop_finalizer_runs_on_collection() {
 fn shared_mutex_serializes_concurrent_increments() {
     // `docs/20` §4: `Shared<T>` is a mutex. Two threads each increment a shared
     // counter 5000 times under `lock`; no updates are lost. `join()` is async,
-    // so `block_on` drives each handle's `Future<Joined<R> | Panicked>`.
+    // so the async main `await`s each handle's `Future<Joined<R> | Panicked>`.
     let src = "struct Counter { value: i64 }\n\
                function bump(s: Shared<Counter>, n: i64) {\n\
                  var i: i64 = 0;\n\
                  while i < n { s.lock((c) => { c.value = c.value + 1; 0 }); i = i + 1; }\n\
                }\n\
-               function main() {\n\
+               function main(): Future<null> async {\n\
                  var state: Shared<Counter> = Shared.new(Counter { value: 0 });\n\
                  var a: Shared<Counter> = state.clone();\n\
                  var b: Shared<Counter> = state.clone();\n\
                  var h1: JoinHandle<i64> = Thread.spawn(() => { bump(a, 5000); 0 });\n\
                  var h2: JoinHandle<i64> = Thread.spawn(() => { bump(b, 5000); 0 });\n\
-                 match block_on(h1.join()) { Joined<i64> j => {}, Panicked p => {} }\n\
-                 match block_on(h2.join()) { Joined<i64> j => {}, Panicked p => {} }\n\
+                 var r1: Joined<i64> | Panicked = await h1.join();\n\
+                 var r2: Joined<i64> | Panicked = await h2.join();\n\
                  println((state.lock((c) => c.value)) as str);\n\
                }";
     let (out, err, ok) = lang("run", src);
@@ -735,8 +735,8 @@ fn shared_try_lock_returns_value_or_lock_busy() {
 fn channel_cross_thread_producer_consumer() {
     // `docs/20` §2: a worker thread sends over a channel; main consumes
     // asynchronously. `recv()` is a `Future<T>` — `await`ing it suspends the
-    // task (driven here by `block_on`) instead of blocking the thread. The
-    // `Sender` is captured into the spawned closure (a thread-safe handle).
+    // task (an async main here) instead of blocking the thread. The `Sender`
+    // is captured into the spawned closure (a thread-safe handle).
     let src = "function produce(tx: Sender<i64>) {\n\
                  var i: i64 = 1;\n\
                  while i <= 5 { tx.send(i * 10); i = i + 1; }\n\
@@ -746,13 +746,13 @@ fn channel_cross_thread_producer_consumer() {
                  while n < 5 { var m: i64 = await rx.recv(); total = total + m; n = n + 1; }\n\
                  total\n\
                }\n\
-               function main() {\n\
+               function main(): Future<null> async {\n\
                  var pair: (Sender<i64>, Receiver<i64>) = channel<i64>();\n\
                  var tx: Sender<i64> = pair.0;\n\
                  var rx: Receiver<i64> = pair.1;\n\
                  var h: JoinHandle<i64> = Thread.spawn(() => { produce(tx); 0 });\n\
-                 var total: i64 = block_on(consume(rx));\n\
-                 match block_on(h.join()) { Joined<i64> j => {}, Panicked p => {} }\n\
+                 var total: i64 = await consume(rx);\n\
+                 var r: Joined<i64> | Panicked = await h.join();\n\
                  println(total as str);\n\
                }";
     let (out1, err, ok) = lang("run", src);
@@ -777,13 +777,13 @@ fn channel_async_recv_of_managed_element_survives_gc_stress() {
                  while n < 3 { var m: str = await rx.recv(); acc = acc + m; n = n + 1; }\n\
                  acc\n\
                }\n\
-               function main() {\n\
+               function main(): Future<null> async {\n\
                  var pair: (Sender<str>, Receiver<str>) = channel<str>();\n\
                  var tx: Sender<str> = pair.0;\n\
                  var rx: Receiver<str> = pair.1;\n\
                  var h: JoinHandle<i64> = Thread.spawn(() => { produce(tx); 0 });\n\
-                 var acc: str = block_on(consume(rx));\n\
-                 match block_on(h.join()) { Joined<i64> j => {}, Panicked p => {} }\n\
+                 var acc: str = await consume(rx);\n\
+                 var r: Joined<i64> | Panicked = await h.join();\n\
                  println(acc);\n\
                }";
     let (out1, err, ok) = lang("run", src);
@@ -853,19 +853,20 @@ fn calling_instance_method_statically_errors() {
 #[test]
 fn thread_spawn_join_returns_result() {
     // `docs/20` §1: `Thread.spawn(() => R)` runs a closure on a new OS thread;
-    // `join()` is async — it returns a `Future<Joined<R> | Panicked>` driven
-    // here by `block_on` (or awaitable inside an async body).
+    // `join()` is async — it returns a `Future<Joined<R> | Panicked>` awaited
+    // inside the async main (or any async body).
     let src = "function take(r: Joined<i64> | Panicked): i64 {\n\
                  match r { Joined<i64> j => j.value, Panicked p => 0 - 1 }\n\
                }\n\
-               function main() {\n\
+               function main(): Future<null> async {\n\
                  var base: i64 = 10;\n\
                  var h: JoinHandle<i64> = Thread.spawn(() => {\n\
                    var s: i64 = 0; var i: i64 = 0;\n\
                    while i < 1000 { s = s + i; i = i + 1; }\n\
                    s + base\n\
                  });\n\
-                 println(take(block_on(h.join())) as str);\n\
+                 var r: Joined<i64> | Panicked = await h.join();\n\
+                 println(take(r) as str);\n\
                }";
     let (out, err, ok) = lang("run", src);
     assert!(ok, "stderr: {err}");
@@ -892,11 +893,12 @@ fn many_threads_under_gc_stress() {
                  var rc: Joined<i64> | Panicked = await c.join();\n\
                  take(ra) + take(rb) + take(rc)\n\
                }\n\
-               function main() {\n\
+               function main(): Future<null> async {\n\
                  var a: JoinHandle<i64> = Thread.spawn(() => work(1));\n\
                  var b: JoinHandle<i64> = Thread.spawn(() => work(2));\n\
                  var c: JoinHandle<i64> = Thread.spawn(() => work(3));\n\
-                 println(block_on(gather(a, b, c)) as str);\n\
+                 var total: i64 = await gather(a, b, c);\n\
+                 println(total as str);\n\
                }";
     let (out1, err, ok) = lang("run", src);
     assert!(ok, "stderr: {err}");
@@ -1377,11 +1379,11 @@ fn check_clean_program_succeeds() {
 
 #[test]
 fn async_fn_driven_by_block_on() {
-    // An async function lowers to a Future state machine; `block_on` drives it
-    // to completion. (No `await` in the body — the core pipeline slice.)
+    // An async function lowers to a Future state machine; an async main awaits
+    // it directly. (No `await` in `answer`'s body — the core pipeline slice.)
     let src = "function answer(): Future<i64> async { 40 + 2 }\n\
-               function main() {\n\
-                 var x: i64 = block_on(answer());\n\
+               function main(): Future<null> async {\n\
+                 var x: i64 = await answer();\n\
                  println(x as str);\n\
                }";
     let (out, err, ok) = lang("run", src);
@@ -1392,12 +1394,12 @@ fn async_fn_driven_by_block_on() {
 #[test]
 fn async_block_captures_and_block_on() {
     // A bare `async { … }` block is a zero-arg inline future literal that
-    // captures enclosing locals; `block_on` runs it.
-    let src = "function main() {\n\
+    // captures enclosing locals; an async main awaits it.
+    let src = "function main(): Future<null> async {\n\
                  var n: i64 = 40;\n\
-                 var f: i64 = block_on(async { n + 2 });\n\
+                 var f: i64 = await async { n + 2 };\n\
                  println(f as str);\n\
-                 var g: str = block_on(async { \"async str\" });\n\
+                 var g: str = await async { \"async str\" };\n\
                  println(g);\n\
                }";
     let (out, err, ok) = lang("run", src);
@@ -1410,8 +1412,8 @@ fn async_block_on_str_survives_gc_stress() {
     // The future's managed (str) result must survive collections triggered
     // during the poll/await machinery.
     let src = "function greet(name: str): Future<str> async { \"hi, \" + name }\n\
-               function main() {\n\
-                 var s: str = block_on(greet(\"world\"));\n\
+               function main(): Future<null> async {\n\
+                 var s: str = await greet(\"world\");\n\
                  println(s);\n\
                }";
     let (out, err, ok) = lang_env("run", src, &[("LANG_GC", "stress")]);
@@ -1422,7 +1424,10 @@ fn async_block_on_str_survives_gc_stress() {
 #[test]
 fn async_native_build_matches_jit() {
     let src = "function answer(): Future<i64> async { 42 }\n\
-               function main() { println(block_on(answer()) as str); }";
+               function main(): Future<null> async {\n\
+                 var v: i64 = await answer();\n\
+                 println(v as str);\n\
+               }";
     let (jit, jerr, jok) = lang("run", src);
     assert!(jok, "jit stderr: {jerr}");
     let (nat, nerr, nok) = lang_build_run(src, &[]);
@@ -1441,7 +1446,10 @@ fn await_chains_async_functions() {
                  var y: i64 = await inner();\n\
                  x + y + 1\n\
                }\n\
-               function main() { println(block_on(outer()) as str); }";
+               function main(): Future<null> async {\n\
+                 var v: i64 = await outer();\n\
+                 println(v as str);\n\
+               }";
     let (out, err, ok) = lang("run", src);
     assert!(ok, "stderr: {err}");
     assert_eq!(out, "11\n");
@@ -1461,9 +1469,11 @@ fn await_in_control_flow_and_managed_results() {
                  var n: i64 = await pick(true);\n\
                  \"${s} n=${n}\"\n\
                }\n\
-               function main() {\n\
-                 println(block_on(gather()));\n\
-                 println(block_on(pick(false)) as str);\n\
+               function main(): Future<null> async {\n\
+                 var s: str = await gather();\n\
+                 println(s);\n\
+                 var v: i64 = await pick(false);\n\
+                 println(v as str);\n\
                }";
     let (out, err, ok) = lang("run", src);
     assert!(ok, "stderr: {err}");
@@ -1485,7 +1495,10 @@ fn await_genuine_suspension_via_yield_under_gc_stress() {
                  }\n\
                  sum\n\
                }\n\
-               function main() { println(block_on(counter()) as str); }";
+               function main(): Future<null> async {\n\
+                 var v: i64 = await counter();\n\
+                 println(v as str);\n\
+               }";
     let (out, err, ok) = lang_env("run", src, &[("LANG_GC", "stress")]);
     assert!(ok, "stderr: {err}");
     assert_eq!(out, "3\n");
@@ -1497,15 +1510,15 @@ fn await_genuine_suspension_via_yield_under_gc_stress() {
 
 #[test]
 fn await_inside_async_block() {
-    // `block_on(async { await … })` — the doc's primary launcher pattern. The
-    // block is a suspendable state machine that captures nothing and awaits.
+    // An async main awaits an inline `async { await … }` block — the
+    // doc's primary launcher pattern.
     let src = "function tick(): Future<i64> async { var _ = await yield_now(); 7 }\n\
-               function main() {\n\
-                 var r: i64 = block_on(async {\n\
+               function main(): Future<null> async {\n\
+                 var r: i64 = await async {\n\
                    var a: i64 = await tick();\n\
                    var b: i64 = await tick();\n\
                    a + b + 100\n\
-                 });\n\
+                 };\n\
                  println(r as str);\n\
                }";
     let (out, err, ok) = lang_env("run", src, &[("LANG_GC", "stress")]);
@@ -1515,18 +1528,16 @@ fn await_inside_async_block() {
 
 #[test]
 fn async_spawn_drives_futures_on_workers() {
-    // `spawn(fut)` runs a future to completion on a worker thread and returns a
-    // `JoinHandle<T>`. `.join()` is async — it yields a
-    // `Future<Joined<T> | Panicked>`, driven here by `block_on`.
+    // `spawn EXPR` (keyword) schedules a future on a worker and itself
+    // evaluates to a `Future<T>` — awaiting it yields T directly (`docs/21`).
     let src = "function work(n: i64): Future<i64> async { var _ = await yield_now(); n * n }\n\
-               function result_of(r: Joined<i64> | Panicked): i64 {\n\
-                 match r { Joined<i64> j => j.value, Panicked p => 0 - 1, }\n\
-               }\n\
-               function main() {\n\
-                 var h: JoinHandle<i64> = spawn(work(6));\n\
-                 var h2: JoinHandle<i64> = spawn(work(7));\n\
-                 println(result_of(block_on(h.join())) as str);\n\
-                 println(result_of(block_on(h2.join())) as str);\n\
+               function main(): Future<null> async {\n\
+                 var h: Future<i64> = spawn work(6);\n\
+                 var h2: Future<i64> = spawn work(7);\n\
+                 var a: i64 = await h;\n\
+                 var b: i64 = await h2;\n\
+                 println(a as str);\n\
+                 println(b as str);\n\
                }";
     let (out, err, ok) = lang("run", src);
     assert!(ok, "stderr: {err}");
@@ -1556,9 +1567,10 @@ fn for_await_over_async_iterator() {
                  for await n in c { total = total + n; }\n\
                  total\n\
                }\n\
-               function main() {\n\
+               function main(): Future<null> async {\n\
                  var c = Counter { current: 0, end: 5 };\n\
-                 println(block_on(sum_stream(c)) as str);\n\
+                 var v: i64 = await sum_stream(c);\n\
+                 println(v as str);\n\
                }";
     let (out, err, ok) = lang_env("run", src, &[("LANG_GC", "stress")]);
     assert!(ok, "stderr: {err}");
@@ -1570,7 +1582,10 @@ fn async_sleep_completes_after_delay() {
     // `sleep(ms)` is a `Future<null>` driven by a timer thread that wakes the
     // executor; awaiting it suspends until the delay elapses.
     let src = "function delayed(x: i64): Future<i64> async { var _ = await sleep(5); x * 2 }\n\
-               function main() { println(block_on(delayed(21)) as str); }";
+               function main(): Future<null> async {\n\
+                 var v: i64 = await delayed(21);\n\
+                 println(v as str);\n\
+               }";
     let (out, err, ok) = lang("run", src);
     assert!(ok, "stderr: {err}");
     assert_eq!(out, "42\n");
@@ -1580,11 +1595,12 @@ fn async_sleep_completes_after_delay() {
 fn async_cancel_is_a_safe_noop() {
     // `.cancel()` on a compute-only future releases nothing and is repeatable.
     let src = "function task(): Future<i64> async { var _ = await yield_now(); 5 }\n\
-               function main() {\n\
+               function main(): Future<null> async {\n\
                  var f: Future<i64> = task();\n\
                  f.cancel();\n\
                  f.cancel();\n\
-                 println(block_on(task()) as str);\n\
+                 var v: i64 = await task();\n\
+                 println(v as str);\n\
                }";
     let (out, err, ok) = lang("run", src);
     assert!(ok, "stderr: {err}");

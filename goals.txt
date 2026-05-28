@@ -2,15 +2,15 @@
 
 /goal analyze project structure, read source files, rethink project structure and reorganize if needed to prevent organization & structural issues. Ensure no regressions.
 
----
-
 /goal implement the programming language end to end. Continue working on every feature, every system, every part of the language. Follow the design. Do not take shortcuts. Read docs and respect choices, ask questions if things are not clear. We are building a programming language at the same level of rust. NOT A DEMO, A FULL WORKING PROGRAMMING LANGUAGE. Backend in cranelift with ALL proposed and designed features working 100% with good design. NO SHORTCUTS. Do tests, continue with the project. Always do good practices and make sure the design is fast and efficient. Keep code clean and organized.
 
 /goal refactor channel implementation. Make channels async and non-blocking. Ensure they work with the async runtime. Update docs to reflect this. Update example. Update any code or anything needed.
 
 /goal refactor threads api. Ensure it uses async and it is non-blocking. Update docs to reflect this. Update example. Update any code or anything needed.
 
-/goal refactor async features. Ensure there isn't any blocking feature and everything is async. Remove block_on support and add keyword 'spawn' instead of function (similar to go's 'go' keyword). Update docs to reflect this. Update example. Update any code or anything needed. Make async implicit like JS (less control).
+/goal refactor async features. Ensure it is fully working, follow the way javascript or dart does it. No blocking functions, use async await syntax. Futures. And stuff. Do not change the language design without asking first. This is to adjust stuff not to remake everything. Add support for a spawn keyword that will work like tokio spawn (returning a future) and disallow at all calling async function without capturing the future. Update docs to reflect this. Update example. Update any code or anything needed.
+
+---
 
 /goal apply optimizations to the backend. You can use possible-optimizations.txt as a reference but be smart and apply common logical optimization to the compiler and backend logic.
 

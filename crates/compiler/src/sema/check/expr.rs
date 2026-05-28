@@ -129,6 +129,7 @@ impl<'a> Checker<'a> {
             }
             ExprKind::Try { expr: inner, q_span } => self.check_try(inner, *q_span),
             ExprKind::Await { expr: inner, kw_span } => self.check_await(inner, *kw_span),
+            ExprKind::Spawn { expr: inner, kw_span } => self.check_spawn(inner, *kw_span),
             ExprKind::AsyncBlock(block) => self.check_async_block(block, expected, expr.span),
             ExprKind::While { cond, body } => {
                 let cty = self.check_expr(cond, Some(self.tcx.bool));
@@ -402,6 +403,30 @@ impl<'a> Checker<'a> {
                 let t = self.display(fty);
                 self.emit(inner.span, SemaErrorKind::Message(format!(
                     "`await` requires a `Future`, but `{t}` is not one"
+                )));
+                self.tcx.error
+            }
+        }
+    }
+
+    /// Type-check `spawn EXPR` (`docs/21` §6): schedule a future on the async
+    /// executor. `EXPR` must be a `Future<Output>`; the result is also
+    /// `Future<Output>` — the spawn-handle is itself an awaitable future, in
+    /// the style of JavaScript/Dart and Tokio's `JoinHandle`.
+    pub(crate) fn check_spawn(&mut self, inner: &Expr, kw_span: Span) -> Ty {
+        let fty = self.check_expr(inner, None);
+        if self.tcx.is_error(fty) {
+            return self.tcx.error;
+        }
+        match self.future_output(fty) {
+            Some(out) => {
+                self.results.async_spawns.insert(kw_span, out);
+                self.tcx.mk_named(self.prog.future_def, vec![out])
+            }
+            None => {
+                let t = self.display(fty);
+                self.emit(inner.span, SemaErrorKind::Message(format!(
+                    "`spawn` requires a `Future`, but `{t}` is not one"
                 )));
                 self.tcx.error
             }
@@ -742,17 +767,8 @@ impl<'a> Checker<'a> {
                 return self.check_channel_new(_generics, args, span);
             }
         }
-        // `block_on(fut)` (`docs/21` §6): drive a future to completion on the
-        // current thread, returning its `Output`. A free-function builtin (no
-        // real binding), recognised before the general call path.
+        // `yield_now()` (`docs/21`): a `Future<null>` that suspends once.
         if let ExprKind::Ident(name) = &callee.kind {
-            if name.name == "block_on"
-                && self.lookup("block_on").is_none()
-                && self.prog.resolve_value_in(self.current_module(), "block_on").is_none()
-            {
-                return self.check_block_on(args, span);
-            }
-            // `yield_now()` (`docs/21`): a `Future<null>` that suspends once.
             if name.name == "yield_now"
                 && self.lookup("yield_now").is_none()
                 && self.prog.resolve_value_in(self.current_module(), "yield_now").is_none()
@@ -762,14 +778,6 @@ impl<'a> Checker<'a> {
                 }
                 self.results.yield_nows.insert(span);
                 return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.null]);
-            }
-            // `spawn(fut)` (`docs/21` §6): run a future on a worker, yielding a
-            // `JoinHandle<T>`.
-            if name.name == "spawn"
-                && self.lookup("spawn").is_none()
-                && self.prog.resolve_value_in(self.current_module(), "spawn").is_none()
-            {
-                return self.check_async_spawn(args, span);
             }
             // `sleep(ms)` (`docs/21` §9): a `Future<null>` completing after a delay.
             if name.name == "sleep"

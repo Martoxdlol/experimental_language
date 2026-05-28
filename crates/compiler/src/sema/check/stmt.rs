@@ -55,14 +55,14 @@ impl<'a> Checker<'a> {
                 let t = self.check_expr(e, None);
                 // "Forgot to await" lint (`docs/21` §5): a `Future` produced as a
                 // statement and silently discarded is almost always a bug — it
-                // never runs. `await`ing it, `spawn`ing it (yields a
-                // `JoinHandle`, not a `Future`), or binding it (`var _ = …`)
-                // all avoid this. An `await` expression statement is fine even
-                // when its own result is a future.
+                // never runs. Calling an `async` function returns a `Future` —
+                // `await` it, bind it with `var f = …`, or `var _ = …` to
+                // explicitly discard. `await EXPR` is allowed at the statement
+                // level even when its own type is a future.
                 if self.is_future_ty(t) && !matches!(e.kind, ExprKind::Await { .. }) {
                     self.emit(e.span, SemaErrorKind::Message(
-                        "this `Future` is created but never used — `await` it, `spawn` \
-                         it, or bind it with `var _ = …`"
+                        "this `Future` is created but never used — `await` it, \
+                         `spawn` it, or bind it (e.g. `var _ = …`)"
                             .into(),
                     ));
                 }

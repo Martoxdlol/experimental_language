@@ -669,62 +669,6 @@ impl<'a> Checker<'a> {
         self.tcx.mk_tuple(vec![sender, receiver])
     }
 
-    /// `block_on(fut): Out` (`docs/21` §6) — run a future to completion on the
-    /// current thread. The argument must be a `Future<Out>`; the result is `Out`.
-    pub(crate) fn check_block_on(&mut self, args: &[Expr], span: Span) -> Ty {
-        if args.len() != 1 {
-            self.emit(span, SemaErrorKind::ArgCount { expected: 1, found: args.len() });
-            for a in args {
-                self.check_expr(a, None);
-            }
-            return self.tcx.error;
-        }
-        let fty = self.check_expr(&args[0], None);
-        match self.future_output(fty) {
-            Some(out) => {
-                self.results.block_ons.insert(span, out);
-                out
-            }
-            None => {
-                if !self.tcx.is_error(fty) {
-                    let t = self.display(fty);
-                    self.emit(args[0].span, SemaErrorKind::Message(format!(
-                        "`block_on` requires a `Future`, but `{t}` is not one"
-                    )));
-                }
-                self.tcx.error
-            }
-        }
-    }
-
-    /// `spawn(fut): JoinHandle<Out>` (`docs/21` §6) — drive a future on a worker
-    /// thread. The argument must be a `Future<Out>`.
-    pub(crate) fn check_async_spawn(&mut self, args: &[Expr], span: Span) -> Ty {
-        if args.len() != 1 {
-            self.emit(span, SemaErrorKind::ArgCount { expected: 1, found: args.len() });
-            for a in args {
-                self.check_expr(a, None);
-            }
-            return self.tcx.error;
-        }
-        let fty = self.check_expr(&args[0], None);
-        match self.future_output(fty) {
-            Some(out) => {
-                self.results.async_spawns.insert(span, out);
-                self.tcx.mk_named(self.prog.join_handle_def, vec![out])
-            }
-            None => {
-                if !self.tcx.is_error(fty) {
-                    let t = self.display(fty);
-                    self.emit(args[0].span, SemaErrorKind::Message(format!(
-                        "`spawn` requires a `Future`, but `{t}` is not one"
-                    )));
-                }
-                self.tcx.error
-            }
-        }
-    }
-
     /// `Sender<T>` / `Receiver<T>` builtin methods (`docs/20` §2).
     pub(crate) fn check_channel_method(&mut self, def: DefId, elem: Ty, name: &Ident, args: &[Expr], span: Span) -> Ty {
         let is_sender = def == self.prog.sender_def;

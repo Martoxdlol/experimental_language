@@ -13,7 +13,9 @@ function bump(s: Shared<Counter>, times: i64) {
   }
 }
 
-function main() {
+// An async `main` so we can `await` each worker's join future without
+// parking the OS thread (docs/21).
+function main(): Future<null> async {
   var state: Shared<Counter> = Shared.new(Counter { value: 0 });
 
   // `clone` clones the *handle* — both workers lock the same counter.
@@ -21,10 +23,10 @@ function main() {
   var b: Shared<Counter> = state.clone();
   var h1: JoinHandle<i64> = Thread.spawn(() => { bump(a, 5000); 0 });
   var h2: JoinHandle<i64> = Thread.spawn(() => { bump(b, 5000); 0 });
-  // `join()` is async (docs/20 §1 / docs/21); `block_on` drives the future
-  // here rather than parking the calling OS thread.
-  match block_on(h1.join()) { Joined<i64> j => {}, Panicked p => {} }
-  match block_on(h2.join()) { Joined<i64> j => {}, Panicked p => {} }
+  // `join()` is async (docs/20 §1 / docs/21); `await` suspends the joiner
+  // task rather than parking the calling OS thread.
+  var r1: Joined<i64> | Panicked = await h1.join();
+  var r2: Joined<i64> | Panicked = await h2.join();
 
   // No lost updates: the mutex serialized every increment.
   var total: i64 = state.lock((c) => c.value);

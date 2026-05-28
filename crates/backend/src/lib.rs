@@ -74,6 +74,7 @@ fn register_runtime_symbols(b: &mut JITBuilder) {
     b.symbol("lang_async_yield", runtime::async_rt::lang_async_yield as *const u8);
     b.symbol("lang_async_sleep", runtime::async_rt::lang_async_sleep as *const u8);
     b.symbol("lang_async_spawn", runtime::threads::lang_async_spawn as *const u8);
+    b.symbol("lang_async_spawn_future", runtime::threads::lang_async_spawn_future as *const u8);
     b.symbol("lang_thread_spawn", runtime::threads::lang_thread_spawn as *const u8);
     b.symbol("lang_thread_join_future", runtime::threads::lang_thread_join_future as *const u8);
     b.symbol("lang_channel_new", runtime::channels::lang_channel_new as *const u8);
@@ -146,12 +147,46 @@ pub struct Jit {
     module: JITModule,
     /// Language function name → its Cranelift id.
     funcs: HashMap<String, FuncId>,
+    /// The `Pending` type id (`docs/21`), if the program reached the async
+    /// runtime — recorded so a top-level driver can call `lang_block_on` on an
+    /// `async main`'s root future without crossing back into the analysis.
+    pending_tid: Option<i64>,
+    /// Whether the user `main` is an `async function` (`docs/21` §6 — async
+    /// `main`): the compiled symbol returns a `Future<…>` box instead of
+    /// running the body. A native or JIT driver consumes that future via the
+    /// runtime executor.
+    main_is_async: bool,
 }
 
 impl Jit {
     /// Raw code pointer for a compiled function by language name.
     pub fn func_ptr(&self, name: &str) -> Option<*const u8> {
         self.funcs.get(name).map(|id| self.module.get_finalized_function(*id))
+    }
+
+    /// Run the program's `main` — calling it directly if sync, or driving its
+    /// root future via the runtime executor if it is an `async function`
+    /// (`docs/21` §6). The user does not (cannot) call the executor entry
+    /// `lang_block_on` themselves.
+    ///
+    /// # Safety
+    /// `main` must exist with the standard zero-arg signature; for async main
+    /// it must return a `Future<…>` box (constructor ABI).
+    pub unsafe fn run_main(&self) -> bool {
+        let Some(ptr) = self.func_ptr("main") else { return false };
+        if self.main_is_async {
+            let pending_tid = self.pending_tid.unwrap_or(0);
+            let ctor: extern "C" fn() -> *mut u8 = unsafe { std::mem::transmute(ptr) };
+            let fut = ctor();
+            // The future graph isn't reachable from any scanned stack until the
+            // executor reads it; pin it across the cross-thread handoff inside
+            // the runtime drives the future to completion.
+            unsafe { runtime::async_rt::lang_block_on(fut, pending_tid) };
+        } else {
+            let main: extern "C" fn() = unsafe { std::mem::transmute(ptr) };
+            main();
+        }
+        true
     }
 
     /// Call a zero-argument function returning `i64` (test/`main` convenience).
@@ -258,7 +293,27 @@ pub fn compile(analysis: &Analysis) -> CgResult<Jit> {
         unsafe { runtime::gc::lang_gc_register_drop(*type_id as u64, f) };
     }
 
-    Ok(Jit { module, funcs: by_name })
+    let main_is_async = main_is_async(analysis);
+    let pending_tid = Some(1000 + analysis.program.pending_def.index() as i64);
+    Ok(Jit { module, funcs: by_name, pending_tid, main_is_async })
+}
+
+/// Whether the user `main` is declared `async function` — its compiled symbol
+/// returns a `Future<…>` box and must be driven by the runtime executor.
+fn main_is_async(analysis: &Analysis) -> bool {
+    analysis
+        .program
+        .defs
+        .iter()
+        .enumerate()
+        .any(|(idx, d)| {
+            d.name == "main"
+                && matches!(d.kind, DefKind::Function)
+                && analysis
+                    .results
+                    .async_fns
+                    .contains_key(&compiler::ids::DefId(idx as u32))
+        })
 }
 
 /// Compile `analysis` to a native relocatable object file at `out`, suitable
@@ -297,7 +352,9 @@ pub fn compile_object(analysis: &Analysis, out: &Path) -> CgResult<()> {
         .get("main")
         .ok_or_else(|| CodegenError::new(Span::dummy(), "no `main` function to build"))?;
 
-    emit_native_entry(&mut module, user_main, &safepoints, &drops)?;
+    let main_async = main_is_async(analysis);
+    let pending_tid = 1000 + analysis.program.pending_def.index() as i64;
+    emit_native_entry(&mut module, user_main, main_async, pending_tid, &safepoints, &drops)?;
 
     let product = module.finish();
     let bytes = product.emit().expect("emit object");
@@ -313,6 +370,8 @@ pub fn compile_object(analysis: &Analysis, out: &Path) -> CgResult<()> {
 fn emit_native_entry<M: Module>(
     module: &mut M,
     user_main: FuncId,
+    main_is_async: bool,
+    pending_tid: i64,
     safepoints: &[Safepoint],
     drops: &[(i64, FuncId)],
 ) -> CgResult<()> {
@@ -375,6 +434,22 @@ fn emit_native_entry<M: Module>(
         .declare_function("lang_gc_set_enabled", Linkage::Import, &en_sig)
         .expect("declare set_enabled");
 
+    // The executor entry — used internally by the program entry when `main`
+    // is an `async function` (`docs/21`): drive the root future to completion.
+    let block_on_id = if main_is_async {
+        let mut bo_sig = module.make_signature();
+        bo_sig.params.push(AbiParam::new(PTR)); // fut
+        bo_sig.params.push(AbiParam::new(types::I64)); // pending_tid
+        bo_sig.returns.push(AbiParam::new(types::I64));
+        Some(
+            module
+                .declare_function("lang_block_on", Linkage::Import, &bo_sig)
+                .expect("declare lang_block_on"),
+        )
+    } else {
+        None
+    };
+
     // The C entry: `int main(void)`. The `object` crate mangles this to `_main`
     // on Mach-O, which is the program entry the C runtime startup calls.
     let mut main_sig = module.make_signature();
@@ -418,7 +493,20 @@ fn emit_native_entry<M: Module>(
         b.ins().call(en_ref, &[on]);
 
         let main_ref = module.declare_func_in_func(user_main, b.func);
-        b.ins().call(main_ref, &[]);
+        if main_is_async {
+            // Async `main`: calling the symbol just builds the root future.
+            // Hand it to the runtime executor to drive to completion.
+            let call = b.ins().call(main_ref, &[]);
+            let fut = b.inst_results(call)[0];
+            let ptid = b.ins().iconst(types::I64, pending_tid);
+            let bo_ref = module.declare_func_in_func(
+                block_on_id.expect("block_on declared when main is async"),
+                b.func,
+            );
+            b.ins().call(bo_ref, &[fut, ptid]);
+        } else {
+            b.ins().call(main_ref, &[]);
+        }
 
         let zero = b.ins().iconst(types::I32, 0);
         b.ins().return_(&[zero]);

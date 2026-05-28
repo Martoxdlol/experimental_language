@@ -329,6 +329,131 @@ extern "C" fn thread_join_poll(data: *mut u8, ctx: *mut Context) -> *mut u8 {
     r
 }
 
+// -- async spawn-as-Future: spawn EXPR returns Future<T> --------------------
+//
+// `spawn EXPR` (`docs/21` §6) starts the inner future on a worker and yields a
+// new `Future<T>` whose own `poll` returns `Ready<T>` when the worker has
+// finished and `Pending` until then. Panics in the worker propagate at the
+// awaiter as a language panic (matching the JS/Dart "promise rejection" style).
+// We reuse the `ThreadCtl` registry the join-future runs on top of: spawn
+// publishes the worker's `i64`-widened result through it; the spawn future's
+// poll reads it the same way `thread_join_poll` does, but the result it builds
+// is `Ready<T>{ value }` directly, not `Ready<Joined<T>|Panicked>`.
+
+/// Per-spawn-future state — five words, no managed pointers (the registry id
+/// resolves the worker's pinned result on completion).
+fn spawn_data_desc() -> *const u8 {
+    // [id @0][ready_tid @8][pending_tid @16][value_is_ptr @24] — 32B.
+    static D: OnceLock<usize> = OnceLock::new();
+    *D.get_or_init(|| make_desc(32, &[]) as usize) as *const u8
+}
+fn ready_t_managed_desc() -> *const u8 {
+    // `Ready<T> { value }` when T is managed.
+    static D: OnceLock<usize> = OnceLock::new();
+    *D.get_or_init(|| make_desc(8, &[0]) as usize) as *const u8
+}
+fn ready_t_plain_desc() -> *const u8 {
+    // `Ready<T> { value }` when T is a scalar.
+    static D: OnceLock<usize> = OnceLock::new();
+    *D.get_or_init(|| make_desc(8, &[]) as usize) as *const u8
+}
+fn spawn_vtable() -> *const u8 {
+    static V: OnceLock<usize> = OnceLock::new();
+    *V.get_or_init(|| {
+        let f: extern "C" fn(*mut u8, *mut Context) -> *mut u8 = spawn_poll;
+        Box::leak(Box::new([f as usize])) as *const [usize; 1] as usize
+    }) as *const u8
+}
+
+/// Build a `Ready<T> { value: result }` boxed in a `Ready<T> | Pending` union.
+unsafe fn ready_value_box(ready_tid: i64, result: i64, value_is_ptr: bool) -> *mut u8 {
+    let desc = if value_is_ptr { ready_t_managed_desc() } else { ready_t_plain_desc() };
+    let payload = unsafe { gc::alloc(desc) };
+    unsafe { (payload as *mut i64).write(result) };
+    let bx = unsafe { gc::alloc(union_managed_desc()) };
+    unsafe {
+        (bx as *mut i64).write(ready_tid);
+        ((bx as usize + 8) as *mut usize).write(payload as usize);
+    }
+    bx
+}
+
+extern "C" fn spawn_poll(data: *mut u8, ctx: *mut Context) -> *mut u8 {
+    // data: [id @0][ready_tid @8][pending_tid @16][value_is_ptr @24].
+    let id = unsafe { (data as *const u64).read() };
+    let ready_tid = unsafe { ((data as usize + 8) as *const i64).read() };
+    let pending_tid = unsafe { ((data as usize + 16) as *const i64).read() };
+    let value_is_ptr = unsafe { ((data as usize + 24) as *const i64).read() } != 0;
+    let ctl = registry().lock().unwrap().get(&id).cloned().expect("invalid spawn id");
+
+    let (result, panicked, message, os_handle, was_taken) = {
+        let mut g = ctl.inner.lock().unwrap();
+        if !g.done {
+            let c = unsafe { &*ctx };
+            g.waiters.push((c.waker_data as usize, c.wake_fn));
+            drop(g);
+            gc::pause();
+            let r = unsafe { pending_box(pending_tid) };
+            gc::resume();
+            return r;
+        }
+        let was_taken = g.taken;
+        g.taken = true;
+        let os = if was_taken { None } else { g.os.take() };
+        (g.result, g.panicked, g.message, os, was_taken)
+    };
+
+    if let Some(os) = os_handle {
+        let _ = os.join();
+    }
+
+    if panicked {
+        // Propagate the spawned task's panic at the awaiter (`docs/21` §11).
+        unsafe { crate::lang_panic(message as *const crate::strings::LangStr) };
+    }
+
+    gc::pause();
+    let r = unsafe { ready_value_box(ready_tid, result, value_is_ptr) };
+    gc::resume();
+
+    if !was_taken {
+        gc::remove_extra_root(result as usize);
+    }
+    r
+}
+
+/// `spawn EXPR` (`docs/21` §6): schedule `fut` on a worker and return a fresh
+/// `Future<T>` interface-object box whose poll resolves to `T` when the worker
+/// finishes. The returned future is awaitable just like any other.
+///
+/// # Safety
+/// `fut` must be a valid `Future<T>` box (vtable slot 0 = `poll`).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lang_async_spawn_future(
+    fut: *mut u8,
+    ready_tid: i64,
+    pending_tid: i64,
+    value_is_ptr: i64,
+) -> *mut u8 {
+    let id = unsafe { lang_async_spawn(fut, pending_tid) };
+    gc::pause();
+    let data = unsafe { gc::alloc(spawn_data_desc()) };
+    unsafe {
+        (data as *mut u64).write(id);
+        ((data as usize + 8) as *mut i64).write(ready_tid);
+        ((data as usize + 16) as *mut i64).write(pending_tid);
+        ((data as usize + 24) as *mut i64).write(value_is_ptr);
+    }
+    let bx = unsafe { gc::alloc(future_box_desc()) };
+    unsafe {
+        (bx as *mut usize).write(spawn_vtable() as usize);
+        ((bx as usize + 8) as *mut usize).write(data as usize);
+        ((bx as usize + 16) as *mut i64).write(0);
+    }
+    gc::resume();
+    bx
+}
+
 /// Construct a `JoinHandle<R>.join()` future (`docs/20` §1): a
 /// `Future<Joined<R> | Panicked>` that resolves once the worker finishes.
 ///

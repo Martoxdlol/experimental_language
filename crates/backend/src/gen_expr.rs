@@ -355,20 +355,29 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         self.i64_to_elem(valw, out, await_span)
     }
 
-    /// Lower `block_on(fut)` (`docs/21` §6): drive the future to completion via
-    /// the runtime executor and narrow its widened `Out` result.
-    pub(crate) fn gen_block_on(&mut self, args: &[Expr], span: Span) -> CgResult<Option<Value>> {
-        let out = self.cx.analysis.results.block_ons.get(&span).copied()
-            .unwrap_or(self.cx.analysis.tcx.error);
-        let fut = self.gen_expr(&args[0])?.ok_or_else(|| {
-            CodegenError::new(args[0].span, "block_on argument has no value")
+    /// Lower `spawn EXPR` (`docs/21` §6): start the inner future on a worker
+    /// and return a fresh `Future<T>` whose own `poll` resolves to `T` when the
+    /// worker finishes. The returned future is awaitable like any other.
+    pub(crate) fn gen_spawn(&mut self, inner: &Expr, kw_span: Span) -> CgResult<Option<Value>> {
+        let fut = self.gen_expr(inner)?.ok_or_else(|| {
+            CodegenError::new(inner.span, "spawn operand has no value")
         })?;
-        let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
-        let ptid = self.b.ins().iconst(types::I64, pending_tid);
-        let raw = self.call_intrinsic(
-            "lang_block_on", &[PTR, types::I64], Some(types::I64), &[fut, ptid],
-        ).expect("lang_block_on returns a value");
-        self.i64_to_elem(raw, out, span)
+        let out = self.cx.analysis.results.async_spawns.get(&kw_span).copied()
+            .unwrap_or(self.cx.analysis.tcx.error);
+        let prog = &self.cx.analysis.program;
+        let ready_tid = 1000 + prog.ready_def.index() as i64;
+        let pending_tid = 1000 + prog.pending_def.index() as i64;
+        let rt = self.b.ins().iconst(types::I64, ready_tid);
+        let pt = self.b.ins().iconst(types::I64, pending_tid);
+        let out_res = resolve_shallow(self.cx.analysis, out, &self.subst);
+        let is_ptr = is_managed_ptr(self.cx.analysis, out_res) as i64;
+        let ip = self.b.ins().iconst(types::I64, is_ptr);
+        Ok(self.call_intrinsic(
+            "lang_async_spawn_future",
+            &[PTR, types::I64, types::I64, types::I64],
+            Some(PTR),
+            &[fut, rt, pt, ip],
+        ))
     }
 
     pub(crate) fn gen_expr_raw(&mut self, expr: &Expr) -> CgResult<Option<Value>> {
@@ -473,6 +482,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             }
             ExprKind::AsyncBlock(block) => self.gen_async_block(block, expr.span),
             ExprKind::Await { expr: inner, kw_span } => self.gen_await(inner, *kw_span),
+            ExprKind::Spawn { expr: inner, kw_span } => self.gen_spawn(inner, *kw_span),
             ExprKind::Index { receiver, index } => self.gen_index_load(receiver, index),
             ExprKind::Tuple(elems) => {
                 let elem_tys = match self.cx.analysis.tcx.kind(ty).clone() {

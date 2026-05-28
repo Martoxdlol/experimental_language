@@ -1,13 +1,20 @@
-// Async / await (docs/21).
+// Async / await (docs/21) — JavaScript/Dart-style.
 //
-// An `async` function returns a `Future<Output>`: calling it does NOT run the
-// body — it builds an inert state-machine future. `block_on` drives a future to
-// completion on the current thread (the executor of `std:async`).
+// An `async` function declares its return type as `Future<Output>`. Calling
+// it does NOT run the body — it returns an inert state-machine future.
+// `await` drives a future inside another async body; the compiler turns the
+// surrounding body into a state machine that suspends at each `await`
+// (returning `Pending`) and resumes when the awaited future is ready.
 //
-// `await` drives an inner future from within an async body: the compiler turns
-// the body into a state machine that suspends at each `await` (returning
-// `Pending`) and resumes when the awaited future is ready. `yield_now()` is a
-// future that suspends exactly once — it forces a real park/resume cycle.
+// `main` itself can be `async`: the runtime detects this and drives the root
+// future automatically — there is no user-visible `block_on`.
+// `spawn EXPR` schedules a future on a worker; it itself evaluates to a
+// `Future<T>`, so `var f = spawn task(); var v = await f` runs `task` in
+// parallel and joins it.
+//
+// Calling an `async` function and discarding the result is an error: a
+// `Future` that is never `await`ed, `spawn`ed, or bound (`var f = …` or
+// `var _ = …`) is a forgot-to-await mistake (docs/21 §5).
 
 // An async function. The body's trailing value is the future's Output.
 function answer(): Future<i64> async {
@@ -17,10 +24,6 @@ function answer(): Future<i64> async {
 // A managed (str) Output works too; it survives GC across the poll machinery.
 function greet(name: str): Future<str> async {
   "hello, " + name
-}
-
-function answer_value(): i64 {
-  42
 }
 
 // An async stream: `AsyncIterator<T>` whose `next_async` yields then produces.
@@ -74,35 +77,38 @@ function tick(n: i64): Future<i64> async {
   sum
 }
 
-function main() {
-  // Drive an async function to completion.
-  var a: i64 = block_on(answer());
+// The program entry is itself an async function — the runtime starts the
+// executor and drives this future to completion. No `block_on` in user code.
+function main(): Future<null> async {
+  // Drive an async function directly with `await`.
+  var a: i64 = await answer();
   println("answer = ${a}");
 
-  var g: str = block_on(greet("async world"));
+  var g: str = await greet("async world");
   println(g);
 
-  // A bare `async { … }` block is a zero-arg inline future literal. It captures
-  // enclosing locals by value.
+  // A bare `async { … }` block is a zero-arg inline future literal. It
+  // captures enclosing locals by value.
   var base: i64 = 100;
-  var computed: i64 = block_on(async { base + answer_value() });
+  var computed: i64 = await async { base + 42 };
   println("computed = ${computed}");
 
   // `await` chaining: answer() = 42, greet_len("world") = len("hello, world") = 12.
-  println("compute = ${block_on(compute())}");
+  var c: i64 = await compute();
+  println("compute = ${c}");
 
   // Genuine suspension: 0 + 1 + 2 + 3 = 6, across four park/resume cycles.
-  println("tick = ${block_on(tick(4))}");
+  var t: i64 = await tick(4);
+  println("tick = ${t}");
 
   // `for await` over an async stream: 0 + 1 + 2 + 3 + 4 = 10.
   var r = Range { current: 0, end: 5 };
-  println("stream = ${block_on(sum_range(r))}");
+  var s: i64 = await sum_range(r);
+  println("stream = ${s}");
 
-  // `spawn` drives a future on a worker thread; `join()` is itself async, so
-  // we `block_on` the resulting future (or `await` it inside an async body).
-  var h: JoinHandle<i64> = spawn(tick(5));
-  match block_on(h.join()) {
-    Joined<i64> j => println("spawned = ${j.value}"),
-    Panicked p => println("spawned panicked"),
-  }
+  // `spawn EXPR` schedules a future on a worker and itself returns a
+  // `Future<T>`. We can run two tasks in parallel and `await` each in turn.
+  var h: Future<i64> = spawn tick(5);
+  var spawned: i64 = await h;
+  println("spawned = ${spawned}");
 }

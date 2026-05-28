@@ -1,9 +1,9 @@
 // Channels (docs/20 §2) are async and non-blocking. `channel<T>()` returns a
 // `(Sender<T>, Receiver<T>)` pair; `send` enqueues without blocking (the queue
-// is unbounded), and `recv()` returns a `Future<T>` you `await` (or drive with
-// `block_on`). Awaiting a recv *suspends the task* rather than parking the OS
-// thread, so channels compose with the async runtime (docs/21). Endpoints are
-// thread-safe handles, so a `Sender` can be captured into a spawned worker.
+// is unbounded), and `recv()` returns a `Future<T>` you `await`. Awaiting a
+// recv *suspends the task* rather than parking the OS thread, so channels
+// compose with the async runtime (docs/21). Endpoints are thread-safe
+// handles, so a `Sender` can be captured into a spawned worker.
 
 function produce(tx: Sender<i64>, n: i64) {
   var i: i64 = 1;
@@ -25,7 +25,8 @@ function consume(rx: Receiver<i64>, n: i64): Future<i64> async {
   total
 }
 
-function main() {
+// An async `main`: the runtime drives the root future automatically.
+function main(): Future<null> async {
   var pair: (Sender<i64>, Receiver<i64>) = channel<i64>();
   var tx: Sender<i64> = pair.0;
   var rx: Receiver<i64> = pair.1;
@@ -34,13 +35,10 @@ function main() {
   // consumer suspends on each empty recv and is woken by the worker's `send`.
   var worker: JoinHandle<i64> = Thread.spawn(() => { produce(tx, 5); 0 });
 
-  var total: i64 = block_on(consume(rx, 5));
-  // `worker.join()` is also async — drive it with `block_on` (or await it
-  // inside an async body) instead of parking the OS thread.
-  match block_on(worker.join()) {
-    Joined<i64> j => {},
-    Panicked p => println("worker panicked"),
-  }
+  var total: i64 = await consume(rx, 5);
+  // `worker.join()` is also async — `await` it (the calling task suspends
+  // instead of parking the OS thread).
+  var r: Joined<i64> | Panicked = await worker.join();
   println("sum of squares 1..5 = " + (total as str));   // 1+4+9+16+25 = 55
 
   // `try_recv` polls without blocking and without a future: `T | null`.

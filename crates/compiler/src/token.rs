@@ -40,6 +40,7 @@ pub enum Keyword {
     Import,
     Pub,
     Async,
+    Spawn,
     SelfLower, // `self`
     SelfUpper, // `Self`
 
@@ -84,6 +85,7 @@ impl Keyword {
             "import" => Import,
             "pub" => Pub,
             "async" => Async,
+            "spawn" => Spawn,
             "self" => SelfLower,
             "Self" => SelfUpper,
             "if" => If,
@@ -121,6 +123,7 @@ impl Keyword {
             Import => "import",
             Pub => "pub",
             Async => "async",
+            Spawn => "spawn",
             SelfLower => "self",
             SelfUpper => "Self",
             If => "if",

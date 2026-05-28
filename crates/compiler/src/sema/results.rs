@@ -189,15 +189,13 @@ pub struct CheckResults {
     /// `await e` expressions (`docs/21` §4), keyed by the `await` keyword span.
     /// The value is the awaited future's `Output` (the type `await` yields).
     pub awaits: HashMap<Span, Ty>,
-    /// `block_on(fut)` calls (`docs/21` §6), keyed by the call span. The value
-    /// is the awaited future's `Output` (the type `block_on` returns). Codegen
-    /// drives the future to completion via the runtime executor.
-    pub block_ons: HashMap<Span, Ty>,
     /// `yield_now()` calls (`docs/21`): a builtin returning a `Future<null>`
     /// that suspends once. Keyed by the call span.
     pub yield_nows: std::collections::HashSet<Span>,
-    /// `spawn(fut)` calls (`docs/21` §6), keyed by the call span. The value is
-    /// the future's `Output` `T`, so codegen builds `JoinHandle<T>`.
+    /// `spawn EXPR` expressions (`docs/21` §6), keyed by the `spawn` keyword
+    /// span. The value is the inner future's `Output` `T`. `spawn EXPR`
+    /// evaluates to a `Future<T>` whose poll either delivers the result of the
+    /// scheduled task or registers a waker.
     pub async_spawns: HashMap<Span, Ty>,
     /// `sleep(ms)` calls (`docs/21`): a `Future<null>` completing after a delay.
     pub async_sleeps: std::collections::HashSet<Span>,

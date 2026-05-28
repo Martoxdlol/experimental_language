@@ -159,9 +159,8 @@ pub struct Panicked  { pub message: str }</code></pre>
   <strong><code>join</code> is async and non-blocking.</strong>
   <code>join()</code> does <em>not</em> park the calling OS thread. It returns a
   <code>Future&lt;Joined&lt;R&gt; | Panicked&gt;</code> (see <a href="21-async.html">async</a>)
-  that you <code>await</code> inside an async body, or drive with
-  <code>block_on</code> from synchronous code. Polling the future checks whether
-  the worker has finished: if so, it resolves to
+  that you <code>await</code> inside an async body. Polling the future checks
+  whether the worker has finished: if so, it resolves to
   <code>Joined&lt;R&gt; { value }</code> (or <code>Panicked { message }</code>);
   otherwise it registers the executor's waker and reports <code>Pending</code>
   so the <em>task</em> suspends while the joining thread is free to interleave
@@ -169,10 +168,7 @@ pub struct Panicked  { pub message: str }</code></pre>
   re-poll the awaiting task.
 </div>
 
-<pre><code>// Drive a join from sync code, or await it inside an async body.
-var r: Joined&lt;R&gt; | Panicked = block_on(h.join());
-
-function collect(h: JoinHandle&lt;R&gt;): Future&lt;R&gt; async {
+<pre><code>function collect(h: JoinHandle&lt;R&gt;): Future&lt;R&gt; async {
   match await h.join() {                  // suspends until the worker finishes
     Joined&lt;R&gt; j => j.value,
     Panicked p  => panic("worker: " + p.message),
@@ -181,9 +177,12 @@ function collect(h: JoinHandle&lt;R&gt;): Future&lt;R&gt; async {
 
 <div class="callout">
   <strong>Two flavors of spawn</strong>
-  <code>Thread.spawn</code> runs a synchronous closure. For <code>Future&lt;T&gt;</code> work,
-  use <code>spawn(fut)</code> from <a href="21-async.html">21-async</a>. Both return the same
-  <code>JoinHandle&lt;R&gt;</code> type, and both are joined the same async way.
+  <code>Thread.spawn</code> runs a synchronous closure on a fresh OS thread and
+  returns a <code>JoinHandle&lt;R&gt;</code>. For <code>Future&lt;T&gt;</code> work,
+  use the <code>spawn</code> keyword from <a href="21-async.html">21-async</a> —
+  <code>spawn EXPR</code> schedules a future on a worker and itself evaluates to
+  a <code>Future&lt;T&gt;</code>. Joining is the same: <code>await</code> the
+  resulting future.
 </div>
 
 <h3>Cross-thread capture — isolation rules</h3>
@@ -310,10 +309,7 @@ pub struct ChannelClosed;</code></pre>
   is what lets channels compose with the async runtime.
 </div>
 
-<pre><code>// Drive a recv with the executor, or await it inside an async body.
-var v: T = block_on(rx.recv());
-
-function consume(rx: Receiver&lt;T&gt;): Future&lt;null&gt; async {
+<pre><code>function consume(rx: Receiver&lt;T&gt;): Future&lt;null&gt; async {
   var msg: T = await rx.recv();   // suspends until a message arrives
   process(msg)
 }</code></pre>
@@ -562,14 +558,14 @@ function consumer(rx: Receiver&lt;i64&gt;) {
   }
 }
 
-function main() {
+function main(): Future&lt;null&gt; async {
   var (tx, rx) = channel&lt;i64&gt;()
   var h1 = Thread.spawn { producer(tx) }
   var h2 = Thread.spawn { consumer(rx) }
-  // `join()` is async — drive each handle with `block_on`, or await them
-  // inside an `async { … }` block that the executor runs concurrently.
-  block_on(h1.join())
-  block_on(h2.join())
+  // `join()` is async — await each handle. The main task suspends rather
+  // than parking the OS thread between worker completions.
+  var _ = await h1.join()
+  var _ = await h2.join()
 }</code></pre>
 
 <pre><code>// Shared counter incremented by many threads
@@ -582,7 +578,7 @@ function gather(handles: List&lt;JoinHandle&lt;null&gt;&gt;): Future&lt;null&gt;
   for h in handles { var _ = await h.join() }
 }
 
-function main() {
+function main(): Future&lt;null&gt; async {
   var state = Shared.new(0i64)
   var handles = List.new&lt;JoinHandle&lt;null&gt;&gt;()
   for _ in (Range { current: 0, end: 8 }) {
@@ -593,7 +589,7 @@ function main() {
       }
     })
   }
-  block_on(gather(handles))
+  await gather(handles)
   println(state.lock { it } as str)
 }</code></pre>
 

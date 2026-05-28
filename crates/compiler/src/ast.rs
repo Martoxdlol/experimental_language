@@ -459,6 +459,9 @@ pub enum ExprKind {
     /// `*expr` — pointer dereference.
     Deref { expr: Box<Expr>, star_span: Span },
     Await { expr: Box<Expr>, kw_span: Span },
+    /// `spawn EXPR` — schedule `EXPR` (a future-producing call/expr) on the
+    /// async executor; evaluates to a `Future<T>`.
+    Spawn { expr: Box<Expr>, kw_span: Span },
 
     // Control flow ----------------------------------------------------------
     If {

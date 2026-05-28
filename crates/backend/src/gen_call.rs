@@ -15,12 +15,6 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         if self.cx.analysis.results.shared_news.contains(&span) {
             return self.gen_shared_new(args, span);
         }
-        if self.cx.analysis.results.block_ons.contains_key(&span) {
-            return self.gen_block_on(args, span);
-        }
-        if self.cx.analysis.results.async_spawns.contains_key(&span) {
-            return self.gen_async_spawn(args, span);
-        }
         if self.cx.analysis.results.yield_nows.contains(&span) {
             let prog = &self.cx.analysis.program;
             let ready_tid = 1000 + prog.ready_def.index() as i64;
@@ -410,29 +404,6 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         // Pin the handle as a global root for its lifetime: it may be held on a
         // thread whose stack a collector cannot perfectly reconstruct, and it is
         // tiny, so pinning until `join` is both simple and robust (`docs/20`).
-        self.call_intrinsic("lang_gc_pin", &[PTR], None, &[ptr]);
-        Ok(Some(ptr))
-    }
-
-    /// Lower `spawn(fut)` (`docs/21` §6): hand the future to a worker thread
-    /// that drives it to completion, returning a `JoinHandle<Out>` (the same
-    /// handle type `Thread.spawn` produces, so `.join()` works unchanged).
-    pub(crate) fn gen_async_spawn(&mut self, args: &[Expr], span: Span) -> CgResult<Option<Value>> {
-        let fut = self.gen_expr(&args[0])?.ok_or_else(|| {
-            CodegenError::new(args[0].span, "spawn argument has no value")
-        })?;
-        let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
-        let ptid = self.b.ins().iconst(types::I64, pending_tid);
-        let id = self
-            .call_intrinsic("lang_async_spawn", &[PTR, types::I64], Some(types::I64), &[fut, ptid])
-            .expect("lang_async_spawn returns an id");
-        let r = self.cx.analysis.results.async_spawns.get(&span).copied()
-            .unwrap_or(self.cx.analysis.tcx.error);
-        let jh_def = self.cx.analysis.program.join_handle_def;
-        let layout = self.struct_layout(jh_def, &[r]);
-        let ptr = self.alloc_struct(&layout);
-        let off = layout.offsets[layout.index_of("id").unwrap_or(0)] as i32;
-        self.b.ins().store(MemFlags::trusted(), id, ptr, off);
         self.call_intrinsic("lang_gc_pin", &[PTR], None, &[ptr]);
         Ok(Some(ptr))
     }

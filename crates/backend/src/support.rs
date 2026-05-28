@@ -40,7 +40,8 @@ pub(crate) fn expr_has_await(e: &Expr) -> bool {
         ExprKind::Paren(x) | ExprKind::Unary { operand: x, .. }
         | ExprKind::Cast { expr: x, .. } | ExprKind::Field { receiver: x, .. }
         | ExprKind::TupleIndex { receiver: x, .. } | ExprKind::Try { expr: x, .. }
-        | ExprKind::Ref { expr: x, .. } | ExprKind::Deref { expr: x, .. } => expr_has_await(x),
+        | ExprKind::Ref { expr: x, .. } | ExprKind::Deref { expr: x, .. }
+        | ExprKind::Spawn { expr: x, .. } => expr_has_await(x),
         ExprKind::Binary { left, right, .. } => expr_has_await(left) || expr_has_await(right),
         ExprKind::Tuple(xs) | ExprKind::List(xs) => xs.iter().any(expr_has_await),
         ExprKind::Call { callee, args, trailing_closure, .. } => {
@@ -166,7 +167,9 @@ pub(crate) fn collect_expr_locals(a: &Analysis, e: &Expr, out: &mut Vec<LocalId>
         | ExprKind::Cast { expr: x, .. } | ExprKind::Field { receiver: x, .. }
         | ExprKind::TupleIndex { receiver: x, .. } | ExprKind::Try { expr: x, .. }
         | ExprKind::Ref { expr: x, .. } | ExprKind::Deref { expr: x, .. }
-        | ExprKind::Await { expr: x, .. } => collect_expr_locals(a, x, out, seen),
+        | ExprKind::Await { expr: x, .. } | ExprKind::Spawn { expr: x, .. } => {
+            collect_expr_locals(a, x, out, seen)
+        }
         ExprKind::Binary { left, right, .. } => {
             collect_expr_locals(a, left, out, seen);
             collect_expr_locals(a, right, out, seen);

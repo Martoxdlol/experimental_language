@@ -58,8 +58,10 @@
 
 <h1>21. Async</h1>
 <p class="lead">
-  State-machine futures, explicit executor, <code>await</code> as the suspension point.
-  No built-in generator syntax — <code>Iterator</code>/<code>AsyncIterator</code> are implemented by hand.
+  State-machine futures, JavaScript/Dart-style <code>async</code> / <code>await</code>,
+  a <code>spawn</code> keyword for parallel tasks. No user-visible blocking calls:
+  awaiting suspends the task, never the OS thread; <code>main</code> itself is
+  allowed to be <code>async</code> and the runtime drives the root future.
 </p>
 
 <div class="toc">
@@ -69,9 +71,9 @@
     <li><a href="#ctx"><code>Context</code> and wakers</a></li>
     <li><a href="#asyncfn"><code>async</code> functions</a></li>
     <li><a href="#await"><code>await</code></a></li>
-    <li><a href="#forgot">"Forgot to await" lint</a></li>
-    <li><a href="#exec">Executor</a></li>
-    <li><a href="#closures">Async closures</a></li>
+    <li><a href="#forgot">"Forgot to await" — futures must be captured</a></li>
+    <li><a href="#exec">Async <code>main</code>, <code>spawn</code>, and the executor</a></li>
+    <li><a href="#closures">Async closures and inline futures</a></li>
     <li><a href="#cancel">Cancellation</a></li>
     <li><a href="#timeout">Timeouts</a></li>
     <li><a href="#asynciter"><code>AsyncIterator&lt;T&gt;</code></a></li>
@@ -99,17 +101,17 @@
 
     <g transform="translate(470, 30)">
       <rect width="430" height="170" rx="8" fill="#eaf0f8" stroke="#1a4a8a" stroke-width="2"/>
-      <text x="14" y="22" font-weight="700" fill="#1a4a8a">std:async — runtime</text>
-      <text x="14" y="40" class="small">explicit import · needs OS</text>
+      <text x="14" y="22" font-weight="700" fill="#1a4a8a">runtime — drives futures</text>
+      <text x="14" y="40" class="small">linked automatically · needs OS</text>
 
-      <text x="14" y="68" font-size="11">— spawn(fut)</text>
-      <text x="14" y="86" font-size="11">— block_on(fut)</text>
-      <text x="14" y="104" font-size="11">— timeout(fut, ms)</text>
+      <text x="14" y="68" font-size="11">— spawn EXPR (keyword)</text>
+      <text x="14" y="86" font-size="11">— async main &nbsp;(driven implicitly)</text>
+      <text x="14" y="104" font-size="11">— sleep(ms), yield_now()</text>
       <text x="14" y="122" font-size="11">— default work-stealing executor</text>
       <text x="14" y="146" font-size="11" class="small">freestanding targets need a custom executor</text>
     </g>
   </svg>
-  <div class="diagram-caption">Shape vs runtime: you can <em>write</em> async on any target; you need <code>std:async</code> to <em>drive</em> it.</div>
+  <div class="diagram-caption">Shape vs runtime: you can <em>write</em> async on any target; the runtime <em>drives</em> it.</div>
 </div>
 
 <!-- =========================================================== -->
@@ -125,7 +127,8 @@ pub interface Future&lt;Output&gt; {
 <div class="callout warn">
   <strong>A <code>Future&lt;T&gt;</code> is inert</strong>
   Calling <code>poll</code> advances it; a future that is never polled never runs. Construction
-  creates a state machine — execution happens only when something drives it.
+  creates a state machine — execution happens only when something drives it. Awaiting
+  a future or <code>spawn</code>-ing it hands the driving job to the executor.
 </div>
 
 <p>Type ergonomics: <code>Future&lt;null&gt;</code> for "no useful return"; <code>Future&lt;T | E&gt;</code>
@@ -250,61 +253,81 @@ extend MyFetcher: Fetcher {
 </div>
 
 <!-- =========================================================== -->
-<h2 id="forgot">5. "Forgot to await" lint</h2>
+<h2 id="forgot">5. "Forgot to await" — futures must be captured</h2>
 
-<p>A <code>Future&lt;T&gt;</code> created but never <code>await</code>ed, never <code>spawn</code>ed,
-and never returned is suspicious. The compiler errors by default on silently-discarded futures.</p>
+<p>A call to an <code>async</code> function returns a <code>Future&lt;T&gt;</code>. The
+compiler errors when a future is produced as a statement and silently discarded
+— it would never run, which is almost always a bug. To make a future <em>do</em>
+anything, you have to do one of:</p>
+
+<ul>
+  <li><code>await</code> it from within another <code>async</code> body — drives it to completion;</li>
+  <li><code>spawn</code> it — hands it to a worker (and returns another <code>Future&lt;T&gt;</code>);</li>
+  <li>bind it (<code>var f = …</code>) and pass it along, or explicitly discard with <code>var _ = …</code>.</li>
+</ul>
 
 <pre><code>function fetch_data(): Future&lt;str&gt; async { "data" }
 
-function main() {
-  fetch_data()             // ERROR — Future created but unused
-  spawn(fetch_data())      // OK
-  var f = fetch_data()     // OK — bound
+function main(): Future&lt;null&gt; async {
+  fetch_data()             // ERROR — Future created but never used
+  spawn fetch_data()       // ERROR — spawn evaluates to a Future too; bind or await
+  var h = spawn fetch_data()  // OK — bound
   var _ = fetch_data()     // OK — acknowledged discard
+  var s = await fetch_data()  // OK — driven to completion
 }</code></pre>
+
+<div class="callout good">
+  <strong>Rule of thumb</strong>
+  Every <code>Future</code> a function produces must be either named or consumed
+  before it falls out of statement position. The compiler enforces this.
+</div>
 
 <!-- =========================================================== -->
-<h2 id="exec">6. Executor — <code>std:async</code></h2>
+<h2 id="exec">6. Async <code>main</code>, <code>spawn</code>, and the executor</h2>
 
-<pre><code>pub function spawn&lt;T&gt;(fut: Future&lt;T&gt;): JoinHandle&lt;T&gt;
-pub function block_on&lt;T&gt;(fut: Future&lt;T&gt;): T
+<p>The program entry can itself be an <code>async</code> function. The runtime
+detects an async <code>main</code> at startup and drives the root future on the
+default work-stealing executor. There is no user-visible <code>block_on</code>
+— sync code cannot "wait" on a future synchronously, because doing so would
+block the OS thread (which the language forbids).</p>
 
-import { block_on } from "std:async"
-import { println }  from "std:io"
-
-function main() {
-  block_on(async {
-    var r = await some_top_level_task()
-    println(r)
-  })
+<pre><code>function main(): Future&lt;null&gt; async {
+  var r = await some_top_level_task()
+  println(r)
 }</code></pre>
 
-<p>The default executor is a work-stealing thread pool with one worker per logical core.
-<code>JoinHandle&lt;T&gt;</code> is the same type from <a href="20-concurrency.html">20-concurrency</a>.</p>
+<h3>The <code>spawn</code> keyword</h3>
+
+<pre><code>var f: Future&lt;i64&gt; = spawn work(42);
+var v: i64         = await f;</code></pre>
+
+<p><code>spawn</code> is a prefix keyword (like <code>await</code>). It takes a
+future-producing expression — usually a call to an <code>async</code> function
+— hands it to a worker thread, and itself evaluates to a fresh
+<code>Future&lt;T&gt;</code>. Awaiting that future resolves to the spawned task's
+result. This mirrors Tokio's <code>JoinHandle</code>, but typed as a
+<code>Future&lt;T&gt;</code> directly (in the JS/Dart spirit).</p>
 
 <div class="callout">
-  <strong>The bare <code>async { ... }</code> block</strong>
-  This is the one place <code>async</code> appears without a signature in front of it.
-  It is a <em>zero-arg inline future literal</em>: the block becomes a
-  <code>Future&lt;T&gt;</code> whose <code>T</code> is the type of the trailing expression.
-  Kept as a deliberate exception so launchers like <code>block_on</code> and
-  <code>spawn</code> don't force <code>(() async =&gt; { ... })()</code> ceremony.
-<pre style="background: transparent; border: none; padding: 0; margin-top: 0.5rem;"><code>block_on(async { await work() })            // OK — inline future literal
-spawn(async { await tick() })               // OK
-var fut: Future&lt;i64&gt; = async { 42 }         // OK — value form</code></pre>
+  <strong>Parallel fan-out</strong>
+<pre style="background: transparent; border: none; padding: 0;"><code>var a: Future&lt;i64&gt; = spawn work(1);
+var b: Future&lt;i64&gt; = spawn work(2);
+var c: Future&lt;i64&gt; = spawn work(3);
+// They all run in parallel. Joining is just awaiting each handle.
+var sum: i64 = (await a) + (await b) + (await c);</code></pre>
 </div>
 
 <div class="callout warn">
   <strong>Don't block the worker thread</strong>
-  A future polled by an executor runs on the executor's worker. The <code>poll</code> body must
-  not block the OS thread for long — return <code>Pending</code> and rely on a waker. Synchronous
-  blocking calls (file I/O, sync DB) should go through a "blocking task" mechanism the executor
+  A future polled by the executor runs on the executor's worker. The
+  <code>poll</code> body must not block the OS thread for long — return
+  <code>Pending</code> and rely on a waker. Synchronous blocking calls (sync
+  file I/O, sync DB) should go through a "blocking task" mechanism the executor
   provides (implementation-defined).
 </div>
 
 <!-- =========================================================== -->
-<h2 id="closures">7. Async closures</h2>
+<h2 id="closures">7. Async closures and inline futures</h2>
 
 <pre><code>var f1 = function(x: i64): Future&lt;str&gt; async {
   await sleep(100)
@@ -316,18 +339,20 @@ var f2 = (x) async =&gt; {
   x as str
 }
 
-// To get the "implicit it" feel, attach the async closure as a trailing closure
-// to a launcher like spawn:
-spawn { await fetch(it) }              // it: the argument the launcher passes in</code></pre>
+// A bare `async { ... }` block is a zero-arg inline future literal — a future
+// that captures enclosing locals by value. Useful with `await` / `spawn`:
+var h = spawn async { await fetch(); await save(); }</code></pre>
 
 <p>The <code>async</code> modifier sits between the signature and the body opener:
-before <code>{</code> on a <code>function(...)</code>, before <code>=&gt;</code> on an arrow closure.
-The bare <code>async { ... }</code> block (see §6) is the one exception — a zero-arg
-inline future literal kept for ergonomics with launchers like <code>block_on</code>.</p>
+before <code>{</code> on a <code>function(...)</code>, before <code>=&gt;</code>
+on an arrow closure. The bare <code>async { ... }</code> block is the one
+exception — a zero-arg inline future literal kept for ergonomics with
+<code>await</code> and <code>spawn</code>.</p>
 
-<p>Captures follow ordinary closure rules. When passed to <code>spawn</code>, the captured set is
-subject to cross-thread isolation (<a href="20-concurrency.html#threads">20 §1</a>) — captured
-references are deep-cloned at spawn time. Async closures cannot be <code>extern</code>.</p>
+<p>Captures follow ordinary closure rules. When passed to <code>spawn</code>,
+the captured set is subject to cross-thread isolation
+(<a href="20-concurrency.html#threads">20 §1</a>) — captured references are
+deep-cloned at spawn time. Async closures cannot be <code>extern</code>.</p>
 
 <!-- =========================================================== -->
 <h2 id="cancel">8. Cancellation</h2>
@@ -422,8 +447,8 @@ extend Ticker: AsyncIterator&lt;i64&gt; {
 <table>
   <thead><tr><th>Site</th><th>Effect</th></tr></thead>
   <tbody>
-    <tr><td><code>block_on(fut)</code></td><td>Calling thread panics.</td></tr>
-    <tr><td><code>spawn(fut)</code></td><td>Task ends; <code>JoinHandle.join</code> returns <code>Panicked</code>.</td></tr>
+    <tr><td>async <code>main</code></td><td>Process exits with the panic; the executor unwinds.</td></tr>
+    <tr><td><code>spawn EXPR</code></td><td>The spawned task ends with the panic; <code>await</code>-ing the returned <code>Future&lt;T&gt;</code> propagates the panic at the awaiter.</td></tr>
   </tbody>
 </table>
 
@@ -436,7 +461,7 @@ extend Ticker: AsyncIterator&lt;i64&gt; {
 additions, not core language. The minimum guarantees:</p>
 <ul>
   <li><code>await</code> exists and behaves as described.</li>
-  <li><code>spawn</code> exists and returns a <code>JoinHandle</code>.</li>
+  <li><code>spawn</code> is a prefix keyword on a future-producing expression and itself yields a <code>Future&lt;T&gt;</code>.</li>
   <li><code>Future&lt;T&gt;</code> has the interface shape above.</li>
   <li><code>Context</code> interoperates with C event loops.</li>
 </ul>
@@ -446,10 +471,11 @@ additions, not core language. The minimum guarantees:</p>
 
 <div class="callout good">
   <ul>
-    <li><code>Future&lt;T&gt;</code> is an inert state machine.</li>
-    <li>Postfix <code>async</code> on a function body produces one; <code>await</code> drives one inside another. The return type is written explicitly as <code>Future&lt;T&gt;</code>.</li>
-    <li>Futures must be <code>spawn</code>ed or <code>await</code>ed; ignoring them is a compile error.</li>
-    <li>The default executor is a work-stealing pool; <code>block_on</code> runs a top-level future.</li>
+    <li><code>Future&lt;T&gt;</code> is an inert state machine. JavaScript/Dart-style explicit syntax: <code>async</code> on the body, <code>await</code> at suspension points.</li>
+    <li>Postfix <code>async</code> on a function body produces a <code>Future&lt;T&gt;</code>; <code>await</code> drives one inside another. The return type is written explicitly as <code>Future&lt;T&gt;</code>.</li>
+    <li>Futures must be captured — <code>await</code>ed, <code>spawn</code>ed, or bound; ignoring one is a compile error.</li>
+    <li><code>main</code> may itself be <code>async</code>; the runtime drives the root future. There is no user-visible <code>block_on</code> — no blocking calls.</li>
+    <li><code>spawn EXPR</code> (keyword) schedules a future on a worker and itself returns a <code>Future&lt;T&gt;</code> — perfect for parallel fan-out.</li>
     <li><code>AsyncIterator&lt;T&gt;</code> + <code>for await</code> for async streams. No generator syntax.</li>
     <li>Cancellation via explicit <code>.cancel()</code>; timeouts via <code>timeout(...)</code>.</li>
     <li>Async closures use postfix <code>async</code> too; bare <code>async { ... }</code> is a zero-arg inline future literal.</li>
