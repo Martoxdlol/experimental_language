@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "lang-lsp"
+name = "otter_fusion_lsp"
 path = "src/main.rs"
 
 [dependencies]

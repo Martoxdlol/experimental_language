@@ -403,7 +403,7 @@ pub unsafe extern "C" fn lang_gc_register_safepoint(
 
 fn gc_debug() -> bool {
     static D: OnceLock<bool> = OnceLock::new();
-    *D.get_or_init(|| std::env::var("LANG_GC_DEBUG").is_ok())
+    *D.get_or_init(|| std::env::var("OTTER_FUSION_GC_DEBUG").is_ok())
 }
 
 /// Runtime collection toggle. Off by default so the in-process, multi-threaded
@@ -418,17 +418,17 @@ pub extern "C" fn lang_gc_set_enabled(on: bool) {
     GC_ON.store(on, Ordering::Relaxed);
 }
 
-/// Whether collection runs: the runtime toggle, or the `LANG_GC` env override.
+/// Whether collection runs: the runtime toggle, or the `OTTER_FUSION_GC` env override.
 fn gc_enabled() -> bool {
     static E: OnceLock<bool> = OnceLock::new();
-    let env = *E.get_or_init(|| matches!(std::env::var("LANG_GC").as_deref(), Ok(v) if v != "off"));
+    let env = *E.get_or_init(|| matches!(std::env::var("OTTER_FUSION_GC").as_deref(), Ok(v) if v != "off"));
     env || GC_ON.load(Ordering::Relaxed)
 }
 
-/// Collection threshold in bytes; `LANG_GC=stress` collects on every alloc.
+/// Collection threshold in bytes; `OTTER_FUSION_GC=stress` collects on every alloc.
 fn gc_threshold() -> usize {
     static T: OnceLock<usize> = OnceLock::new();
-    *T.get_or_init(|| match std::env::var("LANG_GC").as_deref() {
+    *T.get_or_init(|| match std::env::var("OTTER_FUSION_GC").as_deref() {
         Ok("stress") => 0,
         _ => 1 << 20, // 1 MiB
     })

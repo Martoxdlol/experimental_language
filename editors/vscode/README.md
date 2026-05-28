@@ -1,6 +1,6 @@
 # Otter Fusion for VS Code
 
-Editor support for Otter Fusion (`.otter`), backed by the `lang-lsp`
+Editor support for Otter Fusion (`.otter`), backed by the `otter_fusion_lsp`
 language server (`crates/lsp`).
 
 ## Features
@@ -17,19 +17,19 @@ language server (`crates/lsp`).
   bundled TextMate grammar.
 - **Run / Build code lenses** — `▶ Run`, `▶ Run (release)`, and `🔨 Build`
   appear above every `function main`. Clicking them opens an integrated
-  terminal and invokes the `lang` CLI on the current file.
+  terminal and invokes the `otter_fusion` CLI on the current file.
 
 ## Build
 
 The server is part of the Cargo workspace:
 
 ```sh
-cargo build -p lsp          # produces target/debug/lang-lsp
-cargo build -p lsp --release   # target/release/lang-lsp
+cargo build -p lsp          # produces target/debug/otter_fusion_lsp
+cargo build -p lsp --release   # target/release/otter_fusion_lsp
 ```
 
-Put `lang-lsp` on your `PATH`, or set the `lang.server.path` setting to its
-absolute path (e.g. `${workspaceFolder}/target/debug/lang-lsp`).
+Put `otter_fusion_lsp` on your `PATH`, or set the `otter-fusion.server.path` setting to its
+absolute path (e.g. `${workspaceFolder}/target/debug/otter_fusion_lsp`).
 
 ## Run the extension
 
@@ -59,8 +59,8 @@ VS Code via the `code` CLI.
 
 | Setting             | Default    | Description                                                |
 | ------------------- | ---------- | ---------------------------------------------------------- |
-| `lang.server.path`  | `lang-lsp` | Path to the language-server binary.                        |
-| `lang.runner.path`  | `lang`     | Path to the `lang` CLI used by the Run / Build code lenses. |
-| `lang.trace.server` | `off`      | Trace LSP traffic (`messages`/`verbose`).                  |
+| `otter-fusion.server.path`  | `otter_fusion_lsp` | Path to the language-server binary.                        |
+| `otter-fusion.runner.path`  | `otter_fusion`     | Path to the `otter_fusion` CLI used by the Run / Build code lenses. |
+| `otter-fusion.trace.server` | `off`      | Trace LSP traffic (`messages`/`verbose`).                  |
 
 Command **Otter Fusion: Restart Language Server** reloads the server after a rebuild.

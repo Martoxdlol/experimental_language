@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "lang"
+name = "otter_fusion"
 path = "src/main.rs"
 
 [dependencies]

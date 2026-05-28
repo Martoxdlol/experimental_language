@@ -1,12 +1,12 @@
-//! `lang` — the Otter Fusion toolchain driver.
+//! `otter_fusion` — the Otter Fusion toolchain driver.
 //!
 //! A thin orchestrator over `liblangc` (the `compiler` crate) and the Cranelift
 //! `backend`, with a Clap-based command surface. This is an early cut covering
 //! the subcommands the current pipeline supports end to end:
 //!
-//! * `lang check <file>` — lex, parse, and type-check; report diagnostics.
-//! * `lang run <file>`   — the above, then JIT-compile and run `main`.
-//! * `lang build <file>` — the above check + compile, without running.
+//! * `otter_fusion check <file>` — lex, parse, and type-check; report diagnostics.
+//! * `otter_fusion run <file>`   — the above, then JIT-compile and run `main`.
+//! * `otter_fusion build <file>` — the above check + compile, without running.
 //!
 //! Diagnostics are rendered with a source excerpt and caret, in the spirit of
 //! `docs/23` (stable codes and `--message-format` come later).
@@ -25,7 +25,7 @@ use compiler::span::{SourceMap, Span};
 
 /// The Otter Fusion toolchain.
 #[derive(Parser)]
-#[command(name = "lang", version, about, long_about = None)]
+#[command(name = "otter_fusion", version, about, long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -225,7 +225,7 @@ fn build_executable(map: &SourceMap, analysis: &Analysis, exe: &Path) -> ExitCod
     let runtime_lib = match find_runtime_lib() {
         Some(p) => p,
         None => {
-            eprintln!("error: cannot locate `libruntime.a` next to the `lang` executable");
+            eprintln!("error: cannot locate `libruntime.a` next to the `otter_fusion` executable");
             return ExitCode::FAILURE;
         }
     };
@@ -259,7 +259,7 @@ fn build_executable(map: &SourceMap, analysis: &Analysis, exe: &Path) -> ExitCod
 }
 
 /// Find `libruntime.a` — the runtime static library cargo emits alongside the
-/// `lang` binary (`target/<profile>/`), checking the executable's own directory
+/// `otter_fusion` binary (`target/<profile>/`), checking the executable's own directory
 /// and its `deps/` sibling.
 fn find_runtime_lib() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;

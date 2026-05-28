@@ -1,4 +1,4 @@
-//! `lang-lsp` — the Language Server Protocol implementation for the language.
+//! `otter_fusion_lsp` — the Language Server Protocol implementation for the language.
 //!
 //! Speaks LSP over stdio (the transport every editor uses). The actual feature
 //! logic lives in [`server::Backend`]; this entry point only wires the

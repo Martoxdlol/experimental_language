@@ -17,8 +17,8 @@ semantics; this file is only the implementation sequencing.
   real **MMTk Immix/StickyImmix** as the production plan once the pipeline runs
   end-to-end. The *semantic contract* from `docs/16-memory` is honored from the
   start; only the collector internals are staged.
-- **Codegen**: **Cranelift**. `lang run` uses `cranelift-jit` (in-process)
-  first; `lang build` adds `cranelift-object` + system linker. Both share one
+- **Codegen**: **Cranelift**. `otter_fusion run` uses `cranelift-jit` (in-process)
+  first; `otter_fusion build` adds `cranelift-object` + system linker. Both share one
   codegen backend.
 - **Generics**: monomorphization by default; dynamic dispatch only when an
   interface name is used as a value type (fat pointer / header vtable).
@@ -31,7 +31,7 @@ semantics; this file is only the implementation sequencing.
   `sema` (resolve + check), `mir`, `monomorphize`, `codegen`.
 - `crates/runtime`: GC, object layout, intrinsics, primitive `str`/`List`/`Map`,
   scheduler/executor, channels — linked into compiled programs.
-- `crates/cli` (`lang`): driver, project loading, subcommands.
+- `crates/cli` (`otter_fusion`): driver, project loading, subcommands.
 - `crates/lsp`: language server over `liblangc`.
 
 ## Phases
@@ -121,7 +121,7 @@ Lexer, parser, AST, spans, diagnostics. 205 tests.
 - [x] **`panic_with(value): never`** (`docs/14` §1): value widened to `dynamic`
       (the language never inspects it), evaluated for effects, then `lang_panic`.
       1 CLI test. (`assert`/`debug_assert` are NOT in the spec — not added.)
-- [x] **Build profiles (`docs/14` §5)**: `lang run --release` / `lang build
+- [x] **Build profiles (`docs/14` §5)**: `otter_fusion run --release` / `lang build
       --release` select the release profile (`backend::set_release_profile`, a
       module-level flag like `set_gc_enabled`). In release, overflowing `+`/`-`/
       `*` wrap via plain `iadd`/`isub`/`imul` (no overflow guard), and signed
@@ -199,8 +199,8 @@ User chose the spec-exact path (Cranelift `user_stack_maps`). Staged:
       matches each return address to its safepoint **directly** (Cranelift keys
       maps at the return point), reconstructs `SP = caller_fp − frame_to_fp`,
       reads the precise root slots, and runs mark-sweep. Triggered from
-      `lang_alloc` on a 1 MiB budget (or every alloc with `LANG_GC=stress`).
-      Enabled for `lang run`; left off for the in-process parallel test harness
+      `lang_alloc` on a 1 MiB budget (or every alloc with `OTTER_FUSION_GC=stress`).
+      Enabled for `otter_fusion run`; left off for the in-process parallel test harness
       (one shared heap, single-thread scan). Validated by a forced-collect CLI
       test (live `str`/struct survive 300 garbage-allocating iterations).
 
@@ -217,7 +217,7 @@ The tracing GC is functionally complete for single-threaded programs.
       scans **every** thread's stack (`scan_stack_roots_from(fp)`), mark-sweeps,
       then resumes (condvar). Single-threaded programs never park (the only
       mutator is the collector), so behavior is unchanged — all 552 single-
-      threaded tests pass and every example runs under `LANG_GC=stress`. The
+      threaded tests pass and every example runs under `OTTER_FUSION_GC=stress`. The
       multi-thread paths (parking, multi-stack scan, resume) are validated by a
       runtime unit test that runs stop-the-world cycles against 3 real
       safepoint-polling OS threads. `Thread.spawn`/`join` (the language surface)
@@ -545,10 +545,10 @@ The tracing GC is functionally complete for single-threaded programs.
       and residual. JIT + native + GC-stress parity. 4 new CLI tests
       (basic / FromResidual chained / native / plain-type rejected).
 - [ ] User macros; ambient/`pkg:` imports; concurrent GC.
-- [x] **Native object output + linking for `lang build`** (`docs/23`): the
+- [x] **Native object output + linking for `otter_fusion build`** (`docs/23`): the
       codegen backend is now generic over `cranelift_module::Module`, so the
       same lowering drives the JIT (`compile`) and a `cranelift-object`
-      `ObjectModule` (`compile_object`). `lang build foo.otter [-o exe]` emits a
+      `ObjectModule` (`compile_object`). `otter_fusion build foo.otter [-o exe]` emits a
       relocatable object and links it against the runtime **static library**
       (`libruntime.a`, `crate-type = ["rlib", "staticlib"]`) via the system `cc`
       driver into a standalone executable. Because function load addresses are
@@ -561,7 +561,7 @@ The tracing GC is functionally complete for single-threaded programs.
       from `darwin` to `macosx` (a real `LC_BUILD_VERSION`). 4 CLI tests
       (hello, JIT-vs-native output parity, GC-stress live-root survival,
       panic→exit 101); all 11 `examples/*.otter` build and run natively with
-      byte-identical output to `lang run`, including under `LANG_GC=stress`.
+      byte-identical output to `otter_fusion run`, including under `OTTER_FUSION_GC=stress`.
 
 ### Phase 5 — System features
 - [~] **Threads (`docs/20` §1): `Thread.spawn`/`join` work.** `Thread.spawn(() =>
@@ -737,12 +737,12 @@ The tracing GC is functionally complete for single-threaded programs.
       GC-stress clean. 4 CLI tests.
 
 ### Phase 6 — Toolchain  🚧 IN PROGRESS
-- [x] `lang` CLI (`crates/cli`): Clap-based `check` / `build` / `run` (auto
+- [x] `otter_fusion` CLI (`crates/cli`): Clap-based `check` / `build` / `run` (auto
       `--help`/`--version`) over the full pipeline, with caret diagnostics +
       error recovery. `run` JIT-executes `main`; `build [-o exe]` emits a native
       object and links a standalone executable (see Phase 4). Verified on
       `examples/`.
-- [x] **LSP server + VS Code extension** (`crates/lsp` → `lang-lsp`, plus
+- [x] **LSP server + VS Code extension** (`crates/lsp` → `otter_fusion_lsp`, plus
       `editors/vscode`). The server is built on `tower-lsp`/`tokio` and reuses
       the front-end (`Compiled` recompiles each open buffer; the checker's
       span-keyed `expr_types`/`resolutions`/new `local_decls` tables drive every

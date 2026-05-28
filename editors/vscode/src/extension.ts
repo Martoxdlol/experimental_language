@@ -14,10 +14,10 @@ function shellQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
-/** Open (or reuse) the dedicated terminal and dispatch a `lang` subcommand. */
+/** Open (or reuse) the dedicated terminal and dispatch an `otter_fusion` subcommand. */
 function runInTerminal(args: string[], filePath: string): void {
-  const config = workspace.getConfiguration("lang");
-  const runner = config.get<string>("runner.path") || "lang";
+  const config = workspace.getConfiguration("otter-fusion");
+  const runner = config.get<string>("runner.path") || "otter_fusion";
   if (!runTerminal || runTerminal.exitStatus !== undefined) {
     runTerminal = window.createTerminal({ name: "Otter Fusion" });
   }
@@ -28,8 +28,8 @@ function runInTerminal(args: string[], filePath: string): void {
 
 /** Build the client from current settings and start it. */
 async function startClient(): Promise<void> {
-  const config = workspace.getConfiguration("lang");
-  const command = config.get<string>("server.path") || "lang-lsp";
+  const config = workspace.getConfiguration("otter-fusion");
+  const command = config.get<string>("server.path") || "otter_fusion_lsp";
 
   const serverOptions: ServerOptions = {
     run: { command, transport: TransportKind.stdio },
@@ -45,7 +45,7 @@ async function startClient(): Promise<void> {
   };
 
   client = new LanguageClient(
-    "lang",
+    "otter-fusion",
     "Otter Fusion Language Server",
     serverOptions,
     clientOptions,
@@ -56,28 +56,28 @@ async function startClient(): Promise<void> {
   } catch (err) {
     window.showErrorMessage(
       `Failed to start the Otter Fusion language server ("${command}"). ` +
-        `Set "lang.server.path" to the lang-lsp binary. ${err}`,
+        `Set "otter-fusion.server.path" to the otter_fusion_lsp binary. ${err}`,
     );
   }
 }
 
 export async function activate(context: ExtensionContext): Promise<void> {
   context.subscriptions.push(
-    commands.registerCommand("lang.restartServer", async () => {
+    commands.registerCommand("otter-fusion.restartServer", async () => {
       await client?.stop();
       client = undefined;
       await startClient();
       window.showInformationMessage("Otter Fusion language server restarted.");
     }),
     commands.registerCommand(
-      "lang.runFile",
+      "otter-fusion.runFile",
       (uri: string, release: boolean = false) => {
         const path = Uri.parse(uri).fsPath;
         const args = release ? ["run", "--release"] : ["run"];
         runInTerminal(args, path);
       },
     ),
-    commands.registerCommand("lang.buildFile", (uri: string) => {
+    commands.registerCommand("otter-fusion.buildFile", (uri: string) => {
       const path = Uri.parse(uri).fsPath;
       runInTerminal(["build"], path);
     }),

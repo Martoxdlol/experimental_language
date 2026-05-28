@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
-  "name": "Lang",
-  "scopeName": "source.lang",
+  "name": "Otter Fusion",
+  "scopeName": "source.otter-fusion",
   "patterns": [
     { "include": "#comments" },
     { "include": "#strings" },
@@ -19,55 +19,55 @@
     "comments": {
       "patterns": [
         {
-          "name": "comment.line.documentation.lang",
+          "name": "comment.line.documentation.otter-fusion",
           "match": "(///|//!).*$"
         },
         {
-          "name": "comment.line.double-slash.lang",
+          "name": "comment.line.double-slash.otter-fusion",
           "match": "//.*$"
         },
         {
-          "name": "comment.block.lang",
+          "name": "comment.block.otter-fusion",
           "begin": "/\\*",
           "end": "\\*/"
         }
       ]
     },
     "strings": {
-      "name": "string.quoted.double.lang",
+      "name": "string.quoted.double.otter-fusion",
       "begin": "\"",
       "end": "\"",
       "patterns": [
         {
-          "name": "constant.character.escape.lang",
+          "name": "constant.character.escape.otter-fusion",
           "match": "\\\\(u\\{[0-9A-Fa-f]+\\}|[nrt0\\\\\"'$])"
         },
         {
-          "name": "meta.interpolation.lang",
+          "name": "meta.interpolation.otter-fusion",
           "begin": "\\$\\{",
           "end": "\\}",
-          "beginCaptures": { "0": { "name": "punctuation.section.interpolation.begin.lang" } },
-          "endCaptures": { "0": { "name": "punctuation.section.interpolation.end.lang" } },
+          "beginCaptures": { "0": { "name": "punctuation.section.interpolation.begin.otter-fusion" } },
+          "endCaptures": { "0": { "name": "punctuation.section.interpolation.end.otter-fusion" } },
           "patterns": [{ "include": "$self" }]
         },
         {
-          "name": "variable.other.interpolation.lang",
+          "name": "variable.other.interpolation.otter-fusion",
           "match": "\\$[A-Za-z_][A-Za-z0-9_]*"
         }
       ]
     },
     "chars": {
-      "name": "string.quoted.single.lang",
+      "name": "string.quoted.single.otter-fusion",
       "match": "'(\\\\(u\\{[0-9A-Fa-f]+\\}|[nrt0\\\\\"'])|[^'\\\\])'"
     },
     "numbers": {
       "patterns": [
         {
-          "name": "constant.numeric.float.lang",
+          "name": "constant.numeric.float.otter-fusion",
           "match": "\\b[0-9][0-9_]*(\\.[0-9][0-9_]*)?([eE][+-]?[0-9_]+)?(f32|f64)?\\b"
         },
         {
-          "name": "constant.numeric.integer.lang",
+          "name": "constant.numeric.integer.otter-fusion",
           "match": "\\b(0x[0-9A-Fa-f_]+|0o[0-7_]+|0b[01_]+|[0-9][0-9_]*)(i8|i16|i32|i64|isize|u8|u16|u32|u64|usize)?\\b"
         }
       ]
@@ -75,47 +75,47 @@
     "keywords": {
       "patterns": [
         {
-          "name": "keyword.control.lang",
+          "name": "keyword.control.otter-fusion",
           "match": "\\b(if|else|match|return|for|in|while|loop|break|continue|await|yield|spawn)\\b"
         },
         {
-          "name": "storage.type.lang",
+          "name": "storage.type.otter-fusion",
           "match": "\\b(function|var|struct|interface|type|mod|extend|extern|import)\\b"
         },
         {
-          "name": "storage.modifier.lang",
+          "name": "storage.modifier.otter-fusion",
           "match": "\\b(pub|async)\\b"
         },
         {
-          "name": "keyword.operator.word.lang",
+          "name": "keyword.operator.word.otter-fusion",
           "match": "\\b(as|is)\\b"
         },
         {
-          "name": "variable.language.lang",
+          "name": "variable.language.otter-fusion",
           "match": "\\b(self|Self)\\b"
         }
       ]
     },
     "constants": {
-      "name": "constant.language.lang",
+      "name": "constant.language.otter-fusion",
       "match": "\\b(true|false|null)\\b"
     },
     "types": {
       "patterns": [
         {
-          "name": "entity.name.type.numeric.lang",
+          "name": "entity.name.type.numeric.otter-fusion",
           "match": "\\b(i8|i16|i32|i64|isize|u8|u16|u32|u64|usize|f32|f64)\\b"
         },
         {
-          "name": "entity.name.type.primitive.lang",
+          "name": "entity.name.type.primitive.otter-fusion",
           "match": "\\b(bool|char|str)\\b"
         },
         {
-          "name": "entity.name.type.special.lang",
+          "name": "entity.name.type.special.otter-fusion",
           "match": "\\b(never|dynamic)\\b"
         },
         {
-          "name": "entity.name.type.lang",
+          "name": "entity.name.type.otter-fusion",
           "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
         }
       ]
@@ -125,72 +125,72 @@
         {
           "match": "\\b(function)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
-            "1": { "name": "storage.type.lang" },
-            "2": { "name": "entity.name.function.lang" }
+            "1": { "name": "storage.type.otter-fusion" },
+            "2": { "name": "entity.name.function.otter-fusion" }
           }
         },
         {
           "match": "\\b(struct)\\s+([A-Z][A-Za-z0-9_]*)",
           "captures": {
-            "1": { "name": "storage.type.lang" },
-            "2": { "name": "entity.name.type.struct.lang" }
+            "1": { "name": "storage.type.otter-fusion" },
+            "2": { "name": "entity.name.type.struct.otter-fusion" }
           }
         },
         {
           "match": "\\b(interface)\\s+([A-Z][A-Za-z0-9_]*)",
           "captures": {
-            "1": { "name": "storage.type.lang" },
-            "2": { "name": "entity.name.type.interface.lang" }
+            "1": { "name": "storage.type.otter-fusion" },
+            "2": { "name": "entity.name.type.interface.otter-fusion" }
           }
         },
         {
           "match": "\\b(type)\\s+([A-Z][A-Za-z0-9_]*)",
           "captures": {
-            "1": { "name": "storage.type.lang" },
-            "2": { "name": "entity.name.type.lang" }
+            "1": { "name": "storage.type.otter-fusion" },
+            "2": { "name": "entity.name.type.otter-fusion" }
           }
         },
         {
           "match": "\\b(extend)(?:\\s*<[^>]*>)?\\s+([A-Z][A-Za-z0-9_]*)",
           "captures": {
-            "1": { "name": "storage.type.lang" },
-            "2": { "name": "entity.name.type.lang" }
+            "1": { "name": "storage.type.otter-fusion" },
+            "2": { "name": "entity.name.type.otter-fusion" }
           }
         },
         {
           "match": "\\b(mod)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
-            "1": { "name": "storage.type.lang" },
-            "2": { "name": "entity.name.namespace.lang" }
+            "1": { "name": "storage.type.otter-fusion" },
+            "2": { "name": "entity.name.namespace.otter-fusion" }
           }
         }
       ]
     },
     "functions": {
-      "name": "entity.name.function.call.lang",
+      "name": "entity.name.function.call.otter-fusion",
       "match": "\\b([a-z_][A-Za-z0-9_]*)(?=\\s*[<(])"
     },
     "attributes": {
       "begin": "(@[A-Za-z_][A-Za-z0-9_]*)\\s*(\\()?",
       "end": "(?<=\\))|(?=$|[^A-Za-z0-9_(])",
       "beginCaptures": {
-        "1": { "name": "meta.attribute.lang entity.name.function.attribute.lang" },
-        "2": { "name": "punctuation.section.attribute.begin.lang" }
+        "1": { "name": "meta.attribute.otter-fusion entity.name.function.attribute.otter-fusion" },
+        "2": { "name": "punctuation.section.attribute.begin.otter-fusion" }
       },
       "patterns": [
         { "include": "#types" },
         {
-          "name": "punctuation.separator.attribute.lang",
+          "name": "punctuation.separator.attribute.otter-fusion",
           "match": ","
         },
         {
-          "name": "punctuation.section.attribute.end.lang",
+          "name": "punctuation.section.attribute.end.otter-fusion",
           "match": "\\)"
         }
       ]
     },
     "operators": {
-      "name": "keyword.operator.lang",
+      "name": "keyword.operator.otter-fusion",
       "match": "(=>|==|!=|<=|>=|<<|>>|&&|\\|\\||->|[-+*/%<>=!&|\\^~?.:])"
     }
   }

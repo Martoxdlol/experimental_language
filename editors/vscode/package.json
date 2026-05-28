@@ -33,7 +33,7 @@
     "grammars": [
       {
         "language": "otter-fusion",
-        "scopeName": "source.lang",
+        "scopeName": "source.otter-fusion",
         "path": "./syntaxes/grammar.tmLanguage.json"
       }
     ],
@@ -42,33 +42,33 @@
         "language": "otter-fusion",
         "scopes": {
           "type": [
-            "entity.name.type.lang",
-            "support.type.lang"
+            "entity.name.type.otter-fusion",
+            "support.type.otter-fusion"
           ],
           "struct": [
-            "entity.name.type.struct.lang",
-            "entity.name.type.lang"
+            "entity.name.type.struct.otter-fusion",
+            "entity.name.type.otter-fusion"
           ],
           "interface": [
-            "entity.name.type.interface.lang",
-            "entity.name.type.lang"
+            "entity.name.type.interface.otter-fusion",
+            "entity.name.type.otter-fusion"
           ],
           "function": [
-            "entity.name.function.lang"
+            "entity.name.function.otter-fusion"
           ],
           "method": [
-            "entity.name.function.method.lang",
-            "entity.name.function.lang"
+            "entity.name.function.method.otter-fusion",
+            "entity.name.function.otter-fusion"
           ],
           "variable": [
-            "variable.other.lang"
+            "variable.other.otter-fusion"
           ],
           "parameter": [
-            "variable.parameter.lang"
+            "variable.parameter.otter-fusion"
           ],
           "property": [
-            "variable.other.property.lang",
-            "variable.other.member.lang"
+            "variable.other.property.otter-fusion",
+            "variable.other.member.otter-fusion"
           ]
         }
       }
@@ -76,17 +76,17 @@
     "configuration": {
       "title": "Otter Fusion",
       "properties": {
-        "lang.server.path": {
+        "otter-fusion.server.path": {
           "type": "string",
-          "default": "lang-lsp",
-          "description": "Path to the `lang-lsp` language server binary. If it is on your PATH the default works; otherwise give an absolute path (e.g. target/debug/lang-lsp)."
+          "default": "otter_fusion_lsp",
+          "description": "Path to the `otter_fusion_lsp` language server binary. If it is on your PATH the default works; otherwise give an absolute path (e.g. target/debug/otter_fusion_lsp)."
         },
-        "lang.runner.path": {
+        "otter-fusion.runner.path": {
           "type": "string",
-          "default": "lang",
-          "description": "Path to the `lang` CLI used by the Run / Build code lenses above `main`."
+          "default": "otter_fusion",
+          "description": "Path to the `otter_fusion` CLI used by the Run / Build code lenses above `main`."
         },
-        "lang.trace.server": {
+        "otter-fusion.trace.server": {
           "type": "string",
           "enum": [
             "off",
@@ -100,15 +100,15 @@
     },
     "commands": [
       {
-        "command": "lang.restartServer",
+        "command": "otter-fusion.restartServer",
         "title": "Otter Fusion: Restart Language Server"
       },
       {
-        "command": "lang.runFile",
+        "command": "otter-fusion.runFile",
         "title": "Otter Fusion: Run File"
       },
       {
-        "command": "lang.buildFile",
+        "command": "otter-fusion.buildFile",
         "title": "Otter Fusion: Build File"
       }
     ]

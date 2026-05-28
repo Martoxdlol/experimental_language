@@ -1,21 +1,21 @@
-//! End-to-end tests: write a `.otter` file, invoke the `lang` binary, and check
+//! End-to-end tests: write a `.otter` file, invoke the `otter_fusion` binary, and check
 //! its stdout/exit status. Exercises the full pipeline including `print`.
 
 use std::process::Command;
 
-/// Run `lang <cmd> <file>` with `src` written to a temp file; return
+/// Run `otter_fusion <cmd> <file>` with `src` written to a temp file; return
 /// (stdout, stderr, success).
 fn lang(cmd: &str, src: &str) -> (String, String, bool) {
     lang_env(cmd, src, &[])
 }
 
-/// Like [`lang`], with extra command-line flags after the file (e.g.
+/// Like [`otter_fusion`], with extra command-line flags after the file (e.g.
 /// `--release`).
 fn lang_flag(cmd: &str, src: &str, flags: &[&str]) -> (String, String, bool) {
     let dir = std::env::temp_dir();
     let path = dir.join(format!("lang_test_{}.otter", nonce()));
     std::fs::write(&path, src).unwrap();
-    let mut command = Command::new(env!("CARGO_BIN_EXE_lang"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
     command.arg(cmd).arg(&path);
     for f in flags {
         command.arg(f);
@@ -29,12 +29,12 @@ fn lang_flag(cmd: &str, src: &str, flags: &[&str]) -> (String, String, bool) {
     )
 }
 
-/// Like [`lang`], with extra environment variables.
+/// Like [`otter_fusion`], with extra environment variables.
 fn lang_env(cmd: &str, src: &str, env: &[(&str, &str)]) -> (String, String, bool) {
     let dir = std::env::temp_dir();
     let path = dir.join(format!("lang_test_{}.otter", nonce()));
     std::fs::write(&path, src).unwrap();
-    let mut command = Command::new(env!("CARGO_BIN_EXE_lang"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
     command.arg(cmd).arg(&path);
     for (k, v) in env {
         command.env(k, v);
@@ -56,7 +56,7 @@ fn lang_build_run(src: &str, env: &[(&str, &str)]) -> (String, String, bool) {
     let path = dir.join(format!("lang_test_{n}.otter"));
     let exe = dir.join(format!("lang_test_bin_{n}"));
     std::fs::write(&path, src).unwrap();
-    let build = Command::new(env!("CARGO_BIN_EXE_lang"))
+    let build = Command::new(env!("CARGO_BIN_EXE_otter_fusion"))
         .arg("build").arg(&path).arg("-o").arg(&exe)
         .output()
         .expect("run lang build");
@@ -91,7 +91,7 @@ fn lang_run_project(entry: &str, files: &[(&str, &str)]) -> (String, String, boo
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, src).unwrap();
     }
-    let out = Command::new(env!("CARGO_BIN_EXE_lang"))
+    let out = Command::new(env!("CARGO_BIN_EXE_otter_fusion"))
         .arg("run")
         .arg(root.join(entry))
         .output()
@@ -168,7 +168,7 @@ fn error_propagation_with_question_mark() {
 
 #[test]
 fn gc_collects_garbage_keeping_live_roots() {
-    // With collection forced on every allocation (`LANG_GC=stress`), the live
+    // With collection forced on every allocation (`OTTER_FUSION_GC=stress`), the live
     // `keep` string and `b` struct must survive the loop's garbage allocations.
     // A missed root would free them and corrupt the output.
     let src = "struct Box { v: i64 }\n\
@@ -187,7 +187,7 @@ fn gc_collects_garbage_keeping_live_roots() {
                  println(total as str);\n\
                  println(b.v as str);\n\
                }";
-    let (out, err, ok) = lang_env("run", src, &[("LANG_GC", "stress")]);
+    let (out, err, ok) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
     assert!(ok, "stderr: {err}");
     // total = sum over i in 0..300 of (i + 100) = (0+1+...+299) + 300*100
     let expected_total: i64 = (0..300).sum::<i64>() + 300 * 100;
@@ -210,7 +210,7 @@ fn map_survives_gc_stress() {
                  match m.get(\"lang\") { str s => println(s), null => println(\"lost\") };\n\
                  println(\"size=${m.size()}\");\n\
                }";
-    let (out, err, ok) = lang_env("run", src, &[("LANG_GC", "stress")]);
+    let (out, err, ok) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
     assert!(ok, "stderr: {err}");
     // name/lang preserved; size = 3 (name, lang, iter).
     assert_eq!(out, "ada\nrust\nsize=3\n");
@@ -234,7 +234,7 @@ fn for_over_user_iterator_under_gc_stress() {
                  }\n\
                  println(acc);\n\
                }";
-    let (out, err, ok) = lang_env("run", src, &[("LANG_GC", "stress")]);
+    let (out, err, ok) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
     assert!(ok, "stderr: {err}");
     assert_eq!(out, "0,1,2,3,4,\n");
 }
@@ -254,7 +254,7 @@ fn dyn_dispatch_heterogeneous_under_gc_stress() {
                  for s in zoo { out = out + s.show() + \",\"; }\n\
                  println(out);\n\
                }";
-    let (out, err, ok) = lang_env("run", src, &[("LANG_GC", "stress")]);
+    let (out, err, ok) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
     assert!(ok, "stderr: {err}");
     assert_eq!(out, "ada,anon,bob,\n");
 }
@@ -285,7 +285,7 @@ fn closures_capture_survive_gc_stress() {
                  for f in fns { out = out + f(\"v\") + \" \"; }\n\
                  println(out);\n\
                }";
-    let (out, err, ok) = lang_env("run", src, &[("LANG_GC", "stress")]);
+    let (out, err, ok) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
     assert!(ok, "stderr: {err}");
     assert_eq!(out, "a:v b:v \n");
 }
@@ -301,7 +301,7 @@ fn for_entry_in_map_under_gc_stress() {
                  for e in m { out = out + e.key + e.value; }\n\
                  println(out);\n\
                }";
-    let (out, err, ok) = lang_env("run", src, &[("LANG_GC", "stress")]);
+    let (out, err, ok) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
     assert!(ok, "stderr: {err}");
     // probe order is deterministic for these keys
     assert_eq!(out, "czaxby\n");
@@ -388,7 +388,7 @@ fn native_build_gc_stress_keeps_live_roots() {
                  println(keep);\n\
                  println(total as str);\n\
                }";
-    let (out, err, ok) = lang_build_run(src, &[("LANG_GC", "stress")]);
+    let (out, err, ok) = lang_build_run(src, &[("OTTER_FUSION_GC", "stress")]);
     assert!(ok, "stderr: {err}");
     let expected_total: i64 = (0..300).sum::<i64>() + 300 * 100;
     assert_eq!(out, format!("important data\n{expected_total}\n"));
@@ -777,7 +777,7 @@ fn drop_finalizer_runs_on_collection() {
                  while i < 3 { var r: Resource = Resource { id: i }; i = i + 1; }\n\
                  println(\"done\");\n\
                }";
-    let (out, err, ok) = lang_env("run", src, &[("LANG_GC", "stress")]);
+    let (out, err, ok) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
     assert!(ok, "stderr: {err}");
     // All three temporaries are finalized; order is deterministic single-thread.
     assert!(out.contains("drop 0"), "out: {out}");
@@ -854,7 +854,7 @@ fn channel_cross_thread_producer_consumer() {
     let (out1, err, ok) = lang("run", src);
     assert!(ok, "stderr: {err}");
     assert_eq!(out1, "150\n"); // 10+20+30+40+50
-    let (out2, _, ok2) = lang_env("run", src, &[("LANG_GC", "stress")]);
+    let (out2, _, ok2) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
     assert!(ok2);
     assert_eq!(out1, out2, "GC stress changed the channel result");
 }
@@ -885,7 +885,7 @@ fn channel_async_recv_of_managed_element_survives_gc_stress() {
     let (out1, err, ok) = lang("run", src);
     assert!(ok, "stderr: {err}");
     assert_eq!(out1, "abc\n");
-    let (out2, _, ok2) = lang_env("run", src, &[("LANG_GC", "stress")]);
+    let (out2, _, ok2) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
     assert!(ok2);
     assert_eq!(out1, out2, "GC stress changed the channel result");
 }
@@ -1119,7 +1119,7 @@ fn thread_spawn_join_returns_result() {
 #[test]
 fn many_threads_under_gc_stress() {
     // Several workers each allocate heavily; the result must be deterministic
-    // and memory-safe under `LANG_GC=stress` (stop-the-world coordination). An
+    // and memory-safe under `OTTER_FUSION_GC=stress` (stop-the-world coordination). An
     // async gatherer awaits each `join()` in turn so the main task suspends
     // (rather than parking the OS thread) between worker completions.
     let src = "function work(id: i64): i64 {\n\
@@ -1145,7 +1145,7 @@ fn many_threads_under_gc_stress() {
                }";
     let (out1, err, ok) = lang("run", src);
     assert!(ok, "stderr: {err}");
-    let (out2, _, ok2) = lang_env("run", src, &[("LANG_GC", "stress")]);
+    let (out2, _, ok2) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
     assert!(ok2);
     assert_eq!(out1, out2, "GC stress changed the result (memory corruption)");
 }
@@ -1347,7 +1347,7 @@ fn list_clone_is_independent_under_gc_stress() {
                  }\n\
                  println(total as str);\n\
                }";
-    let (out, err, ok) = lang_env("run", src, &[("LANG_GC", "stress")]);
+    let (out, err, ok) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
     assert!(ok, "stderr: {err}");
     // each iteration: xs.size()=2, ys.size()=3 → 5 * 200 = 1000
     assert_eq!(out, "1000\n");
@@ -1669,7 +1669,7 @@ fn derive_hash_user_keyed_map_under_gc_stress() {
                  match m.get(Key { tag: \"keep\", n: 2 }) { str s => println(s), null => println(\"lost\") };\n\
                  println(\"size=${m.size()}\");\n\
                }";
-    let (out, err, ok) = lang_env("run", src, &[("LANG_GC", "stress")]);
+    let (out, err, ok) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
     assert!(ok, "stderr: {err}");
     // Both `keep` keys preserved; size = 2 (keeps) + 200 (churn) — but the
     // last churn key (i=199) overwrites if it collides; here every churn key
@@ -1793,7 +1793,7 @@ fn by_ref_captures_survive_gc_stress() {
                  println(\"total=${total}\");\n\
                  println(\"label=${label}\");\n\
                }";
-    let (out, err, ok) = lang_env("run", src, &[("LANG_GC", "stress")]);
+    let (out, err, ok) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
     assert!(ok, "stderr: {err}");
     // total = 0+1+...+49 = 1225; label = "sum" + "!" * 50.
     let want_label: String = (0..50).fold("sum".to_string(), |acc, _| acc + "!");
@@ -1944,7 +1944,7 @@ fn map_iterators_survive_gc_stress() {
                  }\n\
                  println(\"keep=${saw_keep} loops=${i}\");\n\
                }";
-    let (out, err, ok) = lang_env("run", src, &[("LANG_GC", "stress")]);
+    let (out, err, ok) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
     assert!(ok, "stderr: {err}");
     assert_eq!(out, "keep=true loops=2\n");
 }
@@ -2200,7 +2200,7 @@ fn async_block_on_str_survives_gc_stress() {
                  var s: str = await greet(\"world\");\n\
                  println(s);\n\
                }";
-    let (out, err, ok) = lang_env("run", src, &[("LANG_GC", "stress")]);
+    let (out, err, ok) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
     assert!(ok, "stderr: {err}");
     assert_eq!(out, "hi, world\n");
 }
@@ -2283,7 +2283,7 @@ fn await_genuine_suspension_via_yield_under_gc_stress() {
                  var v: i64 = await counter();\n\
                  println(v as str);\n\
                }";
-    let (out, err, ok) = lang_env("run", src, &[("LANG_GC", "stress")]);
+    let (out, err, ok) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
     assert!(ok, "stderr: {err}");
     assert_eq!(out, "3\n");
     // Native parity.
@@ -2305,7 +2305,7 @@ fn await_inside_async_block() {
                  };\n\
                  println(r as str);\n\
                }";
-    let (out, err, ok) = lang_env("run", src, &[("LANG_GC", "stress")]);
+    let (out, err, ok) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
     assert!(ok, "stderr: {err}");
     assert_eq!(out, "114\n");
 }
@@ -2356,7 +2356,7 @@ fn for_await_over_async_iterator() {
                  var v: i64 = await sum_stream(c);\n\
                  println(v as str);\n\
                }";
-    let (out, err, ok) = lang_env("run", src, &[("LANG_GC", "stress")]);
+    let (out, err, ok) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
     assert!(ok, "stderr: {err}");
     assert_eq!(out, "10\n");
 }

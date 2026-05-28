@@ -65,7 +65,7 @@ impl Backend {
             .map(|(span, msg)| Diagnostic {
                 range: span_to_range(&c.text, *span),
                 severity: Some(DiagnosticSeverity::ERROR),
-                source: Some("lang".into()),
+                source: Some("otter-fusion".into()),
                 message: msg.clone(),
                 ..Default::default()
             })
@@ -83,7 +83,7 @@ impl LanguageServer for Backend {
         };
         Ok(InitializeResult {
             server_info: Some(ServerInfo {
-                name: "lang-lsp".into(),
+                name: "otter_fusion_lsp".into(),
                 version: Some(env!("CARGO_PKG_VERSION").into()),
             }),
             capabilities: ServerCapabilities {
@@ -125,7 +125,7 @@ impl LanguageServer for Backend {
 
     async fn initialized(&self, _: InitializedParams) {
         self.client
-            .log_message(MessageType::INFO, "lang language server ready")
+            .log_message(MessageType::INFO, "otter-fusion language server ready")
             .await;
     }
 
@@ -185,20 +185,20 @@ impl LanguageServer for Backend {
                         .get(&id)
                         .map(|t| c.display_ty(*t))
                         .unwrap_or_else(|| "?".into());
-                    lines.push(format!("```lang\n{name}: {ty}\n```"));
+                    lines.push(format!("```otter-fusion\n{name}: {ty}\n```"));
                 }
                 ValueRes::Function(d)
                 | ValueRes::Method(d)
                 | ValueRes::Global(d)
                 | ValueRes::StructCtor(d) => {
                     let def = c.analysis.program.def(d);
-                    lines.push(format!("```lang\n{}\n```", c.def_label(def)));
+                    lines.push(format!("```otter-fusion\n{}\n```", c.def_label(def)));
                     if let Some(ret) = c.analysis.results.fn_return.get(&d) {
                         lines.push(format!("returns `{}`", c.display_ty(*ret)));
                     }
                 }
                 ValueRes::Builtin(b) => {
-                    lines.push(format!("```lang\n{}\n```", builtin_signature(b)));
+                    lines.push(format!("```otter-fusion\n{}\n```", builtin_signature(b)));
                     lines.push("builtin function".into());
                 }
             }
@@ -969,7 +969,7 @@ fn collect_code_lenses(c: &Compiled, uri: &str) -> Vec<CodeLens> {
             range,
             command: Some(Command {
                 title: "▶ Run".into(),
-                command: "lang.runFile".into(),
+                command: "otter-fusion.runFile".into(),
                 arguments: Some(vec![
                     serde_json::Value::String(uri.clone()),
                     serde_json::Value::Bool(false),
@@ -981,7 +981,7 @@ fn collect_code_lenses(c: &Compiled, uri: &str) -> Vec<CodeLens> {
             range,
             command: Some(Command {
                 title: "▶ Run (release)".into(),
-                command: "lang.runFile".into(),
+                command: "otter-fusion.runFile".into(),
                 arguments: Some(vec![
                     serde_json::Value::String(uri.clone()),
                     serde_json::Value::Bool(true),
@@ -993,7 +993,7 @@ fn collect_code_lenses(c: &Compiled, uri: &str) -> Vec<CodeLens> {
             range,
             command: Some(Command {
                 title: "🔨 Build".into(),
-                command: "lang.buildFile".into(),
+                command: "otter-fusion.buildFile".into(),
                 arguments: Some(vec![serde_json::Value::String(uri)]),
             }),
             data: None,
