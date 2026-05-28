@@ -324,6 +324,20 @@ impl<'a> Checker<'a> {
                 return self.is_immutable_value(kt) && self.is_immutable_value(vt);
             }
         }
+        // `Eq`/`Ord` are intrinsic for primitive scalars and `str` (`docs/15`):
+        // they have built-in `==`/`<`. User types satisfy them through a derived
+        // or hand-written `extend … : Eq`/`: Ord`, handled by the scan below.
+        if iface == self.prog.eq_def && iface != DefId(0) && self.is_immutable_value(ty) {
+            return true;
+        }
+        if iface == self.prog.ord_def && iface != DefId(0) && self.is_ordered(ty) {
+            return true;
+        }
+        // `ToStr` is intrinsic for any directly-stringifiable value (primitives,
+        // `str`, `null` — renderable via `as str`); user types via their impl.
+        if iface == self.prog.to_str_def && iface != DefId(0) && self.is_stringifiable(ty) {
+            return true;
+        }
         let module = self.current_module();
         let extends = self.prog.module(module).extends.clone();
         for ext in extends {
@@ -514,7 +528,11 @@ impl<'a> Checker<'a> {
     /// binds `T → i64`; empty for a concrete `extend`).
     /// The `to_str(self): str` method for `ty`, if one exists (hand-written or
     /// `@Derive(ToStr)`-synthesised). Used to make a user type interpolatable.
-    pub(crate) fn tostr_method(&mut self, ty: Ty) -> Option<DefId> {
+    /// Resolve a type's `to_str(self): str` method for string interpolation,
+    /// returning the method def and the enclosing `extend`'s solved type
+    /// arguments (empty for a non-generic `extend`) so the caller can record the
+    /// monomorphization at the interpolation site.
+    pub(crate) fn tostr_method(&mut self, ty: Ty) -> Option<(DefId, Vec<Ty>)> {
         if !matches!(self.tcx.kind(ty), TyKind::Named { .. }) {
             return None;
         }
@@ -532,7 +550,26 @@ impl<'a> Checker<'a> {
             }
             None => self.tcx.null,
         };
-        (takes_only_self && ret == self.tcx.str).then_some(mdef)
+        if !(takes_only_self && ret == self.tcx.str) {
+            return None;
+        }
+        // The extend's generic arguments, in declaration order, for codegen
+        // monomorphization (`Box<i64>.to_str` vs `Box<str>.to_str`).
+        let targs = self
+            .prog
+            .def(mdef)
+            .parent
+            .map(|parent| {
+                self.prog
+                    .def(parent)
+                    .generics
+                    .clone()
+                    .iter()
+                    .map(|g| subst.get(g).copied().unwrap_or(self.tcx.error))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Some((mdef, targs))
     }
 
     pub(crate) fn resolve_method(&mut self, recv_ty: Ty, name: &str) -> Option<(DefId, HashMap<DefId, Ty>)> {
@@ -786,6 +823,20 @@ impl<'a> Checker<'a> {
             return Some(self.tcx.error);
         };
         self.results.operator_methods.insert(op_span, mdef);
+        // If the operator method lives in a *generic* `extend` (e.g. a derived
+        // `eq`/`lt` on `Pair<A, B>`), record the extend's solved type arguments
+        // so codegen monomorphizes the method to this operand's instantiation —
+        // exactly as the general method-call path does.
+        if let Some(parent) = self.prog.def(mdef).parent {
+            let ext_gens = self.prog.def(parent).generics.clone();
+            if !ext_gens.is_empty() {
+                let targs: Vec<Ty> = ext_gens
+                    .iter()
+                    .map(|g| op_subst.get(g).copied().unwrap_or(self.tcx.error))
+                    .collect();
+                self.results.call_type_args.insert(op_span, targs);
+            }
+        }
 
         let (env, _) = self.fn_env(mdef);
         let Some(ItemKind::Function(f)) = self.prog.def(mdef).item.clone() else {

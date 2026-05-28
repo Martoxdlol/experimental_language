@@ -8,4 +8,4 @@ I started doing this because I always wanted to build a programming language. No
 
 I choose "Otter Fusion" because otters are cute and didn't have much idea of other super tech names. I realized the name "Otter" is already in use.
 
-I also choose `.otr` extension because it is short and not used by any other commonly known language.
+I also choose `.otter` extension because it is nice and not used by any other commonly known language.

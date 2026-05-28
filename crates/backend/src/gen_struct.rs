@@ -108,9 +108,21 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         Ok(ptr)
     }
 
-    /// Construct a tuple struct from positional arguments.
-    pub(crate) fn gen_tuple_ctor(&mut self, def: DefId, args: &[Expr]) -> CgResult<Option<Value>> {
-        let layout = self.struct_layout(def, &[]);
+    /// Construct a tuple struct from positional arguments. `span` is the call
+    /// expression's span; its recorded type carries the (possibly inferred)
+    /// generic arguments, so the layout is computed for the concrete instance.
+    pub(crate) fn gen_tuple_ctor(
+        &mut self,
+        def: DefId,
+        args: &[Expr],
+        span: Span,
+    ) -> CgResult<Option<Value>> {
+        // Prefer the call's result type (`S<A, B>`) so a generic tuple struct is
+        // laid out for its inferred arguments; fall back to the bare def.
+        let layout = match self.cx.analysis.results.expr_ty(span) {
+            Some(ty) => self.layout_for_ty(ty).unwrap_or_else(|| self.struct_layout(def, &[])),
+            None => self.struct_layout(def, &[]),
+        };
         let ptr = self.alloc_struct(&layout);
         for (i, a) in args.iter().enumerate() {
             let off = *layout.offsets.get(i).unwrap_or(&0) as i32;

@@ -11,6 +11,16 @@ struct Point { x: i64, y: i64 }
 @Derive(Clone)
 struct Line { from: Point, to: Point }
 
+// `@Derive(Clone)` works on generic structs too: the impl becomes
+// `extend<T: Clone> Box<T>: Clone`, so a `Box<T>` is cloneable whenever its
+// element is. Tuple structs are supported as well, and their type arguments are
+// inferred from the construction.
+@Derive(Clone)
+struct Box<T> { value: T }
+
+@Derive(Clone)
+struct Pair<A, B>(A, B)
+
 // A generic function bounded by `Clone` can clone any qualifying argument.
 function duplicate<T: Clone>(value: T): T {
   value.clone()
@@ -34,4 +44,16 @@ function main() {
   ys.push(4);
   println("xs.size = " + (xs.size() as str)); // 3
   println("ys.size = " + (ys.size() as str)); // 4
+
+  // Generic structs: a deep copy through the synthesised generic impl.
+  var box: Box<Point> = Box { value: Point { x: 1, y: 2 } };
+  var box2: Box<Point> = box.clone();
+  box2.value.x = 50;
+  println("box  = " + (box.value.x as str));   // 1 — unaffected
+  println("box2 = " + (box2.value.x as str));  // 50
+
+  // Tuple struct with inferred type arguments (`Pair<i64, str>`).
+  var pair: Pair<i64, str> = Pair(8, "wide");
+  var pair2 = pair.clone();
+  println("pair = " + (pair2.0 as str) + " " + pair2.1); // 8 wide
 }

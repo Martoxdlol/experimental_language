@@ -39,8 +39,11 @@ impl<'a> Checker<'a> {
                         // `to_str(self): str` method (hand-written or derived
                         // via `@Derive(ToStr)`) — the `ToStr` protocol of
                         // `docs/01` §8.
-                        if let Some(mdef) = self.tostr_method(pty) {
+                        if let Some((mdef, targs)) = self.tostr_method(pty) {
                             self.results.stringify_methods.insert(pspan, mdef);
+                            if !targs.is_empty() {
+                                self.results.call_type_args.insert(pspan, targs);
+                            }
                         } else {
                             let t = self.display(pty);
                             self.emit(pspan, SemaErrorKind::Message(format!(

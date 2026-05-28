@@ -7,8 +7,13 @@
 //! downstream knows the impl was generated — `==` resolves to the synthesised
 //! `eq` exactly as it would a hand-written one.
 //!
-//! Currently supported: `Eq` (field-by-field equality; `!=` comes free via the
-//! operator machinery negating `eq`). `Ord`/`Hash`/`Clone`/`ToStr` are staged.
+//! Supported: `Eq` (field-by-field equality; `!=` is free via the operator
+//! machinery negating `eq`), `Ord` (lexicographic `lt`/`le`/`gt`/`ge`), `ToStr`
+//! (debug-style rendering), and `Clone` (field-by-field deep copy). All four
+//! also work on **generic** structs — the impl becomes
+//! `extend<T: Eq + Ord + ToStr + Clone> S<T>: …`, and per-field operations
+//! become `.eq()`/`.lt()`/`.to_str()`/`.clone()` calls so they dispatch through
+//! the field type's bound. `Hash` is staged.
 
 use crate::ast::*;
 use crate::span::{BytePos, FileId, Span};
@@ -86,35 +91,72 @@ fn known_derive(name: &str) -> Option<&'static str> {
 
 /// Synthesise one `extend` block implementing all `derives` for struct `s`,
 /// deduping methods (e.g. `Ord` implies `Eq`, so `eq` is emitted once even with
-/// `@Derive(Eq, Ord)`). Returns `None` for cases not yet handled (generic
-/// structs).
+/// `@Derive(Eq, Ord)`). For a generic struct the result is a generic
+/// `extend<T: Clone> S<T>: Clone` (only `Clone` is supported on generics; the
+/// others are filtered out). Returns `None` when nothing is left to synthesise.
 fn synth_impl(s: &StructItem, derives: &[&str]) -> Option<Item> {
-    // Generic structs need a generic `extend` with bounds; staged.
-    if s.generics.is_some() {
-        return None;
-    }
+    let is_generic = s.generics.is_some();
     let want_eq = derives.contains(&"Eq") || derives.contains(&"Ord");
     let want_ord = derives.contains(&"Ord");
     let want_to_str = derives.contains(&"ToStr");
     let want_clone = derives.contains(&"Clone");
 
+    // For a generic struct the impl is a generic `extend<T: …> S<T>: …`: copy the
+    // struct's parameters (bound by the interfaces the methods need), and target
+    // `S<T, …>`. A non-generic struct targets the bare name. The target type
+    // doubles as the `other`/return type of the synthesised methods (`Self` does
+    // not resolve during the standalone lowering of a synthesised signature).
+    let (extend_generics, target) = if let Some(gp) = &s.generics {
+        // Each parameter carries exactly the bounds its field operations need:
+        // `Eq` for `eq`/lexicographic equality, `Ord` for `lt`, `Clone` for
+        // `clone`.
+        let mut bounds = Vec::new();
+        if want_eq {
+            bounds.push(named_ty("Eq"));
+        }
+        if want_ord {
+            bounds.push(named_ty("Ord"));
+        }
+        if want_to_str {
+            bounds.push(named_ty("ToStr"));
+        }
+        if want_clone {
+            bounds.push(named_ty("Clone"));
+        }
+        let params = gp
+            .params
+            .iter()
+            .map(|p| GenericParam {
+                name: ident(&p.name.name),
+                bounds: bounds.clone(),
+                default: None,
+                span: nsp(),
+            })
+            .collect();
+        let args = gp.params.iter().map(|p| named_ty(&p.name.name)).collect();
+        let target =
+            Type { kind: TypeKind::Named { name: ident(&s.name.name), generics: args }, span: nsp() };
+        (Some(GenericParams { params, span: nsp() }), target)
+    } else {
+        (None, named_ty(&s.name.name))
+    };
+
     let mut functions: Vec<FunctionItem> = Vec::new();
     if want_eq {
-        functions.push(synth_eq(s));
+        functions.push(synth_eq(s, is_generic, target.clone()));
     }
     if want_ord {
         // `<`/`<=`/`>`/`>=` resolve to distinct methods; synthesise all four.
-        let name = &s.name.name;
-        functions.push(synth_lt(s));
-        functions.push(synth_le(name));
-        functions.push(synth_gt(name));
-        functions.push(synth_ge(name));
+        functions.push(synth_lt(s, is_generic, target.clone()));
+        functions.push(synth_le(target.clone()));
+        functions.push(synth_gt(target.clone()));
+        functions.push(synth_ge(target.clone()));
     }
     if want_to_str {
-        functions.push(synth_to_str(s));
+        functions.push(synth_to_str(s, is_generic));
     }
     if want_clone {
-        functions.push(synth_clone(s));
+        functions.push(synth_clone(s, target.clone()));
     }
     if functions.is_empty() {
         return None;
@@ -130,18 +172,32 @@ fn synth_impl(s: &StructItem, derives: &[&str]) -> Option<Item> {
             span: nsp(),
         })
         .collect();
-    // `Eq`/`Ord`/`ToStr` resolve by operator/name, so they need no interface
-    // declaration. `Clone`, however, is dispatched through `T: Clone` bounds and
-    // interface objects, so the synthesised impl must declare it (populating the
-    // `(type, Clone)` impl table the monomorphizer consults).
-    let interfaces = if want_clone { vec![named_ty("Clone")] } else { Vec::new() };
+    // Declare every derived interface so the `(type, interface)` impl table is
+    // populated — this lets a concrete derived type satisfy a `T: Eq`/`T: Ord`/
+    // `T: Clone` bound (e.g. as another generic struct's argument), and drives
+    // monomorphized bound dispatch. (`==`/`<` on a *concrete* value still resolve
+    // `eq`/`lt` by name, independent of the declaration.)
+    let mut interfaces = Vec::new();
+    if want_eq {
+        interfaces.push(named_ty("Eq"));
+    }
+    if want_ord {
+        interfaces.push(named_ty("Ord"));
+    }
+    if want_to_str {
+        interfaces.push(named_ty("ToStr"));
+    }
+    if want_clone {
+        interfaces.push(named_ty("Clone"));
+    }
+
     Some(Item {
         docs: Vec::new(),
         attrs: Vec::new(),
         visibility: Visibility::Private,
         kind: ItemKind::Extend(ExtendItem {
-            generics: None,
-            target: named_ty(&s.name.name),
+            generics: extend_generics,
+            target,
             interfaces,
             members,
         }),
@@ -149,15 +205,17 @@ fn synth_impl(s: &StructItem, derives: &[&str]) -> Option<Item> {
     })
 }
 
-/// A `function <name>(self, other: S): bool { <body> }` comparison method.
-fn cmp_method(name: &str, struct_name: &str, body: Expr) -> FunctionItem {
+/// A `function <name>(self, other: <other_ty>): bool { <body> }` comparison
+/// method. `other_ty` is the bare struct name for a non-generic struct or
+/// `S<T, …>` for a generic one.
+fn cmp_method(name: &str, other_ty: Type, body: Expr) -> FunctionItem {
     FunctionItem {
         name: ident(name),
         generics: None,
         params: vec![
             Param { kind: ParamKind::SelfParam, span: nsp() },
             Param {
-                kind: ParamKind::Normal { name: ident("other"), ty: named_ty(struct_name) },
+                kind: ParamKind::Normal { name: ident("other"), ty: other_ty },
                 span: nsp(),
             },
         ],
@@ -167,39 +225,60 @@ fn cmp_method(name: &str, struct_name: &str, body: Expr) -> FunctionItem {
     }
 }
 
-/// `eq`: `self.f0 == other.f0 && …` (field-by-field). Unit/empty → `true`.
-fn synth_eq(s: &StructItem) -> FunctionItem {
-    let body = conjoin(field_cmps(s, BinaryOp::Eq).into_iter());
-    cmp_method("eq", &s.name.name, body)
+/// `eq`: `self.f0 == other.f0 && …` (field-by-field). Unit/empty → `true`. On a
+/// generic struct each field comparison is a `self.fi.eq(other.fi)` call so it
+/// dispatches through the field type's `T: Eq` bound (the `==` operator does not
+/// resolve on a bare type parameter).
+fn synth_eq(s: &StructItem, generic: bool, other_ty: Type) -> FunctionItem {
+    let cmps = (0..field_count(s)).map(|i| field_eq(s, i, generic));
+    cmp_method("eq", other_ty, conjoin(cmps))
 }
 
 /// `lt`: lexicographic less-than by field declaration order (`docs/22` §11).
-fn synth_lt(s: &StructItem) -> FunctionItem {
+fn synth_lt(s: &StructItem, generic: bool, other_ty: Type) -> FunctionItem {
     let n = field_count(s);
-    let body = lex_lt(s, 0, n);
-    cmp_method("lt", &s.name.name, body)
+    let body = lex_lt(s, 0, n, generic);
+    cmp_method("lt", other_ty, body)
 }
 
 /// `le`: `self.lt(other) || self.eq(other)`.
-fn synth_le(struct_name: &str) -> FunctionItem {
+fn synth_le(other_ty: Type) -> FunctionItem {
     let body = binary(
         BinaryOp::Or,
         method_call(self_expr(), "lt", ident_expr("other")),
         method_call(self_expr(), "eq", ident_expr("other")),
     );
-    cmp_method("le", struct_name, body)
+    cmp_method("le", other_ty, body)
 }
 
 /// `gt`: `!self.le(other)`.
-fn synth_gt(struct_name: &str) -> FunctionItem {
+fn synth_gt(other_ty: Type) -> FunctionItem {
     let body = not(method_call(self_expr(), "le", ident_expr("other")));
-    cmp_method("gt", struct_name, body)
+    cmp_method("gt", other_ty, body)
 }
 
 /// `ge`: `!self.lt(other)`.
-fn synth_ge(struct_name: &str) -> FunctionItem {
+fn synth_ge(other_ty: Type) -> FunctionItem {
     let body = not(method_call(self_expr(), "lt", ident_expr("other")));
-    cmp_method("ge", struct_name, body)
+    cmp_method("ge", other_ty, body)
+}
+
+/// `self.fi == other.fi` (concrete) or `self.fi.eq(other.fi)` (generic field).
+fn field_eq(s: &StructItem, i: usize, generic: bool) -> Expr {
+    if generic {
+        method_call(self_field(s, i), "eq", other_field(s, i))
+    } else {
+        binary(BinaryOp::Eq, self_field(s, i), other_field(s, i))
+    }
+}
+
+/// `self.fi < other.fi` (concrete) or `self.fi.lt(other.fi)` (generic field).
+fn field_lt(s: &StructItem, i: usize, generic: bool) -> Expr {
+    if generic {
+        method_call(self_field(s, i), "lt", other_field(s, i))
+    } else {
+        binary(BinaryOp::Lt, self_field(s, i), other_field(s, i))
+    }
 }
 
 /// Number of fields (0 for a unit struct).
@@ -227,23 +306,20 @@ fn field_at(s: &StructItem, base: Expr, i: usize) -> Expr {
     }
 }
 
-/// All field comparisons `self.fi <op> other.fi`.
-fn field_cmps(s: &StructItem, op: BinaryOp) -> Vec<Expr> {
-    (0..field_count(s)).map(|i| binary(op, self_field(s, i), other_field(s, i))).collect()
-}
-
 /// Lexicographic `<` over fields `[i, n)`:
 /// `self.fi < other.fi || (self.fi == other.fi && <rest>)`. Empty → `false`.
-fn lex_lt(s: &StructItem, i: usize, n: usize) -> Expr {
+/// On a generic struct the per-field `<`/`==` are `.lt()`/`.eq()` method calls
+/// (dispatched through the field type's `Ord`/`Eq` bound).
+fn lex_lt(s: &StructItem, i: usize, n: usize, generic: bool) -> Expr {
     if i >= n {
         return bool_lit(false);
     }
-    let lt_i = binary(BinaryOp::Lt, self_field(s, i), other_field(s, i));
+    let lt_i = field_lt(s, i, generic);
     if i + 1 == n {
         return lt_i;
     }
-    let eq_i = binary(BinaryOp::Eq, self_field(s, i), other_field(s, i));
-    let rest = lex_lt(s, i + 1, n);
+    let eq_i = field_eq(s, i, generic);
+    let rest = lex_lt(s, i + 1, n, generic);
     binary(BinaryOp::Or, lt_i, binary(BinaryOp::And, eq_i, rest))
 }
 
@@ -252,7 +328,11 @@ fn lex_lt(s: &StructItem, i: usize, n: usize) -> Expr {
 /// `str` (`docs/22` §11). Fields must themselves be `as str`-stringifiable
 /// (primitives and `str`); nested-struct fields await interpolation of derived
 /// `to_str`, a follow-up.
-fn synth_to_str(s: &StructItem) -> FunctionItem {
+fn synth_to_str(s: &StructItem, generic: bool) -> FunctionItem {
+    // Render one field to `str`: a direct `as str` cast for a concrete field, or
+    // a `.to_str()` call (dispatched through the field's `T: ToStr` bound) for a
+    // generic field — `as str` does not apply to a bare type parameter.
+    let render = |e: Expr| if generic { to_str_call(e) } else { cast_to_str(e) };
     let name = &s.name.name;
     let body = match &s.kind {
         StructKind::Unit => str_lit(name),
@@ -261,7 +341,7 @@ fn synth_to_str(s: &StructItem) -> FunctionItem {
             for (i, f) in fields.iter().enumerate() {
                 let sep = if i == 0 { String::new() } else { ", ".to_string() };
                 pieces.push(str_lit(&format!("{sep}{}: ", f.name.name)));
-                pieces.push(cast_to_str(field_access(self_expr(), &f.name.name)));
+                pieces.push(render(field_access(self_expr(), &f.name.name)));
             }
             pieces.push(str_lit(" }"));
             concat(pieces)
@@ -272,7 +352,7 @@ fn synth_to_str(s: &StructItem) -> FunctionItem {
                 if i > 0 {
                     pieces.push(str_lit(", "));
                 }
-                pieces.push(cast_to_str(tuple_index(self_expr(), i)));
+                pieces.push(render(tuple_index(self_expr(), i)));
             }
             pieces.push(str_lit(")"));
             concat(pieces)
@@ -288,11 +368,29 @@ fn synth_to_str(s: &StructItem) -> FunctionItem {
     }
 }
 
+/// `receiver.to_str()` — a zero-argument method call (resolves through a
+/// `T: ToStr` bound for a generic field).
+fn to_str_call(receiver: Expr) -> Expr {
+    let callee = Expr {
+        kind: ExprKind::Field { receiver: Box::new(receiver), name: ident("to_str") },
+        span: nsp(),
+    };
+    Expr {
+        kind: ExprKind::Call {
+            callee: Box::new(callee),
+            generics: Vec::new(),
+            args: Vec::new(),
+            trailing_closure: None,
+        },
+        span: nsp(),
+    }
+}
+
 /// `clone(self): Self` — a field-by-field deep copy (`docs/15` §8). Each field
 /// is cloned via its own `.clone()` (primitives/`str` clone trivially; nested
 /// structs recurse through their own `Clone` impl). The result is a freshly
 /// constructed value of the same struct shape.
-fn synth_clone(s: &StructItem) -> FunctionItem {
+fn synth_clone(s: &StructItem, ret_ty: Type) -> FunctionItem {
     let name = &s.name.name;
     let body = match &s.kind {
         StructKind::Unit => ident_expr(name),
@@ -334,7 +432,7 @@ fn synth_clone(s: &StructItem) -> FunctionItem {
         name: ident("clone"),
         generics: None,
         params: vec![Param { kind: ParamKind::SelfParam, span: nsp() }],
-        return_type: Some(named_ty(&s.name.name)),
+        return_type: Some(ret_ty),
         is_async: false,
         body: Some(Block { stmts: Vec::new(), trailing: Some(Box::new(body)), span: nsp() }),
     }

@@ -577,7 +577,11 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             let r = self.gen_expr(right)?.ok_or_else(|| {
                 CodegenError::new(right.span, "operand has no value")
             })?;
-            let result = self.emit_call(mdef, Vec::new(), &[l, r], op_span)?;
+            // If `mdef` lives in a generic `extend`, the checker recorded the
+            // extend's type arguments at `op_span`; pass them so the method is
+            // monomorphized to this operand's instantiation.
+            let targs = self.instance_args(op_span);
+            let result = self.emit_call(mdef, targs, &[l, r], op_span)?;
             // `a != b` negates the `eq` result.
             if matches!(op, Ne) {
                 let v = result.ok_or_else(|| CodegenError::new(op_span, "`eq` returned no value"))?;

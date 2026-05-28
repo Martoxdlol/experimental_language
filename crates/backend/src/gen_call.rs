@@ -131,7 +131,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         let def = match self.cx.analysis.results.resolution(callee.span) {
             Some(ValueRes::Function(d)) => d,
             Some(ValueRes::Builtin(b)) => return self.gen_builtin_call(b, args),
-            Some(ValueRes::StructCtor(d)) => return self.gen_tuple_ctor(d, args),
+            Some(ValueRes::StructCtor(d)) => return self.gen_tuple_ctor(d, args, span),
             Some(ValueRes::Method(d)) => {
                 if self.cx.analysis.results.static_calls.contains(&callee.span) {
                     return self.gen_static_call(d, callee, args, span);
@@ -343,6 +343,48 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             return Some(CloneKind::Map);
         }
         None
+    }
+
+    /// Whether `ty` has an intrinsic `Eq`/`Ord` comparison (a primitive scalar
+    /// or `str`); user types compare through their own `extend … : Eq`/`: Ord`.
+    pub(crate) fn is_primitive_comparable(&self, ty: Ty) -> bool {
+        matches!(
+            self.cx.analysis.tcx.kind(ty),
+            TyKind::Int(_) | TyKind::Float(_) | TyKind::Bool | TyKind::Char | TyKind::Str
+        )
+    }
+
+    /// Emit an intrinsic comparison for an `Eq`/`Ord` method (`eq`/`lt`/`le`/
+    /// `gt`/`ge`) on a primitive or `str` receiver — the same code paths
+    /// `gen_binary` uses for `==`/`<`/… on builtins, so a bounded `T`'s
+    /// comparison agrees with a direct operator.
+    pub(crate) fn gen_primitive_compare(
+        &mut self,
+        op: BinaryOp,
+        recv_ty: Ty,
+        receiver: &Expr,
+        args: &[Expr],
+        span: Span,
+    ) -> CgResult<Option<Value>> {
+        let other = args.first().ok_or_else(|| {
+            CodegenError::new(span, "comparison method missing its argument")
+        })?;
+        let l = self.gen_expr(receiver)?.ok_or_else(|| {
+            CodegenError::new(receiver.span, "comparison receiver has no value")
+        })?;
+        let r = self.gen_expr(other)?.ok_or_else(|| {
+            CodegenError::new(other.span, "comparison argument has no value")
+        })?;
+        if matches!(self.cx.analysis.tcx.kind(recv_ty), TyKind::Str) {
+            return Ok(Some(self.gen_str_compare(op, l, r)));
+        }
+        let (is_float, signed) = match self.cx.analysis.tcx.kind(recv_ty) {
+            TyKind::Float(_) => (true, true),
+            TyKind::Int(it) => (false, it.is_signed()),
+            // `char` and `bool` compare as unsigned integers.
+            _ => (false, false),
+        };
+        Ok(Some(self.gen_compare(op, is_float, signed, l, r)))
     }
 
     /// Lower `Thread.spawn { … }` (`docs/20` §1): evaluate the closure to its
@@ -796,6 +838,39 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 return self.gen_builtin_clone(receiver, kind);
             }
         }
+        // `Eq.eq` / `Ord.{lt,le,gt,ge}` reached through a `T: Eq`/`T: Ord` bound:
+        // if the monomorphized receiver is a primitive or `str`, emit the
+        // intrinsic comparison rather than seeking an `extend` impl (primitives
+        // implement these structurally — `docs/15`).
+        let parent = self.cx.analysis.program.def(def).parent;
+        if self.cx.analysis.program.def(def).kind == DefKind::InterfaceMethod
+            && (parent == Some(self.cx.analysis.program.eq_def)
+                || parent == Some(self.cx.analysis.program.ord_def))
+            && self.cx.analysis.program.eq_def != DefId(0)
+        {
+            if let Some(op) = compare_op(&self.cx.analysis.program.def(def).name) {
+                if self.is_primitive_comparable(recv_ty) {
+                    return self.gen_primitive_compare(op, recv_ty, receiver, args, span);
+                }
+            }
+        }
+        // `ToStr.to_str` reached through a `T: ToStr` bound on a directly
+        // stringifiable receiver (primitive/`str`/`null`): emit the `as str`
+        // intrinsic rather than seeking an `extend` impl (`docs/15`).
+        if self.cx.analysis.program.def(def).kind == DefKind::InterfaceMethod
+            && parent == Some(self.cx.analysis.program.to_str_def)
+            && self.cx.analysis.program.to_str_def != DefId(0)
+        {
+            if matches!(
+                self.cx.analysis.tcx.kind(recv_ty),
+                TyKind::Int(_) | TyKind::Float(_) | TyKind::Bool | TyKind::Char | TyKind::Str | TyKind::Null
+            ) {
+                let v = self.gen_expr(receiver)?.ok_or_else(|| {
+                    CodegenError::new(receiver.span, "to_str receiver has no value")
+                })?;
+                return Ok(Some(self.cast_to_str(v, recv_ty, span)?));
+            }
+        }
         // An interface method on a generic type parameter is resolved to the
         // concrete `extend` impl of whatever the parameter was monomorphized to.
         let (target, targs) = if self.cx.analysis.program.def(def).kind == DefKind::InterfaceMethod {
@@ -1183,4 +1258,17 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         self.term = true;
     }
 
+}
+
+/// Map an `Eq`/`Ord` method name to the binary comparison operator it stands
+/// for, or `None` if the name is not a comparison method.
+pub(crate) fn compare_op(name: &str) -> Option<BinaryOp> {
+    Some(match name {
+        "eq" => BinaryOp::Eq,
+        "lt" => BinaryOp::Lt,
+        "le" => BinaryOp::Le,
+        "gt" => BinaryOp::Gt,
+        "ge" => BinaryOp::Ge,
+        _ => return None,
+    })
 }

@@ -192,26 +192,71 @@ impl<'a> Checker<'a> {
 
     pub(crate) fn check_tuple_ctor(&mut self, def: DefId, callee: &Expr, args: &[Expr], span: Span) -> Ty {
         self.results.resolutions.insert(callee.span, ValueRes::StructCtor(def));
-        let targs: Vec<Ty> = Vec::new(); // generic tuple-struct inference deferred
-        let Some(field_tys) = self.tuple_fields(def, &targs) else {
+        let gens = self.prog.def(def).generics.clone();
+
+        // Non-generic tuple struct: check args against the declared field types.
+        if gens.is_empty() {
+            let Some(field_tys) = self.tuple_fields(def, &[]) else {
+                self.emit(span, SemaErrorKind::Message(
+                    "only tuple structs are constructed by call".into(),
+                ));
+                for a in args {
+                    self.check_expr(a, None);
+                }
+                return self.tcx.error;
+            };
+            if args.len() != field_tys.len() {
+                self.emit(span, SemaErrorKind::ArgCount { expected: field_tys.len(), found: args.len() });
+            }
+            for (a, fty) in args.iter().zip(&field_tys) {
+                let at = self.check_expr(a, Some(*fty));
+                self.expect(at, *fty, a.span);
+            }
+            return self.tcx.mk_named(def, Vec::new());
+        }
+
+        // Generic tuple struct: infer the type arguments from the positional
+        // argument types (mirroring `infer_struct_args` for record literals).
+        let param_args: Vec<Ty> = gens.iter().map(|g| self.tcx.mk_param(*g)).collect();
+        let Some(declared) = self.tuple_fields(def, &param_args) else {
             self.emit(span, SemaErrorKind::Message(
                 "only tuple structs are constructed by call".into(),
             ));
-            // Still check the args so errors inside them surface.
             for a in args {
                 self.check_expr(a, None);
             }
             return self.tcx.error;
         };
-        if args.len() != field_tys.len() {
-            self.emit(span, SemaErrorKind::ArgCount {
-                expected: field_tys.len(),
-                found: args.len(),
-            });
+        if args.len() != declared.len() {
+            self.emit(span, SemaErrorKind::ArgCount { expected: declared.len(), found: args.len() });
         }
-        for (a, fty) in args.iter().zip(&field_tys) {
-            let at = self.check_expr(a, Some(*fty));
-            self.expect(at, *fty, a.span);
+        let mut map: HashMap<DefId, Ty> = HashMap::new();
+        for (a, pfty) in args.iter().zip(&declared) {
+            let vt = self.check_expr(a, None);
+            self.unify(*pfty, vt, &mut map);
+        }
+        let mut targs = Vec::with_capacity(gens.len());
+        for g in &gens {
+            match map.get(g).copied() {
+                Some(t) => targs.push(t),
+                None => {
+                    let gname = self.prog.def(*g).name.clone();
+                    self.emit(span, SemaErrorKind::Message(format!(
+                        "cannot infer generic argument `{}` for `{}`; annotate it",
+                        gname,
+                        self.prog.def(def).name
+                    )));
+                    targs.push(self.tcx.error);
+                }
+            }
+        }
+        // Re-check each argument against the now-concrete field type (reusing the
+        // type already computed during inference).
+        if let Some(concrete) = self.tuple_fields(def, &targs) {
+            for (a, fty) in args.iter().zip(&concrete) {
+                let vt = self.results.expr_types.get(&a.span).copied().unwrap_or(self.tcx.error);
+                self.expect(vt, *fty, a.span);
+            }
         }
         self.tcx.mk_named(def, targs)
     }

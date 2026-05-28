@@ -1,41 +1,54 @@
 {
-  "name": "langc-placeholder",
-  "displayName": "Language (placeholder)",
-  "description": "Editor support for the experimental language",
-  "version": "0.0.1",
+  "name": "lang",
+  "displayName": "Lang",
+  "description": "Language support for the experimental language: diagnostics, hover, go-to-definition, references, rename, symbols, completion, and semantic highlighting.",
+  "version": "0.1.0",
   "publisher": "experimental",
   "engines": { "vscode": "^1.85.0" },
   "categories": ["Programming Languages"],
   "main": "./out/extension.js",
-  "activationEvents": ["onLanguage:lang-placeholder"],
+  "activationEvents": ["onLanguage:lang"],
   "contributes": {
     "languages": [
       {
-        "id": "lang-placeholder",
-        "aliases": ["Language (placeholder)"],
+        "id": "lang",
+        "aliases": ["Lang", "lang"],
         "extensions": [".lang"],
         "configuration": "./language-configuration.json"
       }
     ],
     "grammars": [
       {
-        "language": "lang-placeholder",
+        "language": "lang",
         "scopeName": "source.lang",
         "path": "./syntaxes/grammar.tmLanguage.json"
       }
     ],
     "configuration": {
-      "title": "Language (placeholder)",
+      "title": "Lang",
       "properties": {
-        "langPlaceholder.serverPath": {
+        "lang.server.path": {
           "type": "string",
-          "default": "langc-lsp-placeholder",
-          "description": "Path to the language server binary."
+          "default": "lang-lsp",
+          "description": "Path to the `lang-lsp` language server binary. If it is on your PATH the default works; otherwise give an absolute path (e.g. target/debug/lang-lsp)."
+        },
+        "lang.trace.server": {
+          "type": "string",
+          "enum": ["off", "messages", "verbose"],
+          "default": "off",
+          "description": "Trace the communication between VS Code and the language server."
         }
       }
-    }
+    },
+    "commands": [
+      {
+        "command": "lang.restartServer",
+        "title": "Lang: Restart Language Server"
+      }
+    ]
   },
   "scripts": {
+    "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -w -p ./"
   },

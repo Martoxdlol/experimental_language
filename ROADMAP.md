@@ -551,12 +551,32 @@ The tracing GC is functionally complete for single-threaded programs.
       (record/tuple/unit forms), and/or `clone(self): Self` constructing a fresh
       value with each field `.clone()`d. The `Clone` impl declares the `Clone`
       interface (so `(type, Clone)` lands in the impl table for monomorphized
-      bound dispatch); the others resolve by operator/name. Synthesised nodes get
-      unique spans in a virtual file (`FileId(u32::MAX-1)`) so the span-keyed
-      checker tables don't collide; the CLI renders diagnostics on virtual files
-      without an excerpt. 7 CLI tests. TODO: `Hash` derive, derives on generic
-      structs, `to_str` for nested-struct fields / interpolation integration,
-      user proc macros.
+      bound dispatch); the others resolve by operator/name. **All four derives
+      also work on generic structs** (record, tuple, unit): the impl is a generic
+      `extend<T: Eq + Ord + ToStr + Clone> S<T>: …`. On a generic struct,
+      per-field operations are synthesised as method calls —
+      `self.fi.eq(other.fi)` / `.lt(…)` / `.to_str()` / `.clone()` — (the
+      `==`/`<`/`as str` forms don't apply to a bare type parameter) that dispatch
+      through each field's bound. `Eq`/`Ord`/`ToStr` are now real prelude
+      interfaces (`Program.eq_def`/`ord_def`/`to_str_def`), primitives/`str`
+      satisfy them via `type_implements`, and codegen (`gen_method_call`) emits
+      the intrinsic comparison / `as str` for a primitive receiver — mirroring how
+      `Clone` dispatches. Every derived interface is declared on the synthesised
+      `extend` so concrete derived types satisfy `T: Eq`/`Ord`/`ToStr`/`Clone`
+      bounds (e.g. as another generic struct's element); generic `to_str` also
+      works through string interpolation (`tostr_method` records the extend's
+      type args at the interpolation site).
+      Two underlying fixes enabled this: the seed phase no longer compiles a
+      method of a *generic* `extend` with an empty substitution (monomorphized
+      per call site — also fixes hand-written generic `extend` methods), and
+      generic **tuple-struct construction** now infers its type arguments from
+      the positional argument types (`check_tuple_ctor`), with codegen laying the
+      value out for the inferred instance. Operator overloads on a generic type
+      now record/pass the extend's type args (`call_type_args[op_span]`).
+      Synthesised nodes get unique spans in a virtual file (`FileId(u32::MAX-1)`)
+      so the span-keyed checker tables don't collide; the CLI renders diagnostics
+      on virtual files without an excerpt. 13 CLI tests (incl. native parity).
+      TODO: `Hash` derive, user proc macros.
 - [x] **`Clone`** (`docs/10`/`docs/15` §8): prelude `interface Clone`
       (`Program.clone_def`). `.clone()` is intrinsic for immutable values
       (primitives/`char`/`bool`/`str`/`null` — `CloneKind::Identity`, since
@@ -578,8 +598,22 @@ The tracing GC is functionally complete for single-threaded programs.
       error recovery. `run` JIT-executes `main`; `build [-o exe]` emits a native
       object and links a standalone executable (see Phase 4). Verified on
       `examples/`.
-- [ ] `project.toml`, multi-file builds, sysroot/stdlib, LSP, fmt, doc, the
-      rest of the `docs/23` subcommand surface.
+- [x] **LSP server + VS Code extension** (`crates/lsp` → `lang-lsp`, plus
+      `editors/vscode`). The server is built on `tower-lsp`/`tokio` and reuses
+      the front-end (`Compiled` recompiles each open buffer; the checker's
+      span-keyed `expr_types`/`resolutions`/new `local_decls` tables drive every
+      query). Features: live diagnostics (lex+parse+sema), hover (types +
+      symbol/builtin signatures), go-to-definition (name-precise, for
+      functions/methods/globals/struct ctors/locals), find-references, rename,
+      document symbols (items + struct fields + interface/`extend` methods),
+      completion (keywords/builtins/top-level defs/locals), and full semantic
+      tokens (resolution-driven classes refining a bundled TextMate grammar).
+      Editor positions are converted UTF-16↔UTF-8 (`LineIndex` on the hot path).
+      11 unit tests in `crates/lsp`; the extension compiles (`npm run compile`).
+- [ ] `project.toml`, multi-file LSP workspaces (the server is currently
+      single-file: cross-module diagnostics/goto need disk + unsaved-buffer
+      overlay), sysroot/stdlib, fmt, doc, the rest of the `docs/23` subcommand
+      surface.
 
 ## Current vertical-slice target
 Smallest end-to-end program that exercises the full pipeline, expanded each

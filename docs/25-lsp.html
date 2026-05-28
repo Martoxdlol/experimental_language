@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>25. Language Server (LSP)</title>
+<style>
+  :root {
+    --fg: #1b1b1d; --muted: #5a5a60; --bg: #fdfdfc;
+    --accent: #1a4a8a; --accent-2: #2a6f4d; --warn: #b54708;
+    --code-bg: #f4f2ee; --code-fg: #1b1b1d; --border: #e4e1dc;
+    --table-stripe: #f8f7f4; --pub: #2a6f4d; --priv: #b54708;
+    --pkg: #1a4a8a; --core: #6b4ba8;
+  }
+  html { box-sizing: border-box; } *, *::before, *::after { box-sizing: inherit; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color: var(--fg); background: var(--bg); line-height: 1.55;
+    max-width: 980px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem; }
+  h1, h2, h3, h4 { color: var(--fg); line-height: 1.25; margin-top: 2.2rem; margin-bottom: 0.6rem; }
+  h1 { font-size: 2rem; border-bottom: 2px solid var(--border); padding-bottom: 0.4rem; }
+  h2 { font-size: 1.45rem; margin-top: 2.6rem; }
+  h3 { font-size: 1.15rem; color: var(--accent); }
+  h4 { font-size: 1rem; color: var(--muted); }
+  p { margin: 0.7rem 0; } ul, ol { margin: 0.7rem 0; padding-left: 1.6rem; } li { margin: 0.3rem 0; }
+  code { font-family: "SF Mono", Menlo, Consolas, "Courier New", monospace;
+    background: var(--code-bg); color: var(--code-fg); padding: 0.1em 0.35em;
+    border-radius: 3px; font-size: 0.92em; }
+  pre { background: var(--code-bg); color: var(--code-fg); padding: 0.9rem 1rem;
+    border-radius: 6px; overflow-x: auto; font-size: 0.88rem; line-height: 1.5;
+    border: 1px solid var(--border); }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: 0.94rem; }
+  th, td { text-align: left; padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { background: var(--code-bg); font-weight: 600; }
+  tbody tr:nth-child(even) { background: var(--table-stripe); }
+  .lead { font-size: 1.05rem; color: var(--muted); margin-bottom: 1.6rem; }
+  .toc { background: var(--code-bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 1rem 1.2rem; margin: 1.6rem 0 2rem; font-size: 0.94rem; }
+  .toc ol { margin: 0.2rem 0 0; padding-left: 1.3rem; }
+  .toc a { color: var(--accent); text-decoration: none; } .toc a:hover { text-decoration: underline; }
+  .diagram { background: #ffffff; border: 1px solid var(--border);
+    border-radius: 8px; padding: 1.4rem; margin: 1.4rem 0; overflow-x: auto; }
+  .diagram-caption { font-size: 0.85rem; color: var(--muted); text-align: center;
+    margin-top: 0.6rem; font-style: italic; }
+  svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+  svg text { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; fill: var(--fg); }
+  svg .label { font-family: -apple-system, system-ui, sans-serif; font-size: 12px; }
+  svg .small { font-size: 10px; fill: var(--muted); }
+  .callout { border-left: 4px solid var(--accent); background: #f0f4fa;
+    padding: 0.8rem 1rem; margin: 1.2rem 0; border-radius: 0 6px 6px 0; }
+  .callout.warn { border-color: var(--warn); background: #fbf3ec; }
+  .callout.good { border-color: var(--accent-2); background: #eef6f1; }
+  .callout strong { display: block; margin-bottom: 0.3rem; }
+  .status { display: inline-block; font-size: 0.72rem; font-weight: 700; padding: 0.1rem 0.5rem;
+    border-radius: 999px; vertical-align: middle; }
+  .status.done { background: #e3f1ea; color: var(--accent-2); border: 1px solid #b9ddc9; }
+  .status.todo { background: #fbf0e6; color: var(--warn); border: 1px solid #e8cfb4; }
+  .feature-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+    gap: 0.7rem; margin: 1.2rem 0; }
+  .feature { background: #fff; border: 1px solid var(--border); border-radius: 8px;
+    padding: 0.7rem 0.9rem; border-top: 3px solid var(--accent); }
+  .feature .name { font-weight: 700; color: var(--accent); display: block; font-size: 0.95rem; }
+  .feature .desc { color: var(--muted); font-size: 0.82rem; display: block; margin-top: 0.25rem; }
+  .cmd-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 0.6rem; margin: 1rem 0; }
+  .cmd { background: #fff; border: 1px solid var(--border); border-radius: 6px;
+    padding: 0.55rem 0.8rem; font-family: "SF Mono", Menlo, monospace; font-size: 0.85rem;
+    border-left: 4px solid var(--accent-2); }
+  .cmd .name { font-weight: 700; color: var(--accent-2); display: block; }
+  .cmd .desc { color: var(--muted); font-size: 0.78rem; display: block; margin-top: 0.15rem; font-family: -apple-system, sans-serif; }
+</style>
+</head>
+<body>
+
+<h1>25. Language Server (LSP)</h1>
+<p class="lead">
+  <code>lang-lsp</code> — the editor brain. A standalone server that speaks the
+  Language Server Protocol over stdio and reuses <code>liblangc</code>
+  (<code>crates/compiler</code>) so the IDE sees <em>exactly</em> what the
+  compiler sees. Ships with a VS Code extension in <code>editors/vscode</code>.
+</p>
+
+<div class="toc">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#arch">Architecture</a></li>
+    <li><a href="#features">Features</a></li>
+    <li><a href="#pipeline">Request pipeline</a></li>
+    <li><a href="#tables">How queries are answered</a></li>
+    <li><a href="#positions">Positions: UTF-16 ↔ UTF-8</a></li>
+    <li><a href="#semtok">Semantic tokens</a></li>
+    <li><a href="#vscode">VS Code extension</a></li>
+    <li><a href="#build">Build &amp; run</a></li>
+    <li><a href="#limits">Scope &amp; what's next</a></li>
+  </ol>
+</div>
+
+<!-- =========================================================== -->
+<h2 id="arch">1. Architecture</h2>
+
+<p>
+  The server is one more consumer of the front-end, alongside the CLI and the
+  Cranelift backend. It does not fork the parser or type checker; it calls
+  <code>compiler::sema::analyze</code> on the open buffer and reads the
+  span-keyed side tables the checker already produces for code generation.
+</p>
+
+<div class="diagram">
+  <svg viewBox="0 0 920 300" role="img" aria-label="LSP architecture">
+    <g transform="translate(20,20)">
+      <!-- editor -->
+      <rect x="0" y="0" width="200" height="60" rx="6" fill="#eaf0f8" stroke="#1a4a8a" stroke-width="2"/>
+      <text x="100" y="28" text-anchor="middle" class="label" font-weight="700" fill="#1a4a8a">Editor</text>
+      <text x="100" y="46" text-anchor="middle" class="small">VS Code · any LSP client</text>
+
+      <!-- JSON-RPC arrow -->
+      <line x1="200" y1="30" x2="320" y2="30" stroke="#5a5a60" stroke-width="1.5" marker-end="url(#a)"/>
+      <line x1="320" y1="48" x2="200" y2="48" stroke="#5a5a60" stroke-width="1.5" marker-end="url(#a)"/>
+      <text x="260" y="22" text-anchor="middle" class="small">JSON-RPC / stdio</text>
+
+      <!-- server -->
+      <rect x="320" y="-6" width="280" height="160" rx="8" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
+      <text x="460" y="16" text-anchor="middle" class="label" font-weight="700" fill="#2a6f4d">lang-lsp</text>
+      <rect x="340" y="28" width="240" height="34" rx="5" fill="#fff" stroke="#b9ddc9"/>
+      <text x="460" y="50" text-anchor="middle" class="small">tower-lsp · tokio (stdio loop)</text>
+      <rect x="340" y="68" width="240" height="34" rx="5" fill="#fff" stroke="#b9ddc9"/>
+      <text x="460" y="90" text-anchor="middle" class="small">Backend — one handler per feature</text>
+      <rect x="340" y="108" width="240" height="34" rx="5" fill="#fff" stroke="#b9ddc9"/>
+      <text x="460" y="130" text-anchor="middle" class="small">Compiled — query layer over a buffer</text>
+
+      <!-- arrow to compiler -->
+      <line x1="600" y1="74" x2="700" y2="74" stroke="#5a5a60" stroke-width="1.5" marker-end="url(#a)"/>
+
+      <!-- compiler -->
+      <rect x="700" y="14" width="180" height="120" rx="8" fill="#f3eefa" stroke="#6b4ba8" stroke-width="2"/>
+      <text x="790" y="36" text-anchor="middle" class="label" font-weight="700" fill="#6b4ba8">liblangc</text>
+      <text x="790" y="58" text-anchor="middle" class="small">lex · parse</text>
+      <text x="790" y="76" text-anchor="middle" class="small">collect · resolve</text>
+      <text x="790" y="94" text-anchor="middle" class="small">type check</text>
+      <text x="790" y="116" text-anchor="middle" class="small">CheckResults</text>
+
+      <defs>
+        <marker id="a" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+          <path d="M0,0 L8,4 L0,8 z" fill="#5a5a60"/>
+        </marker>
+      </defs>
+    </g>
+  </svg>
+  <div class="diagram-caption">The same library the compiler uses answers every editor query.</div>
+</div>
+
+<div class="callout good">
+  <strong>One source of truth</strong>
+  Diagnostics in the editor are the identical lexer / parser / type-checker
+  errors <code>lang check</code> reports. There is no second, drifting analysis.
+</div>
+
+<!-- =========================================================== -->
+<h2 id="features">2. Features</h2>
+
+<div class="feature-grid">
+  <div class="feature"><span class="name">Diagnostics <span class="status done">done</span></span><span class="desc">Lex + parse + semantic errors, live on every keystroke.</span></div>
+  <div class="feature"><span class="name">Hover <span class="status done">done</span></span><span class="desc">Type of the expression, plus symbol / builtin signature.</span></div>
+  <div class="feature"><span class="name">Go to definition <span class="status done">done</span></span><span class="desc">Functions, methods, globals, struct ctors, and locals — jumps to the name.</span></div>
+  <div class="feature"><span class="name">Find references <span class="status done">done</span></span><span class="desc">Every use of a value symbol, declaration optional.</span></div>
+  <div class="feature"><span class="name">Rename <span class="status done">done</span></span><span class="desc">Renames a symbol and all its uses in one edit.</span></div>
+  <div class="feature"><span class="name">Document symbols <span class="status done">done</span></span><span class="desc">Outline: items, struct fields, interface / extend methods.</span></div>
+  <div class="feature"><span class="name">Completion <span class="status done">done</span></span><span class="desc">Keywords, builtins, top-level types/functions, locals.</span></div>
+  <div class="feature"><span class="name">Semantic tokens <span class="status done">done</span></span><span class="desc">Resolution-driven highlighting refining the TextMate grammar.</span></div>
+</div>
+
+<table>
+  <thead><tr><th>LSP capability</th><th>Method</th><th>Backed by</th></tr></thead>
+  <tbody>
+    <tr><td>Diagnostics</td><td><code>textDocument/publishDiagnostics</code></td><td><code>analyze().errors</code> + lex/parse errors</td></tr>
+    <tr><td>Hover</td><td><code>textDocument/hover</code></td><td><code>expr_types</code> + <code>resolutions</code></td></tr>
+    <tr><td>Definition</td><td><code>textDocument/definition</code></td><td><code>resolutions</code> → <code>Def.span</code> / <code>local_decls</code></td></tr>
+    <tr><td>References</td><td><code>textDocument/references</code></td><td><code>resolutions</code> (reverse lookup)</td></tr>
+    <tr><td>Rename</td><td><code>textDocument/rename</code></td><td><code>resolutions</code> + declaration span</td></tr>
+    <tr><td>Symbols</td><td><code>textDocument/documentSymbol</code></td><td>parsed <code>Module</code> items</td></tr>
+    <tr><td>Completion</td><td><code>textDocument/completion</code></td><td>module items + keywords + locals</td></tr>
+    <tr><td>Semantic tokens</td><td><code>textDocument/semanticTokens/full</code></td><td>token stream + <code>resolutions</code></td></tr>
+  </tbody>
+</table>
+
+<!-- =========================================================== -->
+<h2 id="pipeline">3. Request pipeline</h2>
+
+<p>
+  The server keeps the latest text of each open document
+  (<code>DashMap&lt;Url, String&gt;</code>, full-sync). Every request recompiles
+  that text into a <code>Compiled</code> — the front-end is fast and
+  side-effect-free, so this is simpler and more robust than incremental caching,
+  and always reflects the current buffer.
+</p>
+
+<pre><code>didOpen / didChange  ──►  store text  ──►  Compiled::new  ──►  publishDiagnostics
+hover / definition   ──►  Compiled::new  ──►  offset_at(pos)  ──►  query side tables
+</code></pre>
+
+<!-- =========================================================== -->
+<h2 id="tables">4. How queries are answered</h2>
+
+<p>
+  Every AST node carries a unique <code>Span</code>, and the checker keys its
+  results by span. A cursor query becomes "find the <em>smallest</em> span that
+  contains this byte offset," then read its entry:
+</p>
+
+<ul>
+  <li><strong>Hover</strong> — smallest span in <code>resolutions</code> gives
+    the symbol (and a label: <em>function <code>add</code></em>, a local's
+    <code>name: type</code>, or a builtin signature); the smallest span in
+    <code>expr_types</code> gives the value type.</li>
+  <li><strong>Definition</strong> — the resolution under the cursor is a
+    <code>ValueRes</code>. A <code>Local</code> resolves through the new
+    <code>local_decls</code> table to its binding occurrence; a
+    <code>Function</code>/<code>Method</code>/<code>Global</code>/
+    <code>StructCtor</code> resolves to its definition's <em>name</em> span.</li>
+  <li><strong>References / rename</strong> — scan <code>resolutions</code> for
+    every span mapping to the same target (locals' binding spans are recorded
+    there too, so they are included for free).</li>
+</ul>
+
+<div class="callout">
+  <strong>The one compiler change this needed</strong>
+  A <code>local_decls: HashMap&lt;LocalId, Span&gt;</code> table, populated where
+  locals are bound. It is the minimal, additive piece that makes
+  go-to-definition and rename work for locals — the checker's
+  <code>CheckResults</code> doc already named the LSP as a consumer.
+</div>
+
+<!-- =========================================================== -->
+<h2 id="positions">5. Positions: UTF-16 ↔ UTF-8</h2>
+
+<p>
+  The protocol counts columns in <strong>UTF-16 code units</strong>; the
+  compiler works in <strong>UTF-8 byte offsets</strong>. The server converts in
+  both directions: <code>offset_at</code> (position → byte) for incoming
+  cursors, and <code>position_at</code> / <code>span_to_range</code> (byte →
+  position) for outgoing ranges. A multi-byte character such as <code>é</code>
+  is two UTF-8 bytes but one UTF-16 unit, so the conversion walks
+  <code>char</code>s counting <code>len_utf16()</code>.
+</p>
+
+<p>
+  Semantic tokens convert <em>every</em> token, so they use a precomputed
+  <code>LineIndex</code> (line-start table + binary search) instead of scanning
+  from the top of the file each time.
+</p>
+
+<!-- =========================================================== -->
+<h2 id="semtok">6. Semantic tokens</h2>
+
+<p>
+  The legend declares 13 token types. Each lexer token maps to one: keywords,
+  numbers, strings, comments, and operators come straight from the token kind.
+  Identifiers are classified by the checker's <code>resolutions</code> first
+  (function vs. method vs. variable vs. parameter vs. struct constructor), then
+  fall back to whether the name is a declared type or function, and finally to
+  <em>property</em> for a name following <code>.</code>. The bundled TextMate
+  grammar provides instant coloring before the server attaches; semantic tokens
+  then refine it.
+</p>
+
+<pre><code>Type · Struct · Interface · Function · Method · Variable · Parameter
+Property · Keyword · Number · String · Comment · Operator</code></pre>
+
+<!-- =========================================================== -->
+<h2 id="vscode">7. VS Code extension</h2>
+
+<p><code>editors/vscode</code> is a thin client over
+  <code>vscode-languageclient</code>:</p>
+
+<ul>
+  <li>Registers the <code>lang</code> language for <code>.lang</code> files with
+    a TextMate grammar and bracket/comment/indentation rules.</li>
+  <li>Launches <code>lang-lsp</code> over stdio (path configurable via
+    <code>lang.server.path</code>; LSP tracing via <code>lang.trace.server</code>).</li>
+  <li>Provides a <strong>Lang: Restart Language Server</strong> command for use
+    after rebuilding the server.</li>
+</ul>
+
+<!-- =========================================================== -->
+<h2 id="build">8. Build &amp; run</h2>
+
+<div class="cmd-grid">
+  <div class="cmd"><span class="name">cargo build -p lsp</span><span class="desc">→ target/debug/lang-lsp</span></div>
+  <div class="cmd"><span class="name">cargo test -p lsp</span><span class="desc">unit tests for the query layer</span></div>
+  <div class="cmd"><span class="name">npm install &amp;&amp; npm run compile</span><span class="desc">in editors/vscode</span></div>
+</div>
+
+<p>
+  Put <code>lang-lsp</code> on your <code>PATH</code> (or set
+  <code>lang.server.path</code>), then press <kbd>F5</kbd> in VS Code to launch
+  an Extension Development Host.
+</p>
+
+<!-- =========================================================== -->
+<h2 id="limits">9. Scope &amp; what's next</h2>
+
+<p>The server analyses one file at a time. That covers the dominant editing
+  case; the items below are the natural extensions.</p>
+
+<table>
+  <thead><tr><th>Area</th><th>Status</th></tr></thead>
+  <tbody>
+    <tr><td>Single-file diagnostics, hover, goto, references, rename, symbols, completion, semantic tokens</td><td><span class="status done">done</span></td></tr>
+    <tr><td>Multi-file workspaces (cross-module goto/diagnostics with unsaved-buffer overlay)</td><td><span class="status todo">next</span></td></tr>
+    <tr><td>Type-position go-to-definition (the checker records value-position resolutions today)</td><td><span class="status todo">next</span></td></tr>
+    <tr><td>Signature help, code actions / quick-fixes, formatting (<code>lang fmt</code>), inlay hints</td><td><span class="status todo">next</span></td></tr>
+    <tr><td>Incremental sync &amp; cached analysis for very large files</td><td><span class="status todo">next</span></td></tr>
+  </tbody>
+</table>
+
+<div class="callout">
+  <strong>See also</strong>
+  Chapter <a href="23-cli.html">23 · CLI &amp; toolchain</a> for the driver this
+  shares <code>liblangc</code> with, and <code>crates/lsp</code> /
+  <code>editors/vscode</code> in the tree.
+</div>
+
+</body>
+</html>

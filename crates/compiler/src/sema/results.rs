@@ -93,6 +93,10 @@ pub struct CheckResults {
     pub resolutions: HashMap<Span, ValueRes>,
     /// The type of every local binding.
     pub local_types: HashMap<LocalId, Ty>,
+    /// The declaration (binding occurrence) span of every local — its `var`
+    /// name, parameter name, or pattern binding. Consumed by the LSP for
+    /// go-to-definition / find-references on locals.
+    pub local_decls: HashMap<LocalId, Span>,
     /// Per function: its parameter locals in order, and its return type.
     pub fn_params: HashMap<DefId, Vec<LocalId>>,
     pub fn_return: HashMap<DefId, Ty>,

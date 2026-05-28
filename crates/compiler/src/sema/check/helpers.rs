@@ -189,6 +189,7 @@ impl<'a> Checker<'a> {
         let id = LocalId(self.next_local);
         self.next_local += 1;
         self.results.local_types.insert(id, ty);
+        self.results.local_decls.insert(id, span);
         self.results.resolutions.insert(span, ValueRes::Local(id));
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(name.to_string(), (ty, id));

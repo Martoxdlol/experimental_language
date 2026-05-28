@@ -1,6 +1,134 @@
 {
-  "name": "Language (placeholder)",
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Lang",
   "scopeName": "source.lang",
-  "patterns": [],
-  "repository": {}
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#chars" },
+    { "include": "#numbers" },
+    { "include": "#keywords" },
+    { "include": "#constants" },
+    { "include": "#types" },
+    { "include": "#declarations" },
+    { "include": "#attributes" },
+    { "include": "#operators" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.documentation.lang",
+          "match": "(///|//!).*$"
+        },
+        {
+          "name": "comment.line.double-slash.lang",
+          "match": "//.*$"
+        },
+        {
+          "name": "comment.block.lang",
+          "begin": "/\\*",
+          "end": "\\*/"
+        }
+      ]
+    },
+    "strings": {
+      "name": "string.quoted.double.lang",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.lang",
+          "match": "\\\\(u\\{[0-9A-Fa-f]+\\}|[nrt0\\\\\"'$])"
+        },
+        {
+          "name": "meta.interpolation.lang",
+          "begin": "\\$\\{",
+          "end": "\\}",
+          "beginCaptures": { "0": { "name": "punctuation.section.interpolation.begin.lang" } },
+          "endCaptures": { "0": { "name": "punctuation.section.interpolation.end.lang" } },
+          "patterns": [{ "include": "$self" }]
+        },
+        {
+          "name": "variable.other.interpolation.lang",
+          "match": "\\$[A-Za-z_][A-Za-z0-9_]*"
+        }
+      ]
+    },
+    "chars": {
+      "name": "string.quoted.single.lang",
+      "match": "'(\\\\(u\\{[0-9A-Fa-f]+\\}|[nrt0\\\\\"'])|[^'\\\\])'"
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.float.lang",
+          "match": "\\b[0-9][0-9_]*(\\.[0-9][0-9_]*)?([eE][+-]?[0-9_]+)?(f32|f64)?\\b"
+        },
+        {
+          "name": "constant.numeric.integer.lang",
+          "match": "\\b(0x[0-9A-Fa-f_]+|0o[0-7_]+|0b[01_]+|[0-9][0-9_]*)(i8|i16|i32|i64|isize|u8|u16|u32|u64|usize)?\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.lang",
+          "match": "\\b(if|else|match|return|for|in|while|loop|break|continue|await|yield)\\b"
+        },
+        {
+          "name": "keyword.declaration.lang",
+          "match": "\\b(var|function|struct|interface|type|mod|extend|extern|import|pub|async)\\b"
+        },
+        {
+          "name": "keyword.operator.word.lang",
+          "match": "\\b(as|is)\\b"
+        },
+        {
+          "name": "variable.language.lang",
+          "match": "\\b(self|Self)\\b"
+        }
+      ]
+    },
+    "constants": {
+      "name": "constant.language.lang",
+      "match": "\\b(true|false|null)\\b"
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "support.type.primitive.lang",
+          "match": "\\b(i8|i16|i32|i64|isize|u8|u16|u32|u64|usize|f32|f64|bool|char|str|never|dynamic)\\b"
+        },
+        {
+          "name": "entity.name.type.lang",
+          "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
+        }
+      ]
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "match": "\\b(function)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.declaration.lang" },
+            "2": { "name": "entity.name.function.lang" }
+          }
+        },
+        {
+          "name": "entity.name.function.call.lang",
+          "match": "\\b([a-z_][A-Za-z0-9_]*)(?=\\s*\\()"
+        }
+      ]
+    },
+    "attributes": {
+      "name": "meta.attribute.lang",
+      "match": "@[A-Za-z_][A-Za-z0-9_]*"
+    },
+    "operators": {
+      "name": "keyword.operator.lang",
+      "match": "(=>|==|!=|<=|>=|<<|>>|&&|\\|\\||->|[-+*/%<>=!&|\\^~?.:])"
+    }
+  }
 }

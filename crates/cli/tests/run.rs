@@ -913,6 +913,133 @@ fn clone_through_clone_bound() {
 }
 
 #[test]
+fn generic_struct_derives_clone() {
+    // `@Derive(Clone)` on a generic struct synthesises `extend<T: Clone> S<T>:
+    // Clone`. The clone is a deep copy: mutating a nested field of the copy must
+    // not touch the original, and a primitive payload clones intrinsically.
+    let src = "@Derive(Clone)\n\
+               struct Box<T> { value: T }\n\
+               @Derive(Clone)\n\
+               struct Point { x: i64, y: i64 }\n\
+               function main() {\n\
+                 var a = Box { value: Point { x: 1, y: 2 } };\n\
+                 var b = a.clone();\n\
+                 b.value.x = 99;\n\
+                 println((a.value.x as str) + \" \" + (b.value.x as str));\n\
+                 var n = Box { value: 7 };\n\
+                 println(n.clone().value as str);\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "1 99\n7\n");
+    // Native build must match the JIT output byte-for-byte.
+    let (nout, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(nout, out);
+}
+
+#[test]
+fn generic_tuple_struct_construction_and_clone() {
+    // Generic tuple-struct construction infers its type arguments from the
+    // positional arguments (`Pair(5, "x")` → `Pair<i64, str>`), and `Clone`
+    // derives on it.
+    let src = "@Derive(Clone)\n\
+               struct Pair<A, B>(A, B)\n\
+               function main() {\n\
+                 var t = Pair(5, \"x\");\n\
+                 var u = t.clone();\n\
+                 println((u.0 as str) + u.1);\n\
+                 var p = Pair(1, 2);\n\
+                 println((p.0 + p.1) as str);\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "5x\n3\n");
+    let (nout, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(nout, out);
+}
+
+#[test]
+fn generic_struct_derives_eq_and_ord() {
+    // `@Derive(Eq, Ord)` on a generic struct: per-field `==`/`<` become
+    // `.eq()`/`.lt()` calls dispatched through each field's `Eq`/`Ord` bound.
+    // Works for primitive fields (intrinsic compare) and user-type fields
+    // (their own derived impl).
+    let src = "@Derive(Eq, Ord)\n\
+               struct Pair<A, B> { a: A, b: B }\n\
+               @Derive(Eq, Ord)\n\
+               struct Point { x: i64, y: i64 }\n\
+               function main() {\n\
+                 var p1 = Pair { a: 1, b: \"x\" };\n\
+                 var p2 = Pair { a: 1, b: \"y\" };\n\
+                 println((p1 == p1) as str);\n\
+                 println((p1 < p2) as str);\n\
+                 println((p2 < p1) as str);\n\
+                 println((p1 != p2) as str);\n\
+                 var q1 = Pair { a: Point { x: 1, y: 2 }, b: 0 };\n\
+                 var q2 = Pair { a: Point { x: 1, y: 3 }, b: 0 };\n\
+                 println((q1 < q2) as str);\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "true\ntrue\nfalse\ntrue\ntrue\n");
+    let (nout, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(nout, out);
+}
+
+#[test]
+fn generic_derived_type_satisfies_eq_bound() {
+    // A concrete `@Derive(Eq)` type satisfies a `T: Eq` bound (its synthesised
+    // `extend` declares the interface), so it can be a generic struct's element.
+    let src = "@Derive(Eq)\n\
+               struct Wrap<T> { inner: T }\n\
+               @Derive(Eq)\n\
+               struct Id { n: i64 }\n\
+               function main() {\n\
+                 var a = Wrap { inner: Id { n: 7 } };\n\
+                 var b = Wrap { inner: Id { n: 7 } };\n\
+                 var c = Wrap { inner: Id { n: 9 } };\n\
+                 println((a == b) as str);\n\
+                 println((a == c) as str);\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "true\nfalse\n");
+}
+
+#[test]
+fn generic_struct_derives_to_str() {
+    // `@Derive(ToStr)` on a generic struct: each field is rendered via a
+    // `.to_str()` call dispatched through its `ToStr` bound — a primitive field
+    // via the intrinsic `as str`, a user-type field via its own `to_str`. Also
+    // exercised through string interpolation.
+    let src = "@Derive(ToStr)\n\
+               struct Box<T> { value: T }\n\
+               @Derive(ToStr)\n\
+               struct Point { x: i64, y: i64 }\n\
+               @Derive(ToStr)\n\
+               struct Pair<A, B>(A, B)\n\
+               function main() {\n\
+                 println(Box { value: 7 }.to_str());\n\
+                 println(Box { value: \"hi\" }.to_str());\n\
+                 println(Box { value: Point { x: 1, y: 2 } }.to_str());\n\
+                 println(Pair(5, \"x\").to_str());\n\
+                 println(\"interp: ${Box { value: 9 }}\");\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(
+        out,
+        "Box { value: 7 }\nBox { value: hi }\nBox { value: Point { x: 1, y: 2 } }\nPair(5, x)\ninterp: Box { value: 9 }\n"
+    );
+    let (nout, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(nout, out);
+}
+
+#[test]
 fn list_clone_is_independent_under_gc_stress() {
     // A cloned `List` is independent of the original, and the clone allocation
     // is GC-safe (the new handle/buffer are rooted across collection).

@@ -6,8 +6,11 @@ rust-version.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "langc-lsp-placeholder"
+name = "lang-lsp"
 path = "src/main.rs"
 
 [dependencies]
 compiler.workspace = true
+tower-lsp = "0.20"
+tokio = { version = "1", features = ["rt-multi-thread", "io-std", "macros"] }
+dashmap = "6"

@@ -234,6 +234,15 @@ pub struct Program {
     pub async_iterator_def: DefId,
     /// Prelude `struct TimedOut` — `timeout` loser marker (`docs/21` §9).
     pub timed_out_def: DefId,
+    /// Prelude `interface Eq` — structural equality (`docs/15`); the `T: Eq`
+    /// bound for `@Derive(Eq)` on generic structs.
+    pub eq_def: DefId,
+    /// Prelude `interface Ord` — total ordering (`docs/15`); the `T: Ord` bound
+    /// for `@Derive(Ord)` on generic structs.
+    pub ord_def: DefId,
+    /// Prelude `interface ToStr` — string rendering (`docs/15`/`docs/01` §8);
+    /// the `T: ToStr` bound for `@Derive(ToStr)` on generic structs.
+    pub to_str_def: DefId,
     /// Names the language prelude + builtins put in *every* module's scope
     /// (`List`, `Map`, `Item`, `Done`, `Iterator`, `Entry`, …), so a submodule
     /// resolves them without an `import`. Snapshotted from the root after the
@@ -257,6 +266,18 @@ interface FromResidual<R> {
 }
 interface Clone {
   function clone(self): Self;
+}
+interface Eq {
+  function eq(self, other: Self): bool;
+}
+interface Ord {
+  function lt(self, other: Self): bool;
+  function le(self, other: Self): bool;
+  function gt(self, other: Self): bool;
+  function ge(self, other: Self): bool;
+}
+interface ToStr {
+  function to_str(self): str;
 }
 interface Drop {
   function drop(self);
@@ -320,6 +341,9 @@ impl Program {
             context_def: DefId(0),
             async_iterator_def: DefId(0),
             timed_out_def: DefId(0),
+            eq_def: DefId(0),
+            ord_def: DefId(0),
+            to_str_def: DefId(0),
             prelude_types: HashMap::new(),
             prelude_values: HashMap::new(),
         }
@@ -383,6 +407,9 @@ impl Program {
         self.context_def = types.get("Context").copied().unwrap_or(DefId(0));
         self.async_iterator_def = types.get("AsyncIterator").copied().unwrap_or(DefId(0));
         self.timed_out_def = types.get("TimedOut").copied().unwrap_or(DefId(0));
+        self.eq_def = types.get("Eq").copied().unwrap_or(DefId(0));
+        self.ord_def = types.get("Ord").copied().unwrap_or(DefId(0));
+        self.to_str_def = types.get("ToStr").copied().unwrap_or(DefId(0));
     }
 
     /// Inject compiler-provided prelude types (currently `List<T>`). These have

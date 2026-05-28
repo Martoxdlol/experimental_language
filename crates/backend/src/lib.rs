@@ -535,6 +535,17 @@ impl<'a, M: Module> Codegen<'a, M> {
             {
                 continue;
             }
+            // A method's own generics may be empty while its enclosing `extend`
+            // is generic (`extend<T> S<T> { function m(self) {…} }`); its body
+            // still references the extend's `T`, so it must be monomorphized per
+            // instantiation from call sites, never seeded with an empty subst.
+            if def.kind == DefKind::ExtendMethod {
+                if let Some(parent) = def.parent {
+                    if !self.analysis.program.def(parent).generics.is_empty() {
+                        continue;
+                    }
+                }
+            }
             let Some(ItemKind::Function(f)) = &def.item else { continue };
             if f.body.is_none() {
                 continue;
