@@ -164,8 +164,10 @@
   <div class="feature"><span class="name">Find references <span class="status done">done</span></span><span class="desc">Every use of a value symbol, declaration optional.</span></div>
   <div class="feature"><span class="name">Rename <span class="status done">done</span></span><span class="desc">Renames a symbol and all its uses in one edit.</span></div>
   <div class="feature"><span class="name">Document symbols <span class="status done">done</span></span><span class="desc">Outline: items, struct fields, interface / extend methods.</span></div>
-  <div class="feature"><span class="name">Completion <span class="status done">done</span></span><span class="desc">Keywords, builtins, top-level types/functions, locals.</span></div>
-  <div class="feature"><span class="name">Semantic tokens <span class="status done">done</span></span><span class="desc">Resolution-driven highlighting refining the TextMate grammar.</span></div>
+  <div class="feature"><span class="name">Completion <span class="status done">done</span></span><span class="desc">Member dot-completion (fields + methods + intrinsics) and a default list (keywords, builtins, types, functions, locals) with signatures.</span></div>
+  <div class="feature"><span class="name">Signature help <span class="status done">done</span></span><span class="desc">Live parameter hints inside a call, with the active parameter highlighted.</span></div>
+  <div class="feature"><span class="name">Document highlights <span class="status done">done</span></span><span class="desc">Every occurrence of the symbol at the cursor is highlighted in the current file.</span></div>
+  <div class="feature"><span class="name">Semantic tokens <span class="status done">done</span></span><span class="desc">Resolution-driven highlighting that <em>refines</em> (never replaces) the grammar's rich sub-scopes.</span></div>
 </div>
 
 <table>
@@ -177,8 +179,10 @@
     <tr><td>References</td><td><code>textDocument/references</code></td><td><code>resolutions</code> (reverse lookup)</td></tr>
     <tr><td>Rename</td><td><code>textDocument/rename</code></td><td><code>resolutions</code> + declaration span</td></tr>
     <tr><td>Symbols</td><td><code>textDocument/documentSymbol</code></td><td>parsed <code>Module</code> items</td></tr>
-    <tr><td>Completion</td><td><code>textDocument/completion</code></td><td>module items + keywords + locals</td></tr>
-    <tr><td>Semantic tokens</td><td><code>textDocument/semanticTokens/full</code></td><td>token stream + <code>resolutions</code></td></tr>
+    <tr><td>Completion</td><td><code>textDocument/completion</code></td><td>receiver-aware: dot context dispatches to fields/methods/intrinsics; otherwise locals, top-level items, builtins, keywords (deduped, sorted)</td></tr>
+    <tr><td>Signature help</td><td><code>textDocument/signatureHelp</code></td><td>scans back to the open <code>(</code>, looks up the callee in <code>resolutions</code>, renders the function signature with the active parameter index from the comma count</td></tr>
+    <tr><td>Document highlight</td><td><code>textDocument/documentHighlight</code></td><td><code>resolutions</code> reverse lookup, restricted to the current file</td></tr>
+    <tr><td>Semantic tokens</td><td><code>textDocument/semanticTokens/full</code></td><td>identifier classification via <code>resolutions</code> (grammar keeps its own keyword/number/string/comment/operator coloring)</td></tr>
   </tbody>
 </table>
 
@@ -252,18 +256,31 @@ hover / definition   ──►  Compiled::new  ──►  offset_at(pos)  ──
 <h2 id="semtok">6. Semantic tokens</h2>
 
 <p>
-  The legend declares 13 token types. Each lexer token maps to one: keywords,
-  numbers, strings, comments, and operators come straight from the token kind.
-  Identifiers are classified by the checker's <code>resolutions</code> first
-  (function vs. method vs. variable vs. parameter vs. struct constructor), then
-  fall back to whether the name is a declared type or function, and finally to
-  <em>property</em> for a name following <code>.</code>. The bundled TextMate
-  grammar provides instant coloring before the server attaches; semantic tokens
-  then refine it.
+  The legend declares 13 token types, but only <strong>identifier-shaped</strong>
+  classes are emitted. The TextMate grammar already paints keywords, numbers,
+  strings, comments, and operators with rich sub-scopes
+  (<code>keyword.control</code> vs <code>keyword.declaration</code>,
+  <code>constant.numeric.integer</code> vs <code>constant.numeric.float</code>,
+  &hellip;); a flat LSP <em>keyword</em>/<em>number</em>/&hellip; token would
+  overwrite that with a single color. So the server emits semantic tokens only
+  where it strictly <em>refines</em> what the grammar can see — function vs.
+  method, parameter vs. local variable, struct vs. interface, property accesses.
 </p>
 
-<pre><code>Type · Struct · Interface · Function · Method · Variable · Parameter
-Property · Keyword · Number · String · Comment · Operator</code></pre>
+<pre><code><span style="opacity:0.45">// legend (indices fixed by TokenClass::*)</span>
+Type · Struct · Interface · Function · Method · Variable · Parameter
+Property <span style="opacity:0.45">· Keyword · Number · String · Comment · Operator   ⟵ never emitted</span></code></pre>
+
+<p>
+  The VS Code extension contributes a <code>semanticTokenScopes</code> mapping
+  so each emitted class falls back to the matching TextMate scope
+  (<code>function</code> → <code>entity.name.function.lang</code>,
+  <code>parameter</code> → <code>variable.parameter.lang</code>,
+  <code>property</code> → <code>variable.other.property.lang</code>, &hellip;).
+  Themes that don't have specific semantic-token rules colour the LSP's tokens
+  via the same TextMate rules as the grammar — so semantic highlighting
+  <em>extends</em> the grammar's palette instead of clashing with it.
+</p>
 
 <!-- =========================================================== -->
 <h2 id="vscode">7. VS Code extension</h2>
@@ -304,10 +321,10 @@ Property · Keyword · Number · String · Comment · Operator</code></pre>
 <table>
   <thead><tr><th>Area</th><th>Status</th></tr></thead>
   <tbody>
-    <tr><td>Single-file diagnostics, hover, goto, references, rename, symbols, completion, semantic tokens</td><td><span class="status done">done</span></td></tr>
+    <tr><td>Single-file diagnostics, hover, goto, references, rename, symbols, completion (with dot context), semantic tokens, signature help, document highlights</td><td><span class="status done">done</span></td></tr>
     <tr><td>Multi-file workspaces (cross-module goto/diagnostics with unsaved-buffer overlay)</td><td><span class="status todo">next</span></td></tr>
     <tr><td>Type-position go-to-definition (the checker records value-position resolutions today)</td><td><span class="status todo">next</span></td></tr>
-    <tr><td>Signature help, code actions / quick-fixes, formatting (<code>lang fmt</code>), inlay hints</td><td><span class="status todo">next</span></td></tr>
+    <tr><td>Code actions / quick-fixes, formatting (<code>lang fmt</code>), inlay hints, folding ranges</td><td><span class="status todo">next</span></td></tr>
     <tr><td>Incremental sync &amp; cached analysis for very large files</td><td><span class="status todo">next</span></td></tr>
   </tbody>
 </table>

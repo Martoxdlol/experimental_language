@@ -15,6 +15,9 @@ language server (`crates/lsp`).
 - **Semantic highlighting** — token colors driven by the type checker
   (functions vs. methods vs. types vs. parameters vs. fields), refining the
   bundled TextMate grammar.
+- **Run / Build code lenses** — `▶ Run`, `▶ Run (release)`, and `🔨 Build`
+  appear above every `function main`. Clicking them opens an integrated
+  terminal and invokes the `lang` CLI on the current file.
 
 ## Build
 
@@ -36,14 +39,28 @@ npm install
 npm run compile     # or `npm run watch`
 ```
 
-Then press <kbd>F5</kbd> in VS Code to launch an Extension Development Host, or
-package it with `vsce package` and install the resulting `.vsix`.
+Then press <kbd>F5</kbd> in VS Code to launch an Extension Development Host.
+
+## Package & install
+
+```sh
+cd editors/vscode
+npm install                  # one-time, also installs @vscode/vsce
+npm run package              # writes otter-fusion-<version>.vsix
+npm run install-extension    # installs that .vsix into VS Code
+```
+
+`npm run package` runs `vsce package` (via the bundled `@vscode/vsce` dev
+dependency) and names the artifact after the current `version` in
+`package.json`. `npm run install-extension` then loads it into the local
+VS Code via the `code` CLI.
 
 ## Settings
 
-| Setting             | Default    | Description                               |
-| ------------------- | ---------- | ----------------------------------------- |
-| `lang.server.path`  | `lang-lsp` | Path to the language-server binary.       |
-| `lang.trace.server` | `off`      | Trace LSP traffic (`messages`/`verbose`). |
+| Setting             | Default    | Description                                                |
+| ------------------- | ---------- | ---------------------------------------------------------- |
+| `lang.server.path`  | `lang-lsp` | Path to the language-server binary.                        |
+| `lang.runner.path`  | `lang`     | Path to the `lang` CLI used by the Run / Build code lenses. |
+| `lang.trace.server` | `off`      | Trace LSP traffic (`messages`/`verbose`).                  |
 
 Command **Otter Fusion: Restart Language Server** reloads the server after a rebuild.

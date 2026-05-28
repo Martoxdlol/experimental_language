@@ -8,10 +8,11 @@
 //! Editor positions are UTF-16 (the LSP default); the compiler works in UTF-8
 //! byte offsets. The free conversion functions at the bottom bridge the two.
 
-use compiler::ast::{ExternItem, ItemKind, Module};
+use compiler::ast::{ExternItem, ItemKind, Module, TypeKind};
+use compiler::ids::DefId;
 use compiler::lexer::lex;
 use compiler::parser::parse;
-use compiler::sema::symbols::{Def, Program};
+use compiler::sema::symbols::{Def, DefKind, Program};
 use compiler::sema::{analyze, Analysis, Builtin, ValueRes};
 use compiler::span::{FileId, SourceMap, Span};
 use compiler::token::{Token, TokenKind};
@@ -24,8 +25,13 @@ pub const DOC_FILE: FileId = FileId(0);
 
 /// A semantic-token class. The numeric value is the index into the legend
 /// declared by the server (`semantic_token_legend`), so the two must agree.
+///
+/// `Keyword`/`Number`/`String`/`Comment`/`Operator` are part of the legend so
+/// the indices stay stable, but they are never emitted: those token kinds are
+/// already colored by the TextMate grammar with richer sub-scopes.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 #[repr(u32)]
+#[allow(dead_code)]
 pub enum TokenClass {
     Type = 0,
     Struct = 1,
@@ -160,8 +166,16 @@ impl Compiled {
         format!("{} `{}`", def.kind.describe(), def.name)
     }
 
-    /// Classify every token for semantic highlighting, in source order. Returns
-    /// `(span, class)` pairs; purely structural punctuation is omitted.
+    /// Classify identifier tokens for semantic highlighting, in source order.
+    /// Returns `(span, class)` pairs.
+    ///
+    /// Keywords, numbers, strings, comments, and operators are *not* emitted —
+    /// the TextMate grammar already colors them with richer sub-scopes (e.g.
+    /// `keyword.control` vs `keyword.declaration`), and an LSP token of type
+    /// `keyword` would overwrite that with a single flat color. The LSP only
+    /// emits classes where it adds information the grammar cannot derive:
+    /// struct vs interface vs alias for type names, function vs method,
+    /// parameter vs local variable, property accesses, etc.
     pub fn semantic_tokens(&self) -> Vec<(Span, TokenClass)> {
         let (type_names, fn_names) = self.declared_names();
         let mut out = Vec::with_capacity(self.tokens.len());
@@ -169,44 +183,8 @@ impl Compiled {
         for tok in &self.tokens {
             let after_dot = prev_kind == Some(TokenKind::Dot);
             prev_kind = Some(tok.kind);
-            let class = match tok.kind {
-                TokenKind::Kw(_) | TokenKind::Underscore => Some(TokenClass::Keyword),
-                TokenKind::Int { .. } | TokenKind::Float { .. } => Some(TokenClass::Number),
-                TokenKind::Char
-                | TokenKind::StrStart
-                | TokenKind::StrText
-                | TokenKind::StrEnd
-                | TokenKind::DollarIdent => Some(TokenClass::String),
-                TokenKind::DocOuter | TokenKind::DocInner => Some(TokenClass::Comment),
-                TokenKind::Eq
-                | TokenKind::EqEq
-                | TokenKind::Bang
-                | TokenKind::BangEq
-                | TokenKind::Lt
-                | TokenKind::LtEq
-                | TokenKind::Gt
-                | TokenKind::GtEq
-                | TokenKind::Plus
-                | TokenKind::Minus
-                | TokenKind::Star
-                | TokenKind::Slash
-                | TokenKind::Percent
-                | TokenKind::AmpAmp
-                | TokenKind::PipePipe
-                | TokenKind::Amp
-                | TokenKind::Pipe
-                | TokenKind::Caret
-                | TokenKind::Tilde
-                | TokenKind::Shl
-                | TokenKind::Shr
-                | TokenKind::FatArrow
-                | TokenKind::Question => Some(TokenClass::Operator),
-                TokenKind::Ident => {
-                    Some(self.classify_ident(tok.span, after_dot, &type_names, &fn_names))
-                }
-                _ => None,
-            };
-            if let Some(class) = class {
+            if tok.kind == TokenKind::Ident {
+                let class = self.classify_ident(tok.span, after_dot, &type_names, &fn_names);
                 out.push((tok.span, class));
             }
         }
@@ -391,12 +369,296 @@ pub fn span_to_range(text: &str, span: Span) -> Range {
     }
 }
 
-/// Every reserved keyword's source text, for completion.
+// --------------------------------------------------------------------------
+// Completion helpers.
+// --------------------------------------------------------------------------
+
+/// What the editor is asking us to complete when the cursor is in `text` at
+/// byte offset `off`. The lexer is fast and exact, but we need only a few
+/// bytes of local context here — so do the look-back inline.
+#[derive(Debug, PartialEq, Eq)]
+pub struct DotContext {
+    /// Byte offset of the `.` itself.
+    pub dot_offset: usize,
+    /// `Some(start..end)` if the receiver text is a plain identifier (for
+    /// recognising `Type.method` static-method completion). `None` when the
+    /// receiver is a more complex expression (e.g. `foo().`, `xs[0].`).
+    pub receiver_ident: Option<(usize, usize)>,
+}
+
+/// Decide whether `off` sits in a `recv.|` (member-access) position.
+///
+/// We accept both the just-typed-`.` case and the in-progress `recv.par|`
+/// case where the user is filtering the suggestion list by typing a partial
+/// member name.
+pub fn dot_completion_context(text: &str, off: usize) -> Option<DotContext> {
+    let bytes = text.as_bytes();
+    let mut walk = off.min(bytes.len());
+    // Skip over the identifier currently being typed at the cursor.
+    while walk > 0 && is_ident_byte(bytes[walk - 1]) {
+        walk -= 1;
+    }
+    if walk == 0 || bytes[walk - 1] != b'.' {
+        return None;
+    }
+    let dot_offset = walk - 1;
+    let mut recv_end = dot_offset;
+    // Strip whitespace between the receiver and the `.` (rare but tolerated).
+    while recv_end > 0 && matches!(bytes[recv_end - 1], b' ' | b'\t') {
+        recv_end -= 1;
+    }
+    let receiver_ident = if recv_end > 0 && is_ident_byte(bytes[recv_end - 1]) {
+        let mut start = recv_end;
+        while start > 0 && is_ident_byte(bytes[start - 1]) {
+            start -= 1;
+        }
+        // Ensure we don't consume a digit-led "ident" — those are numeric
+        // literals, not identifiers.
+        if !bytes[start].is_ascii_digit() {
+            Some((start, recv_end))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    Some(DotContext { dot_offset, receiver_ident })
+}
+
+fn is_ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+impl Compiled {
+    /// The type of the expression that immediately precedes `dot_off`, if any
+    /// — i.e. the receiver in `receiver.member`. Picks the LARGEST recorded
+    /// expression span ending exactly at the dot, so `a.b.c.|` returns the
+    /// type of the full `a.b.c` chain.
+    pub fn receiver_type_at_dot(&self, dot_off: usize) -> Option<Ty> {
+        let mut best: Option<(Span, Ty)> = None;
+        for (&span, &ty) in &self.analysis.results.expr_types {
+            if span.file != DOC_FILE || span.hi.to_usize() != dot_off {
+                continue;
+            }
+            let better = best.is_none_or(|(b, _)| span.len() > b.len());
+            if better {
+                best = Some((span, ty));
+            }
+        }
+        best.map(|(_, ty)| ty)
+    }
+
+    /// Look up a top-level type def in the document's module by name.
+    pub fn lookup_type_def(&self, name: &str) -> Option<DefId> {
+        // Document file lives in ROOT until multi-module support lands.
+        self.analysis.program.resolve_type_in(
+            compiler::ids::ModId::ROOT,
+            name,
+        )
+    }
+
+    /// Every direct field of a struct/extern-struct def, in declaration order.
+    pub fn struct_fields(&self, struct_def: DefId) -> Vec<&Def> {
+        let prog = &self.analysis.program;
+        prog.defs
+            .iter()
+            .filter(|d| d.kind == DefKind::Field && d.parent == Some(struct_def))
+            .collect()
+    }
+
+    /// Every `extend` method whose target's top-level name matches `type_name`.
+    /// `want_static` selects instance vs static methods. Methods include both
+    /// public and private — visibility is enforced by the checker elsewhere;
+    /// at completion time we suggest everything that lives in scope.
+    pub fn extend_methods_for(&self, type_name: &str, want_static: bool) -> Vec<&Def> {
+        let prog = &self.analysis.program;
+        prog.defs
+            .iter()
+            .filter(|d| d.kind == DefKind::ExtendMethod && d.is_static == want_static)
+            .filter(|d| {
+                let Some(parent_id) = d.parent else { return false };
+                let Some(ItemKind::Extend(e)) = &prog.def(parent_id).item else {
+                    return false;
+                };
+                top_named_name(&e.target).map_or(false, |n| n == type_name)
+            })
+            .collect()
+    }
+
+    /// All interface methods declared inside `iface_def`.
+    pub fn interface_methods(&self, iface_def: DefId, want_static: bool) -> Vec<&Def> {
+        let prog = &self.analysis.program;
+        prog.defs
+            .iter()
+            .filter(|d| {
+                d.kind == DefKind::InterfaceMethod
+                    && d.parent == Some(iface_def)
+                    && d.is_static == want_static
+            })
+            .collect()
+    }
+
+    /// Render a function-like def's signature for completion `detail`/hover.
+    /// Falls back to the def kind's name when the item is not a function.
+    pub fn def_signature(&self, def: &Def) -> String {
+        use compiler::ast::ParamKind;
+        let Some(ItemKind::Function(f)) = &def.item else {
+            return def.kind.describe().to_string();
+        };
+        let mut s = String::new();
+        s.push('(');
+        let mut first = true;
+        for p in &f.params {
+            if matches!(p.kind, ParamKind::SelfParam) {
+                continue;
+            }
+            if !first {
+                s.push_str(", ");
+            }
+            first = false;
+            if let ParamKind::Normal { name, ty } = &p.kind {
+                s.push_str(&name.name);
+                s.push_str(": ");
+                s.push_str(&render_type(&self.map, ty));
+            }
+        }
+        s.push(')');
+        if let Some(rt) = &f.return_type {
+            s.push_str(": ");
+            s.push_str(&render_type(&self.map, rt));
+        }
+        s
+    }
+}
+
+/// The top-level type-name of a syntactic type, if it is a `Named` reference.
+/// Looks through paren grouping but not unions/tuples/function-types.
+fn top_named_name(t: &compiler::ast::Type) -> Option<&str> {
+    match &t.kind {
+        TypeKind::Named { name, .. } => Some(&name.name),
+        TypeKind::Paren(inner) => top_named_name(inner),
+        _ => None,
+    }
+}
+
+/// Render a syntactic type back to its source slice — perfect-fidelity is
+/// not required; we just want a readable hint for completion `detail`.
+fn render_type(map: &SourceMap, t: &compiler::ast::Type) -> String {
+    if t.span.file == DOC_FILE {
+        map.slice(t.span).to_string()
+    } else {
+        // Prelude/derive-synthesised types have no editor-visible source; we
+        // fall back to the structural kind which is still informative.
+        match &t.kind {
+            TypeKind::Named { name, .. } => name.name.clone(),
+            TypeKind::Tuple(_) => "tuple".into(),
+            TypeKind::Function { .. } => "function".into(),
+            TypeKind::ExternFunction { .. } => "extern function".into(),
+            TypeKind::Union(_) => "union".into(),
+            TypeKind::Pointer(_) => "pointer".into(),
+            TypeKind::Array { .. } => "array".into(),
+            TypeKind::SelfType => "Self".into(),
+            TypeKind::Paren(inner) => render_type(map, inner),
+        }
+    }
+}
+
+/// Intrinsic methods on built-in types: `(name, signature)`. Kept in lock-step
+/// with the matching arms in `compiler::sema::check::builtins`.
+pub fn list_intrinsic_methods() -> &'static [(&'static str, &'static str)] {
+    &[
+        ("push", "(value: E)"),
+        ("size", "(): i64"),
+        ("is_empty", "(): bool"),
+        ("get", "(index: i64): E | null"),
+        ("set", "(index: i64, value: E)"),
+        ("map", "((E) => U): List<U>"),
+        ("filter", "((E) => bool): List<E>"),
+        ("each", "((E) => null)"),
+        ("fold", "(init, (acc, E) => acc): acc"),
+        ("clone", "(): List<E>"),
+    ]
+}
+
+pub fn map_intrinsic_methods() -> &'static [(&'static str, &'static str)] {
+    &[
+        ("size", "(): i64"),
+        ("is_empty", "(): bool"),
+        ("contains", "(key: K): bool"),
+        ("get", "(key: K): V | null"),
+        ("set", "(key: K, value: V)"),
+        ("remove", "(key: K): V | null"),
+        ("clear", "()"),
+        ("keys", "(): List<K>"),
+        ("values", "(): List<V>"),
+        ("clone", "(): Map<K, V>"),
+    ]
+}
+
+pub fn str_intrinsic_methods() -> &'static [(&'static str, &'static str)] {
+    &[
+        ("size", "(): i64"),
+        ("byte_size", "(): i64"),
+        ("is_empty", "(): bool"),
+        ("contains", "(needle: str): bool"),
+        ("starts_with", "(prefix: str): bool"),
+        ("ends_with", "(suffix: str): bool"),
+        ("substring", "(start: i64, end: i64): str"),
+        ("to_upper", "(): str"),
+        ("to_lower", "(): str"),
+        ("trim", "(): str"),
+        ("clone", "(): str"),
+    ]
+}
+
+pub fn primitive_static_methods() -> &'static [(&'static str, &'static str)] {
+    &[
+        ("MIN", "(constant)"),
+        ("MAX", "(constant)"),
+        ("wrapping_add", "(a, b)"),
+        ("wrapping_sub", "(a, b)"),
+        ("wrapping_mul", "(a, b)"),
+        ("saturating_add", "(a, b)"),
+        ("saturating_sub", "(a, b)"),
+        ("saturating_mul", "(a, b)"),
+        ("checked_add", "(a, b)"),
+        ("checked_sub", "(a, b)"),
+        ("checked_mul", "(a, b)"),
+        ("overflowing_add", "(a, b)"),
+        ("overflowing_sub", "(a, b)"),
+        ("overflowing_mul", "(a, b)"),
+    ]
+}
+
+pub fn float_static_methods() -> &'static [(&'static str, &'static str)] {
+    &[
+        ("INFINITY", "(constant)"),
+        ("NEG_INFINITY", "(constant)"),
+        ("NAN", "(constant)"),
+    ]
+}
+
+pub fn float_instance_methods() -> &'static [(&'static str, &'static str)] {
+    &[
+        ("is_nan", "(): bool"),
+        ("is_infinite", "(): bool"),
+        ("is_finite", "(): bool"),
+        ("clone", "(): f64"),
+    ]
+}
+
+pub fn int_instance_methods() -> &'static [(&'static str, &'static str)] {
+    &[("clone", "(): Self")]
+}
+
+/// Every reserved keyword's source text, for completion. Kept in sync with
+/// `compiler::token::Keyword`.
 pub fn keyword_texts() -> &'static [&'static str] {
     &[
         "var", "function", "struct", "interface", "type", "mod", "extend", "extern", "import",
-        "pub", "async", "self", "Self", "if", "else", "match", "return", "for", "in", "while",
-        "loop", "break", "continue", "await", "as", "is", "true", "false", "null",
+        "pub", "async", "spawn", "self", "Self", "if", "else", "match", "return", "for", "in",
+        "while", "loop", "break", "continue", "await", "as", "is", "true", "false", "null",
+        "yield",
     ]
 }
 
@@ -517,25 +779,29 @@ function main() {
     }
 
     #[test]
-    fn semantic_tokens_classify_keywords_numbers_and_calls() {
+    fn semantic_tokens_classify_identifiers_but_not_grammar_handled_tokens() {
         let c = Compiled::new(PROG.into());
         let toks = c.semantic_tokens();
-        // The leading `function` keyword.
-        let first = toks
-            .iter()
-            .find(|(s, _)| c.map.slice(*s) == "function")
-            .expect("function keyword token");
-        assert_eq!(first.1, TokenClass::Keyword);
-        // A numeric literal.
-        assert!(toks
-            .iter()
-            .any(|(s, k)| c.map.slice(*s) == "1" && *k == TokenClass::Number));
-        // The `add` call site classified as a function.
+        // Keywords are intentionally not emitted — the TextMate grammar colors
+        // them with richer sub-scopes.
+        assert!(toks.iter().all(|(s, _)| c.map.slice(*s) != "function"));
+        // Numeric literals are likewise grammar-handled.
+        assert!(toks.iter().all(|(s, _)| c.map.slice(*s) != "1"));
+        // The `add` call site is classified as a function (the LSP knows it
+        // resolves to a function definition).
         assert!(toks.iter().any(|(s, k)| {
             c.map.slice(*s) == "add"
                 && *k == TokenClass::Function
                 && s.lo.to_usize() == PROG.find("add(1").unwrap()
         }));
+        // The `total` local use is classified as a variable.
+        assert!(toks
+            .iter()
+            .any(|(s, k)| c.map.slice(*s) == "total" && *k == TokenClass::Variable));
+        // Parameters get their own class.
+        assert!(toks
+            .iter()
+            .any(|(s, k)| c.map.slice(*s) == "a" && *k == TokenClass::Parameter));
     }
 
     #[test]
@@ -545,5 +811,70 @@ function main() {
         for off in 0..=text.len() {
             assert_eq!(idx.position(text, off), position_at(text, off), "off={off}");
         }
+    }
+
+    #[test]
+    fn dot_context_detects_member_access() {
+        let text = "var p = q.foo";
+        let off = text.len(); // cursor at end
+        let ctx = dot_completion_context(text, off).expect("dot context");
+        assert_eq!(&text[ctx.dot_offset..=ctx.dot_offset], ".");
+        let (s, e) = ctx.receiver_ident.expect("receiver ident");
+        assert_eq!(&text[s..e], "q");
+    }
+
+    #[test]
+    fn dot_context_handles_cursor_right_after_dot() {
+        let text = "thing.";
+        let ctx = dot_completion_context(text, text.len()).expect("dot context");
+        assert_eq!(ctx.dot_offset, 5);
+        let (s, e) = ctx.receiver_ident.unwrap();
+        assert_eq!(&text[s..e], "thing");
+    }
+
+    #[test]
+    fn dot_context_is_none_without_dot() {
+        assert!(dot_completion_context("plain_ident", 5).is_none());
+    }
+
+    #[test]
+    fn completion_keywords_match_compiler_lexer() {
+        // Lock the completion list to the compiler's keyword enum so a new
+        // keyword can't be added in one place and forgotten in the other.
+        // If this list grows, update `keyword_texts` (and the TextMate grammar).
+        let expected = [
+            "var", "function", "struct", "interface", "type", "mod", "extend", "extern", "import",
+            "pub", "async", "spawn", "self", "Self", "if", "else", "match", "return", "for", "in",
+            "while", "loop", "break", "continue", "await", "as", "is", "true", "false", "null",
+            "yield",
+        ];
+        for kw in expected {
+            assert!(
+                compiler::token::Keyword::from_str(kw).is_some(),
+                "{kw} not a lexer keyword"
+            );
+            assert!(
+                keyword_texts().contains(&kw),
+                "{kw} missing from completion list"
+            );
+        }
+    }
+
+    #[test]
+    fn receiver_type_resolves_struct_field_chain() {
+        // Type-checking infers types for every sub-expression, including the
+        // receiver chain — so a dot-completion lookup at the trailing `.`
+        // finds the right struct type to suggest members on.
+        let src = "\
+struct Point { x: i64, y: i64 }
+function main() {
+  var p = Point { x: 1, y: 2 };
+  var q = p.x;
+}
+";
+        let c = Compiled::new(src.into());
+        let dot = src.find("p.x").unwrap() + 1; // offset of `.`
+        let ty = c.receiver_type_at_dot(dot).expect("receiver type");
+        assert_eq!(c.display_ty(ty), "Point");
     }
 }

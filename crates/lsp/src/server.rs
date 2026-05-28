@@ -13,9 +13,13 @@ use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
 
 use crate::analysis::{
-    builtin_signature, keyword_texts, offset_at, span_to_range, Compiled, LineIndex, TokenClass,
-    DOC_FILE,
+    builtin_signature, dot_completion_context, float_instance_methods, float_static_methods,
+    int_instance_methods, keyword_texts, list_intrinsic_methods, map_intrinsic_methods,
+    offset_at, primitive_static_methods, span_to_range, str_intrinsic_methods, Compiled,
+    LineIndex, TokenClass, DOC_FILE,
 };
+use compiler::sema::symbols::DefKind;
+use compiler::ty::TyKind;
 
 /// The semantic-token legend, in the exact order of [`TokenClass`]'s numeric
 /// values (the handler emits `class as u32` as the token-type index).
@@ -94,6 +98,15 @@ impl LanguageServer for Backend {
                 completion_provider: Some(CompletionOptions {
                     trigger_characters: Some(vec![".".into()]),
                     ..Default::default()
+                }),
+                signature_help_provider: Some(SignatureHelpOptions {
+                    trigger_characters: Some(vec!["(".into(), ",".into()]),
+                    retrigger_characters: Some(vec![",".into()]),
+                    ..Default::default()
+                }),
+                document_highlight_provider: Some(OneOf::Left(true)),
+                code_lens_provider: Some(CodeLensOptions {
+                    resolve_provider: Some(false),
                 }),
                 semantic_tokens_provider: Some(
                     SemanticTokensServerCapabilities::SemanticTokensOptions(
@@ -338,60 +351,101 @@ impl LanguageServer for Backend {
         let Some(c) = self.compile(&uri) else {
             return Ok(None);
         };
+        let pos = params.text_document_position.position;
+        let off = offset_at(&c.text, pos);
 
-        let mut items: Vec<CompletionItem> = Vec::new();
+        // Dot completion: `recv.foo|` — restrict suggestions to members of
+        // the receiver's type. The same path handles trigger-by-`.` and
+        // re-trigger after typing letters.
+        if let Some(ctx) = dot_completion_context(&c.text, off) {
+            return Ok(Some(CompletionResponse::Array(member_completions(&c, &ctx))));
+        }
 
-        // Keywords.
-        for kw in keyword_texts() {
-            items.push(CompletionItem {
-                label: kw.to_string(),
-                kind: Some(CompletionItemKind::KEYWORD),
-                ..Default::default()
-            });
-        }
-        // Builtins.
-        for b in ["print", "println", "panic", "panic_with", "exit", "abort"] {
-            items.push(CompletionItem {
-                label: b.into(),
-                kind: Some(CompletionItemKind::FUNCTION),
-                ..Default::default()
-            });
-        }
-        // Declared top-level types and functions.
-        let (types, fns) = c.declared_names();
-        for (name, class) in &types {
-            items.push(CompletionItem {
-                label: name.clone(),
-                kind: Some(match class {
-                    TokenClass::Interface => CompletionItemKind::INTERFACE,
-                    _ => CompletionItemKind::STRUCT,
-                }),
-                ..Default::default()
-            });
-        }
-        for name in &fns {
-            items.push(CompletionItem {
-                label: name.clone(),
-                kind: Some(CompletionItemKind::FUNCTION),
-                ..Default::default()
-            });
-        }
-        // In-scope local names (over-approximated across the file).
-        let mut locals: HashSet<String> = HashSet::new();
-        for s in c.analysis.results.local_decls.values() {
-            if s.file == DOC_FILE {
-                locals.insert(c.map.slice(*s).to_string());
+        Ok(Some(CompletionResponse::Array(default_completions(&c))))
+    }
+
+    async fn document_highlight(
+        &self,
+        params: DocumentHighlightParams,
+    ) -> Result<Option<Vec<DocumentHighlight>>> {
+        let pos = params.text_document_position_params;
+        let Some(c) = self.compile(&pos.text_document.uri) else {
+            return Ok(None);
+        };
+        let off = offset_at(&c.text, pos.position);
+        let Some((_, target)) = c.resolution_at(off) else {
+            return Ok(None);
+        };
+
+        // Collect every occurrence of the same resolution in this document.
+        let mut spans: Vec<Span> = c
+            .analysis
+            .results
+            .resolutions
+            .iter()
+            .filter(|(s, r)| **r == target && s.file == DOC_FILE)
+            .map(|(s, _)| *s)
+            .collect();
+        if let Some(dspan) = c.definition_span(target) {
+            if !spans.contains(&dspan) {
+                spans.push(dspan);
             }
         }
-        for name in locals {
-            items.push(CompletionItem {
-                label: name,
-                kind: Some(CompletionItemKind::VARIABLE),
-                ..Default::default()
-            });
-        }
+        spans.sort_by_key(|s| (s.lo.0, s.hi.0));
+        spans.dedup();
 
-        Ok(Some(CompletionResponse::Array(items)))
+        let highlights = spans
+            .into_iter()
+            .map(|s| DocumentHighlight {
+                range: span_to_range(&c.text, s),
+                kind: Some(DocumentHighlightKind::READ),
+            })
+            .collect();
+        Ok(Some(highlights))
+    }
+
+    async fn code_lens(&self, params: CodeLensParams) -> Result<Option<Vec<CodeLens>>> {
+        let uri = params.text_document.uri.clone();
+        let Some(c) = self.compile(&uri) else {
+            return Ok(None);
+        };
+        Ok(Some(collect_code_lenses(&c, uri.as_ref())))
+    }
+
+    async fn signature_help(
+        &self,
+        params: SignatureHelpParams,
+    ) -> Result<Option<SignatureHelp>> {
+        let pos = params.text_document_position_params;
+        let Some(c) = self.compile(&pos.text_document.uri) else {
+            return Ok(None);
+        };
+        let off = offset_at(&c.text, pos.position);
+        let Some((callee_off, active)) = find_active_call(&c.text, off) else {
+            return Ok(None);
+        };
+        let Some((_, res)) = c.resolution_at(callee_off) else {
+            return Ok(None);
+        };
+        let sig = match res {
+            compiler::sema::ValueRes::Function(d)
+            | compiler::sema::ValueRes::Method(d)
+            | compiler::sema::ValueRes::StructCtor(d) => {
+                build_signature_info(&c, c.analysis.program.def(d))
+            }
+            compiler::sema::ValueRes::Builtin(b) => Some(builtin_signature_info(b)),
+            _ => None,
+        };
+        let Some(sig) = sig else { return Ok(None) };
+        let active = active.min(sig.parameters.as_ref().map_or(0, |p| p.len().saturating_sub(1)) as u32);
+        Ok(Some(SignatureHelp {
+            signatures: vec![SignatureInformation {
+                active_parameter: Some(active),
+                ..sig
+            }],
+            active_signature: Some(0),
+            active_parameter: Some(active),
+        }))
     }
 
     async fn semantic_tokens_full(
@@ -583,6 +637,509 @@ fn document_symbols(c: &Compiled) -> Vec<DocumentSymbol> {
     out
 }
 
+/// The completion set when the cursor is *not* after a `.` — keywords,
+/// builtins, declared top-level items, and locals visible anywhere in the
+/// file (a single-file LSP cannot do precise lexical scoping yet).
+fn default_completions(c: &Compiled) -> Vec<CompletionItem> {
+    let mut items: Vec<CompletionItem> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let push = |items: &mut Vec<CompletionItem>,
+                seen: &mut HashSet<String>,
+                item: CompletionItem| {
+        if seen.insert(item.label.clone()) {
+            items.push(item);
+        }
+    };
+
+    // 1. Locals (highest priority — most contextually relevant).
+    let mut locals: HashSet<String> = HashSet::new();
+    for s in c.analysis.results.local_decls.values() {
+        if s.file == DOC_FILE {
+            locals.insert(c.map.slice(*s).to_string());
+        }
+    }
+    for name in locals {
+        push(
+            &mut items,
+            &mut seen,
+            CompletionItem {
+                label: name,
+                kind: Some(CompletionItemKind::VARIABLE),
+                sort_text: Some("1".into()),
+                ..Default::default()
+            },
+        );
+    }
+
+    // 2. Declared top-level types and functions — surface real signatures
+    //    in `detail` so VS Code shows the parameter list inline.
+    let (types, fns) = c.declared_names();
+    for (name, class) in &types {
+        let kind = match class {
+            TokenClass::Interface => CompletionItemKind::INTERFACE,
+            TokenClass::Type => CompletionItemKind::CLASS,
+            _ => CompletionItemKind::STRUCT,
+        };
+        push(
+            &mut items,
+            &mut seen,
+            CompletionItem {
+                label: name.clone(),
+                kind: Some(kind),
+                sort_text: Some("2".into()),
+                ..Default::default()
+            },
+        );
+    }
+    for name in &fns {
+        let detail = c
+            .analysis
+            .program
+            .resolve_value_in(compiler::ids::ModId::ROOT, name)
+            .map(|d| c.def_signature(c.analysis.program.def(d)));
+        push(
+            &mut items,
+            &mut seen,
+            CompletionItem {
+                label: name.clone(),
+                kind: Some(CompletionItemKind::FUNCTION),
+                detail,
+                sort_text: Some("2".into()),
+                ..Default::default()
+            },
+        );
+    }
+
+    // 3. Builtins.
+    let builtins: &[(&str, &str)] = &[
+        ("print", "(str)"),
+        ("println", "(str)"),
+        ("panic", "(str): never"),
+        ("panic_with", "(value: dynamic): never"),
+        ("exit", "(code: i32): never"),
+        ("abort", "(): never"),
+    ];
+    for (name, sig) in builtins {
+        push(
+            &mut items,
+            &mut seen,
+            CompletionItem {
+                label: (*name).into(),
+                kind: Some(CompletionItemKind::FUNCTION),
+                detail: Some((*sig).into()),
+                sort_text: Some("3".into()),
+                ..Default::default()
+            },
+        );
+    }
+
+    // 4. Keywords last — they're useful but rarely the intended completion in
+    //    an expression context, so push them to the bottom of the list.
+    for kw in keyword_texts() {
+        push(
+            &mut items,
+            &mut seen,
+            CompletionItem {
+                label: (*kw).into(),
+                kind: Some(CompletionItemKind::KEYWORD),
+                sort_text: Some("4".into()),
+                ..Default::default()
+            },
+        );
+    }
+
+    items
+}
+
+/// Build the completion list for a `recv.|` cursor: members of the receiver
+/// type. Falls back to `default_completions` for an empty list when the
+/// receiver type cannot be determined (e.g. the receiver expression has not
+/// type-checked yet because of an upstream error).
+fn member_completions(
+    c: &Compiled,
+    ctx: &crate::analysis::DotContext,
+) -> Vec<CompletionItem> {
+    let mut items: Vec<CompletionItem> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut push = |items: &mut Vec<CompletionItem>,
+                    seen: &mut HashSet<String>,
+                    item: CompletionItem| {
+        if seen.insert(item.label.clone()) {
+            items.push(item);
+        }
+    };
+
+    // Value-receiver case: `expr.|` — use the inferred type of the receiver.
+    if let Some(ty) = c.receiver_type_at_dot(ctx.dot_offset) {
+        push_instance_members(c, ty, &mut items, &mut seen, &mut push);
+    }
+
+    // Type-receiver case: `TypeName.|` — list static methods and
+    // type-namespaced items. This is independent of `expr_types` since a bare
+    // type name is not a value expression.
+    if let Some((s, e)) = ctx.receiver_ident {
+        let name = &c.text[s..e];
+        push_type_namespace_members(c, name, &mut items, &mut seen, &mut push);
+    }
+
+    items
+}
+
+fn push_instance_members(
+    c: &Compiled,
+    ty: compiler::ty::Ty,
+    items: &mut Vec<CompletionItem>,
+    seen: &mut HashSet<String>,
+    push: &mut impl FnMut(&mut Vec<CompletionItem>, &mut HashSet<String>, CompletionItem),
+) {
+    let prog = &c.analysis.program;
+    let tcx = &c.analysis.tcx;
+    let kind = tcx.kind(ty).clone();
+
+    // Built-in intrinsics keyed by structural kind.
+    match &kind {
+        TyKind::Str => {
+            for (name, sig) in str_intrinsic_methods() {
+                push(
+                    items,
+                    seen,
+                    intrinsic_completion(name, sig, CompletionItemKind::METHOD),
+                );
+            }
+        }
+        TyKind::Int(_) => {
+            for (name, sig) in int_instance_methods() {
+                push(
+                    items,
+                    seen,
+                    intrinsic_completion(name, sig, CompletionItemKind::METHOD),
+                );
+            }
+        }
+        TyKind::Float(_) => {
+            for (name, sig) in float_instance_methods() {
+                push(
+                    items,
+                    seen,
+                    intrinsic_completion(name, sig, CompletionItemKind::METHOD),
+                );
+            }
+        }
+        TyKind::Bool | TyKind::Char | TyKind::Null => {
+            push(
+                items,
+                seen,
+                intrinsic_completion("clone", "(): Self", CompletionItemKind::METHOD),
+            );
+        }
+        _ => {}
+    }
+
+    // Named types: struct fields + interface methods + `extend` methods.
+    if let TyKind::Named { def, .. } = kind {
+        let d = prog.def(def);
+        match d.kind {
+            DefKind::Struct | DefKind::ExternStruct => {
+                for f in c.struct_fields(def) {
+                    push(
+                        items,
+                        seen,
+                        CompletionItem {
+                            label: f.name.clone(),
+                            kind: Some(CompletionItemKind::FIELD),
+                            sort_text: Some("1".into()),
+                            ..Default::default()
+                        },
+                    );
+                }
+            }
+            DefKind::Interface => {
+                for m in c.interface_methods(def, false) {
+                    push(items, seen, def_to_completion(c, m, CompletionItemKind::METHOD));
+                }
+            }
+            _ => {}
+        }
+
+        // Special-case the std collections — their methods are intrinsic, not
+        // in any `extend`. The `def` comparisons against `prog.*_def` are
+        // exact so generic instances (`List<i64>`, etc.) all hit.
+        if def == prog.list_def {
+            for (name, sig) in list_intrinsic_methods() {
+                push(
+                    items,
+                    seen,
+                    intrinsic_completion(name, sig, CompletionItemKind::METHOD),
+                );
+            }
+        } else if def == prog.map_def {
+            for (name, sig) in map_intrinsic_methods() {
+                push(
+                    items,
+                    seen,
+                    intrinsic_completion(name, sig, CompletionItemKind::METHOD),
+                );
+            }
+        }
+
+        // Any user `extend` block whose target's head name matches this type's
+        // name contributes instance methods.
+        let type_name = d.name.clone();
+        for m in c.extend_methods_for(&type_name, false) {
+            push(items, seen, def_to_completion(c, m, CompletionItemKind::METHOD));
+        }
+    }
+}
+
+fn push_type_namespace_members(
+    c: &Compiled,
+    name: &str,
+    items: &mut Vec<CompletionItem>,
+    seen: &mut HashSet<String>,
+    push: &mut impl FnMut(&mut Vec<CompletionItem>, &mut HashSet<String>, CompletionItem),
+) {
+    // Primitive integer/float namespaces — `i32.MAX`, `f64.NAN`, etc.
+    const INT_NAMES: &[&str] = &[
+        "i8", "i16", "i32", "i64", "isize", "u8", "u16", "u32", "u64", "usize",
+    ];
+    const FLOAT_NAMES: &[&str] = &["f32", "f64"];
+
+    if INT_NAMES.contains(&name) {
+        for (n, sig) in primitive_static_methods() {
+            push(items, seen, intrinsic_completion(n, sig, CompletionItemKind::FUNCTION));
+        }
+        return;
+    }
+    if FLOAT_NAMES.contains(&name) {
+        for (n, sig) in float_static_methods() {
+            push(items, seen, intrinsic_completion(n, sig, CompletionItemKind::CONSTANT));
+        }
+        return;
+    }
+
+    // User type namespace: static methods on `extend Type`.
+    if let Some(_def) = c.lookup_type_def(name) {
+        for m in c.extend_methods_for(name, true) {
+            push(items, seen, def_to_completion(c, m, CompletionItemKind::FUNCTION));
+        }
+    }
+}
+
+fn intrinsic_completion(
+    name: &str,
+    signature: &str,
+    kind: CompletionItemKind,
+) -> CompletionItem {
+    CompletionItem {
+        label: name.into(),
+        kind: Some(kind),
+        detail: Some(signature.into()),
+        sort_text: Some("1".into()),
+        ..Default::default()
+    }
+}
+
+fn def_to_completion(
+    c: &Compiled,
+    def: &compiler::sema::symbols::Def,
+    kind: CompletionItemKind,
+) -> CompletionItem {
+    CompletionItem {
+        label: def.name.clone(),
+        kind: Some(kind),
+        detail: Some(c.def_signature(def)),
+        sort_text: Some("1".into()),
+        ..Default::default()
+    }
+}
+
+/// Build the Run/Build CodeLenses for a compiled document. Emits lenses above
+/// every top-level `function main` (sync or async — the runtime resolves async
+/// main through `block_on`, so the same CLI invocation works).
+fn collect_code_lenses(c: &Compiled, uri: &str) -> Vec<CodeLens> {
+    let mut lenses = Vec::new();
+    for item in &c.module.items {
+        let ItemKind::Function(f) = &item.kind else { continue };
+        if f.name.name != "main" {
+            continue;
+        }
+        let range = span_to_range(&c.text, f.name.span);
+        let uri = uri.to_string();
+        lenses.push(CodeLens {
+            range,
+            command: Some(Command {
+                title: "▶ Run".into(),
+                command: "lang.runFile".into(),
+                arguments: Some(vec![
+                    serde_json::Value::String(uri.clone()),
+                    serde_json::Value::Bool(false),
+                ]),
+            }),
+            data: None,
+        });
+        lenses.push(CodeLens {
+            range,
+            command: Some(Command {
+                title: "▶ Run (release)".into(),
+                command: "lang.runFile".into(),
+                arguments: Some(vec![
+                    serde_json::Value::String(uri.clone()),
+                    serde_json::Value::Bool(true),
+                ]),
+            }),
+            data: None,
+        });
+        lenses.push(CodeLens {
+            range,
+            command: Some(Command {
+                title: "🔨 Build".into(),
+                command: "lang.buildFile".into(),
+                arguments: Some(vec![serde_json::Value::String(uri)]),
+            }),
+            data: None,
+        });
+    }
+    lenses
+}
+
+/// Locate the open `(` of the call enclosing `off`, returning the byte offset
+/// inside the callee name and the active parameter (0-based comma count). Skips
+/// nested braces/brackets/parens and stops at semicolons or unmatched closers.
+pub(crate) fn find_active_call(text: &str, off: usize) -> Option<(usize, u32)> {
+    let bytes = text.as_bytes();
+    let mut depth = 0i32;
+    let mut active: u32 = 0;
+    let mut i = off.min(bytes.len());
+    let paren_off;
+    loop {
+        if i == 0 {
+            return None;
+        }
+        i -= 1;
+        match bytes[i] {
+            b')' | b']' | b'}' => depth += 1,
+            b'(' => {
+                if depth == 0 {
+                    paren_off = i;
+                    break;
+                }
+                depth -= 1;
+            }
+            b'[' | b'{' => {
+                if depth == 0 {
+                    return None;
+                }
+                depth -= 1;
+            }
+            b',' if depth == 0 => active += 1,
+            b';' if depth == 0 => return None,
+            _ => {}
+        }
+    }
+    // Walk back over whitespace to find the end of the callee name.
+    let mut end = paren_off;
+    while end > 0 && matches!(bytes[end - 1], b' ' | b'\t' | b'\n' | b'\r') {
+        end -= 1;
+    }
+    if end == 0 {
+        return None;
+    }
+    // The callee must end in an identifier character (skip generic `>` etc.).
+    if !bytes[end - 1].is_ascii_alphanumeric() && bytes[end - 1] != b'_' {
+        return None;
+    }
+    Some((end - 1, active))
+}
+
+fn build_signature_info(
+    c: &Compiled,
+    def: &compiler::sema::symbols::Def,
+) -> Option<SignatureInformation> {
+    use compiler::ast::ParamKind;
+    let ItemKind::Function(f) = def.item.as_ref()? else {
+        return None;
+    };
+    let mut label = String::new();
+    label.push_str(&def.name);
+    label.push('(');
+    let mut params: Vec<ParameterInformation> = Vec::new();
+    let mut first = true;
+    for p in &f.params {
+        let (name, ty) = match &p.kind {
+            ParamKind::SelfParam => continue,
+            ParamKind::Normal { name, ty } => (name, ty),
+        };
+        if !first {
+            label.push_str(", ");
+        }
+        first = false;
+        let start = label.encode_utf16().count() as u32;
+        label.push_str(&name.name);
+        label.push_str(": ");
+        let ty_text = if ty.span.file == DOC_FILE {
+            c.map.slice(ty.span).to_string()
+        } else {
+            // Synthesised types (prelude / derive) don't have document source.
+            "_".to_string()
+        };
+        label.push_str(&ty_text);
+        let end = label.encode_utf16().count() as u32;
+        params.push(ParameterInformation {
+            label: ParameterLabel::LabelOffsets([start, end]),
+            documentation: None,
+        });
+    }
+    label.push(')');
+    if let Some(rt) = &f.return_type {
+        label.push_str(": ");
+        if rt.span.file == DOC_FILE {
+            label.push_str(c.map.slice(rt.span));
+        } else {
+            label.push('_');
+        }
+    }
+    Some(SignatureInformation {
+        label,
+        documentation: None,
+        parameters: Some(params),
+        active_parameter: None,
+    })
+}
+
+fn builtin_signature_info(b: compiler::sema::Builtin) -> SignatureInformation {
+    use compiler::sema::Builtin;
+    let (label, parts): (&str, &[(&str, &str)]) = match b {
+        Builtin::Print => ("print(value: str)", &[("value", "str")]),
+        Builtin::Println => ("println(value: str)", &[("value", "str")]),
+        Builtin::Panic => ("panic(message: str): never", &[("message", "str")]),
+        Builtin::PanicWith => (
+            "panic_with(value: dynamic): never",
+            &[("value", "dynamic")],
+        ),
+        Builtin::Exit => ("exit(code: i32): never", &[("code", "i32")]),
+        Builtin::Abort => ("abort(): never", &[]),
+    };
+    let mut params = Vec::new();
+    for (name, ty) in parts {
+        // Compute UTF-16 offsets of `name: ty` inside `label`.
+        let needle = format!("{name}: {ty}");
+        if let Some(byte_off) = label.find(&needle) {
+            let start = label[..byte_off].encode_utf16().count() as u32;
+            let end = start + needle.encode_utf16().count() as u32;
+            params.push(ParameterInformation {
+                label: ParameterLabel::LabelOffsets([start, end]),
+                documentation: None,
+            });
+        }
+    }
+    SignatureInformation {
+        label: label.into(),
+        documentation: None,
+        parameters: Some(params),
+        active_parameter: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -644,5 +1201,153 @@ function main() {}
             assert!(s.range.start <= s.selection_range.start);
             assert!(s.selection_range.end <= s.range.end);
         }
+    }
+
+    fn labels(items: &[CompletionItem]) -> Vec<&str> {
+        items.iter().map(|i| i.label.as_str()).collect()
+    }
+
+    #[test]
+    fn member_completion_lists_struct_fields_and_methods() {
+        let src = "\
+struct Point { x: i64, y: i64 }
+extend Point {
+  function magnitude(self): i64 { self.x }
+}
+function main() {
+  var p = Point { x: 1, y: 2 };
+  var n = p.;
+}
+";
+        let c = Compiled::new(src.into());
+        let dot = src.find("p.;").unwrap() + 1;
+        let ctx = crate::analysis::dot_completion_context(&c.text, dot + 1).unwrap();
+        let items = member_completions(&c, &ctx);
+        let names = labels(&items);
+        assert!(names.contains(&"x"), "field x missing in {names:?}");
+        assert!(names.contains(&"y"), "field y missing in {names:?}");
+        assert!(
+            names.contains(&"magnitude"),
+            "method magnitude missing in {names:?}"
+        );
+        // Crucially: keywords/builtins are NOT in the member set.
+        assert!(!names.contains(&"if"));
+        assert!(!names.contains(&"println"));
+    }
+
+    #[test]
+    fn member_completion_lists_list_intrinsic_methods() {
+        let src = "\
+function main() {
+  var xs = [1, 2, 3];
+  var z = xs.;
+}
+";
+        let c = Compiled::new(src.into());
+        let dot = src.find("xs.;").unwrap() + 2;
+        let ctx = crate::analysis::dot_completion_context(&c.text, dot + 1).unwrap();
+        let items = member_completions(&c, &ctx);
+        let names = labels(&items);
+        for must in ["push", "size", "is_empty", "get", "map", "filter", "fold"] {
+            assert!(names.contains(&must), "{must} missing in {names:?}");
+        }
+    }
+
+    #[test]
+    fn member_completion_lists_str_intrinsic_methods() {
+        let src = "\
+function main() {
+  var s = \"hello\";
+  var n = s.;
+}
+";
+        let c = Compiled::new(src.into());
+        let dot = src.find("s.;").unwrap() + 1;
+        let ctx = crate::analysis::dot_completion_context(&c.text, dot + 1).unwrap();
+        let items = member_completions(&c, &ctx);
+        let names = labels(&items);
+        for must in ["size", "contains", "to_upper", "trim", "starts_with"] {
+            assert!(names.contains(&must), "{must} missing in {names:?}");
+        }
+    }
+
+    #[test]
+    fn type_namespace_completion_lists_primitive_static_methods() {
+        let src = "function main() { var x = i32.; }\n";
+        let c = Compiled::new(src.into());
+        let dot = src.find("i32.;").unwrap() + 3;
+        let ctx = crate::analysis::dot_completion_context(&c.text, dot + 1).unwrap();
+        let items = member_completions(&c, &ctx);
+        let names = labels(&items);
+        for must in ["MIN", "MAX", "wrapping_add", "checked_mul"] {
+            assert!(names.contains(&must), "{must} missing in {names:?}");
+        }
+    }
+
+    #[test]
+    fn find_active_call_tracks_param_index() {
+        let text = "foo(a, b, c)";
+        // Just inside `c` — third parameter (index 2).
+        let off = text.find('c').unwrap();
+        let (callee_off, active) = find_active_call(text, off + 1).unwrap();
+        assert_eq!(active, 2);
+        assert_eq!(&text[callee_off..callee_off + 1], "o"); // last char of `foo`
+    }
+
+    #[test]
+    fn find_active_call_skips_nested_calls() {
+        let text = "outer(a, inner(x, y), b";
+        // Cursor at end (in the position of `b`) — second arg of outer (index 1).
+        let (_, active) = find_active_call(text, text.len()).unwrap();
+        assert_eq!(active, 2);
+    }
+
+    #[test]
+    fn code_lens_targets_main_function() {
+        // A program with `main` plus a non-main function — only `main` gets the
+        // Run/Build code lenses.
+        let src = "\
+function helper() {}
+function main() { println(\"hi\"); }
+";
+        let c = Compiled::new(src.into());
+        let lenses = collect_code_lenses(&c, "file:///tmp/x.otter");
+        let titles: Vec<&str> = lenses.iter().map(|l| l.command.as_ref().unwrap().title.as_str()).collect();
+        assert!(titles.iter().any(|t| t.contains("Run") && !t.contains("release")));
+        assert!(titles.iter().any(|t| t.contains("Run (release)")));
+        assert!(titles.iter().any(|t| t.contains("Build")));
+        // Every lens anchors at the `main` name occurrence.
+        let main_off = src.find("function main").unwrap() + "function ".len();
+        let main_line = src[..main_off].matches('\n').count() as u32;
+        for l in &lenses {
+            assert_eq!(l.range.start.line, main_line);
+        }
+    }
+
+    #[test]
+    fn code_lens_empty_without_main() {
+        let c = Compiled::new("function helper() {}\n".into());
+        let lenses = collect_code_lenses(&c, "file:///tmp/x.otter");
+        assert!(lenses.is_empty());
+    }
+
+    #[test]
+    fn default_completion_includes_locals_and_keywords() {
+        let src = "\
+function greet(name: str): str { name }
+function main() {
+  var who = \"world\";
+}
+";
+        let c = Compiled::new(src.into());
+        let items = default_completions(&c);
+        let names = labels(&items);
+        assert!(names.contains(&"greet"));
+        assert!(names.contains(&"who"));
+        assert!(names.contains(&"println"));
+        assert!(names.contains(&"function"));
+        // Each label appears only once even when several sources contribute it.
+        let count = names.iter().filter(|n| **n == "greet").count();
+        assert_eq!(count, 1);
     }
 }

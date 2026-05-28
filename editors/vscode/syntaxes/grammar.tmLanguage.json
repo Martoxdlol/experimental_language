@@ -79,7 +79,7 @@
         },
         {
           "name": "keyword.declaration.lang",
-          "match": "\\b(var|function|struct|interface|type|mod|extend|extern|import|pub|async)\\b"
+          "match": "\\b(var|function|struct|interface|type|mod|extend|extern|import|pub|async|spawn)\\b"
         },
         {
           "name": "keyword.operator.word.lang",

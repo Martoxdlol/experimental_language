@@ -10,9 +10,9 @@
 
 /goal refactor async features. Ensure it is fully working, follow the way javascript or dart does it. No blocking functions, use async await syntax. Futures. And stuff. Do not change the language design without asking first. This is to adjust stuff not to remake everything. Add support for a spawn keyword that will work like tokio spawn (returning a future) and disallow at all calling async function without capturing the future. Update docs to reflect this. Update example. Update any code or anything needed.
 
----
-
 /goal Apply language branding, this language is now officially called "Otter Fusion", file extensions is `.otter`. Keep most code as agnostic to the language name as possible but use the name in the places needed (like the extension)
+
+---
 
 /goal implement fully working LSP + VS Code extension. Make it fully featured and as efficient as possible. Currently colors don't match the grammar. Grammar colors are nice! But once the lsp loads colors changes and look ugly. Use colors from grammar. Make autocomplete work.
 

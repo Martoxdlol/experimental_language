@@ -5,3 +5,11 @@ tsconfig.json
 **/*.map
 **/*.ts
 !out/**/*.js
+*.vsix
+# Do NOT blanket-ignore node_modules — vsce ships runtime deps
+# (e.g. vscode-languageclient) from there, and dev deps are skipped
+# automatically because they live under `devDependencies` in package.json.
+node_modules/**/test/**
+node_modules/**/tests/**
+node_modules/**/*.md
+node_modules/**/*.ts

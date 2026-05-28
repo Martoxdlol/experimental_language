@@ -2,10 +2,11 @@
   "name": "otter-fusion",
   "displayName": "Otter Fusion",
   "description": "Otter Fusion language support: diagnostics, hover, go-to-definition, references, rename, symbols, completion, and semantic highlighting.",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "publisher": "experimental",
   "engines": { "vscode": "^1.85.0" },
   "categories": ["Programming Languages"],
+  "icon": "otter_fusion_small.png",
   "main": "./out/extension.js",
   "activationEvents": ["onLanguage:lang"],
   "contributes": {
@@ -14,7 +15,11 @@
         "id": "lang",
         "aliases": ["Otter Fusion", "otter"],
         "extensions": [".otter"],
-        "configuration": "./language-configuration.json"
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./otter_fusion_small.png",
+          "dark": "./otter_fusion_small.png"
+        }
       }
     ],
     "grammars": [
@@ -24,6 +29,21 @@
         "path": "./syntaxes/grammar.tmLanguage.json"
       }
     ],
+    "semanticTokenScopes": [
+      {
+        "language": "lang",
+        "scopes": {
+          "type": ["entity.name.type.lang", "support.type.lang"],
+          "struct": ["entity.name.type.struct.lang", "entity.name.type.lang"],
+          "interface": ["entity.name.type.interface.lang", "entity.name.type.lang"],
+          "function": ["entity.name.function.lang"],
+          "method": ["entity.name.function.method.lang", "entity.name.function.lang"],
+          "variable": ["variable.other.lang"],
+          "parameter": ["variable.parameter.lang"],
+          "property": ["variable.other.property.lang", "variable.other.member.lang"]
+        }
+      }
+    ],
     "configuration": {
       "title": "Otter Fusion",
       "properties": {
@@ -31,6 +51,11 @@
           "type": "string",
           "default": "lang-lsp",
           "description": "Path to the `lang-lsp` language server binary. If it is on your PATH the default works; otherwise give an absolute path (e.g. target/debug/lang-lsp)."
+        },
+        "lang.runner.path": {
+          "type": "string",
+          "default": "lang",
+          "description": "Path to the `lang` CLI used by the Run / Build code lenses above `main`."
         },
         "lang.trace.server": {
           "type": "string",
@@ -44,13 +69,23 @@
       {
         "command": "lang.restartServer",
         "title": "Otter Fusion: Restart Language Server"
+      },
+      {
+        "command": "lang.runFile",
+        "title": "Otter Fusion: Run File"
+      },
+      {
+        "command": "lang.buildFile",
+        "title": "Otter Fusion: Build File"
       }
     ]
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
-    "watch": "tsc -w -p ./"
+    "watch": "tsc -w -p ./",
+    "package": "vsce package --allow-missing-repository --out otter-fusion-${npm_package_version}.vsix",
+    "install-extension": "code --install-extension otter-fusion-${npm_package_version}.vsix"
   },
   "dependencies": {
     "vscode-languageclient": "^9.0.1"
@@ -58,6 +93,7 @@
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.2.0",
     "typescript": "^5.4.0"
   }
 }
