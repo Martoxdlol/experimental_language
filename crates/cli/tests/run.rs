@@ -318,8 +318,12 @@ fn check_rejects_non_iterable() {
 
 #[test]
 fn check_rejects_non_hashable_map_key() {
-    let src = "function f() {\n\
-                 var m: Map<bool, i64> = { true: 1 };\n\
+    // A user struct that does NOT derive `Eq`/`Hash` cannot be a map key
+    // (`docs/15` §7). `bool` is a primitive and *is* a valid key.
+    let src = "struct K { x: i64 }\n\
+               function f() {\n\
+                 var m: Map<K, i64> = Map<K, i64>();\n\
+                 m.set(K { x: 1 }, 1);\n\
                }";
     let (_, err, ok) = lang("check", src);
     assert!(!ok);
@@ -1294,6 +1298,121 @@ fn derive_ord_lexicographic_comparison() {
     let (out, err, ok) = lang("run", src);
     assert!(ok, "stderr: {err}");
     assert_eq!(out, "true false true true false true\n");
+}
+
+#[test]
+fn hash_intrinsic_on_primitives() {
+    // `.hash()` is intrinsic on primitives + `str` (`docs/15` §7): equal values
+    // hash equally; distinct values almost certainly hash differently.
+    let src = "function main() {\n\
+                 println(\"${(42 as i64).hash() == (42 as i64).hash()}\");\n\
+                 println(\"${\"hello\".hash() == \"hello\".hash()}\");\n\
+                 println(\"${(1 as i64).hash() != (2 as i64).hash()}\");\n\
+                 println(\"${true.hash() != false.hash()}\");\n\
+                 println(\"${'a'.hash() != 'b'.hash()}\");\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "true\ntrue\ntrue\ntrue\ntrue\n");
+}
+
+#[test]
+fn derive_hash_user_keyed_map() {
+    // `@Derive(Eq, Hash)` (`docs/22` §11, `docs/15` §7) makes a user struct
+    // usable as a `Map<K, V>` key. Set/get/contains/remove all route through
+    // the synthesised `hash`/`eq` methods (passed to the runtime as function
+    // pointers when the map is constructed).
+    let src = "@Derive(Eq, Hash)\n\
+               struct Point { x: i64, y: i64 }\n\
+               function main() {\n\
+                 var m: Map<Point, str> = Map<Point, str>();\n\
+                 m.set(Point { x: 1, y: 2 }, \"alpha\");\n\
+                 m.set(Point { x: 3, y: 4 }, \"beta\");\n\
+                 m.set(Point { x: 1, y: 2 }, \"alpha-prime\");\n\
+                 println(\"size=${m.size()}\");\n\
+                 var p = Point { x: 1, y: 2 };\n\
+                 match m.get(p) { str s => println(s), null => println(\"missing!\") };\n\
+                 var q = Point { x: 3, y: 4 };\n\
+                 match m.get(q) { str s => println(s), null => println(\"missing!\") };\n\
+                 var r = Point { x: 99, y: 99 };\n\
+                 match m.get(r) { str s => println(s), null => println(\"not-found\") };\n\
+                 println(\"contains=${m.contains(Point { x: 1, y: 2 })}\");\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "size=2\nalpha-prime\nbeta\nnot-found\ncontains=true\n");
+}
+
+#[test]
+fn derive_hash_user_keyed_map_under_gc_stress() {
+    // The map handle now carries function pointers to the key type's compiled
+    // `hash`/`eq` methods; under stress GC, the handle, slot buffer, and
+    // managed values must survive collection across the loop.
+    let src = "@Derive(Eq, Hash)\n\
+               struct Key { tag: str, n: i64 }\n\
+               function main() {\n\
+                 var m: Map<Key, str> = Map<Key, str>();\n\
+                 m.set(Key { tag: \"keep\", n: 1 }, \"first\");\n\
+                 m.set(Key { tag: \"keep\", n: 2 }, \"second\");\n\
+                 var i: i64 = 0;\n\
+                 while i < 200 {\n\
+                   var k = Key { tag: \"churn\", n: i };\n\
+                   var v = \"junk\" + (i as str);\n\
+                   m.set(k, v);\n\
+                   i = i + 1;\n\
+                 }\n\
+                 match m.get(Key { tag: \"keep\", n: 1 }) { str s => println(s), null => println(\"lost\") };\n\
+                 match m.get(Key { tag: \"keep\", n: 2 }) { str s => println(s), null => println(\"lost\") };\n\
+                 println(\"size=${m.size()}\");\n\
+               }";
+    let (out, err, ok) = lang_env("run", src, &[("LANG_GC", "stress")]);
+    assert!(ok, "stderr: {err}");
+    // Both `keep` keys preserved; size = 2 (keeps) + 200 (churn) — but the
+    // last churn key (i=199) overwrites if it collides; here every churn key
+    // is distinct, so 202.
+    assert_eq!(out, "first\nsecond\nsize=202\n");
+}
+
+#[test]
+fn derive_hash_user_keyed_map_native() {
+    // JIT/native parity for user-keyed maps: native `lang build` must take the
+    // same `hash`/`eq` function-pointer paths as the JIT.
+    let src = "@Derive(Eq, Hash)\n\
+               struct Coord(i64, i64)\n\
+               function main() {\n\
+                 var m: Map<Coord, i64> = Map<Coord, i64>();\n\
+                 m.set(Coord(0, 0), 100);\n\
+                 m.set(Coord(1, 1), 200);\n\
+                 m.set(Coord(0, 0), 999);\n\
+                 println(\"size=${m.size()}\");\n\
+                 println(\"a=${m.get(Coord(0, 0)) as i64}\");\n\
+                 println(\"b=${m.get(Coord(1, 1)) as i64}\");\n\
+               }";
+    let (out, err, ok) = lang_build_run(src, &[]);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "size=2\na=999\nb=200\n");
+}
+
+#[test]
+fn generic_struct_derives_hash() {
+    // `@Derive(Hash)` on a generic struct synthesises a generic
+    // `extend<T: Hash> S<T>: Hash` whose `hash` body XOR-combines each field's
+    // `.hash()` (dispatched through `T: Hash` per field).
+    let src = "@Derive(Eq, Hash)\n\
+               struct Pair<T> { a: T, b: T }\n\
+               function main() {\n\
+                 var p = Pair<i64> { a: 1, b: 2 };\n\
+                 var q = Pair<i64> { a: 1, b: 2 };\n\
+                 var r = Pair<i64> { a: 5, b: 6 };\n\
+                 println(\"${p.hash() == q.hash()}\");\n\
+                 println(\"${p.hash() != r.hash()}\");\n\
+                 var sp = Pair<str> { a: \"hi\", b: \"yo\" };\n\
+                 var sq = Pair<str> { a: \"hi\", b: \"yo\" };\n\
+                 println(\"${sp.hash() == sq.hash()}\");\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "true\ntrue\ntrue\n");
 }
 
 #[test]

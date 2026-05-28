@@ -59,10 +59,21 @@ impl<'a> Checker<'a> {
         self.tcx.mk_named(def, vec![k, v])
     }
 
-    /// A map key must be hashable/comparable. For now that means `str` or any
-    /// integer type (matching the runtime's two hashing strategies).
-    pub(crate) fn is_valid_map_key(&self, ty: Ty) -> bool {
-        ty == self.tcx.str || matches!(self.tcx.kind(ty), TyKind::Int(_))
+    /// A map key must implement `Eq + Hash` (`docs/15` §7, `docs/18` §6). The
+    /// runtime handles `str` and integer types via built-in hash/eq strategies;
+    /// `bool`/`char` are also intrinsically hashable. Other types are accepted
+    /// when an `extend … : Hash` and `extend … : Eq` are in scope (covering
+    /// `@Derive(Eq, Hash)` and hand-written impls).
+    pub(crate) fn is_valid_map_key(&mut self, ty: Ty) -> bool {
+        if self.is_hashable(ty) {
+            return true;
+        }
+        let hash_def = self.prog.hash_def;
+        let eq_def = self.prog.eq_def;
+        if hash_def == DefId(0) || eq_def == DefId(0) {
+            return false;
+        }
+        self.type_implements(ty, hash_def) && self.type_implements(ty, eq_def)
     }
 
     pub(crate) fn check_map_lit(&mut self, items: &[MapItem], expected: Option<Ty>, span: Span) -> Ty {
@@ -324,6 +335,28 @@ impl<'a> Checker<'a> {
                 if *def == self.prog.sender_def
                     || *def == self.prog.receiver_def
                     || *def == self.prog.shared_def)
+    }
+
+    /// Resolve a builtin `.hash()` on a primitive or `str` receiver — types
+    /// the runtime hashes intrinsically (`docs/15` §7). Records the `Hash`
+    /// interface's `hash` method as the call's resolution so the backend's
+    /// existing `InterfaceMethod`/`parent == hash_def` dispatch picks it up
+    /// and emits the right `lang_hash_*` call. Returns `Some(u64)` on match,
+    /// `None` for user types (which resolve through their own `Hash` impl).
+    pub(crate) fn check_builtin_hash(&mut self, rty: Ty, callee_span: Span) -> Option<Ty> {
+        if !self.is_hashable(rty) {
+            return None;
+        }
+        let iface = self.prog.hash_def;
+        if iface == DefId(0) {
+            return None;
+        }
+        let method = (0..self.prog.defs.len() as u32).map(DefId).find(|&d| {
+            let def = self.prog.def(d);
+            def.kind == DefKind::InterfaceMethod && def.parent == Some(iface) && def.name == "hash"
+        })?;
+        self.results.resolutions.insert(callee_span, ValueRes::Method(method));
+        Some(self.tcx.int(IntTy::U64))
     }
 
     /// Resolve a builtin `.clone()`. Returns `Some(result type)` for the

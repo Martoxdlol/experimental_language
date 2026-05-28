@@ -9,11 +9,12 @@
 //!
 //! Supported: `Eq` (field-by-field equality; `!=` is free via the operator
 //! machinery negating `eq`), `Ord` (lexicographic `lt`/`le`/`gt`/`ge`), `ToStr`
-//! (debug-style rendering), and `Clone` (field-by-field deep copy). All four
-//! also work on **generic** structs — the impl becomes
-//! `extend<T: Eq + Ord + ToStr + Clone> S<T>: …`, and per-field operations
-//! become `.eq()`/`.lt()`/`.to_str()`/`.clone()` calls so they dispatch through
-//! the field type's bound. `Hash` is staged.
+//! (debug-style rendering), `Clone` (field-by-field deep copy), and `Hash`
+//! (FNV-style combine of each field's `.hash()`). All five also work on
+//! **generic** structs — the impl becomes
+//! `extend<T: Eq + Ord + ToStr + Clone + Hash> S<T>: …`, and per-field
+//! operations become `.eq()`/`.lt()`/`.to_str()`/`.clone()`/`.hash()` calls so
+//! they dispatch through the field type's bound.
 
 use crate::ast::*;
 use crate::span::{BytePos, FileId, Span};
@@ -85,7 +86,8 @@ fn known_derive(name: &str) -> Option<&'static str> {
         "Ord" => Some("Ord"),
         "ToStr" => Some("ToStr"),
         "Clone" => Some("Clone"),
-        _ => None, // Hash: staged.
+        "Hash" => Some("Hash"),
+        _ => None,
     }
 }
 
@@ -100,6 +102,7 @@ fn synth_impl(s: &StructItem, derives: &[&str]) -> Option<Item> {
     let want_ord = derives.contains(&"Ord");
     let want_to_str = derives.contains(&"ToStr");
     let want_clone = derives.contains(&"Clone");
+    let want_hash = derives.contains(&"Hash");
 
     // For a generic struct the impl is a generic `extend<T: …> S<T>: …`: copy the
     // struct's parameters (bound by the interfaces the methods need), and target
@@ -122,6 +125,9 @@ fn synth_impl(s: &StructItem, derives: &[&str]) -> Option<Item> {
         }
         if want_clone {
             bounds.push(named_ty("Clone"));
+        }
+        if want_hash {
+            bounds.push(named_ty("Hash"));
         }
         let params = gp
             .params
@@ -158,6 +164,9 @@ fn synth_impl(s: &StructItem, derives: &[&str]) -> Option<Item> {
     if want_clone {
         functions.push(synth_clone(s, target.clone()));
     }
+    if want_hash {
+        functions.push(synth_hash(s));
+    }
     if functions.is_empty() {
         return None;
     }
@@ -189,6 +198,9 @@ fn synth_impl(s: &StructItem, derives: &[&str]) -> Option<Item> {
     }
     if want_clone {
         interfaces.push(named_ty("Clone"));
+    }
+    if want_hash {
+        interfaces.push(named_ty("Hash"));
     }
 
     Some(Item {
@@ -453,6 +465,59 @@ fn clone_call(receiver: Expr) -> Expr {
         },
         span: nsp(),
     }
+}
+
+/// `function hash(self): u64 { self.f0.hash() ^ self.f1.hash() ^ … }` — a
+/// commutative XOR combine of every field's `.hash()`. Per-field hashes resolve
+/// uniformly through the field's `T: Hash` (intrinsic for primitives/`str`,
+/// the field's own `extend … : Hash` for user types). A unit struct hashes to
+/// `0u64`; a single-field struct hashes to that field's hash. The XOR combine
+/// satisfies the spec's `eq ⇒ hash == hash` contract (`docs/15` §7); collision
+/// quality on positionally-symmetric tuples is intentionally a follow-up.
+fn synth_hash(s: &StructItem) -> FunctionItem {
+    let n = field_count(s);
+    let body = if n == 0 {
+        u64_lit(0)
+    } else {
+        let mut it = (0..n).map(|i| hash_call(self_field(s, i)));
+        let first = it.next().expect("n >= 1");
+        it.fold(first, |acc, h| binary(BinaryOp::BitXor, acc, h))
+    };
+    FunctionItem {
+        name: ident("hash"),
+        generics: None,
+        params: vec![Param { kind: ParamKind::SelfParam, span: nsp() }],
+        return_type: Some(named_ty("u64")),
+        is_async: false,
+        body: Some(Block { stmts: Vec::new(), trailing: Some(Box::new(body)), span: nsp() }),
+    }
+}
+
+/// `receiver.hash()` — a zero-argument method call.
+fn hash_call(receiver: Expr) -> Expr {
+    let callee = Expr {
+        kind: ExprKind::Field { receiver: Box::new(receiver), name: ident("hash") },
+        span: nsp(),
+    };
+    Expr {
+        kind: ExprKind::Call {
+            callee: Box::new(callee),
+            generics: Vec::new(),
+            args: Vec::new(),
+            trailing_closure: None,
+        },
+        span: nsp(),
+    }
+}
+
+/// `<n>u64` — a `u64`-suffixed integer literal.
+fn u64_lit(n: u64) -> Expr {
+    let lit = IntLit {
+        raw: n.to_string(),
+        base: crate::token::IntBase::Dec,
+        suffix: Some("u64".to_string()),
+    };
+    Expr { kind: ExprKind::Int(lit), span: nsp() }
 }
 
 /// Fold string-valued expressions with `+` (concatenation).

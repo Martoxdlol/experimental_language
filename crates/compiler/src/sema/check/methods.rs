@@ -28,6 +28,13 @@ impl<'a> Checker<'a> {
                 return t;
             }
         }
+        // `.hash()` on a primitive/`str` receiver: intrinsic (`docs/15` §7). User
+        // types resolve through their own `Hash` impl via the normal method path.
+        if name.name == "hash" && args.is_empty() {
+            if let Some(t) = self.check_builtin_hash(rty, callee.span) {
+                return t;
+            }
+        }
         // Builtin `List<T>` methods are resolved specially.
         if let Some(elem) = self.list_elem(rty) {
             return self.check_list_method(elem, name, args, span);
@@ -336,6 +343,11 @@ impl<'a> Checker<'a> {
         // `ToStr` is intrinsic for any directly-stringifiable value (primitives,
         // `str`, `null` — renderable via `as str`); user types via their impl.
         if iface == self.prog.to_str_def && iface != DefId(0) && self.is_stringifiable(ty) {
+            return true;
+        }
+        // `Hash` is intrinsic for primitives + `str` (`docs/15` §7); user types
+        // via a derived or hand-written `extend … : Hash`.
+        if iface == self.prog.hash_def && iface != DefId(0) && self.is_hashable(ty) {
             return true;
         }
         let module = self.current_module();

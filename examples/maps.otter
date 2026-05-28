@@ -1,4 +1,6 @@
-// Map<K, V> — a hash map with str or integer keys (docs/18 §6).
+// Map<K, V> — a hash map. Built-in keys: primitives and `str`. User types
+// implementing `Eq + Hash` (typically via `@Derive`) also work as keys
+// (docs/18 §6, docs/15 §7).
 
 function main() {
   // Map literal: keys commit the parse on the first `key:`.
@@ -50,4 +52,21 @@ function main() {
   }
   println("names   = ${names}");
   println("age sum = ${sum}");
+
+  // User-typed keys: any type implementing `Eq + Hash`. `@Derive(Eq, Hash)`
+  // synthesises both; `Map` then dispatches hashing/equality through the
+  // type's own methods (docs/15 §7). The contract is `a.eq(b)` ⇒
+  // `a.hash() == b.hash()`.
+  var dirs: Map<Coord, str> = Map<Coord, str>();
+  dirs.set(Coord { x: 0, y: 0 }, "origin");
+  dirs.set(Coord { x: 1, y: 0 }, "east");
+  dirs.set(Coord { x: 0, y: 1 }, "north");
+  match dirs.get(Coord { x: 1, y: 0 }) {
+    str s => println("east?   = ${s}"),
+    null  => println("missing east"),
+  };
+  println("dirs    = ${dirs.size()}");
 }
+
+@Derive(Eq, Hash)
+struct Coord { x: i64, y: i64 }

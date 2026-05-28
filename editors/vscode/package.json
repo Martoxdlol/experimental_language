@@ -2,7 +2,7 @@
   "name": "otter-fusion",
   "displayName": "Otter Fusion",
   "description": "Otter Fusion language support: diagnostics, hover, go-to-definition, references, rename, symbols, completion, and semantic highlighting.",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "publisher": "experimental",
   "engines": { "vscode": "^1.85.0" },
   "categories": ["Programming Languages"],

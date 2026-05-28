@@ -9,9 +9,10 @@
     { "include": "#numbers" },
     { "include": "#keywords" },
     { "include": "#constants" },
-    { "include": "#types" },
     { "include": "#declarations" },
+    { "include": "#types" },
     { "include": "#attributes" },
+    { "include": "#functions" },
     { "include": "#operators" }
   ],
   "repository": {
@@ -75,11 +76,15 @@
       "patterns": [
         {
           "name": "keyword.control.lang",
-          "match": "\\b(if|else|match|return|for|in|while|loop|break|continue|await|yield)\\b"
+          "match": "\\b(if|else|match|return|for|in|while|loop|break|continue|await|yield|spawn)\\b"
         },
         {
-          "name": "keyword.declaration.lang",
-          "match": "\\b(var|function|struct|interface|type|mod|extend|extern|import|pub|async|spawn)\\b"
+          "name": "storage.type.lang",
+          "match": "\\b(function|var|struct|interface|type|mod|extend|extern|import)\\b"
+        },
+        {
+          "name": "storage.modifier.lang",
+          "match": "\\b(pub|async)\\b"
         },
         {
           "name": "keyword.operator.word.lang",
@@ -98,8 +103,16 @@
     "types": {
       "patterns": [
         {
-          "name": "support.type.primitive.lang",
-          "match": "\\b(i8|i16|i32|i64|isize|u8|u16|u32|u64|usize|f32|f64|bool|char|str|never|dynamic)\\b"
+          "name": "entity.name.type.numeric.lang",
+          "match": "\\b(i8|i16|i32|i64|isize|u8|u16|u32|u64|usize|f32|f64)\\b"
+        },
+        {
+          "name": "entity.name.type.primitive.lang",
+          "match": "\\b(bool|char|str)\\b"
+        },
+        {
+          "name": "entity.name.type.special.lang",
+          "match": "\\b(never|dynamic)\\b"
         },
         {
           "name": "entity.name.type.lang",
@@ -112,19 +125,69 @@
         {
           "match": "\\b(function)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
-            "1": { "name": "keyword.declaration.lang" },
+            "1": { "name": "storage.type.lang" },
             "2": { "name": "entity.name.function.lang" }
           }
         },
         {
-          "name": "entity.name.function.call.lang",
-          "match": "\\b([a-z_][A-Za-z0-9_]*)(?=\\s*\\()"
+          "match": "\\b(struct)\\s+([A-Z][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "storage.type.lang" },
+            "2": { "name": "entity.name.type.struct.lang" }
+          }
+        },
+        {
+          "match": "\\b(interface)\\s+([A-Z][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "storage.type.lang" },
+            "2": { "name": "entity.name.type.interface.lang" }
+          }
+        },
+        {
+          "match": "\\b(type)\\s+([A-Z][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "storage.type.lang" },
+            "2": { "name": "entity.name.type.lang" }
+          }
+        },
+        {
+          "match": "\\b(extend)(?:\\s*<[^>]*>)?\\s+([A-Z][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "storage.type.lang" },
+            "2": { "name": "entity.name.type.lang" }
+          }
+        },
+        {
+          "match": "\\b(mod)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "storage.type.lang" },
+            "2": { "name": "entity.name.namespace.lang" }
+          }
         }
       ]
     },
+    "functions": {
+      "name": "entity.name.function.call.lang",
+      "match": "\\b([a-z_][A-Za-z0-9_]*)(?=\\s*[<(])"
+    },
     "attributes": {
-      "name": "meta.attribute.lang",
-      "match": "@[A-Za-z_][A-Za-z0-9_]*"
+      "begin": "(@[A-Za-z_][A-Za-z0-9_]*)\\s*(\\()?",
+      "end": "(?<=\\))|(?=$|[^A-Za-z0-9_(])",
+      "beginCaptures": {
+        "1": { "name": "meta.attribute.lang entity.name.function.attribute.lang" },
+        "2": { "name": "punctuation.section.attribute.begin.lang" }
+      },
+      "patterns": [
+        { "include": "#types" },
+        {
+          "name": "punctuation.separator.attribute.lang",
+          "match": ","
+        },
+        {
+          "name": "punctuation.section.attribute.end.lang",
+          "match": "\\)"
+        }
+      ]
     },
     "operators": {
       "name": "keyword.operator.lang",

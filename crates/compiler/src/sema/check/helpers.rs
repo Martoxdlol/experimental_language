@@ -167,6 +167,15 @@ impl<'a> Checker<'a> {
             TyKind::Int(_) | TyKind::Float(_) | TyKind::Char | TyKind::Str
         )
     }
+    /// Types with an intrinsic `Hash` implementation (`docs/15` §7): primitives
+    /// plus `str`. Floats are included for spec parity (NaN intentionally
+    /// violates the `eq ⇒ hash` contract — the user's responsibility).
+    pub(crate) fn is_hashable(&self, ty: Ty) -> bool {
+        matches!(
+            self.tcx.kind(ty),
+            TyKind::Int(_) | TyKind::Float(_) | TyKind::Bool | TyKind::Char | TyKind::Str
+        )
+    }
 
     pub(crate) fn op_error(&mut self, op: &'static str, ty: Ty, span: Span) -> Ty {
         let t = self.display(ty);

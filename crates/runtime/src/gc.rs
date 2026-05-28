@@ -110,9 +110,12 @@ pub static LIST_HANDLE_DESC: StaticDesc = StaticDesc { size: 32, kind: KIND_LIST
 /// traced via its owning `List` handle, which knows the length/elem-kind).
 pub static LIST_BUF_DESC: StaticDesc = StaticDesc { size: 0, kind: KIND_PLAIN, type_id: 0, n_ptrs: 0 };
 /// Shared descriptor for a `Map` handle:
-/// `[len][cap][buf][key_is_ptr][val_is_ptr]` (40 B). The collector special-cases
-/// `kind == MAP` to trace each occupied slot's key/value as needed.
-pub static MAP_HANDLE_DESC: StaticDesc = StaticDesc { size: 40, kind: KIND_MAP, type_id: 0, n_ptrs: 0 };
+/// `[len][cap][buf][key_is_ptr][val_is_ptr][hash_fn][eq_fn]` (56 B). The
+/// `hash_fn`/`eq_fn` slots are nullable function pointers; when non-null, the
+/// runtime calls through them (used for user-typed keys implementing
+/// `Eq + Hash`, `docs/15` §7). The collector special-cases `kind == MAP` to
+/// trace each occupied slot's key/value as needed.
+pub static MAP_HANDLE_DESC: StaticDesc = StaticDesc { size: 56, kind: KIND_MAP, type_id: 0, n_ptrs: 0 };
 /// Shared descriptor for a `Map` slot buffer (variable size, leaf — traced via
 /// its owning handle, which knows the capacity and key/value pointer-ness).
 pub static MAP_BUF_DESC: StaticDesc = StaticDesc { size: 0, kind: KIND_PLAIN, type_id: 0, n_ptrs: 0 };

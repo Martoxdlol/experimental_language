@@ -232,6 +232,16 @@ impl Compiled {
         if after_dot {
             return TokenClass::Property;
         }
+        // The checker only records value-position resolutions, so a name used
+        // in a *type* position (a primitive like `i64`, a prelude type like
+        // `List`, a generic param like `T`, an attribute target like `Clone`)
+        // would otherwise fall through to `Variable` and override the grammar's
+        // type coloring. Recover the type intent from shape.
+        if is_primitive_type_name(name)
+            || name.chars().next().is_some_and(char::is_uppercase)
+        {
+            return TokenClass::Type;
+        }
         TokenClass::Variable
     }
 
@@ -285,6 +295,31 @@ pub fn item_name_span(item: &ItemKind) -> Option<Span> {
         },
         ItemKind::Extend(_) | ItemKind::Import(_) => return None,
     })
+}
+
+/// Is `name` the textual name of a built-in primitive type? Used by semantic-
+/// token classification to recover the type intent for names the checker never
+/// records (type-position only).
+pub fn is_primitive_type_name(name: &str) -> bool {
+    matches!(
+        name,
+        "i8" | "i16"
+            | "i32"
+            | "i64"
+            | "isize"
+            | "u8"
+            | "u16"
+            | "u32"
+            | "u64"
+            | "usize"
+            | "f32"
+            | "f64"
+            | "bool"
+            | "char"
+            | "str"
+            | "never"
+            | "dynamic"
+    )
 }
 
 /// A builtin's display signature, for hover.
@@ -802,6 +837,28 @@ function main() {
         assert!(toks
             .iter()
             .any(|(s, k)| c.map.slice(*s) == "a" && *k == TokenClass::Parameter));
+        // Type-position primitives are classified as Type (not Variable) — the
+        // checker only records value-position resolutions, so without this
+        // recovery `i64` in `a: i64` would otherwise paint with the variable
+        // color and override the grammar's primitive scope.
+        assert!(toks
+            .iter()
+            .any(|(s, k)| c.map.slice(*s) == "i64" && *k == TokenClass::Type));
+    }
+
+    #[test]
+    fn semantic_tokens_classify_unresolved_uppercase_as_type() {
+        // `T` is a generic param (not a value resolution and not a top-level
+        // declared name), so the fallback path must still classify it as Type
+        // — otherwise it would render with the variable color.
+        let src = "function id<T>(x: T): T { x }\n";
+        let c = Compiled::new(src.into());
+        let toks = c.semantic_tokens();
+        let t_count = toks
+            .iter()
+            .filter(|(s, k)| c.map.slice(*s) == "T" && *k == TokenClass::Type)
+            .count();
+        assert!(t_count >= 3, "expected each `T` to be Type, got {t_count}");
     }
 
     #[test]

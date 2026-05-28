@@ -1,7 +1,10 @@
 //! Runtime `Map<K,V>`: open-addressing hash table (handle + slot buffer,
-//! both GC-managed; `str` or integer keys). Split from `lib.rs`.
+//! both GC-managed). Built-in `str`/integer keys and user types implementing
+//! `Eq + Hash` (the latter via per-handle hash/eq function pointers). Split
+//! from `lib.rs`.
 
 use crate::gc;
+use crate::hash::{hash_str_bytes, hash_u64};
 use crate::list::*;
 use crate::strings::{str_bytes, LangStr};
 
@@ -10,12 +13,17 @@ use crate::strings::{str_bytes, LangStr};
 // An open-addressing hash table with linear probing, represented by two managed
 // objects so the collector can trace and reclaim it (`docs/16`):
 //
-//   handle (kind=MAP, 40 B): [len][cap][buf: *managed][key_is_ptr][val_is_ptr]
+//   handle (kind=MAP, 56 B):
+//     [len][cap][buf: *managed][key_is_ptr][val_is_ptr][hash_fn][eq_fn]
 //   buf    (kind=PLAIN leaf): `cap` slots of [state: u64][key: i64][val: i64]
 //
-// `state` is 0 = empty, 1 = occupied, 2 = tombstone. Keys are either integers
-// (compared by value) or `str` pointers (compared by content); the `key_is_ptr`
-// flag selects the strategy and also lets the collector trace pointer keys.
+// `state` is 0 = empty, 1 = occupied, 2 = tombstone. `hash_fn`/`eq_fn` are
+// optional function pointers (`docs/15` §7): when non-null, the runtime calls
+// through them — this is how `Map<UserKey, V>` keyed by a struct implementing
+// `Eq + Hash` works. When null, the runtime uses its built-in strategy:
+// integer keys hash by splitmix and compare by value, `str` keys hash by FNV-1a
+// over their bytes and compare by content. The `key_is_ptr` flag both selects
+// the built-in strategy and lets the collector trace pointer keys.
 // Values are widened to `i64` by the code generator, exactly like `List<T>`.
 
 const M_LEN: usize = 0;
@@ -23,8 +31,22 @@ const M_CAP: usize = 8;
 const M_BUF: usize = 16;
 const M_KEYPTR: usize = 24;
 const M_VALPTR: usize = 32;
+const M_HASH_FN: usize = 40;
+const M_EQ_FN: usize = 48;
 /// Bytes per slot: `[state][key][val]`.
 const SLOT: usize = 24;
+
+/// Uniform C ABI for a user `Hash.hash` impl: receives the key (a managed
+/// pointer for user/`str` keys; the raw value for integers) and returns the
+/// 64-bit hash. User compiled `function hash(self): u64` matches this exactly.
+type HashFn = extern "C" fn(i64) -> u64;
+
+/// Uniform C ABI for a user `Eq.eq` impl. Returns a `u8` (`0`/`1`) — Cranelift
+/// compiles `function eq(self, other: Self): bool` to write the low 8 bits of
+/// the return register, so the `u8` reading on this side picks up exactly
+/// what the user emitted (sub-register upper bits are unspecified on aarch64
+/// / x86-64, so we cannot read a wider integer).
+type EqFn = extern "C" fn(i64, i64) -> u8;
 
 #[inline]
 unsafe fn slot_ptr(buf: *mut u8, i: usize) -> *mut u8 {
@@ -35,27 +57,31 @@ unsafe fn slot_state(buf: *mut u8, i: usize) -> u64 {
     unsafe { (slot_ptr(buf, i) as *const u64).read() }
 }
 
-/// Hash a key. Integer keys are mixed directly; `str` keys hash their bytes
-/// (FNV-1a), so structurally-equal strings collide into the same bucket.
-unsafe fn map_hash(key_is_ptr: bool, key: i64) -> u64 {
+/// Hash a key. If the map carries a `hash_fn`, dispatch to it; otherwise use
+/// the built-in strategy: integer keys are mixed directly; `str` keys hash
+/// their bytes (FNV-1a) so structurally-equal strings collide into the same
+/// bucket.
+unsafe fn map_hash(h: *mut u8, key: i64) -> u64 {
+    let raw = unsafe { lfield(h, M_HASH_FN) };
+    if raw != 0 {
+        let f: HashFn = unsafe { std::mem::transmute(raw as usize) };
+        return f(key);
+    }
+    let key_is_ptr = unsafe { lfield(h, M_KEYPTR) } != 0;
     if key_is_ptr {
-        let bytes = unsafe { str_bytes(key as *const LangStr) };
-        let mut h: u64 = 0xcbf29ce484222325;
-        for &b in bytes {
-            h ^= b as u64;
-            h = h.wrapping_mul(0x100000001b3);
-        }
-        h
+        unsafe { hash_str_bytes(key as *const LangStr) }
     } else {
-        // Mix the integer bits (splitmix64 finalizer) to avoid clustering.
-        let mut z = (key as u64).wrapping_add(0x9e3779b97f4a7c15);
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
-        z ^ (z >> 31)
+        hash_u64(key as u64)
     }
 }
 
-unsafe fn map_key_eq(key_is_ptr: bool, a: i64, b: i64) -> bool {
+unsafe fn map_key_eq(h: *mut u8, a: i64, b: i64) -> bool {
+    let raw = unsafe { lfield(h, M_EQ_FN) };
+    if raw != 0 {
+        let f: EqFn = unsafe { std::mem::transmute(raw as usize) };
+        return f(a, b) != 0;
+    }
+    let key_is_ptr = unsafe { lfield(h, M_KEYPTR) } != 0;
     if key_is_ptr {
         let (x, y) = unsafe { (str_bytes(a as *const LangStr), str_bytes(b as *const LangStr)) };
         x == y
@@ -70,9 +96,8 @@ unsafe fn map_key_eq(key_is_ptr: bool, a: i64, b: i64) -> bool {
 unsafe fn map_probe(h: *mut u8, key: i64) -> (usize, bool) {
     let cap = unsafe { lfield(h, M_CAP) } as usize;
     let buf = unsafe { lfield(h, M_BUF) } as *mut u8;
-    let key_is_ptr = unsafe { lfield(h, M_KEYPTR) } != 0;
     let mask = cap - 1; // cap is always a power of two
-    let mut i = (unsafe { map_hash(key_is_ptr, key) } as usize) & mask;
+    let mut i = (unsafe { map_hash(h, key) } as usize) & mask;
     let mut first_tomb: Option<usize> = None;
     for _ in 0..cap {
         match unsafe { slot_state(buf, i) } {
@@ -84,7 +109,7 @@ unsafe fn map_probe(h: *mut u8, key: i64) -> (usize, bool) {
             }
             _ => {
                 let k = unsafe { (slot_ptr(buf, i).add(8) as *const i64).read() };
-                if unsafe { map_key_eq(key_is_ptr, k, key) } {
+                if unsafe { map_key_eq(h, k, key) } {
                     return (i, true);
                 }
             }
@@ -126,17 +151,28 @@ unsafe fn map_resize(h: *mut u8, new_cap: usize) {
     }
 }
 
-/// Create an empty map. `key_is_ptr`/`val_is_ptr` are 1 if the key/value type is
-/// a managed pointer (so the collector traces them), else 0.
+/// Create an empty map. `key_is_ptr`/`val_is_ptr` are 1 if the key/value type
+/// is a managed pointer (so the collector traces them), else 0. `hash_fn` and
+/// `eq_fn` are optional function pointers (0 = use the built-in strategy);
+/// when non-null they are called for every hash/equality probe — this is how
+/// `Map<UserKey, V>` keyed by a struct implementing `Eq + Hash` works (the
+/// addresses are the compiled `extend` methods, `docs/15` §7).
 ///
 /// # Safety
 /// Safe to call; uses the global managed heap.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn lang_map_new(key_is_ptr: i64, val_is_ptr: i64) -> *mut u8 {
+pub unsafe extern "C" fn lang_map_new(
+    key_is_ptr: i64,
+    val_is_ptr: i64,
+    hash_fn: i64,
+    eq_fn: i64,
+) -> *mut u8 {
     let h = unsafe { gc::alloc(gc::map_handle_desc()) }; // zeroed
     unsafe {
         lset(h, M_KEYPTR, key_is_ptr as u64);
         lset(h, M_VALPTR, val_is_ptr as u64);
+        lset(h, M_HASH_FN, hash_fn as u64);
+        lset(h, M_EQ_FN, eq_fn as u64);
     }
     h
 }
@@ -159,6 +195,8 @@ pub unsafe extern "C" fn lang_map_clone(h: *mut u8) -> *mut u8 {
         lset(new, M_CAP, cap as u64);
         lset(new, M_KEYPTR, lfield(h, M_KEYPTR));
         lset(new, M_VALPTR, lfield(h, M_VALPTR));
+        lset(new, M_HASH_FN, lfield(h, M_HASH_FN));
+        lset(new, M_EQ_FN, lfield(h, M_EQ_FN));
     }
     let old_buf = unsafe { lfield(h, M_BUF) } as *const u8;
     if cap > 0 && !old_buf.is_null() {

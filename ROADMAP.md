@@ -544,7 +544,7 @@ The tracing GC is functionally complete for single-threaded programs.
       layout + decorators (`@Align`/`@Union`/`@CallConv`/`@Link`), opaque-type
       handles, `extern var`, fixed arrays, address-of to produce `*T` values.
 - [~] `@Derive` + procedural macros (`docs/22`): **`@Derive(Eq)`, `@Derive(Ord)`,
-      `@Derive(ToStr)`, and `@Derive(Clone)` work** — a source-level desugaring
+      `@Derive(ToStr)`, `@Derive(Clone)`, and `@Derive(Hash)` work** — a source-level desugaring
       (`sema/derive::expand_derives`, run in `analyze`/`analyze_multi` before
       collection) synthesises one deduped `extend` block: field-by-field `eq`
       (`==`/`!=`), lexicographic `lt`/`le`/`gt`/`ge` (`<`/`<=`/`>`/`>=`; `Ord`
@@ -577,7 +577,27 @@ The tracing GC is functionally complete for single-threaded programs.
       Synthesised nodes get unique spans in a virtual file (`FileId(u32::MAX-1)`)
       so the span-keyed checker tables don't collide; the CLI renders diagnostics
       on virtual files without an excerpt. 13 CLI tests (incl. native parity).
-      TODO: `Hash` derive, user proc macros.
+      TODO: user proc macros.
+- [x] **`Hash` + user-typed `Map` keys** (`docs/15` §7, `docs/18` §6): prelude
+      `interface Hash { function hash(self): u64 }` (`Program.hash_def`).
+      Primitives + `str` implement `Hash` intrinsically (`type_implements`);
+      `.hash()` on those receivers routes — through `check_builtin_hash`, then
+      backend `gen_primitive_hash` — to the runtime entry points
+      `lang_hash_i64` / `lang_hash_str` / `lang_hash_f64` (splitmix64 / FNV-1a;
+      shared with the runtime `Map`'s built-in strategy). `@Derive(Hash)`
+      synthesises an `extend T: Hash` whose body XORs each field's `.hash()`
+      (record/tuple/unit; concrete and generic via the `T: Hash` bound).
+      `Map<K, V>` keys may now be any `K: Eq + Hash`: the map handle carries
+      two nullable function-pointer slots (`hash_fn`, `eq_fn`); `gen_map_new`
+      takes the addresses of the key type's `extend` `hash`/`eq` methods (via
+      `iface_impls` + `declare_instance` + `func_addr`) and passes them to
+      `lang_map_new`. Built-in integer/`str` keys keep the runtime's
+      original (now centralised) hashing — the function-pointer slots stay
+      null and the runtime falls back. The map's eq fn-ptr uses a `u8` C ABI
+      return (`docs/15` §7) so the user `eq`'s compiled `bool` (Cranelift
+      `I8`) matches exactly, no trampoline. 5 new CLI tests + updated
+      `examples/maps.otter` (`Coord` keyed map); JIT + native + GC-stress
+      parity.
 - [x] **`Clone`** (`docs/10`/`docs/15` §8): prelude `interface Clone`
       (`Program.clone_def`). `.clone()` is intrinsic for immutable values
       (primitives/`char`/`bool`/`str`/`null` — `CloneKind::Identity`, since

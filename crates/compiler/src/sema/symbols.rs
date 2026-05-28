@@ -243,6 +243,9 @@ pub struct Program {
     /// Prelude `interface ToStr` — string rendering (`docs/15`/`docs/01` §8);
     /// the `T: ToStr` bound for `@Derive(ToStr)` on generic structs.
     pub to_str_def: DefId,
+    /// Prelude `interface Hash` — structural hashing (`docs/15` §7); the `T: Hash`
+    /// bound for `@Derive(Hash)` on generic structs and for `Map<K, V>` keys.
+    pub hash_def: DefId,
     /// Names the language prelude + builtins put in *every* module's scope
     /// (`List`, `Map`, `Item`, `Done`, `Iterator`, `Entry`, …), so a submodule
     /// resolves them without an `import`. Snapshotted from the root after the
@@ -278,6 +281,9 @@ interface Ord {
 }
 interface ToStr {
   function to_str(self): str;
+}
+interface Hash {
+  function hash(self): u64;
 }
 interface Drop {
   function drop(self);
@@ -344,6 +350,7 @@ impl Program {
             eq_def: DefId(0),
             ord_def: DefId(0),
             to_str_def: DefId(0),
+            hash_def: DefId(0),
             prelude_types: HashMap::new(),
             prelude_values: HashMap::new(),
         }
@@ -410,6 +417,7 @@ impl Program {
         self.eq_def = types.get("Eq").copied().unwrap_or(DefId(0));
         self.ord_def = types.get("Ord").copied().unwrap_or(DefId(0));
         self.to_str_def = types.get("ToStr").copied().unwrap_or(DefId(0));
+        self.hash_def = types.get("Hash").copied().unwrap_or(DefId(0));
     }
 
     /// Inject compiler-provided prelude types (currently `List<T>`). These have

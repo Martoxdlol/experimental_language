@@ -1,0 +1,26 @@
+function hard_work(n: i64): i64 {
+  var acc: i64 = 0;
+  var i: i64 = 0;
+  while i < n {
+    acc = acc + i;
+    i = i + 1;
+  }
+  acc
+}
+
+function main(): Future<null> async {
+  var handles: List<JoinHandle<i64>> = [];
+
+  var count = 8;
+
+  var i: i64 = 0;
+  while i < count {
+    var handle: JoinHandle<i64> = Thread.spawn(() => hard_work(1000000));
+    handles.push(handle);
+    i = i + 1;
+  }
+
+  for handle in handles {
+    await handle.join();
+  }
+}

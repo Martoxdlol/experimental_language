@@ -15,6 +15,7 @@
 pub mod async_rt;
 pub mod channels;
 pub mod gc;
+pub mod hash;
 pub mod list;
 pub mod map;
 pub mod shared;
@@ -24,6 +25,7 @@ pub mod threads;
 // Re-export the `str`/`List`/`Map` intrinsics at the crate root so generated
 // code and the backend keep referring to them as `runtime::lang_*` (and to
 // `runtime::LangStr` / `runtime::str_bytes`).
+pub use hash::*;
 pub use list::*;
 pub use map::*;
 pub use strings::*;

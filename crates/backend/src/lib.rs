@@ -117,6 +117,11 @@ fn register_runtime_symbols(b: &mut JITBuilder) {
     b.symbol("lang_str_to_lower", runtime::lang_str_to_lower as *const u8);
     b.symbol("lang_str_trim", runtime::lang_str_trim as *const u8);
     b.symbol("lang_str_concat", runtime::lang_str_concat as *const u8);
+    b.symbol("lang_hash_i64", runtime::hash::lang_hash_i64 as *const u8);
+    b.symbol("lang_hash_str", runtime::hash::lang_hash_str as *const u8);
+    b.symbol("lang_hash_f64", runtime::hash::lang_hash_f64 as *const u8);
+    b.symbol("lang_eq_i64", runtime::hash::lang_eq_i64 as *const u8);
+    b.symbol("lang_eq_str", runtime::hash::lang_eq_str as *const u8);
     b.symbol("lang_int_to_str", runtime::lang_int_to_str as *const u8);
     b.symbol("lang_uint_to_str", runtime::lang_uint_to_str as *const u8);
     b.symbol("lang_float_to_str", runtime::lang_float_to_str as *const u8);

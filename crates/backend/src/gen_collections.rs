@@ -349,14 +349,101 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     }
 
     /// Create an empty map, telling the runtime whether keys/values are managed
-    /// pointers (so the collector traces them).
+    /// pointers (so the collector traces them) and providing optional `hash`/
+    /// `eq` function pointers for user-typed keys (`docs/15` §7). The builtin
+    /// integer/`str` strategies are reused when the function pointers are
+    /// null — that path matches what existed before this slice.
     pub(crate) fn gen_map_new(&mut self, kt: Ty, vt: Ty) -> Value {
-        let kp = i64::from(is_managed_ptr(self.cx.analysis, resolve_shallow(self.cx.analysis, kt, &self.subst)));
-        let vp = i64::from(is_managed_ptr(self.cx.analysis, resolve_shallow(self.cx.analysis, vt, &self.subst)));
+        let kt_r = resolve_shallow(self.cx.analysis, kt, &self.subst);
+        let vt_r = resolve_shallow(self.cx.analysis, vt, &self.subst);
+        let kp = i64::from(is_managed_ptr(self.cx.analysis, kt_r));
+        let vp = i64::from(is_managed_ptr(self.cx.analysis, vt_r));
         let kpv = self.b.ins().iconst(types::I64, kp);
         let vpv = self.b.ins().iconst(types::I64, vp);
-        self.call_intrinsic("lang_map_new", &[types::I64, types::I64], Some(PTR), &[kpv, vpv])
-            .expect("map_new returns a pointer")
+        let (hash_fn, eq_fn) = self.map_key_ops(kt_r);
+        self.call_intrinsic(
+            "lang_map_new",
+            &[types::I64, types::I64, types::I64, types::I64],
+            Some(PTR),
+            &[kpv, vpv, hash_fn, eq_fn],
+        )
+        .expect("map_new returns a pointer")
+    }
+
+    /// Compute the `(hash_fn, eq_fn)` function-pointer pair `lang_map_new`
+    /// stores in the map handle. Builtin keys (primitives, `str`) leave both
+    /// null — the runtime dispatches them with its built-in strategy. User
+    /// keys (any other `Named` type implementing `Eq + Hash`) get the addresses
+    /// of their compiled `extend … : Hash` / `: Eq` `hash`/`eq` methods.
+    fn map_key_ops(&mut self, kt: Ty) -> (Value, Value) {
+        let null = self.b.ins().iconst(types::I64, 0);
+        match self.cx.analysis.tcx.kind(kt) {
+            // Builtin-keyed maps — runtime fallback handles these.
+            TyKind::Int(_) | TyKind::Float(_) | TyKind::Bool | TyKind::Char | TyKind::Str => {
+                (null, null)
+            }
+            TyKind::Named { def, args } => {
+                let prog = &self.cx.analysis.program;
+                // Skip the language's builtin generic types (List/Map don't act
+                // as map keys); only user nominal types reach the impl lookup.
+                if *def == prog.list_def || *def == prog.map_def {
+                    return (null, null);
+                }
+                let cdef = *def;
+                let cargs = args.clone();
+                let hash = self
+                    .extend_method_addr(cdef, &cargs, prog.hash_def, "hash")
+                    .unwrap_or(null);
+                let eq = self
+                    .extend_method_addr(cdef, &cargs, prog.eq_def, "eq")
+                    .unwrap_or(null);
+                (hash, eq)
+            }
+            _ => (null, null),
+        }
+    }
+
+    /// Look up `extend Type<args>: Iface` for `iface`, find its method named
+    /// `mname`, declare its monomorphized instance, and return that function's
+    /// runtime address as a value. Returns `None` if no such impl exists (e.g.
+    /// the type does not implement the interface).
+    fn extend_method_addr(
+        &mut self,
+        cdef: DefId,
+        cargs: &[Ty],
+        iface: DefId,
+        mname: &str,
+    ) -> Option<Value> {
+        if iface == DefId(0) {
+            return None;
+        }
+        let prog = &self.cx.analysis.program;
+        let ext = self.cx.analysis.results.iface_impls.get(&(cdef, iface)).copied()?;
+        let method = (0..prog.defs.len() as u32).map(DefId).find(|&d| {
+            let def = prog.def(d);
+            def.kind == DefKind::ExtendMethod && def.parent == Some(ext) && def.name == mname
+        })?;
+        // A generic `extend Name<P0, …>` takes the type's args in order; a
+        // concrete `extend` takes none.
+        let targs = if prog.def(ext).generics.is_empty() {
+            Vec::new()
+        } else {
+            cargs.to_vec()
+        };
+        let func_id = match self.funcs.get(&(method, targs.clone())).copied() {
+            Some(f) => f,
+            None => declare_instance(
+                self.module,
+                self.funcs,
+                self.worklist,
+                self.cx.analysis,
+                method,
+                targs,
+            )
+            .ok()??,
+        };
+        let fref = self.module.declare_func_in_func(func_id, self.b.func);
+        Some(self.b.ins().func_addr(PTR, fref))
     }
 
     /// Lower a builtin `Map<K, V>` method call.

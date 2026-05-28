@@ -348,6 +348,37 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         )
     }
 
+    /// Emit a `Hash.hash` intrinsic call for a primitive or `str` receiver
+    /// (`docs/15` §7). Narrow integer-shaped values widen to `i64` (we hash by
+    /// bit pattern, so unsigned widening is correct for both signs); floats
+    /// dispatch to `lang_hash_f64`, strings to `lang_hash_str`.
+    pub(crate) fn gen_primitive_hash(&mut self, v: Value, ty: Ty) -> Value {
+        match self.cx.analysis.tcx.kind(ty) {
+            TyKind::Str => self
+                .call_intrinsic("lang_hash_str", &[PTR], Some(types::I64), &[v])
+                .expect("lang_hash_str returns a value"),
+            TyKind::Float(f) => {
+                let v64 = if matches!(f, FloatTy::F32) {
+                    self.b.ins().fpromote(types::F64, v)
+                } else {
+                    v
+                };
+                self.call_intrinsic("lang_hash_f64", &[types::F64], Some(types::I64), &[v64])
+                    .expect("lang_hash_f64 returns a value")
+            }
+            _ => {
+                let val_ty = self.b.func.dfg.value_type(v);
+                let v64 = if val_ty == types::I64 {
+                    v
+                } else {
+                    self.b.ins().uextend(types::I64, v)
+                };
+                self.call_intrinsic("lang_hash_i64", &[types::I64], Some(types::I64), &[v64])
+                    .expect("lang_hash_i64 returns a value")
+            }
+        }
+    }
+
     /// Emit an intrinsic comparison for an `Eq`/`Ord` method (`eq`/`lt`/`le`/
     /// `gt`/`ge`) on a primitive or `str` receiver — the same code paths
     /// `gen_binary` uses for `==`/`<`/… on builtins, so a bounded `T`'s
@@ -821,6 +852,24 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                     CodegenError::new(receiver.span, "to_str receiver has no value")
                 })?;
                 return Ok(Some(self.cast_to_str(v, recv_ty, span)?));
+            }
+        }
+        // `Hash.hash` reached through a `T: Hash` bound on a primitive or `str`
+        // receiver: emit the runtime hashing intrinsic rather than seeking an
+        // `extend` impl (`docs/15` §7). Numeric/`bool`/`char` receivers widen to
+        // `i64`; floats are passed bit-equivalently to `lang_hash_f64`.
+        if self.cx.analysis.program.def(def).kind == DefKind::InterfaceMethod
+            && parent == Some(self.cx.analysis.program.hash_def)
+            && self.cx.analysis.program.hash_def != DefId(0)
+        {
+            if matches!(
+                self.cx.analysis.tcx.kind(recv_ty),
+                TyKind::Int(_) | TyKind::Float(_) | TyKind::Bool | TyKind::Char | TyKind::Str
+            ) {
+                let v = self.gen_expr(receiver)?.ok_or_else(|| {
+                    CodegenError::new(receiver.span, "hash receiver has no value")
+                })?;
+                return Ok(Some(self.gen_primitive_hash(v, recv_ty)));
             }
         }
         // An interface method on a generic type parameter is resolved to the
