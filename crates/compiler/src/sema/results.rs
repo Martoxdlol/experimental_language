@@ -133,6 +133,12 @@ pub struct CheckResults {
     /// rather than directly — `(residual variant, from_residual method, target
     /// type)`. On a match the value is unboxed, converted, and re-boxed.
     pub residual_conversions: HashMap<Span, Vec<(Ty, DefId, Ty)>>,
+    /// `?` on a non-union wrapper type (`docs/13` §3): for each such `?`
+    /// (keyed by the `?` span), the `branch` method to call on the operand
+    /// to obtain its `Output | Residual` union, the monomorphization arguments
+    /// (the wrapper extend's solved generics), and the resulting union type.
+    /// Codegen emits the branch call before the existing union partition.
+    pub try_branches: HashMap<Span, TryBranch>,
     /// Builtin collection constructor calls (`Map<K,V>()`, `List<T>()`, and
     /// their `.new` forms), keyed by the call expression's span. The value is
     /// the lowered collection type to allocate (empty).
@@ -236,15 +242,24 @@ pub enum NumIntrinsic {
     FloatConst { ty: Ty, kind: u8 },
     /// `f*.is_nan` (0) / `is_infinite` (1) / `is_finite` (2) — one float arg.
     FloatPred { ty: Ty, kind: u8 },
-    /// `T.{wrapping,saturating,checked,overflowing}_{add,sub,mul}(a, b)`.
+    /// `T.{wrapping,saturating,checked,overflowing}_{add,sub,mul,div,rem,neg,shl,shr}(args)`.
     /// `family`: 0 wrapping, 1 saturating, 2 checked, 3 overflowing.
-    /// `op`: 0 add, 1 sub, 2 mul.
+    /// `op`: 0 add, 1 sub, 2 mul, 3 div, 4 rem, 5 neg, 6 shl, 7 shr.
+    /// Arities: add/sub/mul/div/rem take `(T, T)`; neg takes `(T)`;
+    /// shl/shr take `(T, u32)`. Result by family: 0/1 → `T`, 2 → `T | null`,
+    /// 3 → `(T, bool)`.
     IntArith { ty: Ty, family: u8, op: u8 },
 }
 
 /// How codegen should clone a builtin-typed receiver (`docs/15` §8).
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum CloneKind {
+    /// `List` of a mutable element type whose elements implement `Clone`:
+    /// codegen emits an element-by-element deep clone (`docs/10`).
+    ListDeep,
+    /// `Map` whose value type is mutable but implements `Clone` (the key
+    /// type stays immutable since rehashing would change the layout).
+    MapDeep,
     /// Immutable scalars and `str`: a clone is the same value (sharing an
     /// immutable value is observationally identical to a deep copy).
     Identity,
@@ -288,6 +303,28 @@ pub struct ForAsyncIter {
     pub done_ty: Ty,
     /// The `Item<T> | Done` union (the awaited `Output`).
     pub union_ty: Ty,
+}
+
+/// Lowering info for `?` on a wrapper type that implements
+/// `Try<Output, Residual>` (`docs/13` §3). Codegen calls `branch` to get the
+/// `Output | Residual` union; the checker has pre-split it into the success
+/// variants (`output`) and failure variants (`residual`).
+#[derive(Clone, Debug)]
+pub struct TryBranch {
+    /// The `branch(self): Output | Residual` method to invoke.
+    pub method: DefId,
+    /// The monomorphization arguments for `method` (the wrapper extend's
+    /// solved generics), in declaration order.
+    pub targs: Vec<Ty>,
+    /// The `Output | Residual` union returned by `branch` — the runtime tag
+    /// dispatch happens on this.
+    pub union_ty: Ty,
+    /// The `Output` type from the `Try<Output, Residual>` impl. Variants of
+    /// this are the *success* path of `?` (unboxed as the expression's value).
+    pub output: Ty,
+    /// The `Residual` type. Its variants are the *failure* path — early-
+    /// returned directly when in `R`, or via `FromResidual` otherwise.
+    pub residual: Ty,
 }
 
 /// How codegen should drive an `Iterator`-protocol `for` loop.

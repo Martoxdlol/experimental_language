@@ -571,6 +571,17 @@ pub(crate) fn align_up(x: u32, align: u32) -> u32 {
     x.div_ceil(align) * align
 }
 
+/// Is `ty` an immutable, intrinsically-cloneable value? Primitives + `str` +
+/// `null` qualify (sharing them is observationally a deep copy, `docs/15` §8).
+/// Mirrors `Checker::is_immutable_value` for the codegen-side deep-clone
+/// recursion.
+pub(crate) fn is_immutable_value_codegen(analysis: &Analysis, ty: Ty) -> bool {
+    matches!(
+        analysis.tcx.kind(ty),
+        TyKind::Int(_) | TyKind::Float(_) | TyKind::Bool | TyKind::Char | TyKind::Str | TyKind::Null
+    )
+}
+
 /// Is a value of `ty` a managed-heap pointer (so the collector must trace it)?
 /// Primitives are not; `str`, tuples, unions/`dynamic`, and managed structs
 /// (including `List`) are. Foreign (`extern`) structs are not managed.

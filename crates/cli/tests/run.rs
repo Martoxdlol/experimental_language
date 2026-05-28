@@ -672,6 +672,98 @@ fn numeric_namespace_intrinsics() {
 }
 
 #[test]
+fn numeric_div_rem_families() {
+    // `docs/14` §5: the {wrapping,saturating,checked,overflowing}_{div,rem}
+    // families on signed `i32`. The only real overflow is `INT_MIN / -1`
+    // (resp. `INT_MIN % -1` → 0).
+    let src = "function chk(r: i32 | null): str { match r { i32 v => v as str, null => \"of\" } }\n\
+               function main() {\n\
+                 var neg1: i32 = (0 - 1) as i32;\n\
+                 println(i32.wrapping_div(i32.MIN, neg1) as str);\n\
+                 println(i32.wrapping_rem(i32.MIN, neg1) as str);\n\
+                 println(i32.saturating_div(i32.MIN, neg1) as str);\n\
+                 println(chk(i32.checked_div(10 as i32, 0 as i32)));\n\
+                 println(chk(i32.checked_div(i32.MIN, neg1)));\n\
+                 println(chk(i32.checked_div(15 as i32, 4 as i32)));\n\
+                 var od = i32.overflowing_div(i32.MIN, neg1);\n\
+                 println(\"${od.0} ${od.1}\");\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(
+        out,
+        "-2147483648\n0\n2147483647\nof\nof\n3\n-2147483648 true\n"
+    );
+}
+
+#[test]
+fn numeric_div_by_zero_panics_except_checked() {
+    // `wrapping_div(_, 0)` panics like the `/` operator does; `checked_div`
+    // folds the divide-by-zero into the null branch.
+    let src = "function main() {\n\
+                 var z: i32 = 0 as i32;\n\
+                 println(i32.wrapping_div(10 as i32, z) as str);\n\
+               }";
+    let (_, err, ok) = lang("run", src);
+    assert!(!ok, "expected a panic");
+    assert!(err.contains("divide by zero"), "stderr: {err}");
+}
+
+#[test]
+fn numeric_neg_family() {
+    // `docs/14` §5: `_neg` overflows on signed `INT_MIN` (wraps to `INT_MIN`,
+    // saturates to `INT_MAX`, returns null in `checked`, flags overflow in
+    // `overflowing`). Unsigned `neg(0) = 0` is the only non-overflowing case.
+    let src = "function chk(r: i32 | null): str { match r { i32 v => v as str, null => \"of\" } }\n\
+               function main() {\n\
+                 println(i32.wrapping_neg(i32.MIN) as str);\n\
+                 println(i32.saturating_neg(i32.MIN) as str);\n\
+                 println(chk(i32.checked_neg(i32.MIN)));\n\
+                 println(chk(i32.checked_neg(7 as i32)));\n\
+                 var on = i32.overflowing_neg(i32.MIN);\n\
+                 println(\"${on.0} ${on.1}\");\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(
+        out,
+        "-2147483648\n2147483647\nof\n-7\n-2147483648 true\n"
+    );
+}
+
+#[test]
+fn numeric_shift_family() {
+    // `docs/14` §5: `_shl` / `_shr` take a `u32` shift count. Overflow is
+    // `count >= BITS`. Saturating shift saturates the *count* to `BITS - 1`.
+    let src = "function chk(r: i32 | null): str { match r { i32 v => v as str, null => \"of\" } }\n\
+               function main() {\n\
+                 println(i32.wrapping_shl(1 as i32, 5u32) as str);\n\
+                 println(chk(i32.checked_shl(1 as i32, 31u32)));\n\
+                 println(chk(i32.checked_shl(1 as i32, 64u32)));\n\
+                 var os = i32.overflowing_shl(1 as i32, 64u32);\n\
+                 println(\"${os.0} ${os.1}\");\n\
+                 println(i32.saturating_shr(8 as i32, 2u32) as str);\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "32\n-2147483648\nof\n1 true\n2\n");
+}
+
+#[test]
+fn numeric_extended_intrinsics_native_build() {
+    // JIT/native parity for the new ops.
+    let src = "function main() {\n\
+                 println(i32.wrapping_neg(i32.MIN) as str);\n\
+                 println(i32.wrapping_shl(1 as i32, 4u32) as str);\n\
+                 var od = i32.overflowing_div(i32.MIN, (0 - 1) as i32);\n\
+                 println(\"${od.0} ${od.1}\");\n\
+               }";
+    let (out, err, ok) = lang_build_run(src, &[]);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "-2147483648\n16\n-2147483648 true\n");
+}
+
+#[test]
 fn drop_finalizer_runs_on_collection() {
     // `docs/16` §8: a `Drop` impl's `drop(self)` runs when the collector
     // reclaims an unreachable object. Under stress GC each loop temporary is
@@ -841,6 +933,153 @@ fn static_method_through_generic_bound() {
     let (out, err, ok) = lang("run", src);
     assert!(ok, "stderr: {err}");
     assert_eq!(out, "42\n");
+}
+
+#[test]
+fn static_method_on_generic_struct_infers_type_args() {
+    // `docs/11` §3: `Box.new(99)` infers `Box<i64>` from the argument's type —
+    // no explicit `<i64>` needed. Mirrors generic free-function inference.
+    let src = "struct Box<T> { value: T }\n\
+               extend<T> Box<T> {\n\
+                 function new(v: T): Box<T> { Box { value: v } }\n\
+               }\n\
+               function main() {\n\
+                 var b = Box.new(99);\n\
+                 var s = Box.new(\"hello\");\n\
+                 println(\"${b.value} ${s.value}\");\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "99 hello\n");
+}
+
+#[test]
+fn static_method_on_generic_struct_self_return() {
+    // A static method returning `Self` on a generic struct: inference must
+    // flow through the return type so the var's type is the concrete instance.
+    let src = "struct Counter<T> { count: T }\n\
+               extend<T> Counter<T> {\n\
+                 function start(v: T): Self { Counter { count: v } }\n\
+               }\n\
+               function main() {\n\
+                 var c = Counter.start(42);\n\
+                 println(\"${c.count}\");\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn static_method_on_generic_struct_multi_args() {
+    // Inference from multiple positional args binds multiple struct generics.
+    let src = "struct Pair<A, B> { left: A, right: B }\n\
+               extend<A, B> Pair<A, B> {\n\
+                 function make(l: A, r: B): Pair<A, B> { Pair { left: l, right: r } }\n\
+               }\n\
+               function main() {\n\
+                 var p = Pair.make(7, \"x\");\n\
+                 println(\"${p.left} ${p.right}\");\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "7 x\n");
+}
+
+#[test]
+fn static_method_on_generic_struct_native_build() {
+    // JIT/native parity for the new inference path.
+    let src = "struct Box<T> { value: T }\n\
+               extend<T> Box<T> {\n\
+                 function new(v: T): Box<T> { Box { value: v } }\n\
+               }\n\
+               function main() {\n\
+                 var b = Box.new(123);\n\
+                 println(\"${b.value}\");\n\
+               }";
+    let (out, err, ok) = lang_build_run(src, &[]);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "123\n");
+}
+
+#[test]
+fn method_level_generics_on_extend_method_infer() {
+    // `docs/11` §3: a method declared with its own generic params on a generic
+    // extend (`function map<U>(self, f: (T) => U): Box<U>`) infers `U` from the
+    // closure's return type — no `<str>` annotation needed.
+    let src = "struct Box<T> { value: T }\n\
+               extend<T> Box<T> {\n\
+                 function new(v: T): Box<T> { Box { value: v } }\n\
+                 function map<U>(self, f: (T) => U): Box<U> {\n\
+                   Box { value: f(self.value) }\n\
+                 }\n\
+               }\n\
+               function main() {\n\
+                 var b = Box.new(7);\n\
+                 var s = b.map((x: i64): str => \"v=${x}\");\n\
+                 println(s.value);\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "v=7\n");
+}
+
+#[test]
+fn method_level_generics_explicit_annotation() {
+    // The same call with explicit `<str>` works too; both forms target the
+    // same monomorphized instance.
+    let src = "struct Box<T> { value: T }\n\
+               extend<T> Box<T> {\n\
+                 function new(v: T): Box<T> { Box { value: v } }\n\
+                 function map<U>(self, f: (T) => U): Box<U> {\n\
+                   Box { value: f(self.value) }\n\
+                 }\n\
+               }\n\
+               function main() {\n\
+                 var b = Box.new(7);\n\
+                 var s: Box<str> = b.map<str>((x: i64): str => \"v=${x}\");\n\
+                 println(s.value);\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "v=7\n");
+}
+
+#[test]
+fn method_level_generics_chain_with_native_build() {
+    // Method-level inference chains through multiple calls — `map` returning
+    // a different element type, then `map` again. JIT/native parity.
+    let src = "struct Box<T> { value: T }\n\
+               extend<T> Box<T> {\n\
+                 function new(v: T): Box<T> { Box { value: v } }\n\
+                 function map<U>(self, f: (T) => U): Box<U> {\n\
+                   Box { value: f(self.value) }\n\
+                 }\n\
+               }\n\
+               function main() {\n\
+                 var b = Box.new(42);\n\
+                 var s = b.map((x: i64): str => \"x=${x}\");\n\
+                 var n = s.map((t: str): i64 => t.size());\n\
+                 println(\"len=${n.value}\");\n\
+               }";
+    let (out, err, ok) = lang_build_run(src, &[]);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "len=4\n");
+}
+
+#[test]
+fn static_method_on_generic_struct_uninferable_errors() {
+    // No arguments to infer from + no explicit annotation: error must be
+    // clear and anchored to the struct, not the method.
+    let src = "struct Marker<T> { tag: i64 }\n\
+               extend<T> Marker<T> {\n\
+                 function blank(): Marker<T> { Marker { tag: 0 } }\n\
+               }\n\
+               function main() { var m = Marker.blank(); println(\"${m.tag}\"); }";
+    let (_, err, ok) = lang("check", src);
+    assert!(!ok, "expected an unsolved-generic error");
+    assert!(err.contains("cannot infer generic argument") && err.contains("Marker"),
+        "stderr: {err}");
 }
 
 #[test]
@@ -1115,9 +1354,10 @@ fn list_clone_is_independent_under_gc_stress() {
 }
 
 #[test]
-fn clone_rejects_mutable_list_elements() {
-    // Cloning a `List` of a mutable (struct) element type is rejected until
-    // per-element deep clone lands; the diagnostic names the element type.
+fn clone_rejects_list_of_non_clone_elements() {
+    // A `List<T>` where `T` is mutable and has no `Clone` impl still cannot
+    // be cloned — the diagnostic names the element type so users know to
+    // derive or hand-write `Clone`.
     let src = "struct P { x: i64 }\n\
                function main() {\n\
                  var xs: List<P> = [P { x: 1 }];\n\
@@ -1126,7 +1366,71 @@ fn clone_rejects_mutable_list_elements() {
                }";
     let (_, err, ok) = lang("check", src);
     assert!(!ok, "expected a clone rejection");
-    assert!(err.contains("clone") && err.contains("List"), "stderr: {err}");
+    assert!(err.contains("clone") && err.contains("Clone"), "stderr: {err}");
+}
+
+#[test]
+fn list_deep_clone_of_user_struct() {
+    // `docs/10`: a `List` of a mutable user type that implements `Clone` now
+    // clones element-by-element. Mutating an element of the clone must NOT
+    // affect the original.
+    let src = "@Derive(Clone)\n\
+               struct Counter { value: i64 }\n\
+               extend Counter {\n\
+                 function bump(self) { self.value = self.value + 1000; }\n\
+               }\n\
+               function main() {\n\
+                 var xs: List<Counter> = [Counter { value: 1 }, Counter { value: 2 }];\n\
+                 var ys = xs.clone();\n\
+                 ys[0].bump();\n\
+                 println(\"xs0=${xs[0].value} ys0=${ys[0].value}\");\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "xs0=1 ys0=1001\n");
+}
+
+#[test]
+fn map_deep_clone_of_user_struct_value() {
+    // `Map<str, Counter>` deep-clones values element-by-element. Keys must
+    // stay immutable (their hashes would otherwise become unstable).
+    let src = "@Derive(Clone)\n\
+               struct Counter { value: i64 }\n\
+               extend Counter {\n\
+                 function bump(self) { self.value = self.value + 100; }\n\
+               }\n\
+               function main() {\n\
+                 var m: Map<str, Counter> = { \"a\": Counter { value: 1 } };\n\
+                 var n = m.clone();\n\
+                 n[\"a\"].bump();\n\
+                 var ma = m[\"a\"];\n\
+                 var na = n[\"a\"];\n\
+                 println(\"m=${ma.value} n=${na.value}\");\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "m=1 n=101\n");
+}
+
+#[test]
+fn list_deep_clone_native_build_and_gc_stress() {
+    // JIT/native parity + GC-stress safety: per-element clone allocates
+    // inside the loop, so the new list pointer must stay rooted.
+    let src = "@Derive(Clone)\n\
+               struct Counter { value: i64 }\n\
+               extend Counter {\n\
+                 function bump(self) { self.value = self.value + 1; }\n\
+               }\n\
+               function main() {\n\
+                 var xs: List<Counter> = [Counter { value: 10 }, Counter { value: 20 }];\n\
+                 var ys = xs.clone();\n\
+                 ys[0].bump();\n\
+                 ys[1].bump();\n\
+                 println(\"xs=${xs[0].value},${xs[1].value} ys=${ys[0].value},${ys[1].value}\");\n\
+               }";
+    let (out, err, ok) = lang_build_run(src, &[]);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "xs=10,20 ys=11,21\n");
 }
 
 #[test]
@@ -1510,6 +1814,64 @@ fn by_ref_captures_native_build() {
 }
 
 #[test]
+fn zero_arg_closure_call_returns_value() {
+    // `() => expr` followed by `f()` is a regular closure call with no args.
+    // Previously the parser collapsed the call's span onto the callee Ident,
+    // so `expr_types[callee.span]` was overwritten with the return type and
+    // codegen lost the `Func` type — hitting "call target not lowerable".
+    let src = "function main() {\n\
+                 var f = () => 42;\n\
+                 var r = f();\n\
+                 println(\"r=${r}\");\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "r=42\n");
+}
+
+#[test]
+fn zero_arg_closure_captures_and_mutates() {
+    // 0-arg closures still capture and observe outer state through the cells.
+    let src = "function main() {\n\
+                 var n: i64 = 0;\n\
+                 var step = () => { n = n + 1; n };\n\
+                 step();\n\
+                 step();\n\
+                 var last: i64 = step();\n\
+                 println(\"n=${n} last=${last}\");\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "n=3 last=3\n");
+}
+
+#[test]
+fn zero_arg_closure_returns_str() {
+    // The closure's return type is a managed `str` — exercises the
+    // managed-return path of `gen_closure_call` at zero arity.
+    let src = "function main() {\n\
+                 var greet = () => \"hello\";\n\
+                 var g: str = greet();\n\
+                 println(g);\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "hello\n");
+}
+
+#[test]
+fn zero_arg_closure_call_native_build() {
+    // JIT/native parity for 0-arg closure calls.
+    let src = "function main() {\n\
+                 var f = () => 7;\n\
+                 println(\"r=${f()}\");\n\
+               }";
+    let (out, err, ok) = lang_build_run(src, &[]);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "r=7\n");
+}
+
+#[test]
 fn map_keys_returns_iterator() {
     // `Map.keys()` returns a `MapKeys<K>` that implements `Iterator<K>`
     // (`docs/18` §6) — driveable by `for k in m.keys()` and composable like
@@ -1694,6 +2056,100 @@ fn question_mark_with_from_residual_conversion() {
     assert!(ok, "stderr: {err}");
     // success=30; IoError→-1; ParseError→-2
     assert_eq!(out, "30 -1 -2\n");
+}
+
+#[test]
+fn try_on_wrapper_with_branch() {
+    // `docs/13` §3: a non-union wrapper struct opts into `?` by implementing
+    // `Try<Output, Residual>`. `branch(self)` returns the `Output | Residual`
+    // union the rest of `?` then partitions.
+    let src = "struct Either<T> { ok: T, err: str, has_err: bool }\n\
+               extend<T> Either<T>: Try<T, str> {\n\
+                 function branch(self): T | str {\n\
+                   if self.has_err { self.err } else { self.ok }\n\
+                 }\n\
+               }\n\
+               function find(n: i64): Either<i64> {\n\
+                 if n < 0 { Either { ok: 0, err: \"neg\", has_err: true } }\n\
+                 else { Either { ok: n + 100, err: \"\", has_err: false } }\n\
+               }\n\
+               function process(n: i64): i64 | str {\n\
+                 var x = find(n)?;\n\
+                 x + 1\n\
+               }\n\
+               function main() {\n\
+                 match process(5) { i64 n => println(\"ok=${n}\"), str s => println(\"err=${s}\") }\n\
+                 match process(0 - 1) { i64 n => println(\"ok=${n}\"), str s => println(\"err=${s}\") }\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "ok=106\nerr=neg\n");
+}
+
+#[test]
+fn try_on_wrapper_with_from_residual_conversion() {
+    // A wrapper's `Residual` not in R can still propagate through a
+    // `FromResidual` impl on a return-type variant (`docs/13` §3 + §4).
+    let src = "struct Either<T> { ok: T, err: str, has_err: bool }\n\
+               extend<T> Either<T>: Try<T, str> {\n\
+                 function branch(self): T | str {\n\
+                   if self.has_err { self.err } else { self.ok }\n\
+                 }\n\
+               }\n\
+               struct AppError { msg: str }\n\
+               extend AppError: FromResidual<str> {\n\
+                 function from_residual(r: str): AppError { AppError { msg: r } }\n\
+               }\n\
+               function find(n: i64): Either<i64> {\n\
+                 if n < 0 { Either { ok: 0, err: \"bad\", has_err: true } }\n\
+                 else { Either { ok: n * 2, err: \"\", has_err: false } }\n\
+               }\n\
+               function process(n: i64): i64 | AppError {\n\
+                 var v = find(n)?;\n\
+                 v + 10\n\
+               }\n\
+               function main() {\n\
+                 match process(5) {\n\
+                   i64 n => println(\"ok=${n}\"),\n\
+                   AppError e => println(\"err=${e.msg}\"),\n\
+                 }\n\
+                 match process(0 - 1) {\n\
+                   i64 n => println(\"ok=${n}\"),\n\
+                   AppError e => println(\"err=${e.msg}\"),\n\
+                 }\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "ok=20\nerr=bad\n");
+}
+
+#[test]
+fn try_on_wrapper_native_build() {
+    // JIT/native parity for the new `Try` lowering.
+    let src = "struct Wrap<T> { ok: T, fail: bool }\n\
+               extend<T> Wrap<T>: Try<T, str> {\n\
+                 function branch(self): T | str {\n\
+                   if self.fail { \"err\" } else { self.ok }\n\
+                 }\n\
+               }\n\
+               function load(n: i64): Wrap<i64> { Wrap { ok: n, fail: false } }\n\
+               function go(n: i64): i64 | str { var v = load(n)?; v * 3 }\n\
+               function main() {\n\
+                 match go(7) { i64 n => println(\"v=${n}\"), str s => println(\"e=${s}\") }\n\
+               }";
+    let (out, err, ok) = lang_build_run(src, &[]);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "v=21\n");
+}
+
+#[test]
+fn try_on_plain_type_errors() {
+    // A non-union with no `Try` impl can't have `?` applied to it.
+    let src = "function get(): i64 { 5 }\n\
+               function f(): str { var n = get()?; \"hi\" }";
+    let (_, err, ok) = lang("check", src);
+    assert!(!ok, "expected an error");
+    assert!(err.contains("propagate"), "stderr: {err}");
 }
 
 #[test]

@@ -37,7 +37,7 @@ async function startClient(): Promise<void> {
   };
 
   const clientOptions: LanguageClientOptions = {
-    documentSelector: [{ scheme: "file", language: "lang" }],
+    documentSelector: [{ scheme: "file", language: "otter-fusion" }],
     synchronize: {
       fileEvents: workspace.createFileSystemWatcher("**/*.otter"),
     },

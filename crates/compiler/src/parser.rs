@@ -1641,12 +1641,12 @@ impl<'src> Parser<'src> {
                 }
                 TokenKind::LParen => {
                     self.bump();
-                    let (args, trailing) = self.parse_call_args_and_optional_trailing(restrict);
+                    let (args, trailing, rparen_span) =
+                        self.parse_call_args_and_optional_trailing(restrict);
                     let close_span = trailing
                         .as_ref()
                         .map(|tc| tc.span)
-                        .or_else(|| args.last().map(|a| a.span))
-                        .unwrap_or(expr.span);
+                        .unwrap_or(rparen_span);
                     let span = expr.span.join(close_span);
                     expr = Expr {
                         kind: ExprKind::Call {
@@ -1707,13 +1707,12 @@ impl<'src> Parser<'src> {
                     }
                     // Commit: parse `(args)` as a generic call.
                     self.bump();
-                    let (args, trailing) = self.parse_call_args_and_optional_trailing(restrict);
+                    let (args, trailing, rparen_span) =
+                        self.parse_call_args_and_optional_trailing(restrict);
                     let close_span = trailing
                         .as_ref()
                         .map(|tc| tc.span)
-                        .or_else(|| args.last().map(|a| a.span))
-                        .or_else(|| tys.last().map(|t| t.span))
-                        .unwrap_or(expr.span);
+                        .unwrap_or(rparen_span);
                     let span = expr.span.join(close_span);
                     expr = Expr {
                         kind: ExprKind::Call {
@@ -1760,7 +1759,7 @@ impl<'src> Parser<'src> {
     fn parse_call_args_and_optional_trailing(
         &mut self,
         restrict: Restrict,
-    ) -> (Vec<Expr>, Option<Box<Expr>>) {
+    ) -> (Vec<Expr>, Option<Box<Expr>>, Span) {
         let mut args = Vec::new();
         while !self.at(TokenKind::RParen) && !self.at(TokenKind::Eof) {
             args.push(self.parse_expr(Restrict::default()));
@@ -1768,13 +1767,16 @@ impl<'src> Parser<'src> {
                 break;
             }
         }
-        self.expect(TokenKind::RParen, "`)`");
+        let rparen_span = self
+            .expect(TokenKind::RParen, "`)`")
+            .map(|t| t.span)
+            .unwrap_or_else(|| self.peek_span());
         let trailing = if !restrict.no_struct_lit && self.at(TokenKind::LBrace) {
             Some(Box::new(self.parse_trailing_closure()))
         } else {
             None
         };
-        (args, trailing)
+        (args, trailing, rparen_span)
     }
 
     fn parse_trailing_closure(&mut self) -> Expr {

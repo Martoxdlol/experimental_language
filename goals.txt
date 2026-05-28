@@ -14,6 +14,8 @@
 
 ---
 
+/goal I don't want to see the name "lang" ever again. The idea is that the language code is as agnostic as possible. BUT, I DON'T WANT TO SEE "lang" as a NOT CLEAR placeholder anywhere were the real name which is already established should be. Replace WITHOUT USING BASH OR GREP all places where we are using "lang" for "otter-fusion" or "otter_fusion" (use _ for cli or commands).
+
 /goal implement fully working LSP + VS Code extension. Make it fully featured and as efficient as possible. Currently colors don't match the grammar. Grammar colors are nice! But once the lsp loads colors changes and look ugly. Use colors from grammar. Make autocomplete work.
 
 /goal apply optimizations to the backend. You can use possible-optimizations.txt as a reference but be smart and apply common logical optimization to the compiler and backend logic.

@@ -862,6 +862,30 @@ function main() {
     }
 
     #[test]
+    fn semantic_tokens_classify_prelude_types_and_primitives_in_type_position() {
+        // Mirrors a realistic snippet (see examples/threads.otter): in type
+        // position, `JoinHandle`, `Future`, `i64`, and `Thread` must all emit
+        // as Type so the theme can paint them like types, not variables.
+        let src = "\
+function main(): Future<null> async {
+  var a: JoinHandle<i64> = Thread.spawn(() => 0);
+}
+";
+        let c = Compiled::new(src.into());
+        let toks = c.semantic_tokens();
+        for name in ["JoinHandle", "Future", "Thread", "i64"] {
+            assert!(
+                toks.iter()
+                    .any(|(s, k)| c.map.slice(*s) == name && *k == TokenClass::Type),
+                "expected `{name}` to be classified as Type, tokens were: {:?}",
+                toks.iter()
+                    .map(|(s, k)| (c.map.slice(*s), *k))
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
     fn line_index_matches_position_at() {
         let text = "abc\nde\nfghij\n";
         let idx = LineIndex::new(text);

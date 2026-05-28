@@ -8,26 +8,67 @@ impl<'a> Checker<'a> {
     /// `expr?` (`docs/13` §2): partition `expr`'s type against the enclosing
     /// return type `R`. Variants of `expr` that are also variants of `R` are
     /// *failures* (early-returned); the rest are *successes* and become the
-    /// expression's value.
+    /// expression's value. When `expr`'s type is a non-union wrapper that
+    /// implements `Try<Output, Residual>` (`docs/13` §3), the partition is
+    /// performed against the union returned by `branch(self)`.
     pub(crate) fn check_try(&mut self, inner: &Expr, q_span: Span) -> Ty {
-        let et = self.check_expr(inner, None);
-        if self.tcx.is_error(et) {
+        let raw_et = self.check_expr(inner, None);
+        if self.tcx.is_error(raw_et) {
             return self.tcx.error;
         }
+        // `?` classifies each variant of the operand into success / direct
+        // failure / converted failure (via `FromResidual`).
+        //   * **Union operand:** every variant is a *candidate failure* —
+        //     variants in R are direct failures, variants outside R may still
+        //     propagate via `FromResidual`, anything else stays a success
+        //     (the spec's "the rest are the success value", `docs/13` §2).
+        //   * **`Try<O, R>` operand:** `branch(self)` produces `O | R`; the
+        //     `Output` variants are *always* successes, and the `Residual`
+        //     variants are candidate failures (direct or converted).
         let r = self.ret_ty;
-        let et_vars = self.tcx.variants(et);
         let r_vars = self.tcx.variants(r);
-        // Direct failures: variants of the operand that are also variants of R.
-        let failures: Vec<Ty> =
-            et_vars.iter().copied().filter(|v| r_vars.contains(v)).collect();
-        // The rest are candidate successes — unless a variant can propagate via
-        // a `FromResidual` conversion (`docs/13` §4), in which case it is also a
-        // failure (converted at the implicit return).
-        let mut successes = Vec::new();
+        let (always_success, failure_candidates): (Vec<Ty>, Vec<Ty>) = if matches!(
+            self.tcx.kind(raw_et),
+            TyKind::Union(_) | TyKind::Dynamic
+        ) {
+            (Vec::new(), self.tcx.variants(raw_et))
+        } else if let Some(tb) = self.find_try_impl(raw_et, q_span) {
+            let s = self.tcx.variants(tb.output);
+            let f = self.tcx.variants(tb.residual);
+            self.results.try_branches.insert(q_span, tb);
+            (s, f)
+        } else {
+            // No way to propagate from this type — emit a clear message
+            // covering both the "wrong shape" and "no Try impl" cases.
+            let nm = self.display(raw_et);
+            self.emit(q_span, SemaErrorKind::Message(format!(
+                "nothing to propagate here: `{nm}` is not a union and has no \
+                 `Try` impl; remove the `?`"
+            )));
+            return self.tcx.error;
+        };
+        // Classify each candidate failure variant. For the union case a
+        // variant outside R with no `FromResidual` impl stays a success (the
+        // historical lenient behaviour, `docs/13` §2); for the Try case the
+        // same situation is a hard error because Try's contract is that the
+        // residual *always* propagates.
         let mut conversions: Vec<(Ty, DefId, Ty)> = Vec::new();
-        for v in et_vars.iter().copied().filter(|v| !failures.contains(v)) {
-            if let Some((method, target)) = self.find_residual_conversion(v, &r_vars) {
+        let mut failures: Vec<Ty> = Vec::new();
+        let mut successes: Vec<Ty> = always_success.clone();
+        let is_try = self.results.try_branches.contains_key(&q_span);
+        for v in failure_candidates {
+            if r_vars.contains(&v) {
+                failures.push(v);
+            } else if let Some((method, target)) = self.find_residual_conversion(v, &r_vars) {
                 conversions.push((v, method, target));
+            } else if is_try {
+                let vn = self.display(v);
+                let rn = self.display(r);
+                self.emit(q_span, SemaErrorKind::Message(format!(
+                    "residual variant `{vn}` from `branch` cannot propagate \
+                     into `{rn}`; add a `FromResidual<{vn}>` impl on a \
+                     variant of the return type"
+                )));
             } else {
                 successes.push(v);
             }
@@ -40,7 +81,7 @@ impl<'a> Checker<'a> {
             self.emit(q_span, SemaErrorKind::Message(
                 "nothing to propagate here; remove the `?`".into(),
             ));
-            return et;
+            return raw_et;
         }
         if successes.is_empty() {
             self.emit(q_span, SemaErrorKind::Message(
@@ -90,6 +131,80 @@ impl<'a> Checker<'a> {
                     return Some((m, target));
                 }
             }
+        }
+        None
+    }
+
+    /// Look up a `Try<Output, Residual>` implementation for `operand_ty`
+    /// (`docs/13` §3). Scans every `extend <gens> T: Try<O, R>` block whose
+    /// target unifies with `operand_ty`, returning the `branch` method, the
+    /// solved extend type-args (for codegen monomorphization), and the
+    /// resulting `Output | Residual` union.
+    pub(crate) fn find_try_impl(&mut self, operand_ty: Ty, q_span: Span) -> Option<TryBranch> {
+        let try_def = self.prog.try_def;
+        if try_def == DefId(0) {
+            return None;
+        }
+        for id in 0..self.prog.defs.len() {
+            let ext = DefId(id as u32);
+            if self.prog.def(ext).kind != DefKind::Extend {
+                continue;
+            }
+            let Some(ItemKind::Extend(e_item)) = self.prog.def(ext).item.clone() else { continue };
+            // Build a lowering env: each extend generic becomes a fresh `Param`.
+            let mut env = TypeEnv::new(self.prog.def(ext).module);
+            let ext_gens = self.prog.def(ext).generics.clone();
+            for g in &ext_gens {
+                let name = self.prog.def(*g).name.clone();
+                env.generics.insert(name, self.tcx.mk_param(*g));
+            }
+            let target = self.lower_ty(&e_item.target, &env);
+            // Solve the extend's generics from the receiver type.
+            let mut subst: HashMap<DefId, Ty> = HashMap::new();
+            self.unify(target, operand_ty, &mut subst);
+            // Every extend generic must be solved (and the substituted target
+            // must equal `operand_ty`) for this impl to apply.
+            if ext_gens.iter().any(|g| subst.get(g).is_none()) {
+                continue;
+            }
+            let solved_target = self.subst_ty(target, &subst);
+            if solved_target != operand_ty {
+                continue;
+            }
+            // Find the `Try` interface in this extend's clause list and extract
+            // its `Output`/`Residual` type arguments.
+            let mut try_iface_args: Option<(Ty, Ty)> = None;
+            for itf in &e_item.interfaces {
+                let TypeKind::Named { name, generics } = &itf.kind else { continue };
+                if generics.len() != 2 {
+                    continue;
+                }
+                let module = self.prog.def(ext).module;
+                if self.prog.resolve_type_in(module, &name.name) != Some(try_def) {
+                    continue;
+                }
+                let o_raw = self.lower_ty(&generics[0], &env);
+                let r_raw = self.lower_ty(&generics[1], &env);
+                let o = self.subst_ty(o_raw, &subst);
+                let r = self.subst_ty(r_raw, &subst);
+                try_iface_args = Some((o, r));
+                break;
+            }
+            let Some((output, residual)) = try_iface_args else { continue };
+            let Some(method) = self.extend_method(ext, "branch") else { continue };
+            // Monomorphization arguments for `branch` (the extend's generics in
+            // declaration order — the method takes no own generics in `Try`).
+            let targs: Vec<Ty> = ext_gens
+                .iter()
+                .map(|g| subst.get(g).copied().unwrap_or(self.tcx.error))
+                .collect();
+            // Record the method-call's type args at the `?` span so codegen
+            // (which monomorphizes by `(method, targs)`) picks the right instance.
+            if !targs.is_empty() {
+                self.results.call_type_args.insert(q_span, targs.clone());
+            }
+            let union_ty = self.tcx.mk_union([output, residual]);
+            return Some(TryBranch { method, targs, union_ty, output, residual });
         }
         None
     }

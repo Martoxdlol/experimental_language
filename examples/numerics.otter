@@ -24,6 +24,15 @@ function main() {
   var ov: (i32, bool) = i32.overflowing_mul(100000, 100000);
   println("overflowing = (" + (ov.0 as str) + ", " + (ov.1 as str) + ")");
 
+  // The same families exist for div, rem, neg, shl, shr. The only signed
+  // overflow case for / and % is INT_MIN / -1 (resp. % -1 → 0).
+  var neg1: i32 = (0 - 1) as i32;
+  println("checked_div(MIN/-1) = " + describe(i32.checked_div(i32.MIN, neg1)));
+  println("saturating_div(MIN/-1) = " + (i32.saturating_div(i32.MIN, neg1) as str));
+  println("checked_neg(MIN) = " + describe(i32.checked_neg(i32.MIN)));
+  println("wrapping_shl(1, 5) = " + (i32.wrapping_shl(1 as i32, 5u32) as str));
+  println("checked_shl(1, 64) = " + describe(i32.checked_shl(1 as i32, 64u32)));
+
   // Float constants and predicates.
   var zero: f64 = 0.0;
   println("0/0 is_nan = " + (f64.is_nan(zero / zero) as str));

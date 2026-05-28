@@ -2,19 +2,27 @@
   "name": "otter-fusion",
   "displayName": "Otter Fusion",
   "description": "Otter Fusion language support: diagnostics, hover, go-to-definition, references, rename, symbols, completion, and semantic highlighting.",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "publisher": "experimental",
-  "engines": { "vscode": "^1.85.0" },
-  "categories": ["Programming Languages"],
-  "icon": "otter_fusion_small.png",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "icon": "otter_fusion.png",
   "main": "./out/extension.js",
-  "activationEvents": ["onLanguage:lang"],
   "contributes": {
     "languages": [
       {
-        "id": "lang",
-        "aliases": ["Otter Fusion", "otter"],
-        "extensions": [".otter"],
+        "id": "otter-fusion",
+        "aliases": [
+          "Otter Fusion",
+          "otter"
+        ],
+        "extensions": [
+          ".otter"
+        ],
         "configuration": "./language-configuration.json",
         "icon": {
           "light": "./otter_fusion_small.png",
@@ -24,23 +32,44 @@
     ],
     "grammars": [
       {
-        "language": "lang",
+        "language": "otter-fusion",
         "scopeName": "source.lang",
         "path": "./syntaxes/grammar.tmLanguage.json"
       }
     ],
     "semanticTokenScopes": [
       {
-        "language": "lang",
+        "language": "otter-fusion",
         "scopes": {
-          "type": ["entity.name.type.lang", "support.type.lang"],
-          "struct": ["entity.name.type.struct.lang", "entity.name.type.lang"],
-          "interface": ["entity.name.type.interface.lang", "entity.name.type.lang"],
-          "function": ["entity.name.function.lang"],
-          "method": ["entity.name.function.method.lang", "entity.name.function.lang"],
-          "variable": ["variable.other.lang"],
-          "parameter": ["variable.parameter.lang"],
-          "property": ["variable.other.property.lang", "variable.other.member.lang"]
+          "type": [
+            "entity.name.type.lang",
+            "support.type.lang"
+          ],
+          "struct": [
+            "entity.name.type.struct.lang",
+            "entity.name.type.lang"
+          ],
+          "interface": [
+            "entity.name.type.interface.lang",
+            "entity.name.type.lang"
+          ],
+          "function": [
+            "entity.name.function.lang"
+          ],
+          "method": [
+            "entity.name.function.method.lang",
+            "entity.name.function.lang"
+          ],
+          "variable": [
+            "variable.other.lang"
+          ],
+          "parameter": [
+            "variable.parameter.lang"
+          ],
+          "property": [
+            "variable.other.property.lang",
+            "variable.other.member.lang"
+          ]
         }
       }
     ],
@@ -59,7 +88,11 @@
         },
         "lang.trace.server": {
           "type": "string",
-          "enum": ["off", "messages", "verbose"],
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
           "default": "off",
           "description": "Trace the communication between VS Code and the language server."
         }

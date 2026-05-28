@@ -202,6 +202,10 @@ pub struct Program {
     pub entry_def: DefId,
     /// Prelude `interface FromResidual<R>` — error conversion for `?` (`docs/13`).
     pub from_residual_def: DefId,
+    /// Prelude `interface Try<Output, Residual>` — lets a non-union wrapper type
+    /// participate in `?` (`docs/13` §3): `branch(self)` splits the wrapper into
+    /// its success and failure variants.
+    pub try_def: DefId,
     /// Prelude `interface Clone` — deep-copy entry point (`docs/10`/`docs/15`).
     pub clone_def: DefId,
     /// Prelude `interface Drop` — finalizer run before reclamation (`docs/16` §8).
@@ -276,6 +280,9 @@ interface Iterator<T> {
 struct Entry<K, V> { key: K, value: V }
 interface FromResidual<R> {
   function from_residual(r: R): Self;
+}
+interface Try<Output, Residual> {
+  function branch(self): Output | Residual;
 }
 interface Clone {
   function clone(self): Self;
@@ -378,6 +385,7 @@ impl Program {
             iterator_def: DefId(0),
             entry_def: DefId(0),
             from_residual_def: DefId(0),
+            try_def: DefId(0),
             clone_def: DefId(0),
             drop_def: DefId(0),
             join_handle_def: DefId(0),
@@ -448,6 +456,7 @@ impl Program {
         self.iterator_def = types.get("Iterator").copied().unwrap_or(DefId(0));
         self.entry_def = types.get("Entry").copied().unwrap_or(DefId(0));
         self.from_residual_def = types.get("FromResidual").copied().unwrap_or(DefId(0));
+        self.try_def = types.get("Try").copied().unwrap_or(DefId(0));
         self.clone_def = types.get("Clone").copied().unwrap_or(DefId(0));
         self.drop_def = types.get("Drop").copied().unwrap_or(DefId(0));
         self.join_handle_def = types.get("JoinHandle").copied().unwrap_or(DefId(0));
@@ -933,7 +942,13 @@ impl Program {
             self.defs[def.index()].item = Some(ItemKind::Function(m.function.clone()));
             // A method with no `self` parameter is static (`docs/09` §6).
             self.defs[def.index()].is_static = !has_self_param(&m.function.params);
-            self.collect_generics(module, def, &m.function.generics);
+            // Method-level generic params (`function map<U>(...)`): store on the
+            // method def so `fn_env` can layer them on top of the extend's
+            // generics and `Self`. Without this, `<U>` collected the param defs
+            // but they never reached the method's `generics` vector, so type
+            // lowering of the signature failed with "cannot find type `U`".
+            let gen_defs = self.collect_generics(module, def, &m.function.generics);
+            self.defs[def.index()].generics = gen_defs;
         }
     }
 

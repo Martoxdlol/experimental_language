@@ -5,12 +5,13 @@ use super::*;
 impl<'a> Checker<'a> {
     // -- methods -------------------------------------------------------------
 
-    pub(crate) fn check_method_call(
+    pub(crate) fn check_method_call_with_generics(
         &mut self,
         callee: &Expr,
         receiver: &Expr,
         name: &Ident,
         args: &[Expr],
+        explicit_method_generics: &[Type],
         span: Span,
     ) -> Ty {
         let rty = self.check_expr(receiver, None);
@@ -104,37 +105,95 @@ impl<'a> Checker<'a> {
         let Some(ItemKind::Function(f)) = self.prog.def(method_def).item.clone() else {
             return self.tcx.error;
         };
-        // Parameter/return types are written in terms of the `extend`'s generic
-        // params; substitute the solved bindings for this concrete receiver.
-        let param_tys: Vec<Ty> = f
+        // The full substitution starts with what `resolve_method` solved from the
+        // receiver (the extend's generics), then layers the method's own generics
+        // — taken from `<...>` if written, otherwise inferred from the args.
+        let mut subst = ext_subst.clone();
+        let method_gens = self.prog.def(method_def).generics.clone();
+        let local = self.local_env();
+        for (g, t) in method_gens.iter().zip(explicit_method_generics) {
+            let gt = self.lower_ty(t, &local);
+            subst.insert(*g, gt);
+        }
+        // Parameter/return types are written in terms of the `extend`'s + the
+        // method's generic params; lower in that env and apply the current subst.
+        let raw_param_tys: Vec<Ty> = f
             .params
             .iter()
             .filter_map(|p| match &p.kind {
                 ParamKind::Normal { ty, .. } => {
                     let t = self.lower_ty(ty, &env);
-                    Some(self.subst_ty(t, &ext_subst))
+                    Some(self.subst_ty(t, &subst))
                 }
                 ParamKind::SelfParam => None,
             })
             .collect();
+        // Infer any still-unsolved method generic from the matching argument.
+        let need_inference =
+            !method_gens.is_empty() && explicit_method_generics.is_empty();
+        if need_inference {
+            for (i, a) in args.iter().enumerate() {
+                let aty = self.check_expr(a, None);
+                if let Some(pt) = raw_param_tys.get(i) {
+                    self.unify(*pt, aty, &mut subst);
+                }
+            }
+            for g in &method_gens {
+                if subst.get(g).is_none() {
+                    let gname = self.prog.def(*g).name.clone();
+                    self.emit(span, SemaErrorKind::Message(format!(
+                        "cannot infer generic argument `{}` for method `{}`; annotate it",
+                        gname, name.name
+                    )));
+                    subst.insert(*g, self.tcx.error);
+                }
+            }
+            // Chain-resolve like in static call: method generics may flow into
+            // extend-generic slots through the parameter types.
+            for _ in 0..method_gens.len() + 2 {
+                let keys: Vec<DefId> = subst.keys().copied().collect();
+                let mut changed = false;
+                for k in keys {
+                    let v = *subst.get(&k).expect("present");
+                    let resolved = self.subst_ty(v, &subst);
+                    if resolved != v {
+                        subst.insert(k, resolved);
+                        changed = true;
+                    }
+                }
+                if !changed {
+                    break;
+                }
+            }
+        }
+        let param_tys: Vec<Ty> = raw_param_tys
+            .iter()
+            .map(|t| self.subst_ty(*t, &subst))
+            .collect();
         let ret = match &f.return_type {
             Some(t) => {
                 let t = self.lower_ty(t, &env);
-                self.subst_ty(t, &ext_subst)
+                self.subst_ty(t, &subst)
             }
             None => self.tcx.null,
         };
-        // Record the extend's generic arguments (in declaration order) so codegen
-        // monomorphizes the method to this receiver's instantiation.
-        if let Some(parent) = self.prog.def(method_def).parent {
-            let ext_gens = self.prog.def(parent).generics.clone();
-            if !ext_gens.is_empty() {
-                let targs: Vec<Ty> = ext_gens
-                    .iter()
-                    .map(|g| ext_subst.get(g).copied().unwrap_or(self.tcx.error))
-                    .collect();
-                self.results.call_type_args.insert(callee.span, targs);
+        // Record the extend's then the method's generic arguments in declaration
+        // order so codegen monomorphizes the call to this concrete instantiation.
+        let parent = self.prog.def(method_def).parent;
+        let ext_gens = parent.map(|p| self.prog.def(p).generics.clone()).unwrap_or_default();
+        if !ext_gens.is_empty() || !method_gens.is_empty() {
+            let mut targs: Vec<Ty> = ext_gens
+                .iter()
+                .map(|g| subst.get(g).copied().unwrap_or(self.tcx.error))
+                .collect();
+            for g in &method_gens {
+                targs.push(subst.get(g).copied().unwrap_or(self.tcx.error));
             }
+            self.results.call_type_args.insert(callee.span, targs.clone());
+            // Enforce bounds on the inferred arguments.
+            let mut all_gens = ext_gens.clone();
+            all_gens.extend_from_slice(&method_gens);
+            self.check_bounds(&all_gens, &targs, span);
         }
         if args.len() != param_tys.len() {
             self.emit(span, SemaErrorKind::ArgCount {
@@ -142,9 +201,19 @@ impl<'a> Checker<'a> {
                 found: args.len(),
             });
         }
-        for (a, pt) in args.iter().zip(&param_tys) {
-            let at = self.check_expr(a, Some(*pt));
-            self.expect(at, *pt, a.span);
+        for (i, a) in args.iter().enumerate() {
+            if let Some(pt) = param_tys.get(i) {
+                // When we already type-checked each arg during inference, just
+                // re-`expect` against the substituted param. Otherwise check
+                // normally with the substituted param as the expected type.
+                if need_inference {
+                    let at = self.results.expr_types.get(&a.span).copied().unwrap_or(self.tcx.error);
+                    self.expect(at, *pt, a.span);
+                } else {
+                    let at = self.check_expr(a, Some(*pt));
+                    self.expect(at, *pt, a.span);
+                }
+            }
         }
         ret
     }
@@ -316,6 +385,18 @@ impl<'a> Checker<'a> {
         // `dyn I` value can be used where `T: I` is required).
         if matches!(self.tcx.kind(ty), TyKind::Named { def, .. } if *def == iface) {
             return true;
+        }
+        // A type parameter satisfies an interface that appears in its own
+        // bounds (`docs/11` §1): inside a `<T: I>` context, `T` is treated as
+        // implementing `I`. This lets a generic method's body pass a `T`-typed
+        // value to a bound static-method call or another generic call that
+        // expects `I`.
+        if let TyKind::Param(p) = self.tcx.kind(ty).clone() {
+            for (i, _iargs) in self.bound_ifaces(p) {
+                if i == iface {
+                    return true;
+                }
+            }
         }
         // `Clone` is intrinsic for immutable values and immutable-element
         // collections (`docs/15` §8); user types satisfy it via a `clone` impl,

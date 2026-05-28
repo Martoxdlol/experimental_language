@@ -16,7 +16,7 @@ use crate::ast::*;
 use crate::ids::{DefId, LocalId, ModId};
 use crate::sema::diag::{SemaError, SemaErrorKind};
 use crate::sema::lower::{Lowerer, TypeEnv};
-use crate::sema::results::{Adjust, Builtin, CheckResults, ValueRes};
+use crate::sema::results::{Adjust, Builtin, CheckResults, TryBranch, ValueRes};
 use crate::sema::symbols::{DefKind, Program};
 use crate::span::Span;
 use crate::token::IntBase;

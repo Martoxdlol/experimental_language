@@ -30,6 +30,14 @@ function build<T: Default>(): T {
   T.default()
 }
 
+// A static method on a generic type — `Box.new(99)` infers `Box<i64>` from the
+// argument's type (docs/11 §3); no explicit `<i64>` needed, just like generic
+// free-function inference.
+struct Box<T> { value: T }
+extend<T> Box<T> {
+  function new(v: T): Box<T> { Box { value: v } }
+}
+
 function main() {
   var o: Point = Point.origin();
   var p: Point = Point.at(3, 4);
@@ -38,4 +46,10 @@ function main() {
 
   var c: Config = build<Config>();
   println("config level = " + (c.level as str));
+
+  // No `<i64>`/`<str>` here — the receiver's type args fall out of the args.
+  var bi = Box.new(7);
+  var bs = Box.new("hi");
+  println("box i = " + (bi.value as str));
+  println("box s = " + bs.value);
 }

@@ -7,26 +7,73 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
 
     /// `expr?`: if the union box holds a failure variant (one also in the
     /// function's return type), return it; otherwise continue with the success
-    /// value (`success_ty` is the checker-computed result type).
+    /// value (`success_ty` is the checker-computed result type). When the
+    /// operand is a non-union wrapper that implements `Try<Output, Residual>`
+    /// (`docs/13` §3), the checker recorded the `branch` method to call first;
+    /// the resulting `Output | Residual` union is what the rest of `?` then
+    /// partitions against.
     pub(crate) fn gen_try(&mut self, inner: &Expr, q_span: Span, success_ty: Ty) -> CgResult<Option<Value>> {
-        let et = self.cx.analysis.results.expr_ty(inner.span)
-            .unwrap_or(self.cx.analysis.tcx.error);
-        let ptr = self.gen_expr(inner)?.ok_or_else(|| {
+        let raw_v = self.gen_expr(inner)?.ok_or_else(|| {
             CodegenError::new(inner.span, "`?` operand has no value")
         })?;
-        let tag = self.b.ins().load(types::I64, MemFlags::trusted(), ptr, 0);
-
-        // Failure variants: those of `et` that are also in the return type.
-        let r = self.ret_ty;
-        let r_variants = self.cx.analysis.tcx.variants(r);
-        let failures: Vec<Ty> = self
+        // If the operand has a `Try` impl, call `branch(self)` to get the
+        // `Output | Residual` union; otherwise the operand IS the union.
+        let (ptr, et) = if let Some(tb) = self
             .cx
             .analysis
-            .tcx
-            .variants(et)
-            .into_iter()
-            .filter(|v| r_variants.contains(v))
-            .collect();
+            .results
+            .try_branches
+            .get(&q_span)
+            .cloned()
+        {
+            let u = self
+                .emit_call(tb.method, tb.targs, &[raw_v], q_span)?
+                .ok_or_else(|| CodegenError::new(q_span, "`branch` returned no value"))?;
+            (u, tb.union_ty)
+        } else {
+            let et = self.cx.analysis.results.expr_ty(inner.span)
+                .unwrap_or(self.cx.analysis.tcx.error);
+            (raw_v, et)
+        };
+        let tag = self.b.ins().load(types::I64, MemFlags::trusted(), ptr, 0);
+
+        // Failure variants:
+        //   * union operand: variants of `et` that are also in the return type
+        //     R (the historical partition);
+        //   * `Try` operand: the Residual variants from the recorded impl
+        //     (`docs/13` §3) — independent of R-membership.
+        // In either case, residuals that travel via `FromResidual` are
+        // handled separately below; exclude them so we never both early-return
+        // the raw box AND run the conversion.
+        let r = self.ret_ty;
+        let r_variants = self.cx.analysis.tcx.variants(r);
+        let conv_residuals: Vec<Ty> = self
+            .cx
+            .analysis
+            .results
+            .residual_conversions
+            .get(&q_span)
+            .map(|cs| cs.iter().map(|(rv, _, _)| *rv).collect())
+            .unwrap_or_default();
+        let failures: Vec<Ty> = match self.cx.analysis.results.try_branches.get(&q_span) {
+            Some(tb) => self
+                .cx
+                .analysis
+                .tcx
+                .variants(tb.residual)
+                .into_iter()
+                .filter(|v| !conv_residuals.contains(v))
+                .collect(),
+            None => self
+                .cx
+                .analysis
+                .tcx
+                .variants(et)
+                .into_iter()
+                .filter(|v| r_variants.contains(v))
+                .filter(|v| !conv_residuals.contains(v))
+                .collect(),
+        };
 
         for fv in failures {
             let fid = { let id = self.type_id_of(fv); self.b.ins().iconst(types::I64, id) };

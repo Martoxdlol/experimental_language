@@ -138,8 +138,24 @@ Lexer, parser, AST, spans, diagnostics. 205 tests.
       (constants) / `check_call` (methods) on a primitive type name, recorded as
       `results.num_intrinsics`, lowered directly by codegen (overflow via
       Cranelift `{s,u}{add,sub,mul}_overflow`, saturating clamps by result sign).
-      JIT + native parity; `examples/numerics.otter`; 1 CLI test. TODO: the
-      `div`/`rem`/`neg`/`shl`/`shr` families.
+      JIT + native parity; `examples/numerics.otter`; 1 CLI test.
+- [x] **Numeric `div`/`rem`/`neg`/`shl`/`shr` families** (`docs/14` §5,
+      `docs/18` §10): the matrix is now complete. `check_num_method`
+      recognises five new bases (with the correct arity per op: `neg` is
+      unary, `shl`/`shr` take a `u32` shift count, the rest stay `(T, T)`)
+      and records the same `NumIntrinsic::IntArith` shape. `gen_int_arith`
+      split into four per-op-family helpers — `addsubmul` (the original
+      logic, factored), `divrem`, `neg`, `shift` — sharing a
+      `package_int_arith` step that handles the four return shapes
+      (`T` / `T | null` / `(T, bool)` / saturating-via-`select`). Each op
+      respects spec semantics: div/rem panic on `/0` for every family
+      EXCEPT `checked_*` (which folds it into the null branch); signed
+      `INT_MIN / -1` is the only true `div`/`rem` overflow and wraps to
+      `INT_MIN` / `0`; `neg` overflows on signed `INT_MIN` (or unsigned
+      non-zero); shifts overflow when the count `>= BITS`. Saturating
+      shifts saturate the *count* to `BITS - 1`. `examples/numerics.otter`
+      extended; 5 new CLI tests (div/rem matrix, panic on `/0`, neg, shift,
+      native parity). JIT + native + GC-stress parity.
 - [x] `str` + `print`/`println` + `as` casts → real programs with output.
       `crates/runtime` (provisional, pre-GC, leaks): `LangStr` repr, str
       literals (escapes), concat (`str+str`), `int/uint/float/bool/char→str`,
@@ -384,8 +400,41 @@ The tracing GC is functionally complete for single-threaded programs.
       as static (or vice-versa) is a clear error. JIT + native parity; method-
       level generics (`Type.wrap<i64>(..)`) supported; `examples/static_methods.otter`;
       3 CLI tests. TODO: static calls directly on primitive type names
-      (`i32.default()`) and concrete generic-struct type-arg inference from a
-      static call.
+      (`i32.default()`).
+- [x] **Static method inference on generic structs** (`docs/11` §3): a static
+      call on a generic type like `Box.new(99)` now infers the type arguments
+      from the call's argument types — no explicit `<i64>` needed, mirroring
+      generic-free-function inference. `check_type_static_call` keeps a
+      parametric `Param(g_struct)` receiver, runs `resolve_method` (so an
+      `extend<T> Box<T>` still solves its own generics into the same map),
+      then `unify`s each parameter type against its argument, fixed-points the
+      substitution (extend → struct → method generics may chain), records the
+      now-solved receiver in `static_recv`, and re-checks each argument against
+      the final substituted type. The monomorphization args (`call_type_args`)
+      are also chain-resolved so codegen sees only concrete types, and bounds
+      are enforced on the inferred arguments. Unsolved struct generics produce
+      a struct-anchored "cannot infer generic argument" error pointing at the
+      receiver. JIT + native + GC-stress parity; `examples/static_methods.otter`
+      extended with a `Box.new` showcase; 5 new CLI tests
+      (basic / Self-return / multi-arg / native / uninferable-error).
+- [x] **Method-level generics on `extend` methods** (`docs/11` §3): two
+      bugs uncovered and fixed. (1) `collect_extend_members` collected the
+      method's generic-param defs but discarded the result vector, leaving
+      `prog.def(method).generics` empty — so any reference to `<U>` in the
+      signature errored "cannot find type `U` in scope". `Def.generics` is
+      now set from the collected vec. (2) Instance method calls (the
+      `check_method_call` path) only substituted the extend's generics —
+      they had no inference for the method's own generics. The path now
+      unifies parameter types against arg types to solve method generics
+      (or accepts explicit `<...>` from the call site, plumbed through
+      `check_method_call_with_generics`), chain-resolves the full
+      substitution, records the extend-then-method args in
+      `call_type_args`, and enforces bounds. `type_implements` was also
+      extended to recognise that a `Param(T)` with bound `I` satisfies
+      `I` (needed for the new bounds enforcement when the inferred arg is
+      itself a type parameter — e.g. in derived `extend<A: Eq> S<A>: Eq`'s
+      synthesised body). JIT + native + GC-stress parity; 3 new CLI tests
+      (infer / explicit annotation / chained map with native parity).
 - [x] **`is`/`as` on interface objects** (`docs/12`): the `{vtable, data}` box
       now also stores the concrete type id (24 B). `is` compares it; `as`
       down-casts (panic on mismatch, returns the data pointer) and up-casts
@@ -462,8 +511,40 @@ The tracing GC is functionally complete for single-threaded programs.
       `read_local`. 6 new CLI tests (primitive/str/multi-closure/self-field/
       GC-stress/native); JIT + native + GC-stress parity, all 21 examples
       clean.
-- [ ] `Try`/`FromResidual` (`Try` shape); user macros; ambient/`pkg:`
-      imports; concurrent GC.
+- [x] **0-arg closure calls fixed** (regression closed): `var f = () => 42;
+      f()` previously errored "call target not lowerable". The parser was
+      computing the Call expression's `span` via `expr.span.join(close_span)`
+      with `close_span = expr.span` (the Ident's span) when both the args list
+      and the trailing closure were absent — so the Call and its callee Ident
+      had identical spans, and `expr_types[callee.span]` got overwritten with
+      the call's return type, hiding the callee's `Func` type from codegen.
+      `parse_call_args_and_optional_trailing` now also returns the `)` token's
+      span; both call sites use it as the close-span fallback so the Call's
+      span properly extends past the callee. 4 new CLI tests
+      (i64 return / capture+mutate / `str` return / native).
+- [x] **`Try` for non-union wrapper types** (`docs/13` §3): prelude
+      `interface Try<Output, Residual> { function branch(self): Output |
+      Residual }`. A wrapper struct now participates in `?` by writing
+      `extend<T> Wrapper<T>: Try<O, R> { function branch(self): O | R { … } }`.
+      Checker (`find_try_impl` in sema/check/control.rs): scans every
+      `extend Target: Try<O, R>` whose target unifies with the operand
+      type, solves the extend's generics, returns the `branch` method, its
+      monomorphization args, and the resulting `O | R` union. `check_try`
+      now classifies each variant uniformly: union operand → all variants
+      are failure candidates; Try operand → `Output` variants are always
+      successes, `Residual` variants are failure candidates. Each failure
+      candidate is then a *direct* failure (in R), a *converted* failure
+      (via `FromResidual<E>`, `docs/13` §4), or, for the union case,
+      stays a success (historical lenience). For Try, a residual with no
+      conversion path produces a clear error. Codegen (`gen_try`): if a
+      `TryBranch` is recorded at the `?` span, calls `branch` first with
+      its solved type-args to get the union box, then runs the existing
+      tag-dispatch on it; the failure list is the residual minus any
+      conversion variants to avoid double-handling. New `TryBranch`
+      struct in `sema::results` holds the method, targs, union, output,
+      and residual. JIT + native + GC-stress parity. 4 new CLI tests
+      (basic / FromResidual chained / native / plain-type rejected).
+- [ ] User macros; ambient/`pkg:` imports; concurrent GC.
 - [x] **Native object output + linking for `lang build`** (`docs/23`): the
       codegen backend is now generic over `cranelift_module::Module`, so the
       same lowering drives the JIT (`compile`) and a `cranelift-object`
@@ -640,8 +721,19 @@ The tracing GC is functionally complete for single-threaded programs.
       type-checks via `type_implements` (immutable / immutable-collection /
       declared `extend … : Clone`) and dispatches in codegen to the intrinsic
       (builtin receiver) or the concrete impl (user receiver). Cloning a `List`/
-      `Map` of mutable elements is rejected with a clear diagnostic (per-element
-      deep clone is a follow-up). `examples/clone.otter`; JIT + native parity;
+      `Map` of mutable elements was previously rejected; **now** deep-cloned
+      element-by-element when the element implements `Clone` (`CloneKind::
+      ListDeep`/`MapDeep`). A recursive `gen_clone_value(v, ty)` codegen
+      helper dispatches over immutable values, handle types, collections (of
+      immutable elements via the runtime helper, of mutable via the deep
+      paths), and user types (resolved through `iface_impls[(T, clone_def)]`).
+      `gen_list_clone_deep` / `gen_map_clone_deep` allocate a fresh
+      collection, root the source + destination across the per-element
+      allocation, and push each cloned element/value back; `Map` deep clone
+      reuses the source map's hash/eq fn-ptrs and snapshots the keys via
+      `lang_map_entries` to avoid concurrent-mutation hazards. 3 new CLI
+      tests (List/Map deep clone with mutation observability + native
+      parity). `examples/clone.otter`; JIT + native parity;
       GC-stress clean. 4 CLI tests.
 
 ### Phase 6 — Toolchain  🚧 IN PROGRESS

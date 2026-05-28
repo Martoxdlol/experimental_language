@@ -865,14 +865,19 @@ impl<'a> Checker<'a> {
             }
         }
         // `recv.method(args)` — a method call (callee is a field access). A
-        // trailing closure (`xs.map { … }`) is the final argument.
+        // trailing closure (`xs.map { … }`) is the final argument. Explicit
+        // method-level generics (`b.map<U>(...)`) are threaded through.
         if let ExprKind::Field { receiver, name } = &callee.kind {
             if let Some(tc) = trailing {
                 let mut all = args.to_vec();
                 all.push(tc.clone());
-                return self.check_method_call(callee, receiver, name, &all, span);
+                return self.check_method_call_with_generics(
+                    callee, receiver, name, &all, _generics, span,
+                );
             }
-            return self.check_method_call(callee, receiver, name, args, span);
+            return self.check_method_call_with_generics(
+                callee, receiver, name, args, _generics, span,
+            );
         }
         // `Pair(a, b)` on a tuple struct is direct construction, not a call
         // (docs/09 §10 — tuple structs are not rewritten to `.new`).

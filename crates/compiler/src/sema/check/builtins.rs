@@ -400,9 +400,17 @@ impl<'a> Checker<'a> {
                 self.results.clone_kinds.insert(callee_span, CloneKind::List);
                 return Some(rty);
             }
+            // A `List` of mutable elements is still cloneable when the
+            // element type implements `Clone` (`docs/10`): codegen emits a
+            // per-element deep clone.
+            let clone_def = self.prog.clone_def;
+            if clone_def != DefId(0) && self.type_implements(elem, clone_def) {
+                self.results.clone_kinds.insert(callee_span, CloneKind::ListDeep);
+                return Some(rty);
+            }
             self.emit(name_span, SemaErrorKind::Message(format!(
-                "cannot `clone` a `List` of `{}` (only immutable element types are \
-                 cloneable so far; clone the elements explicitly)",
+                "cannot `clone` a `List` of `{}` — its element type does not \
+                 implement `Clone`",
                 self.display(elem)
             )));
             return Some(self.tcx.error);
@@ -412,9 +420,22 @@ impl<'a> Checker<'a> {
                 self.results.clone_kinds.insert(callee_span, CloneKind::Map);
                 return Some(rty);
             }
-            self.emit(name_span, SemaErrorKind::Message(
-                "cannot `clone` a `Map` with mutable key/value types yet".into(),
-            ));
+            // The key type must be immutable (its hash would otherwise become
+            // unstable across the clone). The value type can be deep-cloned
+            // when it implements `Clone`.
+            let clone_def = self.prog.clone_def;
+            if self.is_immutable_value(kt)
+                && clone_def != DefId(0)
+                && self.type_implements(vt, clone_def)
+            {
+                self.results.clone_kinds.insert(callee_span, CloneKind::MapDeep);
+                return Some(rty);
+            }
+            self.emit(name_span, SemaErrorKind::Message(format!(
+                "cannot `clone` a `Map<{}, {}>` — key must be immutable and \
+                 value must implement `Clone`",
+                self.display(kt), self.display(vt)
+            )));
             return Some(self.tcx.error);
         }
         None
@@ -594,6 +615,9 @@ impl<'a> Checker<'a> {
 
     /// `Type.static_method(args)` for a concrete extendable type: resolve a
     /// static method declared in an `extend` of `Type` (`docs/09` §6).
+    /// When `Type` is generic and its type arguments are not annotated, infer
+    /// them from the static method's argument types (`docs/11` §3) — so
+    /// `Box.new(99)` deduces `Box<i64>` from the `99: i64`.
     pub(crate) fn check_type_static_call(
         &mut self,
         struct_def: DefId,
@@ -603,10 +627,9 @@ impl<'a> Checker<'a> {
         explicit_generics: &[Type],
         span: Span,
     ) -> Ty {
-        // Form the receiver nominal type. Non-generic types have no arguments;
-        // a generic type uses its own parameters (its static methods are
-        // resolved structurally — concrete inference of the type's arguments
-        // from a static call is a follow-up).
+        // Form a parametric receiver: each struct generic stays a `Param` until
+        // it is solved from the call's argument types (or remains an error if
+        // there is nothing to infer it from).
         let struct_gens = self.prog.def(struct_def).generics.clone();
         let recv_args: Vec<Ty> = struct_gens.iter().map(|g| self.tcx.mk_param(*g)).collect();
         let recv_ty = self.tcx.mk_named(struct_def, recv_args);
@@ -628,10 +651,11 @@ impl<'a> Checker<'a> {
         }
         self.results.resolutions.insert(callee.span, ValueRes::Method(mdef));
         self.results.static_calls.insert(callee.span);
-        self.results.static_recv.insert(callee.span, recv_ty);
 
-        // Build the full substitution: the extend's generics (solved by the
-        // receiver), then the method's own generics (from explicit `<...>`).
+        // Substitution chain:
+        //   * `ext_subst` maps the extend's generics → the struct's `Param`s.
+        //   * The method's explicit `<...>` (if any) binds its own generics.
+        //   * Inference fills in each struct generic from the matching argument.
         let mut subst = ext_subst.clone();
         let env = self.local_env();
         let method_gens = self.prog.def(mdef).generics.clone();
@@ -643,7 +667,9 @@ impl<'a> Checker<'a> {
         let Some(ItemKind::Function(f)) = self.prog.def(mdef).item.clone() else {
             return self.tcx.error;
         };
-        let param_tys: Vec<Ty> = f
+        // Parameter types with the partial substitution applied — any unsolved
+        // struct generic still appears as `Param(g_struct)` here.
+        let raw_param_tys: Vec<Ty> = f
             .params
             .iter()
             .filter_map(|p| match &p.kind {
@@ -654,34 +680,98 @@ impl<'a> Checker<'a> {
                 ParamKind::SelfParam => None,
             })
             .collect();
-        let ret = match &f.return_type {
-            Some(t) => {
-                let t = self.lower_ty(t, &menv);
-                self.subst_ty(t, &subst)
+
+        // Infer the struct's generics by unifying each parameter against the
+        // matching argument type (mirroring `check_generic_call`). With no
+        // expected type passed in: a single check per arg, then re-`expect`
+        // once the substitution is solved.
+        for (i, a) in args.iter().enumerate() {
+            let aty = self.check_expr(a, None);
+            if let Some(pt) = raw_param_tys.get(i) {
+                self.unify(*pt, aty, &mut subst);
             }
-            None => self.tcx.null,
-        };
-        // Record monomorphization args: the extend's generics, then the method's.
+        }
+        // The (now-solved) receiver type for codegen's static-call dispatch.
+        let recv_args_solved: Vec<Ty> = struct_gens
+            .iter()
+            .map(|g| subst.get(g).copied().unwrap_or(self.tcx.error))
+            .collect();
+        let recv_ty_solved = self.tcx.mk_named(struct_def, recv_args_solved);
+        self.results.static_recv.insert(callee.span, recv_ty_solved);
+        // Report unsolved struct generics with a clear, struct-anchored message.
+        for g in &struct_gens {
+            if subst.get(g).is_none() {
+                let gname = self.prog.def(*g).name.clone();
+                self.emit(span, SemaErrorKind::Message(format!(
+                    "cannot infer generic argument `{}` for `{}`; annotate it",
+                    gname,
+                    self.prog.def(struct_def).name
+                )));
+                subst.insert(*g, self.tcx.error);
+            }
+        }
+        // Chain-resolve the substitution: an extend generic mapped to a struct
+        // `Param` (e.g. `T_ext → Param(T_struct)`) should reach the struct
+        // generic's solved type (e.g. `i64`) in one final lookup. Iterating
+        // once is sufficient because chains are short (struct → extend → method),
+        // but a small fixed-point bound guards against pathological cases.
+        for _ in 0..struct_gens.len() + 2 {
+            let keys: Vec<DefId> = subst.keys().copied().collect();
+            let mut changed = false;
+            for k in keys {
+                let v = *subst.get(&k).expect("present");
+                let resolved = self.subst_ty(v, &subst);
+                if resolved != v {
+                    subst.insert(k, resolved);
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        // Final parameter types, with all generics substituted.
+        let param_tys: Vec<Ty> = raw_param_tys
+            .iter()
+            .map(|t| self.subst_ty(*t, &subst))
+            .collect();
+        if args.len() != param_tys.len() {
+            self.emit(span, SemaErrorKind::ArgCount { expected: param_tys.len(), found: args.len() });
+        }
+        for (i, a) in args.iter().enumerate() {
+            if let Some(pt) = param_tys.get(i) {
+                let at = self.results.expr_types.get(&a.span).copied().unwrap_or(self.tcx.error);
+                self.expect(at, *pt, a.span);
+            }
+        }
+        // Record monomorphization args: the extend's generics (resolved through
+        // the chain to concrete types), then the method's own generics.
         let parent = self.prog.def(mdef).parent;
         let ext_gens = parent.map(|p| self.prog.def(p).generics.clone()).unwrap_or_default();
         let mut targs: Vec<Ty> = ext_gens
             .iter()
-            .map(|g| ext_subst.get(g).copied().unwrap_or(self.tcx.error))
+            .map(|g| {
+                let t = subst.get(g).copied().unwrap_or(self.tcx.error);
+                self.subst_ty(t, &subst)
+            })
             .collect();
         for g in &method_gens {
             targs.push(subst.get(g).copied().unwrap_or(self.tcx.error));
         }
         if !targs.is_empty() {
-            self.results.call_type_args.insert(callee.span, targs);
+            self.results.call_type_args.insert(callee.span, targs.clone());
         }
-        if args.len() != param_tys.len() {
-            self.emit(span, SemaErrorKind::ArgCount { expected: param_tys.len(), found: args.len() });
+        // Enforce each bound on the inferred type arguments.
+        let mut all_gens = ext_gens.clone();
+        all_gens.extend_from_slice(&method_gens);
+        self.check_bounds(&all_gens, &targs, span);
+        match &f.return_type {
+            Some(t) => {
+                let t = self.lower_ty(t, &menv);
+                self.subst_ty(t, &subst)
+            }
+            None => self.tcx.null,
         }
-        for (a, pt) in args.iter().zip(&param_tys) {
-            let at = self.check_expr(a, Some(*pt));
-            self.expect(at, *pt, a.span);
-        }
-        ret
     }
 
     /// Type-check `channel<T>(): (Sender<T>, Receiver<T>)` (`docs/20` §2).
@@ -869,9 +959,33 @@ impl<'a> Checker<'a> {
             "add" => 0u8,
             "sub" => 1,
             "mul" => 2,
+            "div" => 3,
+            "rem" => 4,
+            "neg" => 5,
+            "shl" => 6,
+            "shr" => 7,
             _ => return None,
         };
-        self.check_num_args(args, &[ity, ity], span);
+        // Argument arities differ by op (`docs/14` §5, `docs/18` §10):
+        //   * unary: `neg`;
+        //   * binary with `u32` shift count: `shl`, `shr`;
+        //   * binary `(T, T)`: the rest.
+        let u32_ty = self.tcx.int(IntTy::U32);
+        let expected: &[Ty] = match op {
+            5 => &[ity][..],
+            6 | 7 => {
+                let v = vec![ity, u32_ty];
+                self.results.num_intrinsics.insert(span, NumIntrinsic::IntArith { ty: ity, family, op });
+                self.check_num_args(args, &v, span);
+                return Some(match family {
+                    2 => self.tcx.mk_union([ity, self.tcx.null]),
+                    3 => self.tcx.mk_tuple(vec![ity, self.tcx.bool]),
+                    _ => ity,
+                });
+            }
+            _ => &[ity, ity][..],
+        };
+        self.check_num_args(args, expected, span);
         self.results.num_intrinsics.insert(span, NumIntrinsic::IntArith { ty: ity, family, op });
         // Result type by family: wrapping/saturating → T; checked → T | null;
         // overflowing → (T, bool).

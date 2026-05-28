@@ -219,12 +219,100 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         }
     }
 
-    /// Lower a `{wrapping,saturating,checked,overflowing}_{add,sub,mul}` call.
+    /// Lower a `{wrapping,saturating,checked,overflowing}_{add,sub,mul,div,
+    /// rem,neg,shl,shr}` call. Op codes follow `NumIntrinsic::IntArith`.
     pub(crate) fn gen_int_arith(&mut self, ty: Ty, family: u8, op: u8, args: &[Expr]) -> CgResult<Option<Value>> {
         let it = self.int_ty_of(ty);
         let signed = it.is_signed();
+        let ct = int_clty(it);
+        // Arg evaluation: neg is unary, shl/shr take a u32 shift; the rest are
+        // both `T`.
         let a = self.gen_expr(&args[0])?.ok_or_else(|| CodegenError::new(args[0].span, "arg"))?;
-        let b = self.gen_expr(&args[1])?.ok_or_else(|| CodegenError::new(args[1].span, "arg"))?;
+        let b_opt = match op {
+            5 => None, // neg
+            _ => Some(self.gen_expr(&args[1])?.ok_or_else(|| CodegenError::new(args[1].span, "arg"))?),
+        };
+        match op {
+            0 | 1 | 2 => self.gen_int_arith_addsubmul(ty, it, signed, family, op, a, b_opt.unwrap()),
+            3 | 4 => self.gen_int_arith_divrem(ty, it, signed, family, op, a, b_opt.unwrap()),
+            5 => self.gen_int_arith_neg(ty, it, signed, family, a),
+            6 | 7 => self.gen_int_arith_shift(ty, it, signed, family, op, a, b_opt.unwrap()),
+            _ => Err(CodegenError::new(args[0].span, "unknown int arith op")),
+        }
+        .map(|v| Some(v))
+        .or_else(|e| Err(e)).map(|some| some).map(|v| { let _ = ct; v })
+    }
+
+    /// Wrap a binary-overflow style result `(res, ovf)` according to `family`.
+    /// `saturating_clamp` is the value to substitute when overflowing in
+    /// saturating mode (callers pre-compute it based on the op's overflow
+    /// shape; see add/sub/mul below for the per-op rules).
+    fn package_int_arith(
+        &mut self,
+        family: u8,
+        ty: Ty,
+        res: Value,
+        ovf: Value,
+        saturating_clamp: Option<Value>,
+    ) -> Value {
+        match family {
+            0 => res, // wrapping
+            1 => {
+                let clamp = saturating_clamp.expect("saturating needs a clamp value");
+                self.b.ins().select(ovf, clamp, res)
+            }
+            2 => self.build_checked_union(res, ovf, ty),
+            _ => self.build_overflowing_tuple(res, ovf, ty),
+        }
+    }
+
+    /// Build a `T | null` box: the value boxed as `T` when `ovf` is false,
+    /// otherwise a `null`-tagged box (`docs/14` §5).
+    fn build_checked_union(&mut self, res: Value, ovf: Value, ty: Ty) -> Value {
+        let one = self.b.ins().iconst(types::I8, 1);
+        let no_ovf = self.b.ins().bxor(ovf, one);
+        let some_bb = self.b.create_block();
+        let none_bb = self.b.create_block();
+        let merge = self.b.create_block();
+        self.b.append_block_param(merge, PTR);
+        self.b.ins().brif(no_ovf, some_bb, &[], none_bb, &[]);
+        self.term = true;
+        self.switch(some_bb);
+        let boxed = self.box_value(Some(res), ty);
+        self.b.ins().jump(merge, &[boxed.into()]);
+        self.term = true;
+        self.switch(none_bb);
+        let null_ty = self.cx.analysis.tcx.null;
+        let nb = self.box_value(None, null_ty);
+        self.b.ins().jump(merge, &[nb.into()]);
+        self.term = true;
+        self.switch(merge);
+        self.b.block_params(merge)[0]
+    }
+
+    /// Build a `(T, bool)` tuple holding the result and the overflow flag.
+    fn build_overflowing_tuple(&mut self, res: Value, ovf: Value, ty: Ty) -> Value {
+        let elems = vec![ty, self.cx.analysis.tcx.bool];
+        let layout = tuple_layout(self.cx.analysis, &elems);
+        let ptr = self.alloc_struct(&layout);
+        self.b.ins().store(MemFlags::trusted(), res, ptr, layout.offsets[0] as i32);
+        self.b.ins().store(MemFlags::trusted(), ovf, ptr, layout.offsets[1] as i32);
+        ptr
+    }
+
+    /// `{wrapping,saturating,checked,overflowing}_{add,sub,mul}`. The original
+    /// implementation, factored out so the new ops live alongside it.
+    fn gen_int_arith_addsubmul(
+        &mut self,
+        ty: Ty,
+        it: IntTy,
+        signed: bool,
+        family: u8,
+        op: u8,
+        a: Value,
+        b: Value,
+    ) -> CgResult<Value> {
+        let ct = int_clty(it);
         let (res, ovf) = match (op, signed) {
             (0, true) => self.b.ins().sadd_overflow(a, b),
             (0, false) => self.b.ins().uadd_overflow(a, b),
@@ -233,71 +321,189 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             (2, true) => self.b.ins().smul_overflow(a, b),
             _ => self.b.ins().umul_overflow(a, b),
         };
-        let ct = int_clty(it);
-        match family {
-            0 => Ok(Some(res)), // wrapping: the two's-complement result
-            1 => {
-                // saturating: on overflow clamp to MIN/MAX by the result's sign.
-                let (lo, hi) = int_min_max(it);
-                let min = self.b.ins().iconst(ct, lo);
-                let max = self.b.ins().iconst(ct, hi);
-                let zero = self.b.ins().iconst(ct, 0);
-                let clamp = if !signed {
-                    // unsigned: add/mul overflow → MAX; sub underflow → MIN(0).
-                    if op == 1 { min } else { max }
-                } else {
-                    // signed: pick by the sign the true result would have had.
-                    let to_max = match op {
-                        0 => self.b.ins().icmp(IntCC::SignedGreaterThanOrEqual, a, zero), // a+b overflow: same sign as a
-                        1 => self.b.ins().icmp(IntCC::SignedGreaterThanOrEqual, a, zero), // a-b overflow: sign of a
-                        _ => {
-                            // mul: result positive iff operands have equal sign.
-                            let an = self.b.ins().icmp(IntCC::SignedLessThan, a, zero);
-                            let bn = self.b.ins().icmp(IntCC::SignedLessThan, b, zero);
-                            let diff = self.b.ins().bxor(an, bn);
-                            let one = self.b.ins().iconst(types::I8, 1);
-                            self.b.ins().bxor(diff, one) // positive (→MAX) when signs equal
-                        }
-                    };
-                    self.b.ins().select(to_max, max, min)
+        let sat_clamp = if family == 1 {
+            let (lo, hi) = int_min_max(it);
+            let min = self.b.ins().iconst(ct, lo);
+            let max = self.b.ins().iconst(ct, hi);
+            let zero = self.b.ins().iconst(ct, 0);
+            Some(if !signed {
+                if op == 1 { min } else { max }
+            } else {
+                let to_max = match op {
+                    0 => self.b.ins().icmp(IntCC::SignedGreaterThanOrEqual, a, zero),
+                    1 => self.b.ins().icmp(IntCC::SignedGreaterThanOrEqual, a, zero),
+                    _ => {
+                        let an = self.b.ins().icmp(IntCC::SignedLessThan, a, zero);
+                        let bn = self.b.ins().icmp(IntCC::SignedLessThan, b, zero);
+                        let diff = self.b.ins().bxor(an, bn);
+                        let one = self.b.ins().iconst(types::I8, 1);
+                        self.b.ins().bxor(diff, one)
+                    }
                 };
-                Ok(Some(self.b.ins().select(ovf, clamp, res)))
-            }
-            2 => {
-                // checked: `T | null` — null on overflow, else the value boxed.
-                let union_ty = self.cx.analysis.tcx.error; // not needed; box by elem
-                let _ = union_ty;
-                let one = self.b.ins().iconst(types::I8, 1);
-                let no_ovf = self.b.ins().bxor(ovf, one);
-                // Build the union: value box when no overflow, else null box.
-                let some_bb = self.b.create_block();
-                let none_bb = self.b.create_block();
-                let merge = self.b.create_block();
-                self.b.append_block_param(merge, PTR);
-                self.b.ins().brif(no_ovf, some_bb, &[], none_bb, &[]);
-                self.term = true;
-                self.switch(some_bb);
-                let boxed = self.box_value(Some(res), ty);
-                self.b.ins().jump(merge, &[boxed.into()]);
-                self.term = true;
-                self.switch(none_bb);
-                let null_ty = self.cx.analysis.tcx.null;
-                let nb = self.box_value(None, null_ty);
-                self.b.ins().jump(merge, &[nb.into()]);
-                self.term = true;
-                self.switch(merge);
-                Ok(Some(self.b.block_params(merge)[0]))
-            }
-            _ => {
-                // overflowing: `(T, bool)` tuple.
-                let elems = vec![ty, self.cx.analysis.tcx.bool];
-                let layout = tuple_layout(self.cx.analysis, &elems);
-                let ptr = self.alloc_struct(&layout);
-                self.b.ins().store(MemFlags::trusted(), res, ptr, layout.offsets[0] as i32);
-                self.b.ins().store(MemFlags::trusted(), ovf, ptr, layout.offsets[1] as i32);
-                Ok(Some(ptr))
-            }
+                self.b.ins().select(to_max, max, min)
+            })
+        } else {
+            None
+        };
+        Ok(self.package_int_arith(family, ty, res, ovf, sat_clamp))
+    }
+
+    /// `{wrapping,saturating,checked,overflowing}_{div,rem}`. Divide-by-zero
+    /// is a panic for every family except `checked_*`, which folds it into
+    /// the null branch (`docs/14` §5). The only real overflow on `div`/`rem`
+    /// is signed `INT_MIN / -1` (resp. `INT_MIN % -1` → 0).
+    fn gen_int_arith_divrem(
+        &mut self,
+        ty: Ty,
+        it: IntTy,
+        signed: bool,
+        family: u8,
+        op: u8,
+        a: Value,
+        b: Value,
+    ) -> CgResult<Value> {
+        let ct = int_clty(it);
+        let zero = self.b.ins().iconst(ct, 0);
+        let b_zero = self.b.ins().icmp(IntCC::Equal, b, zero);
+        // For `checked_div`/`checked_rem`, treat `b == 0` as overflow (null);
+        // every other family panics on it (uniform with the operator forms).
+        if family != 2 {
+            self.guard_panic(b_zero, "divide by zero");
         }
+        // Signed `INT_MIN / -1` (or `% -1`) is the only true overflow.
+        let (ovf_signed, safe_b) = if signed {
+            let (o, sb) = self.div_overflow_select(a, b);
+            (o, sb)
+        } else {
+            let i8z = self.b.ins().iconst(types::I8, 0);
+            (i8z, b)
+        };
+        // For `checked_*`, the divisor must also be sanitised so the hardware
+        // op doesn't trap on `0` before we surface it as null. The `ovf` flag
+        // combines "true overflow" with "divide by zero" for this family.
+        let one = self.b.ins().iconst(ct, 1);
+        let safe_b = self.b.ins().select(b_zero, one, safe_b);
+        let ovf = if family == 2 {
+            self.b.ins().bor(ovf_signed, b_zero)
+        } else {
+            ovf_signed
+        };
+        let raw = if op == 3 {
+            if signed { self.b.ins().sdiv(a, safe_b) } else { self.b.ins().udiv(a, safe_b) }
+        } else if signed {
+            self.b.ins().srem(a, safe_b)
+        } else {
+            self.b.ins().urem(a, safe_b)
+        };
+        // Real `INT_MIN / -1` wraps to `INT_MIN`; `INT_MIN % -1` to `0`.
+        let res = if signed {
+            if op == 3 { self.b.ins().select(ovf_signed, a, raw) }
+            else { self.b.ins().select(ovf_signed, zero, raw) }
+        } else {
+            raw
+        };
+        let sat_clamp = if family == 1 {
+            // Saturating signed `INT_MIN / -1` saturates to `INT_MAX`;
+            // `INT_MIN % -1` already wraps to `0` (no saturation needed but
+            // the package selects between `res` and the clamp under `ovf`,
+            // so for rem we still pass `zero` which keeps the result `0`).
+            let (_, hi) = int_min_max(it);
+            let max = self.b.ins().iconst(ct, hi);
+            Some(if op == 3 { max } else { zero })
+        } else {
+            None
+        };
+        Ok(self.package_int_arith(family, ty, res, ovf, sat_clamp))
+    }
+
+    /// `{wrapping,saturating,checked,overflowing}_neg`. Signed `INT_MIN`
+    /// negated overflows back to `INT_MIN`; for unsigned `T`, `neg(a)` is
+    /// `0 - a` (wrapping) and overflows whenever `a != 0`.
+    fn gen_int_arith_neg(
+        &mut self,
+        ty: Ty,
+        it: IntTy,
+        signed: bool,
+        family: u8,
+        a: Value,
+    ) -> CgResult<Value> {
+        let ct = int_clty(it);
+        let res = self.b.ins().ineg(a);
+        let ovf = if signed {
+            let (lo, _) = int_min_max(it);
+            let min_v = self.b.ins().iconst(ct, lo);
+            self.b.ins().icmp(IntCC::Equal, a, min_v)
+        } else {
+            let zero = self.b.ins().iconst(ct, 0);
+            self.b.ins().icmp(IntCC::NotEqual, a, zero)
+        };
+        let sat_clamp = if family == 1 {
+            // Signed saturating neg of `INT_MIN` is `INT_MAX`; unsigned
+            // saturates to `0` (the only representable negation).
+            Some(if signed {
+                let (_, hi) = int_min_max(it);
+                self.b.ins().iconst(ct, hi)
+            } else {
+                self.b.ins().iconst(ct, 0)
+            })
+        } else {
+            None
+        };
+        Ok(self.package_int_arith(family, ty, res, ovf, sat_clamp))
+    }
+
+    /// `{wrapping,saturating,checked,overflowing}_{shl,shr}`. The shift count
+    /// is a `u32` (Rust convention); overflow means `count >= BITS`.
+    fn gen_int_arith_shift(
+        &mut self,
+        ty: Ty,
+        it: IntTy,
+        signed: bool,
+        family: u8,
+        op: u8,
+        a: Value,
+        count_u32: Value,
+    ) -> CgResult<Value> {
+        let ct = int_clty(it);
+        let bits = ct.bits() as i64;
+        // The shift count is a `u32`; widen/narrow to the value's type for the
+        // shift, and keep the original to compare against `BITS`.
+        let count_u32_w = match self.b.func.dfg.value_type(count_u32).bits() {
+            32 => count_u32,
+            _ => self.b.ins().uextend(types::I32, count_u32),
+        };
+        let bits_i32 = self.b.ins().iconst(types::I32, bits);
+        let ovf = self.b.ins().icmp(IntCC::UnsignedGreaterThanOrEqual, count_u32_w, bits_i32);
+        // Bring the count into the value's type for the hardware shift. The
+        // hardware ignores the upper bits past `BITS`, so wrapping behaviour
+        // emerges naturally; the explicit `ovf` flag drives the family logic.
+        let count_t = if ct == types::I32 {
+            count_u32_w
+        } else if ct.bits() < 32 {
+            self.b.ins().ireduce(ct, count_u32_w)
+        } else {
+            self.b.ins().uextend(ct, count_u32_w)
+        };
+        let res = match (op, signed) {
+            (6, _) => self.b.ins().ishl(a, count_t),
+            (7, true) => self.b.ins().sshr(a, count_t),
+            _ => self.b.ins().ushr(a, count_t),
+        };
+        let sat_clamp = if family == 1 {
+            // For an oversized shift count we saturate the count itself to
+            // `BITS - 1` and shift by that — a defined fallback when the
+            // result would otherwise be undefined / all-zero / all-sign.
+            let cap = self.b.ins().iconst(ct, bits - 1);
+            let satted = match (op, signed) {
+                (6, _) => self.b.ins().ishl(a, cap),
+                (7, true) => self.b.ins().sshr(a, cap),
+                _ => self.b.ins().ushr(a, cap),
+            };
+            Some(satted)
+        } else {
+            None
+        };
+        Ok(self.package_int_arith(family, ty, res, ovf, sat_clamp))
     }
 
     /// Lower a builtin `.clone()` (`docs/15` §8). Immutable values clone to
@@ -308,15 +514,157 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         receiver: &Expr,
         kind: CloneKind,
     ) -> CgResult<Option<Value>> {
-        
+
         let v = self.gen_expr(receiver)?.ok_or_else(|| {
             CodegenError::new(receiver.span, "clone receiver has no value")
         })?;
+        let rty = self.cx.analysis.results.expr_ty(receiver.span)
+            .unwrap_or(self.cx.analysis.tcx.error);
         Ok(match kind {
             CloneKind::Identity => Some(v),
             CloneKind::List => self.call_intrinsic("lang_list_clone", &[PTR], Some(PTR), &[v]),
             CloneKind::Map => self.call_intrinsic("lang_map_clone", &[PTR], Some(PTR), &[v]),
+            CloneKind::ListDeep => {
+                let elem = self.list_elem_of(rty).ok_or_else(|| {
+                    CodegenError::new(receiver.span, "deep-clone target is not a List")
+                })?;
+                Some(self.gen_list_clone_deep(v, elem, receiver.span)?)
+            }
+            CloneKind::MapDeep => {
+                let (kt, vt) = self.map_kv_of(rty).ok_or_else(|| {
+                    CodegenError::new(receiver.span, "deep-clone target is not a Map")
+                })?;
+                Some(self.gen_map_clone_deep(v, kt, vt, receiver.span)?)
+            }
         })
+    }
+
+    /// Recursively clone a value of type `ty`. Drives `CloneKind::*Deep` over
+    /// arbitrarily-nested collections and user types (`docs/10`/`docs/15` §8).
+    pub(crate) fn gen_clone_value(&mut self, v: Value, ty: Ty, span: Span) -> CgResult<Value> {
+        let ty = resolve_shallow(self.cx.analysis, ty, &self.subst);
+        // Intrinsic identity — immutable scalars and `str`, plus the
+        // thread-shareable `Shared`/`Sender`/`Receiver` handles.
+        if matches!(
+            self.cx.analysis.tcx.kind(ty),
+            TyKind::Int(_) | TyKind::Float(_) | TyKind::Bool | TyKind::Char | TyKind::Str | TyKind::Null
+        ) {
+            return Ok(v);
+        }
+        let prog = &self.cx.analysis.program;
+        if let TyKind::Named { def, .. } = self.cx.analysis.tcx.kind(ty).clone() {
+            if def == prog.shared_def || def == prog.sender_def || def == prog.receiver_def {
+                return Ok(v);
+            }
+        }
+        if let Some(elem) = self.list_elem_of(ty) {
+            return if is_immutable_value_codegen(self.cx.analysis, elem) {
+                Ok(self
+                    .call_intrinsic("lang_list_clone", &[PTR], Some(PTR), &[v])
+                    .expect("list_clone returns"))
+            } else {
+                self.gen_list_clone_deep(v, elem, span)
+            };
+        }
+        if let Some((kt, vt)) = self.map_kv_of(ty) {
+            return if is_immutable_value_codegen(self.cx.analysis, kt)
+                && is_immutable_value_codegen(self.cx.analysis, vt)
+            {
+                Ok(self
+                    .call_intrinsic("lang_map_clone", &[PTR], Some(PTR), &[v])
+                    .expect("map_clone returns"))
+            } else {
+                self.gen_map_clone_deep(v, kt, vt, span)
+            };
+        }
+        // User type: dispatch through its `Clone` impl.
+        if let TyKind::Named { def: tdef, args } = self.cx.analysis.tcx.kind(ty).clone() {
+            let clone_def = self.cx.analysis.program.clone_def;
+            if let Some(&ext) = self.cx.analysis.results.iface_impls.get(&(tdef, clone_def)) {
+                let method = (0..self.cx.analysis.program.defs.len() as u32)
+                    .map(DefId)
+                    .find(|&d| {
+                        let de = self.cx.analysis.program.def(d);
+                        de.kind == DefKind::ExtendMethod && de.parent == Some(ext) && de.name == "clone"
+                    })
+                    .ok_or_else(|| CodegenError::new(span, "Clone impl has no `clone` method"))?;
+                let targs = if self.cx.analysis.program.def(ext).generics.is_empty() {
+                    Vec::new()
+                } else {
+                    args
+                };
+                return self
+                    .emit_call(method, targs, &[v], span)?
+                    .ok_or_else(|| CodegenError::new(span, "`clone` returned no value"));
+            }
+        }
+        Err(CodegenError::new(span, "no Clone impl for this type"))
+    }
+
+    /// Deep-clone a `List<T>`: allocate a fresh list and push each cloned
+    /// element. Used when `T` is mutable but implements `Clone`.
+    fn gen_list_clone_deep(&mut self, src: Value, elem: Ty, span: Span) -> CgResult<Value> {
+        let elem_is_ptr = if is_managed_ptr(self.cx.analysis, elem) { 1 } else { 0 };
+        let flag = self.b.ins().iconst(types::I64, elem_is_ptr);
+        let new_list = self
+            .call_intrinsic("lang_list_new", &[types::I64], Some(PTR), &[flag])
+            .expect("list_new returns");
+        // Pin the source AND the destination across the per-element clone
+        // (each may itself allocate).
+        self.mark_root(src);
+        self.mark_root(new_list);
+        self.list_for_each(src, elem, span, |this, ev| {
+            let cloned = this.gen_clone_value(ev, elem, span)?;
+            let raw = this.elem_to_i64(Some(cloned), elem, span)?;
+            this.call_intrinsic(
+                "lang_list_push",
+                &[PTR, types::I64],
+                None,
+                &[new_list, raw],
+            );
+            Ok(())
+        })?;
+        Ok(new_list)
+    }
+
+    /// Deep-clone a `Map<K, V>`: build a fresh map (same key-ops) and write
+    /// each `(k, clone(v))` pair. Keys are immutable so they share by value;
+    /// values use `gen_clone_value` for per-element deep clone.
+    fn gen_map_clone_deep(&mut self, src: Value, kt: Ty, vt: Ty, span: Span) -> CgResult<Value> {
+        let new_map = self.gen_map_new(kt, vt);
+        self.mark_root(src);
+        self.mark_root(new_map);
+        // Snapshot the key list.
+        let one = self.b.ins().iconst(types::I64, 1);
+        let keys = self
+            .call_intrinsic("lang_map_entries", &[PTR, types::I64], Some(PTR), &[src, one])
+            .expect("map_entries returns");
+        self.mark_root(keys);
+        self.list_for_each(keys, kt, span, |this, kv| {
+            let kraw = this.elem_to_i64(Some(kv), kt, span)?;
+            // Look up the value in the source map for this key.
+            let vraw = this
+                .call_intrinsic(
+                    "lang_map_index",
+                    &[PTR, types::I64],
+                    Some(types::I64),
+                    &[src, kraw],
+                )
+                .expect("map_index returns");
+            let vval = this
+                .i64_to_elem(vraw, vt, span)?
+                .ok_or_else(|| CodegenError::new(span, "map value is zero-sized"))?;
+            let cloned = this.gen_clone_value(vval, vt, span)?;
+            let craw = this.elem_to_i64(Some(cloned), vt, span)?;
+            this.call_intrinsic(
+                "lang_map_set",
+                &[PTR, types::I64, types::I64],
+                None,
+                &[new_map, kraw, craw],
+            );
+            Ok(())
+        })?;
+        Ok(new_map)
     }
 
     /// The intrinsic [`CloneKind`] for a builtin receiver type, or `None` for a
