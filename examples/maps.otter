@@ -21,11 +21,15 @@ function main() {
   };
   println("kinds   = ${inventory.size()}");
 
-  // keys()/values() snapshot into Lists you can iterate.
+  // keys()/values()/entries() return real Iterator objects (docs/18 §6).
   var scores: Map<i64, i64> = { 1: 10, 2: 20, 3: 30 };
   var total = 0;
   for v in scores.values() { total = total + v; }
   println("total   = ${total}");
+  // entries() yields Entry<K, V> values (same struct `for entry in map` uses).
+  var pair_sum = 0;
+  for e in scores.entries() { pair_sum = pair_sum + e.key + e.value; }
+  println("pairs   = ${pair_sum}");
 
   // `..spread` merges maps; the rightmost binding wins on collision.
   var defaults: Map<str, i64> = { "port": 8080, "tls": 0 };

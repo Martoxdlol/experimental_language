@@ -254,6 +254,19 @@ fn run_codegen<M: Module>(
     analysis: &Analysis,
     module: &mut M,
 ) -> CgResult<(HashMap<String, FuncId>, Vec<Safepoint>, Vec<(i64, FuncId)>)> {
+    // Pre-compute the set of locals captured by some closure. A LocalId in
+    // this set is cell-backed wherever it is bound (`docs/09` §7).
+    let mut captured_locals: HashSet<LocalId> = HashSet::new();
+    for info in analysis.results.closures.values() {
+        for (id, _) in &info.captures {
+            captured_locals.insert(*id);
+        }
+    }
+    for info in analysis.results.async_blocks.values() {
+        for (id, _) in &info.captures {
+            captured_locals.insert(*id);
+        }
+    }
     let mut cg = Codegen {
         analysis,
         module,
@@ -263,6 +276,7 @@ fn run_codegen<M: Module>(
         closures: Vec::new(),
         async_jobs: Vec::new(),
         safepoints: Vec::new(),
+        captured_locals,
     };
     cg.seed()?;
     cg.run()?;
@@ -586,6 +600,13 @@ struct Codegen<'a, M: Module> {
     /// Captured GC safepoints: `(func, call code offset, frame_to_fp, ref SP
     /// offsets)`, registered with the runtime after linking.
     safepoints: Vec<(FuncId, u32, u32, Vec<u32>)>,
+    /// LocalIds captured by some closure anywhere in the program. Captured
+    /// locals are stored in heap-allocated **cells** (`docs/09` §7: "every
+    /// captured variable is captured by reference"): outer accesses and the
+    /// closure body share the same cell, so primitive mutations propagate.
+    /// LocalIds are program-wide unique, so a global set is enough — a binding
+    /// in any function consults this set at its declaration site.
+    captured_locals: HashSet<LocalId>,
 }
 
 impl<'a, M: Module> Codegen<'a, M> {
@@ -711,7 +732,7 @@ impl<'a, M: Module> Codegen<'a, M> {
 
             {
                 let mut fg = FnGen {
-                    cx: CgShared { analysis: self.analysis },
+                    cx: CgShared { analysis: self.analysis, captured_locals: &self.captured_locals },
                     module: self.module,
                     funcs: &mut self.funcs,
                     worklist: &mut self.worklist,
@@ -720,6 +741,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     subst,
                     b: &mut b,
                     vars: HashMap::new(),
+                    cell_content: HashMap::new(),
                     term: false,
                     loops: Vec::new(),
                     ret_ty,
@@ -729,8 +751,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                 for (i, local) in param_locals.iter().enumerate() {
                     let ty = fg.cx.analysis.results.local_ty(*local).unwrap();
                     let ct = fg.cx_clty(ty).expect("param clty");
-                    let var = fg.fresh_var(*local, ct);
-                    fg.b.def_var(var, param_vals[i]);
+                    fg.bind_local(*local, ct, param_vals[i]);
                 }
                 let val = fg.gen_block(&body)?;
                 fg.emit_return(val)?;
@@ -787,7 +808,7 @@ impl<'a, M: Module> Codegen<'a, M> {
             let block_params: Vec<Value> = b.block_params(entry).to_vec();
             {
                 let mut fg = FnGen {
-                    cx: CgShared { analysis: self.analysis },
+                    cx: CgShared { analysis: self.analysis, captured_locals: &self.captured_locals },
                     module: self.module,
                     funcs: &mut self.funcs,
                     worklist: &mut self.worklist,
@@ -796,6 +817,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     subst,
                     b: &mut b,
                     vars: HashMap::new(),
+                    cell_content: HashMap::new(),
                     term: false,
                     loops: Vec::new(),
                     ret_ty,
@@ -803,18 +825,19 @@ impl<'a, M: Module> Codegen<'a, M> {
                     async_ctx: None,
                 };
                 let env = block_params[0];
-                // Captures live in the env after the function pointer (offset 8).
+                // Captures live in the env after the function pointer (offset
+                // 8). Each env slot holds a *cell pointer* (`docs/09` §7); the
+                // closure body reads/writes through the cell, sharing state
+                // with the outer scope.
                 for (k, (local, ty)) in info.captures.iter().enumerate() {
                     let ct = fg.cx_clty(*ty).expect("capture clty");
                     let off = (8 + k * 8) as i32;
-                    let loaded = fg.b.ins().load(ct, MemFlags::trusted(), env, off);
-                    let var = fg.fresh_var(*local, ct);
-                    fg.b.def_var(var, loaded);
+                    let cell_ptr = fg.b.ins().load(PTR, MemFlags::trusted(), env, off);
+                    fg.bind_local_cell(*local, ct, cell_ptr);
                 }
                 for (i, (local, ty)) in info.params.iter().enumerate() {
                     let ct = fg.cx_clty(*ty).expect("param clty");
-                    let var = fg.fresh_var(*local, ct);
-                    fg.b.def_var(var, block_params[i + 1]);
+                    fg.bind_local(*local, ct, block_params[i + 1]);
                 }
                 let val = fg.gen_expr(&body)?;
                 fg.emit_return(val)?;
@@ -916,7 +939,7 @@ impl<'a, M: Module> Codegen<'a, M> {
             let self_val = b.block_params(entry)[0];
             {
                 let mut fg = FnGen {
-                    cx: CgShared { analysis: self.analysis },
+                    cx: CgShared { analysis: self.analysis, captured_locals: &self.captured_locals },
                     module: self.module,
                     funcs: &mut self.funcs,
                     worklist: &mut self.worklist,
@@ -925,6 +948,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     subst: subst.clone(),
                     b: &mut b,
                     vars: HashMap::new(),
+                    cell_content: HashMap::new(),
                     term: false,
                     loops: Vec::new(),
                     ret_ty: out,
@@ -939,8 +963,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     if let Some(ct) = param_cltys[i] {
                         let off = (8 + i * 8) as i32;
                         let loaded = fg.b.ins().load(ct, MemFlags::trusted(), self_val, off);
-                        let var = fg.fresh_var(*local, ct);
-                        fg.b.def_var(var, loaded);
+                        fg.bind_local(*local, ct, loaded);
                     }
                 }
                 let val = fg.gen_block(body)?;
@@ -968,7 +991,7 @@ impl<'a, M: Module> Codegen<'a, M> {
             let pvals: Vec<Value> = b.block_params(entry).to_vec();
             {
                 let mut fg = FnGen {
-                    cx: CgShared { analysis: self.analysis },
+                    cx: CgShared { analysis: self.analysis, captured_locals: &self.captured_locals },
                     module: self.module,
                     funcs: &mut self.funcs,
                     worklist: &mut self.worklist,
@@ -977,6 +1000,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     subst: subst.clone(),
                     b: &mut b,
                     vars: HashMap::new(),
+                    cell_content: HashMap::new(),
                     term: false,
                     loops: Vec::new(),
                     ret_ty: out,
@@ -1057,7 +1081,7 @@ impl<'a, M: Module> Codegen<'a, M> {
             }
             {
                 let mut fg = FnGen {
-                    cx: CgShared { analysis: self.analysis },
+                    cx: CgShared { analysis: self.analysis, captured_locals: &self.captured_locals },
                     module: self.module,
                     funcs: &mut self.funcs,
                     worklist: &mut self.worklist,
@@ -1066,6 +1090,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     subst: subst.clone(),
                     b: &mut b,
                     vars: HashMap::new(),
+                    cell_content: HashMap::new(),
                     term: false,
                     loops: Vec::new(),
                     ret_ty: out,
@@ -1152,7 +1177,7 @@ impl<'a, M: Module> Codegen<'a, M> {
             self.analysis.results.fn_params.get(&def).cloned().unwrap_or_default();
 
         // Lay out the state struct and build the poll function.
-        let layout = async_state_layout(self.analysis, &subst, &param_locals, body);
+        let layout = async_state_layout(self.analysis, &subst, &param_locals, body, &self.captured_locals);
         let entry_set: HashSet<LocalId> = param_locals.iter().copied().collect();
         // Parameter values are stored by the constructor into these slots.
         let param_offs: Vec<i32> =
@@ -1184,7 +1209,7 @@ impl<'a, M: Module> Codegen<'a, M> {
             let pvals: Vec<Value> = b.block_params(entry).to_vec();
             {
                 let mut fg = FnGen {
-                    cx: CgShared { analysis: self.analysis },
+                    cx: CgShared { analysis: self.analysis, captured_locals: &self.captured_locals },
                     module: self.module,
                     funcs: &mut self.funcs,
                     worklist: &mut self.worklist,
@@ -1193,6 +1218,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     subst: subst.clone(),
                     b: &mut b,
                     vars: HashMap::new(),
+                    cell_content: HashMap::new(),
                     term: false,
                     loops: Vec::new(),
                     ret_ty: out,
@@ -1237,7 +1263,7 @@ impl<'a, M: Module> Codegen<'a, M> {
         if let ExprKind::Block(block) = &body.kind {
             if block_has_await(block) {
                 let cap_ids: Vec<LocalId> = info.captures.iter().map(|(l, _)| *l).collect();
-                let layout = async_state_layout(self.analysis, &subst, &cap_ids, block);
+                let layout = async_state_layout(self.analysis, &subst, &cap_ids, block, &self.captured_locals);
                 let entry_set: HashSet<LocalId> = cap_ids.into_iter().collect();
                 return self.build_stateful_poll(
                     poll_fid, &subst, out, block, &entry_set, &layout.live, span,
@@ -1259,7 +1285,7 @@ impl<'a, M: Module> Codegen<'a, M> {
             let self_val = b.block_params(entry)[0];
             {
                 let mut fg = FnGen {
-                    cx: CgShared { analysis: self.analysis },
+                    cx: CgShared { analysis: self.analysis, captured_locals: &self.captured_locals },
                     module: self.module,
                     funcs: &mut self.funcs,
                     worklist: &mut self.worklist,
@@ -1268,6 +1294,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     subst,
                     b: &mut b,
                     vars: HashMap::new(),
+                    cell_content: HashMap::new(),
                     term: false,
                     loops: Vec::new(),
                     ret_ty: out,
@@ -1276,12 +1303,19 @@ impl<'a, M: Module> Codegen<'a, M> {
                 };
                 fg.mark_root(self_val);
                 // Captures live in the state struct after the state word (@8).
+                // Each slot holds a cell pointer (`docs/09` §7 / closure env
+                // layout): the outer scope's gen_async_block stored the cell
+                // pointer from each captured local's variable.
                 for (k, (local, ty)) in info.captures.iter().enumerate() {
                     if let Some(ct) = fg.cx_clty(*ty) {
                         let off = (8 + k * 8) as i32;
-                        let loaded = fg.b.ins().load(ct, MemFlags::trusted(), self_val, off);
-                        let var = fg.fresh_var(*local, ct);
-                        fg.b.def_var(var, loaded);
+                        if fg.cx.captured_locals.contains(local) {
+                            let cell_ptr = fg.b.ins().load(PTR, MemFlags::trusted(), self_val, off);
+                            fg.bind_local_cell(*local, ct, cell_ptr);
+                        } else {
+                            let loaded = fg.b.ins().load(ct, MemFlags::trusted(), self_val, off);
+                            fg.bind_local(*local, ct, loaded);
+                        }
                     }
                 }
                 let val = fg.gen_expr(&body)?;
@@ -1300,6 +1334,11 @@ impl<'a, M: Module> Codegen<'a, M> {
 
 struct CgShared<'a> {
     analysis: &'a Analysis,
+    /// Reference into [`Codegen::captured_locals`] — the set of LocalIds the
+    /// closure analysis identified as captured anywhere in the program. Cell-
+    /// backed binding/access for these locals (`docs/09` §7) is gated on
+    /// membership here. `'a` ties the borrow to the outer codegen.
+    captured_locals: &'a HashSet<LocalId>,
 }
 
 /// Per-function code generator (for one monomorphized instance).
@@ -1316,8 +1355,16 @@ struct FnGen<'a, 'b, 'f, M: Module> {
     /// This instance's generic-parameter substitution.
     subst: HashMap<DefId, Ty>,
     b: &'b mut FunctionBuilder<'f>,
-    /// Language local → Cranelift variable.
+    /// Language local → Cranelift variable. For *cell-backed* locals (those
+    /// captured by some closure, `docs/09` §7), the variable holds the cell's
+    /// pointer; reads/writes go through `lang_alloc`-allocated cells so the
+    /// outer scope and the closure share state. See [`cell_content`].
     vars: HashMap<LocalId, Variable>,
+    /// LocalId → its Cranelift content type, set only for cell-backed locals.
+    /// Membership in this map is what `read_local`/`write_local` consult to
+    /// decide between a direct `use_var` / `def_var` and a load/store through
+    /// the cell pointer held in `vars`.
+    cell_content: HashMap<LocalId, ClType>,
     /// Whether the current block has been terminated (a return/jump/branch was
     /// emitted), so later instructions in the same block are suppressed.
     /// Cranelift's own `is_filled` is private, so we track it ourselves.
@@ -1356,6 +1403,16 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     }
 
     pub(crate) fn fresh_var(&mut self, local: LocalId, ct: ClType) -> Variable {
+        if self.cx.captured_locals.contains(&local) {
+            // Cell-backed: the Cranelift variable holds the cell *pointer*;
+            // reads/writes route through `read_local`/`write_local`. The cell
+            // ptr is itself a managed-heap root.
+            let var = self.b.declare_var(PTR);
+            self.b.declare_var_needs_stack_map(var);
+            self.vars.insert(local, var);
+            self.cell_content.insert(local, ct);
+            return var;
+        }
         let var = self.b.declare_var(ct);
         // Managed-pointer locals are GC roots: Cranelift records them in the
         // precise stack map at each safepoint (call).
@@ -1367,6 +1424,87 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         }
         self.vars.insert(local, var);
         var
+    }
+
+    /// Bind `local` to its initial value `init`. For a plain local this is
+    /// `fresh_var` + `def_var`; for a *captured* local (`docs/09` §7) the
+    /// initial value is stored into a fresh managed cell and the variable
+    /// becomes that cell's pointer. The outer scope and any closure body
+    /// share the cell through `read_local`/`write_local`.
+    pub(crate) fn bind_local(&mut self, local: LocalId, ct: ClType, init: Value) {
+        let var = self.fresh_var(local, ct);
+        if self.cell_content.contains_key(&local) {
+            // If `init` is a managed pointer, it must be a stack-map root
+            // across the cell allocation — otherwise a GC stress collect
+            // between `lang_alloc` and the store would free the pointee
+            // (this bit the closure-tagger GC-stress test).
+            if let Some(ty) = self.cx.analysis.results.local_ty(local) {
+                let resolved = resolve_shallow(self.cx.analysis, ty, &self.subst);
+                if is_managed_ptr(self.cx.analysis, resolved) {
+                    self.mark_root(init);
+                }
+            }
+            let cell = self.alloc_local_cell(local);
+            self.b.ins().store(MemFlags::trusted(), init, cell, 0);
+            self.b.def_var(var, cell);
+        } else {
+            self.b.def_var(var, init);
+        }
+    }
+
+    /// Bind a captured local whose cell pointer is already known — used when
+    /// entering a closure body, where each capture's cell pointer is loaded
+    /// from the env slot. The Cranelift variable holds that cell ptr; reads
+    /// and writes inside the body route through the cell, sharing state with
+    /// the outer scope.
+    pub(crate) fn bind_local_cell(&mut self, local: LocalId, ct: ClType, cell_ptr: Value) {
+        let var = self.fresh_var(local, ct);
+        // `fresh_var` puts this in `cell_content` (the local is by definition
+        // captured here), so read/write paths route through the cell.
+        self.b.def_var(var, cell_ptr);
+    }
+
+    /// Allocate a fresh cell for `local`. The cell is an 8-byte managed object;
+    /// when the content is a managed pointer the descriptor records
+    /// `ptr_offsets = [0]` so the collector traces it.
+    fn alloc_local_cell(&mut self, local: LocalId) -> Value {
+        let mut ptr_offsets: Vec<u32> = Vec::new();
+        if let Some(ty) = self.cx.analysis.results.local_ty(local) {
+            let resolved = resolve_shallow(self.cx.analysis, ty, &self.subst);
+            if is_managed_ptr(self.cx.analysis, resolved) {
+                ptr_offsets.push(0);
+            }
+        }
+        let desc = self.emit_descriptor(8, GC_KIND_PLAIN, &ptr_offsets);
+        self.call_intrinsic("lang_alloc", &[PTR], Some(PTR), &[desc])
+            .expect("lang_alloc returns a pointer")
+    }
+
+    /// Read the value of `local`. Cell-backed locals load through their cell
+    /// pointer; plain locals use Cranelift's `use_var`.
+    pub(crate) fn read_local(&mut self, local: LocalId) -> Option<Value> {
+        let var = *self.vars.get(&local)?;
+        if let Some(&ct) = self.cell_content.get(&local) {
+            let cell = self.b.use_var(var);
+            return Some(self.b.ins().load(ct, MemFlags::trusted(), cell, 0));
+        }
+        Some(self.b.use_var(var))
+    }
+
+    /// Write `v` to `local`. Cell-backed locals store through the cell pointer;
+    /// plain locals use Cranelift's `def_var`. Returns an error only if the
+    /// local is unbound.
+    pub(crate) fn write_local(&mut self, local: LocalId, v: Value, span: Span) -> CgResult<()> {
+        let var = *self.vars.get(&local).ok_or_else(|| {
+            CodegenError::new(span, "write to unbound local")
+        })?;
+        if self.cell_content.contains_key(&local) {
+            let cell = self.b.use_var(var);
+            self.b.ins().store(MemFlags::trusted(), v, cell, 0);
+            return Ok(());
+        }
+        self.b.def_var(var, v);
+        Ok(())
     }
 
     /// Declare `v` a GC root: Cranelift records it in the precise stack map at

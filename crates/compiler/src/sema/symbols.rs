@@ -246,6 +246,16 @@ pub struct Program {
     /// Prelude `interface Hash` — structural hashing (`docs/15` §7); the `T: Hash`
     /// bound for `@Derive(Hash)` on generic structs and for `Map<K, V>` keys.
     pub hash_def: DefId,
+    /// Prelude `struct MapKeys<K>` — the `Iterator<K>` returned by `Map.keys()`
+    /// (`docs/18` §6). Holds a snapshot `List<K>` of the keys at call time.
+    pub map_keys_def: DefId,
+    /// Prelude `struct MapValues<V>` — the `Iterator<V>` returned by
+    /// `Map.values()`. Holds a snapshot `List<V>` of the values at call time.
+    pub map_values_def: DefId,
+    /// Prelude `struct MapEntries<K, V>` — the `Iterator<Entry<K, V>>` returned
+    /// by `Map.entries()`. Holds a reference to the map plus a snapshot of its
+    /// keys; values are looked up lazily as each `next()` runs.
+    pub map_entries_def: DefId,
     /// Names the language prelude + builtins put in *every* module's scope
     /// (`List`, `Map`, `Item`, `Done`, `Iterator`, `Entry`, …), so a submodule
     /// resolves them without an `import`. Snapshotted from the root after the
@@ -284,6 +294,43 @@ interface ToStr {
 }
 interface Hash {
   function hash(self): u64;
+}
+struct MapKeys<K> { snapshot: List<K>, index: i64 }
+struct MapValues<V> { snapshot: List<V>, index: i64 }
+struct MapEntries<K, V> { map: Map<K, V>, keys: List<K>, index: i64 }
+extend<K> MapKeys<K>: Iterator<K> {
+  function next(self): Item<K> | Done {
+    if self.index >= self.snapshot.size() {
+      Done {}
+    } else {
+      var v = self.snapshot[self.index];
+      self.index = self.index + 1;
+      Item { value: v }
+    }
+  }
+}
+extend<V> MapValues<V>: Iterator<V> {
+  function next(self): Item<V> | Done {
+    if self.index >= self.snapshot.size() {
+      Done {}
+    } else {
+      var v = self.snapshot[self.index];
+      self.index = self.index + 1;
+      Item { value: v }
+    }
+  }
+}
+extend<K, V> MapEntries<K, V>: Iterator<Entry<K, V>> {
+  function next(self): Item<Entry<K, V>> | Done {
+    if self.index >= self.keys.size() {
+      Done {}
+    } else {
+      var k = self.keys[self.index];
+      self.index = self.index + 1;
+      var v = self.map[k];
+      Item { value: Entry { key: k, value: v } }
+    }
+  }
 }
 interface Drop {
   function drop(self);
@@ -351,6 +398,9 @@ impl Program {
             ord_def: DefId(0),
             to_str_def: DefId(0),
             hash_def: DefId(0),
+            map_keys_def: DefId(0),
+            map_values_def: DefId(0),
+            map_entries_def: DefId(0),
             prelude_types: HashMap::new(),
             prelude_values: HashMap::new(),
         }
@@ -418,6 +468,9 @@ impl Program {
         self.ord_def = types.get("Ord").copied().unwrap_or(DefId(0));
         self.to_str_def = types.get("ToStr").copied().unwrap_or(DefId(0));
         self.hash_def = types.get("Hash").copied().unwrap_or(DefId(0));
+        self.map_keys_def = types.get("MapKeys").copied().unwrap_or(DefId(0));
+        self.map_values_def = types.get("MapValues").copied().unwrap_or(DefId(0));
+        self.map_entries_def = types.get("MapEntries").copied().unwrap_or(DefId(0));
     }
 
     /// Inject compiler-provided prelude types (currently `List<T>`). These have
@@ -1033,10 +1086,30 @@ mod tests {
             .filter(|d| d.kind == DefKind::InterfaceMethod && d.name == "name")
             .count();
         assert_eq!(iface_methods, 1);
-        let extend_methods =
-            p.defs.iter().filter(|d| d.kind == DefKind::ExtendMethod).count();
-        assert_eq!(extend_methods, 1);
-        assert_eq!(p.module(ModId::ROOT).extends.len(), 1);
+        // The user's `extend P: Named` contributes one method; the prelude
+        // also contributes `extend MapKeys/MapValues/MapEntries: Iterator<…>`
+        // impls (each with one `next` method) and is collected into ROOT.
+        let user_extend_methods = p
+            .defs
+            .iter()
+            .filter(|d| d.kind == DefKind::ExtendMethod && d.name == "name")
+            .count();
+        assert_eq!(user_extend_methods, 1);
+        let user_extends = p
+            .module(ModId::ROOT)
+            .extends
+            .iter()
+            .filter(|&&e| {
+                p.def(e).item.as_ref().is_some_and(|it| matches!(
+                    it,
+                    ItemKind::Extend(e) if matches!(
+                        &e.target.kind,
+                        TypeKind::Named { name, .. } if name.name == "P"
+                    )
+                ))
+            })
+            .count();
+        assert_eq!(user_extends, 1);
     }
 
     #[test]

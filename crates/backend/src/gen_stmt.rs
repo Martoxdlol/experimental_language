@@ -50,8 +50,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                         Some(ValueRes::Local(id)) => id,
                         _ => return Err(CodegenError::new(name.span, "unresolved binding")),
                     };
-                    let var = self.fresh_var(local, ct);
-                    self.b.def_var(var, v);
+                    self.bind_local(local, ct, v);
                 }
                 Ok(())
             }
@@ -91,11 +90,8 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         match &target.kind {
             ExprKind::Ident(_) => {
                 let local = self.resolve_local(target.span)?;
-                let var = self.vars.get(&local).copied().ok_or_else(|| {
-                    CodegenError::new(target.span, "assignment to unbound local")
-                })?;
                 if let Some(v) = val {
-                    self.b.def_var(var, v);
+                    self.write_local(local, v, target.span)?;
                 }
                 Ok(())
             }

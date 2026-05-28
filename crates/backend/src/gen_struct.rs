@@ -200,13 +200,14 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         Ok(())
     }
 
-    /// Load the local resolved at `span` (used for field-init shorthand).
+    /// Load the local resolved at `span` (used for field-init shorthand and
+    /// for `SelfExpr`). Routes through `read_local` so cell-backed locals
+    /// (captured by some closure, `docs/09` §7) load through their cell.
     pub(crate) fn gen_local_use(&mut self, span: Span) -> CgResult<Option<Value>> {
         let local = self.resolve_local(span)?;
-        let var = self.vars.get(&local).copied().ok_or_else(|| {
+        self.read_local(local).map(Some).ok_or_else(|| {
             CodegenError::new(span, "use of unbound local")
-        })?;
-        Ok(Some(self.b.use_var(var)))
+        })
     }
 
 }

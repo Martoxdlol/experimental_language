@@ -522,15 +522,76 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 self.switch(merge);
                 Ok(Some(self.b.block_params(merge)[0]))
             }
-            "keys" | "values" => {
-                let want_keys = self.b.ins().iconst(types::I64, i64::from(name == "keys"));
-                Ok(self.call_intrinsic("lang_map_entries", &[PTR, types::I64], Some(PTR), &[map, want_keys]))
-            }
+            "keys" => Ok(Some(self.gen_map_keys_iter(map, kt))),
+            "values" => Ok(Some(self.gen_map_values_iter(map, vt))),
+            "entries" => Ok(Some(self.gen_map_entries_iter(map, kt, vt))),
             other => Err(CodegenError::new(
                 receiver.span,
                 format!("`Map` method `{other}` is not yet lowerable"),
             )),
         }
+    }
+
+    /// Build the `MapKeys<K>` iterator returned by `Map.keys()` (`docs/18` §6):
+    /// snapshot the keys into a fresh `List<K>` (`lang_map_entries(map, 1)`) and
+    /// wrap it in a prelude `MapKeys` struct with `index = 0`. Iterating with
+    /// `for k in m.keys()` then dispatches through the `Iterator<K>` protocol.
+    fn gen_map_keys_iter(&mut self, map: Value, kt: Ty) -> Value {
+        let one = self.b.ins().iconst(types::I64, 1);
+        let snapshot = self
+            .call_intrinsic("lang_map_entries", &[PTR, types::I64], Some(PTR), &[map, one])
+            .expect("map_entries returns a list");
+        // The snapshot is unrooted between the `lang_map_entries` call and the
+        // `alloc_struct` inside `build_iter_struct` — a stress collect there
+        // would free it. Mark it as a stack-map root for the rest of this
+        // frame (the same fix `box_value` uses for unrooted payloads).
+        self.mark_root(snapshot);
+        let def = self.cx.analysis.program.map_keys_def;
+        self.build_iter_struct(def, &[kt], &[("snapshot", snapshot)])
+    }
+
+    /// Build the `MapValues<V>` iterator returned by `Map.values()`.
+    fn gen_map_values_iter(&mut self, map: Value, vt: Ty) -> Value {
+        let zero = self.b.ins().iconst(types::I64, 0);
+        let snapshot = self
+            .call_intrinsic("lang_map_entries", &[PTR, types::I64], Some(PTR), &[map, zero])
+            .expect("map_entries returns a list");
+        self.mark_root(snapshot);
+        let def = self.cx.analysis.program.map_values_def;
+        self.build_iter_struct(def, &[vt], &[("snapshot", snapshot)])
+    }
+
+    /// Build the `MapEntries<K, V>` iterator returned by `Map.entries()`. The
+    /// keys are snapshotted up front (so insertions during iteration are
+    /// invisible) but values are looked up lazily per `next()` — matching
+    /// `for entry in map`.
+    fn gen_map_entries_iter(&mut self, map: Value, kt: Ty, vt: Ty) -> Value {
+        let one = self.b.ins().iconst(types::I64, 1);
+        let keys = self
+            .call_intrinsic("lang_map_entries", &[PTR, types::I64], Some(PTR), &[map, one])
+            .expect("map_entries returns a list");
+        self.mark_root(keys);
+        let def = self.cx.analysis.program.map_entries_def;
+        self.build_iter_struct(def, &[kt, vt], &[("map", map), ("keys", keys)])
+    }
+
+    /// Allocate a builtin map-iterator struct (`MapKeys`/`MapValues`/
+    /// `MapEntries`), populate the named pointer fields, and zero the `index`
+    /// counter. The struct descriptor (built by `alloc_struct`) records each
+    /// `List<…>` / `Map<…>` field as a managed pointer offset so the GC
+    /// traces them; the iterator itself stays live across `next()` calls via
+    /// the caller's stack root.
+    fn build_iter_struct(&mut self, def: DefId, args: &[Ty], fields: &[(&str, Value)]) -> Value {
+        let layout = self.struct_layout(def, args);
+        let ptr = self.alloc_struct(&layout);
+        for (name, val) in fields {
+            let off = layout.offsets[layout.index_of(name).expect("iterator field")] as i32;
+            self.b.ins().store(MemFlags::trusted(), *val, ptr, off);
+        }
+        let idx_off = layout.offsets[layout.index_of("index").expect("iterator index")] as i32;
+        let zero = self.b.ins().iconst(types::I64, 0);
+        self.b.ins().store(MemFlags::trusted(), zero, ptr, idx_off);
+        ptr
     }
 
     /// Lower a map literal `{ k: v, ..base }` to an allocation plus inserts.

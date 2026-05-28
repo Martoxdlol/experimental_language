@@ -409,12 +409,9 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             }
             ExprKind::Ident(_) => {
                 match self.cx.analysis.results.resolution(expr.span) {
-                    Some(ValueRes::Local(local)) => {
-                        let var = self.vars.get(&local).copied().ok_or_else(|| {
-                            CodegenError::new(expr.span, "use of unbound local")
-                        })?;
-                        Ok(Some(self.b.use_var(var)))
-                    }
+                    Some(ValueRes::Local(local)) => self.read_local(local).map(Some).ok_or_else(|| {
+                        CodegenError::new(expr.span, "use of unbound local")
+                    }),
                     // A unit struct used as a value carries no data — only its
                     // type matters (e.g. once boxed into a union). Represent it
                     // as a null pointer placeholder.

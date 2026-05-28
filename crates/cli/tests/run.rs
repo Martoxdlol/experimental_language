@@ -1394,6 +1394,215 @@ fn derive_hash_user_keyed_map_native() {
 }
 
 #[test]
+fn closure_mutates_captured_primitive() {
+    // Closures capture by reference (`docs/09` §7): a primitive captured into
+    // a closure goes into a heap cell so the outer scope sees mutations.
+    let src = "function main() {\n\
+                 var total: i64 = 0;\n\
+                 [1, 2, 3, 4, 5].each { it => total = total + it; };\n\
+                 println(\"total=${total}\");\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "total=15\n");
+}
+
+#[test]
+fn closure_mutates_captured_str() {
+    // Reference types are also captured by reference; reassigning the captured
+    // variable (not just field mutation) is visible to the outer scope.
+    let src = "function main() {\n\
+                 var name: str = \"alice\";\n\
+                 var set_name = (s: str): i64 => { name = s; 0 };\n\
+                 set_name(\"bob\");\n\
+                 println(\"name=${name}\");\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "name=bob\n");
+}
+
+#[test]
+fn multiple_closures_share_state() {
+    // Two closures capturing the same local share its cell — observing each
+    // other's writes — the classic counter / pair-of-getter-setter pattern.
+    let src = "function main() {\n\
+                 var n: i64 = 0;\n\
+                 var inc = (by: i64): i64 => { n = n + by; n };\n\
+                 var bump_then_read = (extra: i64): i64 => { n = n + extra; n };\n\
+                 inc(3);\n\
+                 inc(4);\n\
+                 var combined: i64 = bump_then_read(0);\n\
+                 println(\"n=${combined}\");\n\
+                 println(\"direct=${n}\");\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "n=7\ndirect=7\n");
+}
+
+#[test]
+fn closure_captures_self_and_mutates_field() {
+    // A method's `self` captured by an inner closure is cell-backed; the
+    // closure's field writes mutate the same struct the outer scope sees.
+    let src = "struct Counter { value: i64 }\n\
+               extend Counter {\n\
+                 function bump(self, by: i64): i64 {\n\
+                   var inc = (a: i64): i64 => {\n\
+                     self.value = self.value + a; self.value\n\
+                   };\n\
+                   inc(by);\n\
+                   inc(by);\n\
+                   self.value\n\
+                 }\n\
+               }\n\
+               function main() {\n\
+                 var c = Counter { value: 10 };\n\
+                 println(c.bump(3) as str);\n\
+                 println(c.value as str);\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "16\n16\n");
+}
+
+#[test]
+fn by_ref_captures_survive_gc_stress() {
+    // The cells holding captured primitives are themselves managed heap
+    // objects; under stress GC they must stay live as long as the closure
+    // (and the outer scope) reaches them. The cell's descriptor traces a
+    // managed-pointer content (here `str`).
+    let src = "function main() {\n\
+                 var total: i64 = 0;\n\
+                 var label: str = \"sum\";\n\
+                 var add = (n: i64): i64 => {\n\
+                   total = total + n;\n\
+                   label = label + \"!\";\n\
+                   total\n\
+                 };\n\
+                 var i: i64 = 0;\n\
+                 while i < 50 {\n\
+                   add(i);\n\
+                   var junk = \"x\" + (i as str);\n\
+                   i = i + 1;\n\
+                 }\n\
+                 println(\"total=${total}\");\n\
+                 println(\"label=${label}\");\n\
+               }";
+    let (out, err, ok) = lang_env("run", src, &[("LANG_GC", "stress")]);
+    assert!(ok, "stderr: {err}");
+    // total = 0+1+...+49 = 1225; label = "sum" + "!" * 50.
+    let want_label: String = (0..50).fold("sum".to_string(), |acc, _| acc + "!");
+    assert_eq!(out, format!("total=1225\nlabel={}\n", want_label));
+}
+
+#[test]
+fn by_ref_captures_native_build() {
+    // JIT/native parity for the cell-backed local infrastructure.
+    let src = "function main() {\n\
+                 var acc: i64 = 0;\n\
+                 [10, 20, 30].each { it => acc = acc + it; };\n\
+                 println(\"acc=${acc}\");\n\
+               }";
+    let (out, err, ok) = lang_build_run(src, &[]);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "acc=60\n");
+}
+
+#[test]
+fn map_keys_returns_iterator() {
+    // `Map.keys()` returns a `MapKeys<K>` that implements `Iterator<K>`
+    // (`docs/18` §6) — driveable by `for k in m.keys()` and composable like
+    // any other iterator.
+    let src = "function main() {\n\
+                 var m: Map<str, i64> = { \"a\": 1, \"b\": 2, \"c\": 3 };\n\
+                 var n: i64 = 0;\n\
+                 for k in m.keys() {\n\
+                   if k == \"a\" { n = n + 1; }\n\
+                   if k == \"b\" { n = n + 1; }\n\
+                   if k == \"c\" { n = n + 1; }\n\
+                 }\n\
+                 println(\"matched=${n}\");\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "matched=3\n");
+}
+
+#[test]
+fn map_values_iterator_sums() {
+    // `Map.values(): MapValues<V>` — `for v in m.values()` still works for
+    // the existing snapshot-walking pattern.
+    let src = "function main() {\n\
+                 var m: Map<str, i64> = { \"a\": 10, \"b\": 20, \"c\": 30 };\n\
+                 var sum: i64 = 0;\n\
+                 for v in m.values() { sum = sum + v; }\n\
+                 println(\"sum=${sum}\");\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "sum=60\n");
+}
+
+#[test]
+fn map_entries_iterator_yields_entry_struct() {
+    // `Map.entries(): MapEntries<K, V>` — yields `Entry<K, V>` values
+    // (`docs/18` §6, same struct `for entry in map` yields).
+    let src = "function main() {\n\
+                 var m: Map<str, i64> = { \"alpha\": 1, \"beta\": 2 };\n\
+                 var saw_a: bool = false;\n\
+                 var saw_b: bool = false;\n\
+                 for e in m.entries() {\n\
+                   if e.key == \"alpha\" { saw_a = e.value == 1; }\n\
+                   if e.key == \"beta\" { saw_b = e.value == 2; }\n\
+                 }\n\
+                 println(\"a=${saw_a} b=${saw_b}\");\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "a=true b=true\n");
+}
+
+#[test]
+fn map_iterators_survive_gc_stress() {
+    // The iterator structs hold managed `List` / `Map` references; under
+    // stress GC, the snapshot list must stay live across each `next()` step,
+    // and freshly-built `Entry` boxes must not be reclaimed before the body
+    // observes them.
+    let src = "function main() {\n\
+                 var m: Map<str, str> = Map<str, str>();\n\
+                 m.set(\"keep\", \"alive\");\n\
+                 m.set(\"also\", \"live\");\n\
+                 var i: i64 = 0;\n\
+                 var saw_keep: bool = false;\n\
+                 for e in m.entries() {\n\
+                   if e.key == \"keep\" { saw_keep = e.value == \"alive\"; }\n\
+                   var junk = \"junk\" + (i as str);\n\
+                   i = i + 1;\n\
+                 }\n\
+                 println(\"keep=${saw_keep} loops=${i}\");\n\
+               }";
+    let (out, err, ok) = lang_env("run", src, &[("LANG_GC", "stress")]);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "keep=true loops=2\n");
+}
+
+#[test]
+fn map_iterators_native_build() {
+    // Native-build parity for the new iterator paths.
+    let src = "function main() {\n\
+                 var m: Map<i64, i64> = { 1: 100, 2: 200 };\n\
+                 var s: i64 = 0;\n\
+                 for e in m.entries() { s = s + e.key + e.value; }\n\
+                 println(\"total=${s}\");\n\
+               }";
+    let (out, err, ok) = lang_build_run(src, &[]);
+    assert!(ok, "stderr: {err}");
+    // 1 + 100 + 2 + 200 = 303
+    assert_eq!(out, "total=303\n");
+}
+
+#[test]
 fn generic_struct_derives_hash() {
     // `@Derive(Hash)` on a generic struct synthesises a generic
     // `extend<T: Hash> S<T>: Hash` whose `hash` body XOR-combines each field's

@@ -79,6 +79,13 @@ impl<'a> Checker<'a> {
             ExprKind::Ident(name) => match self.lookup(&name.name) {
                 Some((ty, id)) => {
                     self.results.resolutions.insert(target.span, ValueRes::Local(id));
+                    // An assignment to an enclosing-scope binding is itself a
+                    // capture (`docs/09` §7): the closure mutates the outer's
+                    // cell. Without this, `name = s` inside a closure body
+                    // resolves to the outer local but never makes it into the
+                    // closure's `captures` list — codegen would then have no
+                    // env slot to write through.
+                    self.record_capture(id, ty);
                     ty
                 }
                 None => {

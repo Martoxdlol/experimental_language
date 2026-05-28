@@ -430,9 +430,40 @@ The tracing GC is functionally complete for single-threaded programs.
       public function in the aliased module), `pub` visibility, and strict
       scoping work in both JIT and native builds. 6 CLI tests. (Ambient
       extension-only imports and `pkg:` cross-package paths deferred.)
-- [ ] `Map.entries()`/`keys()`/`values()` returning real `Iterator` objects;
-      capture-by-reference closures; `Hash`/`Clone` derives; `Try`/`FromResidual`;
-      async; threads; user macros; ambient/`pkg:` imports; concurrent GC.
+- [x] **`Map.keys()`/`values()`/`entries()` return real `Iterator` objects**
+      (`docs/18` §6). Prelude `struct MapKeys<K>`/`MapValues<V>`/
+      `MapEntries<K, V>` each carry a snapshot list (built by the existing
+      `lang_map_entries` runtime) plus an `index`; the prelude's
+      `extend MapKeys<K>: Iterator<K>` etc. implement `next(self): Item<T> |
+      Done` against that snapshot. `entries()` snapshots keys and looks up
+      values lazily per `next()` (so the keys frozen at call time, value
+      mutations during iteration are visible — same as `for entry in map`).
+      Codegen: `gen_map_method` allocates the iterator struct via
+      `struct_layout` + `alloc_struct`, marks the snapshot pointer as a
+      stack-map root across the alloc (the recurring "managed temp held
+      across alloc must be a stack-map root" rule), zeroes `index`. 5 new
+      CLI tests; JIT + native + GC-stress parity.
+- [x] **Capture-by-reference closures** (`docs/09` §7): every captured local is
+      cell-backed. A captured local's Cranelift variable holds a pointer to a
+      managed 8-byte cell whose content is the local's value; outer-scope and
+      closure-body reads/writes both go through that cell, so primitive
+      mutations and reference re-assignments propagate to the outer scope.
+      Backend gained `bind_local` / `read_local` / `write_local` /
+      `bind_local_cell` helpers, an `FnGen::cell_content` map, and a
+      `Codegen::captured_locals` set computed once from `results.closures` and
+      `results.async_blocks`. Closure env layout: every capture slot stores
+      the cell pointer (no longer the value), so the env descriptor traces
+      every cap slot. The async state machine's slot layout is similarly
+      promoted to `PTR` for cell-backed locals, so a captured local survives
+      `await` suspensions intact. Checker fix: `check_lvalue` for an `Ident`
+      target now calls `record_capture` so a closure that *writes* a captured
+      local makes it into the closure's `captures` list. Closure
+      `gen_local_use` (also used for `SelfExpr`) now routes through
+      `read_local`. 6 new CLI tests (primitive/str/multi-closure/self-field/
+      GC-stress/native); JIT + native + GC-stress parity, all 21 examples
+      clean.
+- [ ] `Try`/`FromResidual` (`Try` shape); user macros; ambient/`pkg:`
+      imports; concurrent GC.
 - [x] **Native object output + linking for `lang build`** (`docs/23`): the
       codegen backend is now generic over `cranelift_module::Module`, so the
       same lowering drives the JIT (`compile`) and a `cranelift-object`

@@ -918,17 +918,16 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         let func_id = self.module.declare_function(&name, Linkage::Local, &sig)
             .expect("declare closure");
 
-        // Environment layout: [fn_ptr][cap0][cap1]… ; managed captures are GC
-        // roots traced via the descriptor.
+        // Environment layout: [fn_ptr][cap0_cell][cap1_cell]…  — `docs/09` §7
+        // says every captured variable is captured by reference. The outer
+        // scope binds each captured local as a *cell* (a managed 8-byte heap
+        // object holding the value); the env slot stores the cell pointer.
+        // The closure body loads the cell ptr from the env and reads/writes
+        // through it, so primitive mutations propagate to the outer scope.
+        // Every cap slot is therefore a managed pointer for the GC.
         let n = info.captures.len();
         let size = (8 + n * 8) as u32;
-        let mut ptr_offsets = Vec::new();
-        for (k, (_, ty)) in info.captures.iter().enumerate() {
-            let resolved = resolve_shallow(self.cx.analysis, *ty, &self.subst);
-            if is_managed_ptr(self.cx.analysis, resolved) {
-                ptr_offsets.push((8 + k * 8) as u32);
-            }
-        }
+        let ptr_offsets: Vec<u32> = (0..n).map(|k| (8 + k * 8) as u32).collect();
         let desc = self.emit_descriptor(size, GC_KIND_PLAIN, &ptr_offsets);
         let env = self.call_intrinsic("lang_alloc", &[PTR], Some(PTR), &[desc])
             .expect("lang_alloc returns a pointer");
@@ -936,12 +935,15 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         let fref = self.module.declare_func_in_func(func_id, self.b.func);
         let faddr = self.b.ins().func_addr(PTR, fref);
         self.b.ins().store(MemFlags::trusted(), faddr, env, 0);
-        // Capture each enclosing local by value.
+        // Capture each enclosing local: for a cell-backed local, `use_var`
+        // gives the cell pointer directly (`fresh_var` declared the variable
+        // as `PTR`). The outer's local is therefore cell-backed at this point
+        // (captured locals always are — see `FnGen::fresh_var`).
         for (k, (local, _)) in info.captures.iter().enumerate() {
             let var = *self.vars.get(local)
                 .ok_or_else(|| CodegenError::new(span, "captured local has no slot"))?;
-            let v = self.b.use_var(var);
-            self.b.ins().store(MemFlags::trusted(), v, env, (8 + k * 8) as i32);
+            let cell = self.b.use_var(var);
+            self.b.ins().store(MemFlags::trusted(), cell, env, (8 + k * 8) as i32);
         }
 
         self.closures.push(ClosureJob {
@@ -979,22 +981,19 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         // function (in `define_async_job`) compute the same layout.
         let (size, ptr_offsets, cap_offs): (u32, Vec<u32>, Vec<i32>) = if block_has_await(block) {
             let cap_ids: Vec<LocalId> = info.captures.iter().map(|(l, _)| *l).collect();
-            let layout = async_state_layout(self.cx.analysis, &self.subst, &cap_ids, block);
+            let layout = async_state_layout(self.cx.analysis, &self.subst, &cap_ids, block, self.cx.captured_locals);
             let cap_offs = cap_ids.iter().map(|l| layout.slot_off[l]).collect();
             (layout.state_size, layout.ptr_offsets, cap_offs)
         } else {
-            // [state @0][cap0 @8][cap1 @16]…
+            // [state @0][cap0_cell @8][cap1_cell @16]… — each slot stores a
+            // cell pointer (`docs/09` §7): the outer scope's binding for every
+            // captured local is cell-backed, so the GC must trace each slot.
             let n = info.captures.len();
-            let mut ptr_offsets = Vec::new();
             let mut cap_offs = Vec::new();
-            for (k, (_, ty)) in info.captures.iter().enumerate() {
-                let off = (8 + k * 8) as i32;
-                cap_offs.push(off);
-                let resolved = resolve_shallow(self.cx.analysis, *ty, &self.subst);
-                if is_managed_ptr(self.cx.analysis, resolved) {
-                    ptr_offsets.push(off as u32);
-                }
+            for k in 0..n {
+                cap_offs.push((8 + k * 8) as i32);
             }
+            let ptr_offsets: Vec<u32> = cap_offs.iter().map(|&o| o as u32).collect();
             ((8 + n * 8) as u32, ptr_offsets, cap_offs)
         };
         let desc = self.emit_descriptor(size, GC_KIND_PLAIN, &ptr_offsets);

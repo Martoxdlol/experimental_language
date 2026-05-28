@@ -230,9 +230,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             PatternKind::Binding(name) => {
                 if let (Some(v), Some(ct)) = (scrut, self.cx_clty(sty)) {
                     let local = self.resolve_local(name.span)?;
-                    let var = self.fresh_var(local, ct);
-                    self.b.def_var(var, v);
-                    let _ = ct;
+                    self.bind_local(local, ct, v);
                 }
                 Ok(())
             }
@@ -249,8 +247,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 };
                 if let (Some(v), Some(ct)) = (val, self.cx_clty(t)) {
                     let local = self.resolve_local(b.span)?;
-                    let var = self.fresh_var(local, ct);
-                    self.b.def_var(var, v);
+                    self.bind_local(local, ct, v);
                 }
                 Ok(())
             }

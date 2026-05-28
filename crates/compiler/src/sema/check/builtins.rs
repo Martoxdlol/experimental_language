@@ -140,8 +140,21 @@ impl<'a> Checker<'a> {
             "get" => { check_args(self, &[kt]); self.tcx.mk_union([vt, self.tcx.null]) }
             "remove" => { check_args(self, &[kt]); self.tcx.mk_union([vt, self.tcx.null]) }
             "set" => { check_args(self, &[kt, vt]); self.tcx.null }
-            "keys" => { check_args(self, &[]); self.mk_list(kt) }
-            "values" => { check_args(self, &[]); self.mk_list(vt) }
+            "keys" => {
+                check_args(self, &[]);
+                let def = self.prog.map_keys_def;
+                self.tcx.mk_named(def, vec![kt])
+            }
+            "values" => {
+                check_args(self, &[]);
+                let def = self.prog.map_values_def;
+                self.tcx.mk_named(def, vec![vt])
+            }
+            "entries" => {
+                check_args(self, &[]);
+                let def = self.prog.map_entries_def;
+                self.tcx.mk_named(def, vec![kt, vt])
+            }
             other => {
                 self.emit(name.span, SemaErrorKind::Message(format!(
                     "`Map` has no method `{other}`"

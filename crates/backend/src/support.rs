@@ -328,6 +328,7 @@ pub(crate) fn async_state_layout(
     subst: &HashMap<DefId, Ty>,
     entry: &[LocalId],
     body: &Block,
+    captured_locals: &HashSet<LocalId>,
 ) -> AsyncLayout {
     let mut all_locals = entry.to_vec();
     let mut seen: HashSet<LocalId> = all_locals.iter().copied().collect();
@@ -338,6 +339,15 @@ pub(crate) fn async_state_layout(
     for (i, l) in all_locals.iter().enumerate() {
         let off = (16 + i * 8) as i32;
         slot_off.insert(*l, off);
+        // Captured locals are cell-backed (`docs/09` §7): the Cranelift
+        // variable holds a managed cell pointer, regardless of the local's
+        // declared (content) type. The async state saves/restores that
+        // pointer, so the slot is `PTR` and the descriptor traces it.
+        if captured_locals.contains(l) {
+            live.push((*l, off, PTR));
+            ptr_offsets.push(off as u32);
+            continue;
+        }
         let ty = analysis.results.local_ty(*l).unwrap_or(analysis.tcx.error);
         let resolved = resolve_shallow(analysis, ty, subst);
         if let Some(ct) = clty_of(analysis, resolved) {
