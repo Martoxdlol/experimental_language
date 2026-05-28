@@ -1,4 +1,4 @@
-//! `lang` — the toolchain driver.
+//! `lang` — the Otter Fusion toolchain driver.
 //!
 //! A thin orchestrator over `liblangc` (the `compiler` crate) and the Cranelift
 //! `backend`, with a Clap-based command surface. This is an early cut covering
@@ -23,7 +23,7 @@ use compiler::sema::symbols::Externals;
 use compiler::sema::{analyze_multi, Analysis};
 use compiler::span::{SourceMap, Span};
 
-/// The experimental language toolchain.
+/// The Otter Fusion toolchain.
 #[derive(Parser)]
 #[command(name = "lang", version, about, long_about = None)]
 struct Cli {
@@ -35,12 +35,12 @@ struct Cli {
 enum Command {
     /// Parse and type-check a source file; report diagnostics.
     Check {
-        /// Path to the `.lang` source file.
+        /// Path to the `.otter` source file.
         file: PathBuf,
     },
     /// Check, JIT-compile, and run the program's `main`.
     Run {
-        /// Path to the `.lang` source file.
+        /// Path to the `.otter` source file.
         file: PathBuf,
         /// Use the release profile: arithmetic overflow wraps instead of
         /// panicking (`docs/14` §5).
@@ -49,7 +49,7 @@ enum Command {
     },
     /// Check, compile to a native object, and link a standalone executable.
     Build {
-        /// Path to the `.lang` source file.
+        /// Path to the `.otter` source file.
         file: PathBuf,
         /// Output executable path (defaults to the source file's stem).
         #[arg(short, long)]
@@ -107,7 +107,7 @@ fn drive(path: &Path, stage: Stage, release: bool) -> ExitCode {
     }
 
     // 2b. Discover and load file-backed submodules (`mod foo` → `<dir>/<stem>/
-    //     foo.lang`), recursively, building the externals map for analysis.
+    //     foo.otter`), recursively, building the externals map for analysis.
     let mut externals = Externals::new();
     had_error |= load_submodules(&mut map, path, &module, &mut Vec::new(), &mut externals);
 
@@ -164,8 +164,8 @@ fn drive(path: &Path, stage: Stage, release: bool) -> ExitCode {
 /// module's path from the crate root; loaded bodies are inserted into
 /// `externals` keyed by their full path. Returns `true` if any error occurred.
 ///
-/// Resolution mirrors `docs/17` §2: a `mod foo` in `dir/parent.lang` lives at
-/// `dir/parent/foo.lang` — submodule files sit in a directory named for the
+/// Resolution mirrors `docs/17` §2: a `mod foo` in `dir/parent.otter` lives at
+/// `dir/parent/foo.otter` — submodule files sit in a directory named for the
 /// parent file's stem.
 fn load_submodules(
     map: &mut SourceMap,
@@ -184,7 +184,7 @@ fn load_submodules(
         if !matches!(m.kind, ModuleKind::External) {
             continue;
         }
-        let child_path = dir.join(format!("{}.lang", m.name.name));
+        let child_path = dir.join(format!("{}.otter", m.name.name));
         let src = match std::fs::read_to_string(&child_path) {
             Ok(s) => s,
             Err(e) => {

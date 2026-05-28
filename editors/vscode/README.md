@@ -1,6 +1,6 @@
-# Lang for VS Code
+# Otter Fusion for VS Code
 
-Editor support for the experimental language, backed by the `lang-lsp`
+Editor support for Otter Fusion (`.otter`), backed by the `lang-lsp`
 language server (`crates/lsp`).
 
 ## Features
@@ -46,4 +46,4 @@ package it with `vsce package` and install the resulting `.vsix`.
 | `lang.server.path`  | `lang-lsp` | Path to the language-server binary.       |
 | `lang.trace.server` | `off`      | Trace LSP traffic (`messages`/`verbose`). |
 
-Command **Lang: Restart Language Server** reloads the server after a rebuild.
+Command **Otter Fusion: Restart Language Server** reloads the server after a rebuild.

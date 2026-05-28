@@ -21,14 +21,14 @@ async function startClient(): Promise<void> {
   const clientOptions: LanguageClientOptions = {
     documentSelector: [{ scheme: "file", language: "lang" }],
     synchronize: {
-      fileEvents: workspace.createFileSystemWatcher("**/*.lang"),
+      fileEvents: workspace.createFileSystemWatcher("**/*.otter"),
     },
-    outputChannelName: "Lang Language Server",
+    outputChannelName: "Otter Fusion Language Server",
   };
 
   client = new LanguageClient(
     "lang",
-    "Lang Language Server",
+    "Otter Fusion Language Server",
     serverOptions,
     clientOptions,
   );
@@ -37,7 +37,7 @@ async function startClient(): Promise<void> {
     await client.start();
   } catch (err) {
     window.showErrorMessage(
-      `Failed to start the lang language server ("${command}"). ` +
+      `Failed to start the Otter Fusion language server ("${command}"). ` +
         `Set "lang.server.path" to the lang-lsp binary. ${err}`,
     );
   }
@@ -49,7 +49,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
       await client?.stop();
       client = undefined;
       await startClient();
-      window.showInformationMessage("Lang language server restarted.");
+      window.showInformationMessage("Otter Fusion language server restarted.");
     }),
   );
 

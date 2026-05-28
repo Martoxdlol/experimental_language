@@ -718,7 +718,7 @@ crypto  = { lib = "crypto", kind = "dynamic" }
 [package.ffi]
 bindings = [
   { header    = "vendor/zlib.h",
-    output    = "src/bindings/zlib.lang",
+    output    = "src/bindings/zlib.otter",
     allowlist = ["inflate*", "deflate*"] },
 ]
 exports = [

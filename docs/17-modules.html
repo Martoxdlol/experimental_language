@@ -198,9 +198,9 @@
 <li>A <strong>source root</strong>, conventionally <code>src/</code>, declared in the manifest.</li>
 <li>An <strong>entry file</strong> declared in the manifest:
   <ul>
-    <li><strong>Binary</strong>: <code>kind = "binary"</code>, <code>entry = "src/main.lang"</code>. <code>main.lang</code> must export <code>function main()</code>. The package produces an executable; it is <strong>not</strong> consumable via <code>pkg:</code>.</li>
-    <li><strong>Library</strong>: <code>kind = "library"</code>, <code>entry = "src/lib.lang"</code>. The package's public API is everything <code>pub</code> in <code>lib.lang</code>. Consumers <code>import { ... } from "pkg:&lt;name&gt;"</code> resolve against <code>lib.lang</code>.</li>
-    <li><strong>Library + binaries</strong>: <code>kind = "library+bins"</code>, plus <code>bins = ["src/bin/&lt;name&gt;.lang", ...]</code>. The library entry is <code>lib.lang</code>; each bin is an additional entry the compiler walks.</li>
+    <li><strong>Binary</strong>: <code>kind = "binary"</code>, <code>entry = "src/main.otter"</code>. <code>main.otter</code> must export <code>function main()</code>. The package produces an executable; it is <strong>not</strong> consumable via <code>pkg:</code>.</li>
+    <li><strong>Library</strong>: <code>kind = "library"</code>, <code>entry = "src/lib.otter"</code>. The package's public API is everything <code>pub</code> in <code>lib.otter</code>. Consumers <code>import { ... } from "pkg:&lt;name&gt;"</code> resolve against <code>lib.otter</code>.</li>
+    <li><strong>Library + binaries</strong>: <code>kind = "library+bins"</code>, plus <code>bins = ["src/bin/&lt;name&gt;.otter", ...]</code>. The library entry is <code>lib.otter</code>; each bin is an additional entry the compiler walks.</li>
   </ul>
 </li>
 <li>Dependencies declared in the manifest, available under the <code>pkg:</code> prefix.</li>
@@ -217,7 +217,7 @@
       <rect x="20" y="100" width="230" height="32" rx="4" fill="#fff" stroke="#d6d3cd"/>
       <text x="35" y="120">src/</text>
       <rect x="40" y="140" width="210" height="32" rx="4" fill="#eef6f1" stroke="#2a6f4d"/>
-      <text x="55" y="160">main.lang</text>
+      <text x="55" y="160">main.otter</text>
       <text x="240" y="160" text-anchor="end" class="small" fill="#2a6f4d">entry</text>
       <text x="135" y="200" class="small" text-anchor="middle">function main()</text>
       <text x="135" y="218" class="small" text-anchor="middle">NOT consumable via pkg:</text>
@@ -225,13 +225,13 @@
     <g transform="translate(325, 20)">
       <rect x="0" y="0" width="270" height="240" rx="8" fill="#fafafa" stroke="#d6d3cd"/>
       <text x="135" y="24" class="label" text-anchor="middle" font-weight="700" font-size="13">kind = "library"</text>
-      <text x="135" y="44" class="small" text-anchor="middle">public API = pub in lib.lang</text>
+      <text x="135" y="44" class="small" text-anchor="middle">public API = pub in lib.otter</text>
       <rect x="20" y="60" width="230" height="32" rx="4" fill="#fff" stroke="#d6d3cd"/>
       <text x="35" y="80">project.toml</text>
       <rect x="20" y="100" width="230" height="32" rx="4" fill="#fff" stroke="#d6d3cd"/>
       <text x="35" y="120">src/</text>
       <rect x="40" y="140" width="210" height="32" rx="4" fill="#eef6f1" stroke="#2a6f4d"/>
-      <text x="55" y="160">lib.lang</text>
+      <text x="55" y="160">lib.otter</text>
       <text x="240" y="160" text-anchor="end" class="small" fill="#2a6f4d">entry</text>
       <text x="135" y="200" class="small" text-anchor="middle">consumers:</text>
       <text x="135" y="218" class="small" text-anchor="middle">import { … } from "pkg:&lt;name&gt;"</text>
@@ -245,20 +245,20 @@
       <rect x="20" y="100" width="230" height="32" rx="4" fill="#fff" stroke="#d6d3cd"/>
       <text x="35" y="120">src/</text>
       <rect x="40" y="140" width="210" height="22" rx="4" fill="#eef6f1" stroke="#2a6f4d"/>
-      <text x="55" y="156">lib.lang</text>
+      <text x="55" y="156">lib.otter</text>
       <rect x="40" y="170" width="210" height="22" rx="4" fill="#eef6f1" stroke="#2a6f4d"/>
-      <text x="55" y="186">bin/foo.lang</text>
+      <text x="55" y="186">bin/foo.otter</text>
       <rect x="40" y="200" width="210" height="22" rx="4" fill="#eef6f1" stroke="#2a6f4d"/>
-      <text x="55" y="216">bin/bar.lang</text>
+      <text x="55" y="216">bin/bar.otter</text>
     </g>
   </svg>
   <div class="diagram-caption">Three project kinds. The compiler walks the <code>mod</code> tree starting at each entry.</div>
 </div>
 
-<p>The compiler starts at each declared entry and walks the <code>mod</code> tree (see 17.2). Every <code>.lang</code> file under <code>src/</code> must be reachable from some entry through a chain of <code>mod</code> declarations. <strong>A source file that no <code>mod</code> declaration mentions is a hard error</strong>:</p>
+<p>The compiler starts at each declared entry and walks the <code>mod</code> tree (see 17.2). Every <code>.otter</code> file under <code>src/</code> must be reachable from some entry through a chain of <code>mod</code> declarations. <strong>A source file that no <code>mod</code> declaration mentions is a hard error</strong>:</p>
 
-<pre><code>unreferenced source file: src/util/dead.lang
-  expected `mod dead` in src/util.lang (or an ancestor)
+<pre><code>unreferenced source file: src/util/dead.otter
+  expected `mod dead` in src/util.otter (or an ancestor)
 </code></pre>
 
 <p>This is the same strictness as Rust: if it's not in the <code>mod</code> tree, the compiler doesn't see it.</p>
@@ -267,7 +267,7 @@
 
 <p>A file declares its submodules with <code>mod</code> or <code>pub mod</code>:</p>
 
-<pre><code>// src/lib.lang
+<pre><code>// src/lib.otter
 mod internals          // private — usable from this file, not visible to pkg consumers
 pub mod util           // public — pkg:cool-lib/util is a valid import path for consumers
 pub mod db
@@ -282,25 +282,25 @@ pub mod db
 
 <h3>Resolution to files</h3>
 
-<p>A <code>mod foo</code> in file <code>path/to/parent.lang</code> resolves to <code>path/to/parent/foo.lang</code>. The submodule directory shares its parent file's basename.</p>
+<p>A <code>mod foo</code> in file <code>path/to/parent.otter</code> resolves to <code>path/to/parent/foo.otter</code>. The submodule directory shares its parent file's basename.</p>
 
-<p>Top-level entries are the one exception: <code>mod foo</code> in <code>src/lib.lang</code> (or <code>src/main.lang</code>, or any file directly named in <code>bins</code>) resolves to <code>src/foo.lang</code> — siblings of the entry, not <code>src/lib/foo.lang</code>. This matches Rust's crate-root convention and keeps the source root flat.</p>
+<p>Top-level entries are the one exception: <code>mod foo</code> in <code>src/lib.otter</code> (or <code>src/main.otter</code>, or any file directly named in <code>bins</code>) resolves to <code>src/foo.otter</code> — siblings of the entry, not <code>src/lib/foo.otter</code>. This matches Rust's crate-root convention and keeps the source root flat.</p>
 
 <pre><code>src/
-  lib.lang                 // entry: mod util, pub mod db, mod internals
-  util.lang                // mod helpers, mod parser
+  lib.otter                 // entry: mod util, pub mod db, mod internals
+  util.otter                // mod helpers, mod parser
   util/
-    helpers.lang           // mod text
+    helpers.otter           // mod text
     helpers/
-      text.lang
-    parser.lang
-  db.lang                  // pub mod query
+      text.otter
+    parser.otter
+  db.otter                  // pub mod query
   db/
-    query.lang
-  internals.lang
+    query.otter
+  internals.otter
 </code></pre>
 
-<p>There are no <code>mod.lang</code> index files. Every module's source file is named after itself.</p>
+<p>There are no <code>mod.otter</code> index files. Every module's source file is named after itself.</p>
 
 <div class="diagram">
   <svg viewBox="0 0 920 480" role="img" aria-label="Module tree resolution">
@@ -309,7 +309,7 @@ pub mod db
       <text x="190" y="24" class="label" text-anchor="middle" font-weight="700" font-size="13">Declarations</text>
       <g transform="translate(20, 50)">
         <rect width="340" height="100" rx="6" fill="#fff" stroke="#1a4a8a"/>
-        <text x="12" y="20" font-weight="700">src/lib.lang</text>
+        <text x="12" y="20" font-weight="700">src/lib.otter</text>
         <text x="12" y="42" fill="#2a6f4d">pub mod util</text>
         <text x="12" y="60" fill="#2a6f4d">pub mod db</text>
         <text x="12" y="78" fill="#b54708">mod internals</text>
@@ -317,24 +317,24 @@ pub mod db
       </g>
       <g transform="translate(20, 170)">
         <rect width="340" height="60" rx="6" fill="#fff" stroke="#1a4a8a"/>
-        <text x="12" y="20" font-weight="700">src/util.lang</text>
+        <text x="12" y="20" font-weight="700">src/util.otter</text>
         <text x="12" y="42" fill="#b54708">mod helpers</text>
-        <text x="12" y="56" class="small">child: src/util/helpers.lang</text>
+        <text x="12" y="56" class="small">child: src/util/helpers.otter</text>
       </g>
       <g transform="translate(20, 250)">
         <rect width="340" height="60" rx="6" fill="#fff" stroke="#1a4a8a"/>
-        <text x="12" y="20" font-weight="700">src/util/helpers.lang</text>
+        <text x="12" y="20" font-weight="700">src/util/helpers.otter</text>
         <text x="12" y="42" fill="#b54708">mod text</text>
-        <text x="12" y="56" class="small">child: src/util/helpers/text.lang</text>
+        <text x="12" y="56" class="small">child: src/util/helpers/text.otter</text>
       </g>
       <g transform="translate(20, 330)">
         <rect width="340" height="50" rx="6" fill="#fff" stroke="#1a4a8a"/>
-        <text x="12" y="20" font-weight="700">src/db.lang</text>
+        <text x="12" y="20" font-weight="700">src/db.otter</text>
         <text x="12" y="40" fill="#2a6f4d">pub mod query</text>
       </g>
       <g transform="translate(20, 390)">
         <rect width="340" height="36" rx="6" fill="#fff" stroke="#1a4a8a"/>
-        <text x="12" y="22" font-weight="700">src/internals.lang</text>
+        <text x="12" y="22" font-weight="700">src/internals.otter</text>
       </g>
     </g>
     <g transform="translate(410, 230)">
@@ -346,18 +346,18 @@ pub mod db
       <text x="195" y="24" class="label" text-anchor="middle" font-weight="700" font-size="13">Filesystem</text>
       <g transform="translate(20, 50)" font-family="SF Mono, Menlo, monospace" font-size="12">
         <text y="14">src/</text>
-        <text x="20" y="34">├── lib.lang</text>
-        <text x="20" y="54" fill="#2a6f4d">├── util.lang</text>
+        <text x="20" y="34">├── lib.otter</text>
+        <text x="20" y="54" fill="#2a6f4d">├── util.otter</text>
         <text x="40" y="74" fill="#2a6f4d">└── util/</text>
-        <text x="60" y="94" fill="#b54708">    ├── helpers.lang</text>
+        <text x="60" y="94" fill="#b54708">    ├── helpers.otter</text>
         <text x="80" y="114" fill="#b54708">    │   └── helpers/</text>
-        <text x="100" y="134" fill="#b54708">    │       └── text.lang</text>
-        <text x="60" y="154">    └── parser.lang</text>
-        <text x="20" y="184" fill="#2a6f4d">├── db.lang</text>
+        <text x="100" y="134" fill="#b54708">    │       └── text.otter</text>
+        <text x="60" y="154">    └── parser.otter</text>
+        <text x="20" y="184" fill="#2a6f4d">├── db.otter</text>
         <text x="40" y="204" fill="#2a6f4d">└── db/</text>
-        <text x="60" y="224" fill="#2a6f4d">    └── query.lang</text>
-        <text x="20" y="254" fill="#b54708">└── internals.lang</text>
-        <text y="304" fill="#5a5a60" font-style="italic">No mod.lang index files.</text>
+        <text x="60" y="224" fill="#2a6f4d">    └── query.otter</text>
+        <text x="20" y="254" fill="#b54708">└── internals.otter</text>
+        <text y="304" fill="#5a5a60" font-style="italic">No mod.otter index files.</text>
         <text y="324" fill="#5a5a60" font-style="italic">Every module's file is named</text>
         <text y="344" fill="#5a5a60" font-style="italic">after itself.</text>
       </g>
@@ -370,7 +370,7 @@ pub mod db
   </svg>
   <div class="diagram-caption">
     <span class="tag pub">pub mod</span> external, <span class="tag priv">mod</span> private.
-    The compiler errors on any <code>.lang</code> file not reachable from an entry's <code>mod</code> chain.
+    The compiler errors on any <code>.otter</code> file not reachable from an entry's <code>mod</code> chain.
   </div>
 </div>
 
@@ -505,7 +505,7 @@ import { my_helper } from "pkg:iter_ext"   // also bring a name
   <svg viewBox="0 0 920 320" role="img" aria-label="Path resolution">
     <g transform="translate(360, 130)">
       <rect width="200" height="60" rx="8" fill="#fff" stroke="#1a4a8a" stroke-width="2"/>
-      <text x="100" y="26" text-anchor="middle" font-weight="700">src/app/main.lang</text>
+      <text x="100" y="26" text-anchor="middle" font-weight="700">src/app/main.otter</text>
       <text x="100" y="46" text-anchor="middle" class="small">this importing file</text>
     </g>
     <g transform="translate(60, 20)">
@@ -561,8 +561,8 @@ import { my_helper } from "pkg:iter_ext"   // also bring a name
 
 <p>Path examples (with source root <code>src/</code>):</p>
 
-<pre><code>import { Logger } from "util/log"            // src/util/log.lang
-import { open }   from "io/file"             // src/io/file.lang
+<pre><code>import { Logger } from "util/log"            // src/util/log.otter
+import { open }   from "io/file"             // src/io/file.otter
 import { Helper } from "./helper"            // file in same directory
 import { Util }   from "../shared/util"      // sibling directory
 import { parse }  from "pkg:json/parse"      // external package, subpath
@@ -574,12 +574,12 @@ import { parse }  from "pkg:json/parse"      // external package, subpath
 
 <pre><code>src/
   app/
-    main.lang                  // can import "../util/log" (resolves to src/util/log.lang)
+    main.otter                  // can import "../util/log" (resolves to src/util/log.otter)
     db/
-      query.lang               // can import "../../util/log" (resolves to src/util/log.lang)
+      query.otter               // can import "../../util/log" (resolves to src/util/log.otter)
                                // CANNOT import "../../../something"  ERROR: escapes package
   util/
-    log.lang
+    log.otter
 </code></pre>
 
 <p>Any <code>../</code> chain that resolves above the source root is rejected by the compiler:</p>
@@ -597,13 +597,13 @@ import { parse }  from "pkg:json/parse"      // external package, subpath
       <rect width="180" height="160" rx="6" fill="#fff" stroke="#d6d3cd"/>
       <text x="90" y="22" text-anchor="middle" font-weight="700" font-size="12">src/util/</text>
       <rect x="14" y="36" width="152" height="30" rx="4" fill="#fafafa" stroke="#d6d3cd"/>
-      <text x="90" y="56" text-anchor="middle" font-size="11">log.lang</text>
+      <text x="90" y="56" text-anchor="middle" font-size="11">log.otter</text>
     </g>
     <g transform="translate(280, 90)">
       <rect width="220" height="160" rx="6" fill="#fff" stroke="#d6d3cd"/>
       <text x="110" y="22" text-anchor="middle" font-weight="700" font-size="12">src/app/db/</text>
       <rect x="14" y="36" width="192" height="30" rx="4" fill="#fafafa" stroke="#d6d3cd"/>
-      <text x="110" y="56" text-anchor="middle" font-size="11">query.lang</text>
+      <text x="110" y="56" text-anchor="middle" font-size="11">query.otter</text>
       <text x="110" y="92" text-anchor="middle" font-size="11" fill="#2a6f4d">import "../../util/log" ✓</text>
       <text x="110" y="112" text-anchor="middle" font-size="11" fill="#2a6f4d">import "util/log" ✓</text>
       <text x="110" y="138" text-anchor="middle" font-size="10" class="small">(absolute always works)</text>
@@ -644,33 +644,33 @@ import { parse }  from "pkg:json/parse"      // external package, subpath
 
 <p>Together they form a chain. For a name to be reachable from outside the package, <strong>every <code>mod</code> along the path from the entry must be <code>pub mod</code>, and the leaf item must be <code>pub</code></strong>.</p>
 
-<pre><code>// src/lib.lang
+<pre><code>// src/lib.otter
 pub mod util       // util is part of the public surface
 
-// src/util.lang
+// src/util.otter
 pub mod log        // util/log is part of the public surface
 
-// src/util/log.lang
+// src/util/log.otter
 pub struct Logger { ... }    // Logger is visible to outside callers
 struct Internal { ... }       // Internal is NOT visible to outside callers
 </code></pre>
 
-<p>If <code>lib.lang</code> had written <code>mod util</code> (no <code>pub</code>), the entire <code>util/*</code> subtree would be package-internal, regardless of <code>pub</code> markers further down.</p>
+<p>If <code>lib.otter</code> had written <code>mod util</code> (no <code>pub</code>), the entire <code>util/*</code> subtree would be package-internal, regardless of <code>pub</code> markers further down.</p>
 
 <div class="diagram">
   <svg viewBox="0 0 920 340" role="img" aria-label="The pub chain">
     <g transform="translate(20, 20)">
       <text x="0" y="14" font-weight="700" font-size="13" fill="#2a6f4d">✓ Reachable from outside</text>
       <rect x="0" y="30" width="170" height="60" rx="6" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
-      <text x="85" y="50" text-anchor="middle" font-weight="700">lib.lang</text>
+      <text x="85" y="50" text-anchor="middle" font-weight="700">lib.otter</text>
       <text x="85" y="70" text-anchor="middle" fill="#2a6f4d">pub mod util</text>
       <path d="M 175 60 L 215 60" stroke="#2a6f4d" stroke-width="2" marker-end="url(#chk17)"/>
       <rect x="220" y="30" width="170" height="60" rx="6" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
-      <text x="305" y="50" text-anchor="middle" font-weight="700">util.lang</text>
+      <text x="305" y="50" text-anchor="middle" font-weight="700">util.otter</text>
       <text x="305" y="70" text-anchor="middle" fill="#2a6f4d">pub mod log</text>
       <path d="M 395 60 L 435 60" stroke="#2a6f4d" stroke-width="2" marker-end="url(#chk17)"/>
       <rect x="440" y="30" width="170" height="60" rx="6" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
-      <text x="525" y="50" text-anchor="middle" font-weight="700">util/log.lang</text>
+      <text x="525" y="50" text-anchor="middle" font-weight="700">util/log.otter</text>
       <text x="525" y="70" text-anchor="middle" fill="#2a6f4d">pub struct Logger</text>
       <path d="M 615 60 L 655 60" stroke="#2a6f4d" stroke-width="2" marker-end="url(#chk17)"/>
       <rect x="660" y="30" width="200" height="60" rx="6" fill="#fff" stroke="#1a4a8a" stroke-width="2"/>
@@ -680,15 +680,15 @@ struct Internal { ... }       // Internal is NOT visible to outside callers
     <g transform="translate(20, 140)">
       <text x="0" y="14" font-weight="700" font-size="13" fill="#b54708">✗ Broken — one missing pub on the chain</text>
       <rect x="0" y="30" width="170" height="60" rx="6" fill="#fbf3ec" stroke="#b54708" stroke-width="2"/>
-      <text x="85" y="50" text-anchor="middle" font-weight="700">lib.lang</text>
+      <text x="85" y="50" text-anchor="middle" font-weight="700">lib.otter</text>
       <text x="85" y="70" text-anchor="middle" fill="#b54708">mod util</text>
       <path d="M 175 60 L 215 60" stroke="#b54708" stroke-width="2" stroke-dasharray="4 3" marker-end="url(#x17)"/>
       <rect x="220" y="30" width="170" height="60" rx="6" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
-      <text x="305" y="50" text-anchor="middle" font-weight="700">util.lang</text>
+      <text x="305" y="50" text-anchor="middle" font-weight="700">util.otter</text>
       <text x="305" y="70" text-anchor="middle" fill="#2a6f4d">pub mod log</text>
       <path d="M 395 60 L 435 60" stroke="#2a6f4d" stroke-width="2" marker-end="url(#chk17)"/>
       <rect x="440" y="30" width="170" height="60" rx="6" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
-      <text x="525" y="50" text-anchor="middle" font-weight="700">util/log.lang</text>
+      <text x="525" y="50" text-anchor="middle" font-weight="700">util/log.otter</text>
       <text x="525" y="70" text-anchor="middle" fill="#2a6f4d">pub struct Logger</text>
       <path d="M 615 60 L 655 60" stroke="#b54708" stroke-width="2" stroke-dasharray="4 3"/>
       <text x="635" y="55" text-anchor="middle" font-size="14" fill="#b54708" font-weight="700">✗</text>
@@ -911,22 +911,22 @@ import { spawn, block_on } from "std:async"
       <rect width="300" height="300" rx="8" fill="#fafafa" stroke="#d6d3cd"/>
       <text x="150" y="22" text-anchor="middle" font-weight="700" font-size="13">Internal (deep) tree</text>
       <rect x="20" y="50" width="260" height="46" rx="6" fill="#fbf3ec" stroke="#b54708"/>
-      <text x="32" y="70" font-weight="700">lib.lang</text>
+      <text x="32" y="70" font-weight="700">lib.otter</text>
       <text x="32" y="88" fill="#b54708">mod internals</text>
       <path d="M 150 96 L 150 116" stroke="#5a5a60" stroke-width="1.5" marker-end="url(#a3-17)"/>
       <rect x="20" y="120" width="260" height="46" rx="6" fill="#fbf3ec" stroke="#b54708"/>
       <text x="32" y="140" font-weight="700">internals/</text>
-      <text x="32" y="158" fill="#b54708">log.lang, db.lang</text>
+      <text x="32" y="158" fill="#b54708">log.otter, db.otter</text>
       <path d="M 150 166 L 150 186" stroke="#5a5a60" stroke-width="1.5" marker-end="url(#a3-17)"/>
       <rect x="20" y="190" width="260" height="60" rx="6" fill="#fff" stroke="#1a4a8a"/>
-      <text x="32" y="210" font-weight="700">internals/log.lang</text>
+      <text x="32" y="210" font-weight="700">internals/log.otter</text>
       <text x="32" y="228" fill="#2a6f4d">pub struct Logger</text>
       <text x="32" y="244" class="small">(pub but not externally reachable)</text>
     </g>
     <g transform="translate(340, 130)">
       <rect width="240" height="80" rx="8" fill="#f3eefa" stroke="#6b4ba8" stroke-width="2"/>
       <text x="120" y="22" text-anchor="middle" font-weight="700" font-size="13" fill="#6b4ba8">pub import</text>
-      <text x="120" y="44" text-anchor="middle" font-size="11">in lib.lang:</text>
+      <text x="120" y="44" text-anchor="middle" font-size="11">in lib.otter:</text>
       <text x="14" y="64" font-family="SF Mono, Menlo, monospace" font-size="11">pub import { Logger }</text>
       <text x="14" y="78" font-family="SF Mono, Menlo, monospace" font-size="11">  from "internals/log"</text>
     </g>
@@ -954,7 +954,7 @@ import { spawn, block_on } from "std:async"
   <div class="diagram-caption"><code>pub import</code> lifts individual names without exposing their containing submodule.</div>
 </div>
 
-<pre><code>// src/lib.lang
+<pre><code>// src/lib.otter
 mod internals                                       // private — pkg consumers can't reach internals/*
 pub import { Logger } from "internals/log"          // re-export an individual name
 pub import { Db, open } from "internals/db"
@@ -985,8 +985,8 @@ pub import { Foo as Bar }  from "util/helpers"     // re-export with alias
 <h3>What this lets you do</h3>
 
 <ul>
-<li>Curate a flat public API at <code>lib.lang</code> while keeping the internal directory tree as deep as you want.</li>
-<li>Move implementation files around without changing the public API spelling — consumers always see the <code>lib.lang</code> paths.</li>
+<li>Curate a flat public API at <code>lib.otter</code> while keeping the internal directory tree as deep as you want.</li>
+<li>Move implementation files around without changing the public API spelling — consumers always see the <code>lib.otter</code> paths.</li>
 <li>Build an <strong>umbrella package</strong> that re-exports several extension crates: consumers do one <code>import "pkg:fancy-iters"</code> and pick up all the re-exported extensions transitively.</li>
 <li>Mix <code>pub mod</code>-style "expose the whole submodule" with <code>pub import</code>-style "lift individual names" without conflict.</li>
 </ul>
@@ -994,14 +994,14 @@ pub import { Foo as Bar }  from "util/helpers"     // re-export with alias
 <h2 id="17-11-cheat-sheet">17.11 Cheat sheet</h2>
 
 <div class="file-tree">src/
-├── <span class="pub">lib.lang</span>              <span class="note"># entry; pub mod util, mod internals</span>
-├── <span class="pub">util.lang</span>             <span class="note"># pub mod (in lib.lang) → external surface</span>
+├── <span class="pub">lib.otter</span>              <span class="note"># entry; pub mod util, mod internals</span>
+├── <span class="pub">util.otter</span>             <span class="note"># pub mod (in lib.otter) → external surface</span>
 ├── util/
-│   └── <span class="pub">log.lang</span>          <span class="note"># pub struct Logger reachable as pkg:&lt;name&gt;/util/log</span>
-├── <span class="priv">internals.lang</span>        <span class="note"># mod (no pub) → package-internal only</span>
+│   └── <span class="pub">log.otter</span>          <span class="note"># pub struct Logger reachable as pkg:&lt;name&gt;/util/log</span>
+├── <span class="priv">internals.otter</span>        <span class="note"># mod (no pub) → package-internal only</span>
 └── internals/
-    └── <span class="priv">db.lang</span>           <span class="note"># its pub items are package-internal …</span>
-                          <span class="note">#   unless lifted via `pub import { … } from "internals/db"` in lib.lang</span></div>
+    └── <span class="priv">db.otter</span>           <span class="note"># its pub items are package-internal …</span>
+                          <span class="note">#   unless lifted via `pub import { … } from "internals/db"` in lib.otter</span></div>
 
 <table>
   <thead><tr><th>You want…</th><th>Write</th></tr></thead>
@@ -1009,14 +1009,14 @@ pub import { Foo as Bar }  from "util/helpers"     // re-export with alias
     <tr><td>File-only item</td><td>Leave it private (no <code>pub</code>)</td></tr>
     <tr><td>Package-only item</td><td><code>pub</code> the item; one <code>mod</code> (no <code>pub</code>) somewhere on the chain</td></tr>
     <tr><td>External item</td><td><code>pub</code> the item; <code>pub mod</code> every link in the chain</td></tr>
-    <tr><td>Flat public API from a deep tree</td><td><code>pub import { X } from "internal/path"</code> in <code>lib.lang</code></td></tr>
+    <tr><td>Flat public API from a deep tree</td><td><code>pub import { X } from "internal/path"</code> in <code>lib.otter</code></td></tr>
     <tr><td>Two siblings share internals</td><td>Put both under a common <code>mod parent</code> (no <code>pub</code>)</td></tr>
     <tr><td>Read-only-from-outside state</td><td>Private <code>var</code> + <code>pub function getter()</code></td></tr>
     <tr><td>Reach another package</td><td>Always via <code>pkg:&lt;name&gt;/…</code> &mdash; relative paths can't cross</td></tr>
     <tr><td>Just a module's extension methods, no names</td><td><code>import "pkg:m"</code> (bare ambient form)</td></tr>
     <tr><td>Qualified access to a module</td><td><code>import "pkg:m" as M</code> &mdash; explicit <code>as</code> required</td></tr>
     <tr><td>Specific names from a module</td><td><code>import { Foo, bar } from "pkg:m"</code></td></tr>
-    <tr><td>Umbrella package that re-exports extensions</td><td><code>pub import "pkg:dep"</code> in <code>lib.lang</code></td></tr>
+    <tr><td>Umbrella package that re-exports extensions</td><td><code>pub import "pkg:dep"</code> in <code>lib.otter</code></td></tr>
   </tbody>
 </table>
 

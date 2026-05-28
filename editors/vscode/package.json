@@ -1,7 +1,7 @@
 {
-  "name": "lang",
-  "displayName": "Lang",
-  "description": "Language support for the experimental language: diagnostics, hover, go-to-definition, references, rename, symbols, completion, and semantic highlighting.",
+  "name": "otter-fusion",
+  "displayName": "Otter Fusion",
+  "description": "Otter Fusion language support: diagnostics, hover, go-to-definition, references, rename, symbols, completion, and semantic highlighting.",
   "version": "0.1.0",
   "publisher": "experimental",
   "engines": { "vscode": "^1.85.0" },
@@ -12,8 +12,8 @@
     "languages": [
       {
         "id": "lang",
-        "aliases": ["Lang", "lang"],
-        "extensions": [".lang"],
+        "aliases": ["Otter Fusion", "otter"],
+        "extensions": [".otter"],
         "configuration": "./language-configuration.json"
       }
     ],
@@ -25,7 +25,7 @@
       }
     ],
     "configuration": {
-      "title": "Lang",
+      "title": "Otter Fusion",
       "properties": {
         "lang.server.path": {
           "type": "string",
@@ -43,7 +43,7 @@
     "commands": [
       {
         "command": "lang.restartServer",
-        "title": "Lang: Restart Language Server"
+        "title": "Otter Fusion: Restart Language Server"
       }
     ]
   },

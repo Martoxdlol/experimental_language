@@ -567,8 +567,8 @@ fn line_col_works_for_crlf() {
 #[test]
 fn source_map_distinguishes_files() {
     let mut sm = SourceMap::new();
-    let a = sm.add_file("a.lang", "var x");
-    let b = sm.add_file("b.lang", "var y");
+    let a = sm.add_file("a.otter", "var x");
+    let b = sm.add_file("b.otter", "var y");
     assert_ne!(a, b);
 
     let src_a = sm.file(a).src.clone();

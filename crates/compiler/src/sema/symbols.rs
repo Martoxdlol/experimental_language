@@ -21,7 +21,7 @@ use std::collections::HashMap;
 
 /// Parsed bodies of file-backed submodules, keyed by their module path relative
 /// to the crate root (e.g. `["util", "helpers"]`). The driver builds this by
-/// discovering `mod` declarations and loading the corresponding `.lang` files;
+/// discovering `mod` declarations and loading the corresponding `.otter` files;
 /// single-file builds pass an empty map.
 pub type Externals = HashMap<Vec<String>, Module>;
 

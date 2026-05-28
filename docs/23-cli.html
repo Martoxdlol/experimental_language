@@ -295,8 +295,8 @@
   <div class="diagram-caption">Comma-separate stages or use <code>all</code>. Most stages emit <code>s-expr</code>/<code>json</code> or platform-native files.</div>
 </div>
 
-<pre><code>lang emit tokens src/util/log.lang
-lang emit ast,types --format json src/lib.lang -o ast.json
+<pre><code>lang emit tokens src/util/log.otter
+lang emit ast,types --format json src/lib.otter -o ast.json
 lang emit obj --all -o target/objs/        # one .o per module
 lang emit mod-graph --format dot | dot -Tpng &gt; modules.png</code></pre>
 
@@ -423,7 +423,7 @@ lang emit mod-graph --format dot | dot -Tpng &gt; modules.png</code></pre>
 name = "myapp"
 version = "0.3.1"
 kind = "binary"                # or "library", "library+bins"
-entry = "src/main.lang"
+entry = "src/main.otter"
 edition = "2026"
 no-std = false
 default-features = ["json"]
@@ -467,7 +467,7 @@ mylib   = { lib = "mylib",  kind = "static",  path = "vendor/libmylib.a" }
 [package.ffi]
 bindings = [
   { header    = "vendor/zlib.h",
-    output    = "src/bindings/zlib.lang",
+    output    = "src/bindings/zlib.otter",
     allowlist = ["inflate*", "deflate*"] },
 ]
 
@@ -490,7 +490,7 @@ exports = [
 <h3>Build scripts</h3>
 
 <pre><code>[build-script]
-file = "build.lang"           # compiled and run before the main build</code></pre>
+file = "build.otter"           # compiled and run before the main build</code></pre>
 
 <p>Writes link directives on stdout:</p>
 
@@ -498,7 +498,7 @@ file = "build.lang"           # compiled and run before the main build</code></p
 lang:link-search=native=/opt/lib
 lang:rerun-if-changed=vendor/libmylib.a
 lang:emit-cfg=has_openssl
-lang:ffi-bindgen=vendor/generated.h:src/bindings/generated.lang</code></pre>
+lang:ffi-bindgen=vendor/generated.h:src/bindings/generated.otter</code></pre>
 
 <div class="callout warn">
   <strong>Build scripts are arbitrary code</strong>

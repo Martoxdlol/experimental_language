@@ -1,4 +1,4 @@
-//! End-to-end tests: write a `.lang` file, invoke the `lang` binary, and check
+//! End-to-end tests: write a `.otter` file, invoke the `lang` binary, and check
 //! its stdout/exit status. Exercises the full pipeline including `print`.
 
 use std::process::Command;
@@ -13,7 +13,7 @@ fn lang(cmd: &str, src: &str) -> (String, String, bool) {
 /// `--release`).
 fn lang_flag(cmd: &str, src: &str, flags: &[&str]) -> (String, String, bool) {
     let dir = std::env::temp_dir();
-    let path = dir.join(format!("lang_test_{}.lang", nonce()));
+    let path = dir.join(format!("lang_test_{}.otter", nonce()));
     std::fs::write(&path, src).unwrap();
     let mut command = Command::new(env!("CARGO_BIN_EXE_lang"));
     command.arg(cmd).arg(&path);
@@ -32,7 +32,7 @@ fn lang_flag(cmd: &str, src: &str, flags: &[&str]) -> (String, String, bool) {
 /// Like [`lang`], with extra environment variables.
 fn lang_env(cmd: &str, src: &str, env: &[(&str, &str)]) -> (String, String, bool) {
     let dir = std::env::temp_dir();
-    let path = dir.join(format!("lang_test_{}.lang", nonce()));
+    let path = dir.join(format!("lang_test_{}.otter", nonce()));
     std::fs::write(&path, src).unwrap();
     let mut command = Command::new(env!("CARGO_BIN_EXE_lang"));
     command.arg(cmd).arg(&path);
@@ -53,7 +53,7 @@ fn lang_env(cmd: &str, src: &str, env: &[(&str, &str)]) -> (String, String, bool
 fn lang_build_run(src: &str, env: &[(&str, &str)]) -> (String, String, bool) {
     let dir = std::env::temp_dir();
     let n = nonce();
-    let path = dir.join(format!("lang_test_{n}.lang"));
+    let path = dir.join(format!("lang_test_{n}.otter"));
     let exe = dir.join(format!("lang_test_bin_{n}"));
     std::fs::write(&path, src).unwrap();
     let build = Command::new(env!("CARGO_BIN_EXE_lang"))
@@ -82,7 +82,7 @@ fn lang_build_run(src: &str, env: &[(&str, &str)]) -> (String, String, bool) {
 }
 
 /// Write a multi-file program into a fresh temp directory and run it.
-/// `files` maps a relative path (e.g. `"app/util.lang"`) to its source; the
+/// `files` maps a relative path (e.g. `"app/util.otter"`) to its source; the
 /// entry is `entry` (relative to the temp dir). Returns (stdout, stderr, ok).
 fn lang_run_project(entry: &str, files: &[(&str, &str)]) -> (String, String, bool) {
     let root = std::env::temp_dir().join(format!("lang_proj_{}", nonce()));
@@ -1127,7 +1127,7 @@ fn clone_rejects_mutable_list_elements() {
 
 #[test]
 fn multi_file_named_imports() {
-    // `mod util;` loads `app/util.lang`; named imports bring its public function
+    // `mod util;` loads `app/util.otter`; named imports bring its public function
     // and struct into the entry module's scope (`docs/17`).
     let entry = "mod util;\n\
                  import { add, Point } from \"util\";\n\
@@ -1139,7 +1139,7 @@ fn multi_file_named_imports() {
     let util = "pub function add(a: i64, b: i64): i64 { a + b }\n\
                 pub struct Point { x: i64, y: i64 }";
     let (out, err, ok) =
-        lang_run_project("app.lang", &[("app.lang", entry), ("app/util.lang", util)]);
+        lang_run_project("app.otter", &[("app.otter", entry), ("app/util.otter", util)]);
     assert!(ok, "stderr: {err}");
     assert_eq!(out, "sum=42\npt=(3,4)\n");
 }
@@ -1152,7 +1152,7 @@ fn multi_file_rejects_private_import() {
                  function main() { println(secret() as str); }";
     let util = "function secret(): i64 { 99 }";
     let (_, err, ok) =
-        lang_run_project("app.lang", &[("app.lang", entry), ("app/util.lang", util)]);
+        lang_run_project("app.otter", &[("app.otter", entry), ("app/util.otter", util)]);
     assert!(!ok);
     assert!(err.contains("`secret` is private"), "stderr: {err}");
 }
@@ -1166,7 +1166,7 @@ fn multi_file_strict_module_scoping() {
                  function main() { println(\"${root_only()}\"); }";
     let util = "pub function uses_root(): i64 { root_only() }";
     let (_, err, ok) =
-        lang_run_project("app.lang", &[("app.lang", entry), ("app/util.lang", util)]);
+        lang_run_project("app.otter", &[("app.otter", entry), ("app/util.otter", util)]);
     assert!(!ok);
     assert!(err.contains("cannot find value `root_only`"), "stderr: {err}");
 }
@@ -1181,7 +1181,7 @@ fn import_as_namespace_calls() {
     let mathx = "pub function add(a: i64, b: i64): i64 { a + b }\n\
                  pub function square(n: i64): i64 { n * n }";
     let (out, err, ok) =
-        lang_run_project("app.lang", &[("app.lang", entry), ("app/mathx.lang", mathx)]);
+        lang_run_project("app.otter", &[("app.otter", entry), ("app/mathx.otter", mathx)]);
     assert!(ok, "stderr: {err}");
     assert_eq!(out, "42 49\n");
 }
@@ -1194,7 +1194,7 @@ fn import_as_namespace_rejects_private() {
                  function main() { println(\"${M.hidden()}\"); }";
     let mathx = "function hidden(): i64 { 0 }";
     let (_, err, ok) =
-        lang_run_project("app.lang", &[("app.lang", entry), ("app/mathx.lang", mathx)]);
+        lang_run_project("app.otter", &[("app.otter", entry), ("app/mathx.otter", mathx)]);
     assert!(!ok);
     assert!(err.contains("no public value `hidden`"), "stderr: {err}");
 }
@@ -1202,7 +1202,7 @@ fn import_as_namespace_rejects_private() {
 #[test]
 fn multi_file_nested_submodule() {
     // A submodule may itself declare a file-backed submodule, loaded from a
-    // directory named for its parent file's stem (`app/util/` for `util.lang`).
+    // directory named for its parent file's stem (`app/util/` for `util.otter`).
     let entry = "mod util;\n\
                  import { triple } from \"util\";\n\
                  function main() { println(\"${triple(5)}\"); }";
@@ -1211,8 +1211,8 @@ fn multi_file_nested_submodule() {
                 pub function triple(n: i64): i64 { times(n, 3) }";
     let math = "pub function times(a: i64, b: i64): i64 { a * b }";
     let (out, err, ok) = lang_run_project(
-        "app.lang",
-        &[("app.lang", entry), ("app/util.lang", util), ("app/util/math.lang", math)],
+        "app.otter",
+        &[("app.otter", entry), ("app/util.otter", util), ("app/util/math.otter", math)],
     );
     assert!(ok, "stderr: {err}");
     assert_eq!(out, "15\n");

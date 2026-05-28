@@ -12,8 +12,10 @@
 
 ---
 
+/goal Apply language branding, this language is now officially called "Otter Fusion", file extensions is `.otter`. Keep most code as agnostic to the language name as possible but use the name in the places needed (like the extension)
+
+/goal implement fully working LSP + VS Code extension. Make it fully featured and as efficient as possible. Currently colors don't match the grammar. Grammar colors are nice! But once the lsp loads colors changes and look ugly. Use colors from grammar. Make autocomplete work.
+
 /goal apply optimizations to the backend. You can use possible-optimizations.txt as a reference but be smart and apply common logical optimization to the compiler and backend logic.
 
-/goal implement fully working LSP + VS Code extension. Make it fully featured and as efficient as possible. 
 
-/goal Apply language branding, this language is now officially called "Otter Fusion", file extensions is `.otter`. Keep most code as agnostic to the language name as possible but use the name in the places needed (like the extension)

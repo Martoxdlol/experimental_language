@@ -1,8 +1,9 @@
 # Implementation Roadmap
 
-This is the durable build plan for the language compiler. It is the source of
-truth for *what is done* and *what is next*, so work survives across sessions.
-Update the status markers as phases complete.
+This is the durable build plan for the Otter Fusion compiler (source files use
+the `.otter` extension). It is the source of truth for *what is done* and *what
+is next*, so work survives across sessions. Update the status markers as phases
+complete.
 
 The language is fully specified in `docs/01`..`docs/24` (HTML). Read those for
 semantics; this file is only the implementation sequencing.
@@ -137,7 +138,7 @@ Lexer, parser, AST, spans, diagnostics. 205 tests.
       (constants) / `check_call` (methods) on a primitive type name, recorded as
       `results.num_intrinsics`, lowered directly by codegen (overflow via
       Cranelift `{s,u}{add,sub,mul}_overflow`, saturating clamps by result sign).
-      JIT + native parity; `examples/numerics.lang`; 1 CLI test. TODO: the
+      JIT + native parity; `examples/numerics.otter`; 1 CLI test. TODO: the
       `div`/`rem`/`neg`/`shl`/`shr` families.
 - [x] `str` + `print`/`println` + `as` casts → real programs with output.
       `crates/runtime` (provisional, pre-GC, leaks): `LangStr` repr, str
@@ -146,7 +147,7 @@ Lexer, parser, AST, spans, diagnostics. 205 tests.
       casts (full primitive matrix: int↔int, int↔float, float↔float, int↔char,
       →str), and builtin calls. Checker has `as`/`is` + `print`/`println`
       builtins (temporary prelude; real `std:io` import later). `examples/
-      hello.lang` runs and prints. 31 new tests (backend str/cast + CLI e2e
+      hello.otter` runs and prints. 31 new tests (backend str/cast + CLI e2e
       "hello world" / computed fib via the actual binary).
 - [x] Loops: `while`, `loop` (value-producing via `break <expr>`), `break`,
       `continue` — checker (enclosing-loop stack, value-break only in `loop`)
@@ -215,7 +216,7 @@ The tracing GC is functionally complete for single-threaded programs.
       can safely read fields), moved to a finalize queue, and — after the world
       resumes but still under the GC turn — their `drop` runs, then they are
       freed. Best-effort / unreachability-triggered / unordered, per the spec (no
-      scope-exit hook). JIT + native parity; `examples/drop.lang`; 1 CLI test;
+      scope-exit hook). JIT + native parity; `examples/drop.otter`; 1 CLI test;
       564 tests. TODO: generic `Drop` types; channel-close-on-sender-drop +
       `Receiver: Iterator`; `Shared` lock release on a panicking body.
 **Per-thread TLABs** and MMTk/Immix remain the eventual production plan (the
@@ -248,7 +249,7 @@ The tracing GC is functionally complete for single-threaded programs.
       `null`-literal covered). Codegen is a top-to-bottom test/bind/body chain
       on the union tag. Unit-struct values lower as null-pointer placeholders
       (only their type id matters). 8 backend + 4 checker tests, `examples/
-      match.lang` (Shape areas + `i64|str|null` describe).
+      match.otter` (Shape areas + `i64|str|null` describe).
 - [x] **Flow narrowing** (`docs/12` §4): `if x is T { … }` narrows `x` to `T`
       in the then-branch and to the complement in the else-branch — no explicit
       `as` needed (`x + 1`, `x.v`, `"$x"` all work in-branch). Implemented via a
@@ -261,7 +262,7 @@ The tracing GC is functionally complete for single-threaded programs.
       interpolatable via their `to_str(self): str` method** (hand-written or
       `@Derive(ToStr)`-synthesised) — the checker records the method
       (`results.stringify_methods[span]`) and codegen calls it. Holes with no
-      `to_str` are rejected. 7 tests; `examples/hello.lang` uses it.
+      `to_str` are rejected. 7 tests; `examples/hello.otter` uses it.
 - [x] **`?` operator** (`docs/13` §2): partitions the operand union against the
       enclosing return type — variants also in `R` are failures (early-returned,
       boxed through `R`), the rest are the success value (unboxed). Errors on
@@ -285,14 +286,14 @@ The tracing GC is functionally complete for single-threaded programs.
       declares generic instances on demand at call sites (transitive), each
       compiled under a `Param→concrete` substitution applied to clty/type-id/
       layout via `resolve_shallow`. 7 backend + 3 checker tests; `examples/
-      generics.lang`. (Generic methods on `extend`, and nested-generic type-arg
+      generics.otter`. (Generic methods on `extend`, and nested-generic type-arg
       keys, are follow-ups.)
 - [x] **`List<T>`** (builtin generic): injected prelude type (`Program.list_def`,
       no AST item, special-cased). Runtime is a growable `Vec<i64>` of 8-byte
       slots; codegen widens each element to `i64` (uextend) and narrows on read.
       Supports `[a, b, c]` literals (incl. empty with annotation), `xs[i]` /
       `xs[i] = v` (panic OOB), and methods `push`/`size`/`is_empty`/`set`.
-      7 backend + (checker) tests; `examples/lists.lang`. (`.get` → `T|null`,
+      7 backend + (checker) tests; `examples/lists.otter`. (`.get` → `T|null`,
       `for`-in iteration, float/large elements: follow-ups.)
 - [x] **`for x in xs`** over a `List<T>`: lowered to an index loop (size/get),
       pattern binding per element, with `break`/`continue` (via the loop stack).
@@ -313,7 +314,7 @@ The tracing GC is functionally complete for single-threaded programs.
       `{ k: v, ..spread }` (parser tries map-first, commits on `key:`; `{}` stays
       a block), `Map<K,V>()`/`Map.new<K,V>()` constructors, and `get`(`V|null`)/
       `set`/`size`/`is_empty`/`contains`/`remove`(`V|null`)/`clear`/`keys`/
-      `values`. GC traces pointer keys/values. 17 tests + `examples/maps.lang`.
+      `values`. GC traces pointer keys/values. 17 tests + `examples/maps.otter`.
       - **Fixed a real pre-existing GC bug** surfaced by stress-testing Map:
         `lang_list_push`/`lang_map_set` take a managed value *by value* (not a
         stack-map root); the internal grow allocation could collect it before it
@@ -332,7 +333,7 @@ The tracing GC is functionally complete for single-threaded programs.
       records `results.for_iters`; codegen `gen_for_iterator` loops calling
       `next`, breaks on the `Done` tag, unwraps `Item<U>.value`; break/continue
       work). `List` keeps its index-loop fast path. 7 tests +
-      `examples/iterators.lang`.
+      `examples/iterators.otter`.
       - **Fixed another GC root bug** (general): `box_value` boxed a managed
         payload (e.g. an `Item` struct, a `str`) without rooting it across the
         box allocation — a collection there freed it. Now `mark_root`s a managed
@@ -348,7 +349,7 @@ The tracing GC is functionally complete for single-threaded programs.
       `iface_impls` table (`resolve_iface_method`). Interface methods now store
       their signature like `extend` methods. Works with method args and generic
       interfaces (`T: Iterator<i64>` calling `next()`). 4 tests +
-      `examples/generic_bounds.lang`.
+      `examples/generic_bounds.otter`.
 - [x] **Interface objects / dynamic dispatch** (`docs/11` §5): using an
       interface name as a value type (`var s: Show`, a param, a `List<Show>`
       element) builds an interface object — a managed `{vtable, data}` fat-pointer
@@ -358,7 +359,7 @@ The tracing GC is functionally complete for single-threaded programs.
       a per-`(type, interface)` vtable data object (function pointers via
       `write_function_addr`), `gen_widen_dyn` boxes `{vtable, data}`, and
       `gen_dyn_method_call` loads the slot and `call_indirect`s. GC traces the
-      data pointer through the box. 5 tests + `examples/dynamic_dispatch.lang`.
+      data pointer through the box. 5 tests + `examples/dynamic_dispatch.otter`.
 - [x] **Generic `extend` method resolution** (`docs/11`): `resolve_method` now
       unifies a generic `extend<…> Target<…>`'s target against the receiver and
       returns the solved substitution; method param/return types are substituted,
@@ -366,7 +367,7 @@ The tracing GC is functionally complete for single-threaded programs.
       monomorphizes the method. `build_subst` maps the enclosing extend's
       generics (then the method's). Works for methods returning a type parameter
       or another generic struct, mutating methods, and generic iterators in
-      `for` loops (`ForIter.next_targs`). 5 tests + `examples/generic_methods.lang`.
+      `for` loops (`ForIter.next_targs`). 5 tests + `examples/generic_methods.otter`.
 - [x] **Static methods** (`docs/09` §10, `docs/10` §10): a method declared with
       **no `self`** is static (there is *no* `static` keyword — the keyword was
       removed; absence of `self` is the sole signal, set as `Def.is_static`).
@@ -381,7 +382,7 @@ The tracing GC is functionally complete for single-threaded programs.
       `local_env` now carries the function's generics + `Self` (`cur_generics`/
       `cur_self_ty`) so `T`/`Self` resolve in bodies. Calling an instance method
       as static (or vice-versa) is a clear error. JIT + native parity; method-
-      level generics (`Type.wrap<i64>(..)`) supported; `examples/static_methods.lang`;
+      level generics (`Type.wrap<i64>(..)`) supported; `examples/static_methods.otter`;
       3 CLI tests. TODO: static calls directly on primitive type names
       (`i32.default()`) and concrete generic-struct type-arg inference from a
       static call.
@@ -390,18 +391,18 @@ The tracing GC is functionally complete for single-threaded programs.
       down-casts (panic on mismatch, returns the data pointer) and up-casts
       (concrete `as Iface` builds the box). Flow narrowing (`if s is Dog`) now
       unboxes interface objects too (the payload sits at offset 8, like unions).
-      3 tests; `examples/dynamic_dispatch.lang` extended.
+      3 tests; `examples/dynamic_dispatch.otter` extended.
 - [x] **`for` over a bounded type parameter and over an interface object**:
       `iterator_elem` resolves `next` through a `Param`'s bounds or an
       interface's methods; `gen_for_iterator` dispatches an interface-method
       `next` to the concrete impl (bounded param, monomorphized) or through the
       vtable (interface object). An interface type satisfies its own `T: I`
-      bound. 3 tests; `examples/iterators.lang` extended.
+      bound. 3 tests; `examples/iterators.otter` extended.
 - [x] **`Map` indexing + `for entry in map`** (`docs/18` §6): `map[k]` reads
       (runtime `lang_map_index`, panics on a missing key) and `map[k] = v`
       writes; `for entry in map` yields a prelude `Entry<K, V>` struct (`key`,
       `value`) — codegen snapshots the keys, then builds an `Entry` per key.
-      6 tests + `examples/maps.lang` extended.
+      6 tests + `examples/maps.otter` extended.
 - [x] **Closures** (`docs/09`): `(params) => body` anonymous functions that
       capture enclosing locals *by value*. Checker does capture analysis
       (`closure_stack`; a local with an id predating the closure is captured),
@@ -411,19 +412,19 @@ The tracing GC is functionally complete for single-threaded programs.
       allocates a managed environment `[fn_ptr, captures…]` (captures GC-traced),
       and calls closures via `call_indirect`. First-class: stored in vars/lists,
       passed to and returned from functions (higher-order). 7 tests +
-      `examples/closures.lang`.
+      `examples/closures.otter`.
 - [x] **Trailing closures + implicit `it` + `List` higher-order methods**
       (`docs/09`, `docs/18`): a trailing closure (`xs.map { it*2 }`) is the
       call's final argument (merged into args at both checker and codegen
       dispatch); a parameterless closure with a one-parameter expected type binds
       `it`. `List` gained `map`(`(E)=>U`→`List<U>`), `filter`, `each`, `fold` —
       codegen iterates the list and `call_indirect`s the closure per element.
-      5 tests + `examples/closures.lang` extended. (Captures are by value, so
+      5 tests + `examples/closures.otter` extended. (Captures are by value, so
       `each` is for side effects; `fold` is the accumulator.)
 - [x] **Multi-file modules** (`docs/17`): `Program::collect_multi(root,
       externals)` collects the root plus the parsed bodies of file-backed
       submodules (keyed by module path); the driver (`load_submodules`)
-      discovers `mod foo;` declarations and loads `<dir>/<stem>/foo.lang`
+      discovers `mod foo;` declarations and loads `<dir>/<stem>/foo.otter`
       recursively (nested submodules supported), feeding `analyze_multi`. Named
       imports, **`import "path" as M` namespace imports** (`M.foo(..)` resolves a
       public function in the aliased module), `pub` visibility, and strict
@@ -435,7 +436,7 @@ The tracing GC is functionally complete for single-threaded programs.
 - [x] **Native object output + linking for `lang build`** (`docs/23`): the
       codegen backend is now generic over `cranelift_module::Module`, so the
       same lowering drives the JIT (`compile`) and a `cranelift-object`
-      `ObjectModule` (`compile_object`). `lang build foo.lang [-o exe]` emits a
+      `ObjectModule` (`compile_object`). `lang build foo.otter [-o exe]` emits a
       relocatable object and links it against the runtime **static library**
       (`libruntime.a`, `crate-type = ["rlib", "staticlib"]`) via the system `cc`
       driver into a standalone executable. Because function load addresses are
@@ -447,7 +448,7 @@ The tracing GC is functionally complete for single-threaded programs.
       `lang_*` names match `libruntime.a`. macOS needs the host triple promoted
       from `darwin` to `macosx` (a real `LC_BUILD_VERSION`). 4 CLI tests
       (hello, JIT-vs-native output parity, GC-stress live-root survival,
-      panic→exit 101); all 11 `examples/*.lang` build and run natively with
+      panic→exit 101); all 11 `examples/*.otter` build and run natively with
       byte-identical output to `lang run`, including under `LANG_GC=stress`.
 
 ### Phase 5 — System features
@@ -461,7 +462,7 @@ The tracing GC is functionally complete for single-threaded programs.
       mutable-managed captures (only immutable captures are shared so far —
       deep-clone via `Clone` is the follow-up); codegen builds the handle/union.
       Handles are GC-pinned (`lang_gc_pin`) for their lifetime. JIT + native
-      parity; `examples/threads.lang`; 3 CLI tests incl. multi-worker GC stress.
+      parity; `examples/threads.otter`; 3 CLI tests incl. multi-worker GC stress.
       **GC reclamation is currently gated to single-mutator** (collection is
       skipped while >1 thread is live, resuming after join) — memory-safe, with
       precise concurrent root-scanning hardening deferred (`ROADMAP.md` GC §).
@@ -478,7 +479,7 @@ The tracing GC is functionally complete for single-threaded programs.
       (`add_extra_root`) while in the queue and unpinned on receipt. Endpoints are
       thread-safe handles, so `Thread.spawn` may capture them (`is_thread_shareable`).
       Element types are restricted to immutable values for now (no clone-on-send
-      yet). JIT + native parity; `examples/channels.lang`; 2 CLI tests incl. GC
+      yet). JIT + native parity; `examples/channels.otter`; 2 CLI tests incl. GC
       stress. TODO: channel close on last-sender-drop (needs `Drop`) so `recv`
       returns `ChannelClosed` and `Receiver: Iterator` terminates; `channel_mpmc`;
       bounded channels; move/clone-on-send for non-immutable `T`.
@@ -492,7 +493,7 @@ The tracing GC is functionally complete for single-threaded programs.
       *handle* (same cell), and a `Shared` is thread-shareable so workers capture
       it. The inner value is GC-pinned for the cell's lifetime. Mutex serializes
       concurrent increments (2×5000 → 10000, deterministic under stress). JIT +
-      native parity; `examples/shared.lang`; 2 CLI tests. TODO: lock release on a
+      native parity; `examples/shared.otter`; 2 CLI tests. TODO: lock release on a
       panicking body (needs unwinding); reentrancy is undefined (per spec).
 - [ ] Channel close + `Receiver: Iterator` (needs `Drop`).
 - [~] **Async (`docs/21`) — `Future`/`await`/`block_on` working.** Prelude:
@@ -526,7 +527,7 @@ The tracing GC is functionally complete for single-threaded programs.
       in stream`** drives an `AsyncIterator<T>` (`next_async()` is awaited each
       step). `yield_now()` provides genuine suspension; **`sleep(ms)`** is a
       timer-thread-backed future; **`.cancel()`** is a (no-op) abort for the
-      compute-only futures we build. `examples/async.lang` exercises the whole
+      compute-only futures we build. `examples/async.otter` exercises the whole
       surface; 14 CLI tests + 2 runtime tests; JIT + native + GC-stress parity.
       TODO: `timeout(fut, ms)` (a racing future — needs language-level `select`
       or type-id plumbing to rebox the value variant), async closures (closure
@@ -589,7 +590,7 @@ The tracing GC is functionally complete for single-threaded programs.
       declared `extend … : Clone`) and dispatches in codegen to the intrinsic
       (builtin receiver) or the concrete impl (user receiver). Cloning a `List`/
       `Map` of mutable elements is rejected with a clear diagnostic (per-element
-      deep clone is a follow-up). `examples/clone.lang`; JIT + native parity;
+      deep clone is a follow-up). `examples/clone.otter`; JIT + native parity;
       GC-stress clean. 4 CLI tests.
 
 ### Phase 6 — Toolchain  🚧 IN PROGRESS
