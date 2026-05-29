@@ -242,6 +242,16 @@ impl LanguageServer for Backend {
             }
         }
 
+        // A type name written in a type annotation (no value resolution there):
+        // show what kind of type it names (`struct Point`, `interface Show`, …).
+        if lines.is_empty() {
+            if let Some((tspan, def)) = c.type_def_at(off) {
+                range = Some(span_to_range(&c.text, tspan));
+                let d = c.analysis.program.def(def);
+                lines.push(format!("```otter-fusion\n{}\n```", c.def_label(d)));
+            }
+        }
+
         // Append the expression's resolved type when available and distinct.
         if let Some((espan, ty)) = c.expr_ty_at(off) {
             if range.is_none() {

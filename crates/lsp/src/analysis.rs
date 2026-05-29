@@ -461,10 +461,10 @@ impl Compiled {
     }
 
     /// Resolve a type name written at byte offset `off` (in a type annotation) to
-    /// its definition's name span — type-position go-to-definition. Returns the
-    /// def of the innermost type-name token containing `off` (so `Foo<Bar>` jumps
-    /// to `Foo` or `Bar` depending on which the cursor is over).
-    pub fn type_def_span_at(&self, off: usize) -> Option<Span> {
+    /// its definition. Returns the innermost type-name token containing `off`
+    /// (so `Foo<Bar>` resolves `Foo` or `Bar` depending on the cursor) along with
+    /// the on-screen span of that name, for hover/goto.
+    pub fn type_def_at(&self, off: usize) -> Option<(Span, DefId)> {
         let refs = collect_type_refs(&self.module.items);
         let mut best: Option<(Span, &str)> = None;
         for (span, name) in &refs {
@@ -475,8 +475,15 @@ impl Compiled {
                 best = Some((*span, name.as_str()));
             }
         }
-        let (_, name) = best?;
+        let (span, name) = best?;
         let def = self.lookup_type_def(name)?;
+        Some((span, def))
+    }
+
+    /// The definition-name span for a type name at `off` — type-position
+    /// go-to-definition.
+    pub fn type_def_span_at(&self, off: usize) -> Option<Span> {
+        let (_, def) = self.type_def_at(off)?;
         self.def_name_span(def)
     }
 
@@ -1334,6 +1341,9 @@ function main() {
         let ret_use = src.find("): Point").unwrap() + "): ".len();
         let def2 = c.type_def_span_at(ret_use).expect("type def span (return)");
         assert_eq!(c.map.slice(def2), "Point");
+        // The hover path resolves the same name to a struct definition.
+        let (_, def_id) = c.type_def_at(field_use).expect("type def at field");
+        assert_eq!(c.analysis.program.def(def_id).kind, DefKind::Struct);
     }
 
     #[test]
