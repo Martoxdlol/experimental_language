@@ -191,7 +191,7 @@ impl LanguageServer for Backend {
                 | ValueRes::StructCtor(d) => {
                     let def = c.analysis.program.def(d);
                     lines.push(format!("```otter-fusion\n{}\n```", c.def_label(def)));
-                    if let Some(ret) = c.hir.fn_sigs.get(&d).map(|s| s.ret) {
+                    if let Some(ret) = c.analysis.hir.fn_sigs.get(&d).map(|s| s.ret) {
                         lines.push(format!("returns `{}`", c.display_ty(ret)));
                     }
                 }

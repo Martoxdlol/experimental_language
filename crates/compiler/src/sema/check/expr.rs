@@ -11,7 +11,7 @@ impl<'a> Checker<'a> {
         // it; its `.ty` (or its inner type, under a baked `Adjust`) is the checked
         // type that `results.expr_ty` reports — no separate `expr_types` table.
         if let Some(node) = self.build_hir_node(expr, ty) {
-            self.results.node_hir.insert(expr.span, node);
+            self.node_hir.insert(expr.span, node);
         }
         ty
     }
@@ -32,7 +32,7 @@ impl<'a> Checker<'a> {
             // A resolved value name (`self` resolves to its local too); a
             // narrowed read bakes in its `Unbox` via `build_name_node`.
             ExprKind::Ident(_) | ExprKind::SelfExpr => {
-                let res = self.results.resolution(expr.span)?;
+                let res = self.resolution(expr.span)?;
                 return Some(self.build_name_node(res, ty, expr.span));
             }
             ExprKind::Underscore => H::Discard,
@@ -92,7 +92,7 @@ impl<'a> Checker<'a> {
                 // intrinsic, not a field access — recognized via the shared
                 // `num_constant_of` recognizer (was the `num_intrinsics` table).
                 if let ExprKind::Ident(recv) = &receiver.kind {
-                    if self.results.resolution(receiver.span).is_none() {
+                    if self.resolution(receiver.span).is_none() {
                         if let Some(intr) =
                             crate::sema::results::num_constant_of(self.tcx, &recv.name, &name.name)
                         {
@@ -107,7 +107,7 @@ impl<'a> Checker<'a> {
                         }
                     }
                 }
-                let recv_ty = self.results.expr_ty(receiver.span)?;
+                let recv_ty = self.expr_ty(receiver.span)?;
                 let field = self.hir_field_ref(recv_ty, &name.name);
                 H::Field { receiver: Box::new(self.hir_child(receiver)?), field }
             }
@@ -123,14 +123,14 @@ impl<'a> Checker<'a> {
             }),
             ExprKind::If { cond, then_block, else_branch } => H::If {
                 cond: Box::new(self.hir_child(cond)?),
-                then_block: self.build_block(then_block)?,
-                else_branch: self.build_else(else_branch.as_ref())?,
+                then_block: self.build_block(then_block),
+                else_branch: self.build_else(else_branch.as_ref()),
             },
             ExprKind::Match { scrutinee, arms } => {
                 let mut hir_arms = Vec::with_capacity(arms.len());
                 for a in arms {
                     hir_arms.push(crate::hir::MatchArm {
-                        pattern: self.build_pattern(&a.pattern)?,
+                        pattern: self.build_pattern(&a.pattern),
                         guard: match &a.guard {
                             Some(g) => Some(self.hir_child(g)?),
                             None => None,
@@ -141,16 +141,16 @@ impl<'a> Checker<'a> {
                 }
                 H::Match { scrutinee: Box::new(self.hir_child(scrutinee)?), arms: hir_arms }
             }
-            ExprKind::Block(b) => H::Block(self.build_block(b)?),
-            ExprKind::Loop(b) => H::Loop(self.build_block(b)?),
+            ExprKind::Block(b) => H::Block(self.build_block(b)),
+            ExprKind::Loop(b) => H::Loop(self.build_block(b)),
             ExprKind::While { cond, body } => H::While {
                 cond: Box::new(self.hir_child(cond)?),
-                body: self.build_block(body)?,
+                body: self.build_block(body),
             },
             ExprKind::For { pattern, in_async, iter, body } => H::For {
-                pattern: self.build_pattern(pattern)?,
+                pattern: self.build_pattern(pattern),
                 iter: Box::new(self.hir_child(iter)?),
-                body: self.build_block(body)?,
+                body: self.build_block(body),
                 driver: self.build_for_driver(iter, *in_async),
                 in_async: *in_async,
             },
@@ -170,7 +170,7 @@ impl<'a> Checker<'a> {
                 }
             }
             ExprKind::AsyncBlock(block) => {
-                let body = self.build_block(block)?;
+                let body = self.build_block(block);
                 match self.pending_async.take() {
                     Some(info) => H::AsyncBlock {
                         output: info.output,
@@ -198,7 +198,7 @@ impl<'a> Checker<'a> {
                         // Field-init shorthand `Foo { x }` — `check_struct_lit`
                         // already built the (narrowed/widened) `Name` node for the
                         // local at the field name's span.
-                        None => self.results.node_hir.get(&fi.name.span).cloned()?,
+                        None => self.node_hir.get(&fi.name.span).cloned()?,
                     };
                     hir_fields.push(crate::hir::FieldInit {
                         index: self.hir_field_index(def, &fi.name.name),
@@ -227,7 +227,23 @@ impl<'a> Checker<'a> {
         }
         // The stored node already carries its coercion: a narrowing `Unbox` baked
         // by `build_name_node`, or a widening baked in place by `expect`.
-        self.results.node_hir.get(&e.span).cloned()
+        self.node_hir.get(&e.span).cloned()
+    }
+
+    /// Like [`hir_child`] but total: an expression the checker could not build
+    /// (only possible in an already-erroring program) degrades to an `Error`
+    /// node, so body construction never bails. This is what lets the checker
+    /// emit a `Block` for every function — including malformed ones — and is why
+    /// the old table-driven `lower` recovery path is gone.
+    fn hir_child_or_error(&self, mut e: &Expr) -> crate::hir::Expr {
+        while let ExprKind::Paren(inner) = &e.kind {
+            e = inner;
+        }
+        self.node_hir.get(&e.span).cloned().unwrap_or_else(|| crate::hir::Expr {
+            kind: crate::hir::ExprKind::Error,
+            ty: self.expr_ty(e.span).unwrap_or(self.tcx.error),
+            span: e.span,
+        })
     }
 
     /// Build a value-name HIR node, baking in a flow-narrowing `Unbox` coercion
@@ -248,7 +264,7 @@ impl<'a> Checker<'a> {
         ty: Ty,
     ) {
         let node = self.build_name_node(res, ty, span);
-        self.results.node_hir.insert(span, node);
+        self.node_hir.insert(span, node);
     }
 
     pub(crate) fn build_name_node(
@@ -260,7 +276,7 @@ impl<'a> Checker<'a> {
         use crate::sema::results::{Adjust, ValueRes};
         let name = crate::hir::Expr { kind: crate::hir::ExprKind::Name(res), ty, span };
         if let ValueRes::Local(id) = res {
-            if let Some(wide) = self.results.local_ty(id) {
+            if let Some(wide) = self.hir.local_ty(id) {
                 let was_boxed = (matches!(self.tcx.kind(wide), TyKind::Union(_) | TyKind::Dynamic)
                     && !self.is_npo_union(wide))
                     || self.is_interface(wide);
@@ -289,7 +305,7 @@ impl<'a> Checker<'a> {
     /// last-write-wins `HashMap`.
     pub(crate) fn bake_coercion(&mut self, span: Span, adjust: crate::sema::results::Adjust) {
         use crate::sema::results::Adjust;
-        let Some(node) = self.results.node_hir.get(&span) else { return };
+        let Some(node) = self.node_hir.get(&span) else { return };
         let raw = match &node.kind {
             crate::hir::ExprKind::Adjust { expr, .. } => (**expr).clone(),
             _ => node.clone(),
@@ -297,7 +313,7 @@ impl<'a> Checker<'a> {
         let ty = match adjust {
             Adjust::Widen(t) | Adjust::Unbox(t) | Adjust::WidenDyn(t) => t,
         };
-        self.results.node_hir.insert(
+        self.node_hir.insert(
             span,
             crate::hir::Expr {
                 kind: crate::hir::ExprKind::Adjust { adjust, expr: Box::new(raw) },
@@ -325,7 +341,7 @@ impl<'a> Checker<'a> {
     /// `lower::field_index`).
     fn hir_field_index(&self, def: crate::ids::DefId, name: &str) -> u32 {
         use crate::sema::results::StructFields as SF;
-        match self.results.struct_fields.get(&def) {
+        match self.hir.structs.get(&def) {
             Some(SF::Record(fs)) => fs.iter().position(|(n, _)| n == name).unwrap_or(0) as u32,
             Some(SF::Tuple(_)) => name.parse().unwrap_or(0),
             _ => name.parse().unwrap_or(0),
@@ -344,11 +360,11 @@ impl<'a> Checker<'a> {
             out.push(match p {
                 StringPart::Text { text, .. } => StrPart::Text(text.clone()),
                 StringPart::Ident(id) => {
-                    let res = self.results.resolution(id.span)?;
+                    let res = self.resolution(id.span)?;
                     // `$x` may be flow-narrowed (a union unboxed to a single
                     // variant inside an `is` branch) — `build_name_node` bakes the
                     // `Unbox` in, just as a `${expr}` hole gets it via `hir_child`.
-                    let expr = self.build_name_node(res, self.results.expr_ty(id.span)?, id.span);
+                    let expr = self.build_name_node(res, self.expr_ty(id.span)?, id.span);
                     let (stringify, stringify_targs) = holes.pop_front().unwrap_or((None, Vec::new()));
                     StrPart::Interp { expr: Box::new(expr), stringify, stringify_targs }
                 }
@@ -379,52 +395,41 @@ impl<'a> Checker<'a> {
         Some(out)
     }
 
-    /// Build a [`crate::hir::Block`] (mirrors `lower::lower_block`); `None` if any
-    /// contained statement or trailing expression is not yet migrated.
-    pub(crate) fn build_block(&mut self, b: &Block) -> Option<crate::hir::Block> {
+    /// Build a [`crate::hir::Block`] (the checker's emitted body block). Total —
+    /// unbuildable sub-expressions degrade to `Error` via `hir_child_or_error`.
+    pub(crate) fn build_block(&mut self, b: &Block) -> crate::hir::Block {
         let mut stmts = Vec::with_capacity(b.stmts.len());
         for s in &b.stmts {
-            // `Some(None)` = a block-level item with no def, intentionally
-            // dropped (no runtime effect), matching `lower_stmt`. `None` = the
-            // statement can't be migrated yet, so the whole block bails out.
-            match self.build_stmt(s)? {
-                Some(stmt) => stmts.push(stmt),
-                None => {}
+            if let Some(stmt) = self.build_stmt(s) {
+                stmts.push(stmt);
             }
         }
-        let trailing = match &b.trailing {
-            Some(e) => Some(Box::new(self.hir_child(e)?)),
-            None => None,
-        };
+        let trailing = b.trailing.as_ref().map(|e| Box::new(self.hir_child_or_error(e)));
         let ty = b
             .trailing
             .as_ref()
-            .map(|e| self.results.expr_ty(e.span).unwrap_or(self.tcx.error))
+            .map(|e| self.expr_ty(e.span).unwrap_or(self.tcx.error))
             .unwrap_or(self.tcx.null);
-        Some(crate::hir::Block { stmts, trailing, ty, span: b.span })
+        crate::hir::Block { stmts, trailing, ty, span: b.span }
     }
 
-    /// Build a statement (mirrors `lower::lower_stmt`). Returns `None` if not yet
-    /// migratable; `Some(None)` for an item statement whose def is absent (which
-    /// lowering drops).
-    fn build_stmt(&mut self, s: &Stmt) -> Option<Option<crate::hir::Stmt>> {
+    /// Build a statement. `None` only for a block-level item with no def (which
+    /// has no runtime effect and is dropped from the block).
+    fn build_stmt(&mut self, s: &Stmt) -> Option<crate::hir::Stmt> {
         use crate::hir::StmtKind as SK;
         let kind = match &s.kind {
             StmtKind::Var(lv) => SK::Let {
-                pattern: self.build_pattern(&lv.pattern)?,
-                init: self.hir_child(&lv.init)?,
+                pattern: self.build_pattern(&lv.pattern),
+                init: self.hir_child_or_error(&lv.init),
             },
             StmtKind::Assign { target, value } => SK::Assign {
-                target: self.hir_child(target)?,
-                value: self.hir_child(value)?,
+                target: self.hir_child_or_error(target),
+                value: self.hir_child_or_error(value),
             },
-            StmtKind::Expr(e) => SK::Expr(self.hir_child(e)?),
-            StmtKind::Item(item) => match self.span_def(item.span) {
-                Some(d) => SK::Item(d),
-                None => return Some(None),
-            },
+            StmtKind::Expr(e) => SK::Expr(self.hir_child_or_error(e)),
+            StmtKind::Item(item) => SK::Item(self.span_def(item.span)?),
         };
-        Some(Some(crate::hir::Stmt { kind, span: s.span }))
+        Some(crate::hir::Stmt { kind, span: s.span })
     }
 
     /// The [`DefId`] of the item declared at `span` (mirrors lowering's
@@ -437,28 +442,26 @@ impl<'a> Checker<'a> {
             .map(|i| crate::ids::DefId(i as u32))
     }
 
-    /// Build the `else` branch of an `if` (mirrors `lower::lower_else`). The
-    /// outer `Option` is the "not yet migratable" signal; the inner is the
-    /// presence of an `else`.
-    fn build_else(&mut self, else_branch: Option<&ElseBranch>) -> Option<Option<Box<crate::hir::Expr>>> {
+    /// Build the `else` branch of an `if`. `None` = no `else`.
+    fn build_else(&mut self, else_branch: Option<&ElseBranch>) -> Option<Box<crate::hir::Expr>> {
         match else_branch {
-            None => Some(None),
+            None => None,
             Some(ElseBranch::Block(b)) => {
-                let block = self.build_block(b)?;
+                let block = self.build_block(b);
                 let ty = block.ty;
-                Some(Some(Box::new(crate::hir::Expr {
+                Some(Box::new(crate::hir::Expr {
                     kind: crate::hir::ExprKind::Block(block),
                     ty,
                     span: b.span,
-                })))
+                }))
             }
-            Some(ElseBranch::If(e)) => Some(Some(Box::new(self.hir_child(e)?))),
+            Some(ElseBranch::If(e)) => Some(Box::new(self.hir_child_or_error(e))),
         }
     }
 
-    /// Build a pattern (mirrors `lower::lower_pattern`); `None` if a literal
-    /// sub-pattern's expression is not yet migrated.
-    fn build_pattern(&mut self, p: &Pattern) -> Option<crate::hir::Pattern> {
+    /// Build a pattern (total — sub-expressions/sub-patterns that the checker
+    /// could not build degrade to `Error`/`Wildcard`).
+    fn build_pattern(&mut self, p: &Pattern) -> crate::hir::Pattern {
         use crate::hir::PatternKind as PK;
         // The pattern's HIR type. Only `TypeBind`/`UnitPath` carry a meaningful
         // `test_ty` (the matched variant, used by codegen); other kinds' `.ty` is
@@ -468,7 +471,7 @@ impl<'a> Checker<'a> {
             PatternKind::Wildcard => (PK::Wildcard, self.tcx.error),
             PatternKind::Binding(id) => (PK::Bind(self.hir_local_at(id.span)), self.tcx.error),
             PatternKind::Literal(e) => {
-                let inner = self.hir_child(e)?;
+                let inner = self.hir_child_or_error(e);
                 let ty = inner.ty;
                 (PK::Literal(Box::new(inner)), ty)
             }
@@ -485,55 +488,52 @@ impl<'a> Checker<'a> {
             }
             PatternKind::TupleStruct { path, fields, rest } => {
                 let def = self.hir_path_def(path);
-                let fields = fields.iter().map(|f| self.build_pattern(f)).collect::<Option<_>>()?;
+                let fields = fields.iter().map(|f| self.build_pattern(f)).collect();
                 (PK::TupleStruct { def, fields, rest: rest.as_ref().map(|r| self.build_rest(r)) },
                  self.tcx.error)
             }
             PatternKind::RecordStruct { path, fields, has_rest } => {
                 let def = self.hir_path_def(path);
-                let mut fs = Vec::with_capacity(fields.len());
-                for f in fields {
-                    fs.push(self.build_field_pattern(def, f)?);
-                }
+                let fs = fields.iter().map(|f| self.build_field_pattern(def, f)).collect();
                 (PK::RecordStruct { def, fields: fs, has_rest: *has_rest }, self.tcx.error)
             }
             PatternKind::Tuple { elems, rest } => {
-                let elems = elems.iter().map(|e| self.build_pattern(e)).collect::<Option<_>>()?;
+                let elems = elems.iter().map(|e| self.build_pattern(e)).collect();
                 (PK::Tuple { elems, rest: rest.as_ref().map(|(i, r)| (*i, self.build_rest(r))) },
                  self.tcx.error)
             }
             PatternKind::List { elems, rest } => {
-                let elems = elems.iter().map(|e| self.build_pattern(e)).collect::<Option<_>>()?;
+                let elems = elems.iter().map(|e| self.build_pattern(e)).collect();
                 (PK::List { elems, rest: rest.as_ref().map(|(i, r)| (*i, self.build_rest(r))) },
                  self.tcx.error)
             }
             PatternKind::Or(ps) => {
-                let ps = ps.iter().map(|p| self.build_pattern(p)).collect::<Option<_>>()?;
+                let ps = ps.iter().map(|p| self.build_pattern(p)).collect();
                 (PK::Or(ps), self.tcx.error)
             }
         };
-        Some(crate::hir::Pattern { kind, ty, span: p.span })
+        crate::hir::Pattern { kind, ty, span: p.span }
     }
 
     fn build_field_pattern(
         &mut self,
         def: crate::ids::DefId,
         f: &FieldPattern,
-    ) -> Option<crate::hir::FieldPattern> {
+    ) -> crate::hir::FieldPattern {
         let pattern = match &f.pattern {
-            Some(p) => self.build_pattern(p)?,
+            Some(p) => self.build_pattern(p),
             None => crate::hir::Pattern {
                 kind: crate::hir::PatternKind::Bind(self.hir_local_at(f.name.span)),
-                ty: self.results.expr_ty(f.name.span).unwrap_or(self.tcx.error),
+                ty: self.expr_ty(f.name.span).unwrap_or(self.tcx.error),
                 span: f.name.span,
             },
         };
-        Some(crate::hir::FieldPattern {
+        crate::hir::FieldPattern {
             index: self.hir_field_index(def, &f.name.name),
             name: f.name.name.clone(),
             pattern,
             span: f.span,
-        })
+        }
     }
 
     fn build_rest(&self, r: &RestPattern) -> crate::hir::RestPattern {
@@ -545,7 +545,7 @@ impl<'a> Checker<'a> {
 
     /// The local bound at a binding-occurrence span (mirrors `lower::local_at`).
     fn hir_local_at(&self, span: Span) -> crate::ids::LocalId {
-        match self.results.resolution(span) {
+        match self.resolution(span) {
             Some(crate::sema::results::ValueRes::Local(id)) => id,
             _ => crate::ids::LocalId(u32::MAX),
         }
@@ -563,7 +563,7 @@ impl<'a> Checker<'a> {
     /// `List` fast path for error-recovery when none was recorded.
     fn build_for_driver(&self, iter: &Expr, _in_async: bool) -> crate::hir::ForDriver {
         self.pending_for_driver.take().unwrap_or_else(|| {
-            let iter_ty = self.results.expr_ty(iter.span).unwrap_or(self.tcx.error);
+            let iter_ty = self.expr_ty(iter.span).unwrap_or(self.tcx.error);
             let elem = self.hir_list_elem(iter_ty).unwrap_or(self.tcx.error);
             crate::hir::ForDriver::ListFast { elem }
         })
@@ -600,7 +600,7 @@ impl<'a> Checker<'a> {
     /// Whether a method-call receiver has a builtin type the backend dispatches
     /// structurally (mirrors `lower::is_builtin_recv`).
     fn hir_is_builtin_recv(&self, receiver: &Expr) -> Option<bool> {
-        let ty = self.results.expr_ty(receiver.span)?;
+        let ty = self.expr_ty(receiver.span)?;
         Some(match self.tcx.kind(ty) {
             crate::ty::TyKind::Str => true,
             crate::ty::TyKind::Named { def, .. } => {
@@ -648,10 +648,9 @@ impl<'a> Checker<'a> {
             // Mirror `lower::expr_ty`: a missing callee type (common for a
             // method-callee `Field` span) falls back to the error type rather
             // than bailing the whole node out to table-driven lowering.
-            let callee_ty = self.results.expr_ty(callee.span).unwrap_or(self.tcx.error);
+            let callee_ty = self.expr_ty(callee.span).unwrap_or(self.tcx.error);
             Some(H::Call { kind, args: cargs, callee_span, callee_ty })
         };
-        let r = &self.results;
         // Consume the call-classification facts the check methods stashed for
         // this node (was the `clone_kinds` / `static_calls`+`static_recv` /
         // `foreign_flex` tables). Take all up front so no branch leaves a slot
@@ -662,7 +661,7 @@ impl<'a> Checker<'a> {
         let pending_targs = self.pending_type_args.take().unwrap_or_default();
 
         // --- payload-free prelude builtins recognized by callee shape -------
-        if r.resolution(callee.span).is_none() {
+        if self.resolution(callee.span).is_none() {
             let head1 = &all[..1.min(all.len())];
             if let ExprKind::Ident(n) = &callee.kind {
                 match n.name.as_str() {
@@ -696,7 +695,7 @@ impl<'a> Checker<'a> {
         }
         // `Thread.spawn { … }`.
         if let ExprKind::Field { receiver, name } = &callee.kind {
-            if name.name == "spawn" && r.resolution(callee.span).is_none() {
+            if name.name == "spawn" && self.resolution(callee.span).is_none() {
                 if matches!(&receiver.kind, ExprKind::Ident(rn) if rn.name == "Thread") {
                     let out = match self.tcx.kind(raw_ty) {
                         TyKind::Named { args, .. } => args.first().copied().unwrap_or(self.tcx.error),
@@ -712,8 +711,8 @@ impl<'a> Checker<'a> {
         }
         // `fut.cancel()`.
         if let ExprKind::Field { receiver, name } = &callee.kind {
-            if name.name == "cancel" && r.resolution(callee.span).is_none() {
-                let rty = self.results.expr_ty(receiver.span)?;
+            if name.name == "cancel" && self.resolution(callee.span).is_none() {
+                let rty = self.expr_ty(receiver.span)?;
                 let fut = self.prog.future_def;
                 if fut != DefId(0)
                     && matches!(self.tcx.kind(rty), TyKind::Named { def, .. } if *def == fut)
@@ -724,7 +723,7 @@ impl<'a> Checker<'a> {
         }
         // Numeric-namespace method.
         if let ExprKind::Field { receiver, name } = &callee.kind {
-            if r.resolution(callee.span).is_none() {
+            if self.resolution(callee.span).is_none() {
                 if let ExprKind::Ident(recv) = &receiver.kind {
                     if let Some(intr) = num_method_of(self.tcx, &recv.name, &name.name) {
                         return intrinsic(Intrinsic::Num(intr), &all);
@@ -734,8 +733,8 @@ impl<'a> Checker<'a> {
         }
         // `JoinHandle<R>.join()`.
         if let ExprKind::Field { receiver, name } = &callee.kind {
-            if name.name == "join" && r.resolution(callee.span).is_none() {
-                let rty = self.results.expr_ty(receiver.span)?;
+            if name.name == "join" && self.resolution(callee.span).is_none() {
+                let rty = self.expr_ty(receiver.span)?;
                 let jh = self.prog.join_handle_def;
                 let out = match self.tcx.kind(rty) {
                     TyKind::Named { def, args } if jh != DefId(0) && *def == jh => {
@@ -749,7 +748,7 @@ impl<'a> Checker<'a> {
             }
         }
         // Empty builtin collection constructor `List<T>()` / `Map<K,V>()`.
-        if r.resolution(callee.span).is_none() {
+        if self.resolution(callee.span).is_none() {
             let type_name = match &callee.kind {
                 ExprKind::Ident(n) => Some(n.name.as_str()),
                 ExprKind::Field { receiver, name } if name.name == "new" => match &receiver.kind {
@@ -773,18 +772,18 @@ impl<'a> Checker<'a> {
         }
         // --- builtin List/Map/str/Sender/Receiver/Shared methods ------------
         if let ExprKind::Field { receiver, name } = &callee.kind {
-            if r.resolution(callee.span).is_none() && self.hir_is_builtin_recv(receiver)? {
+            if self.resolution(callee.span).is_none() && self.hir_is_builtin_recv(receiver)? {
                 let mut cargs = vec![self.hir_child(receiver)?];
                 cargs.extend(self.hir_args(&all)?);
                 return finish(CallKind::BuiltinMethod { name: name.name.clone() }, cargs);
             }
         }
         // --- a call through a closure / function-pointer value --------------
-        let res = r.resolution(callee.span);
+        let res = self.resolution(callee.span);
         let is_value =
             matches!(res, Some(ValueRes::Local(_)) | Some(ValueRes::Global(_)) | None);
         if is_value {
-            let cty = self.results.expr_ty(callee.span)?;
+            let cty = self.expr_ty(callee.span)?;
             if matches!(self.tcx.kind(cty), TyKind::Func { is_extern: false, .. }) {
                 let callee_hir = Box::new(self.hir_child(callee)?);
                 let cargs = self.hir_args(&all)?;
@@ -867,9 +866,9 @@ impl<'a> Checker<'a> {
                             // build the hole's HIR `Name` node here (baking any
                             // narrowing) — `expr_ty` reads its type and
                             // `hir_str_parts` reuses it.
-                            if let Some(res) = self.results.resolution(id.span) {
+                            if let Some(res) = self.resolution(id.span) {
                                 let node = self.build_name_node(res, t, id.span);
-                                self.results.node_hir.insert(id.span, node);
+                                self.node_hir.insert(id.span, node);
                             }
                             (t, id.span)
                         }

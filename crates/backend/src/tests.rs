@@ -2262,7 +2262,7 @@ extend Cat: Sound { function code(self): i64 { 2 } }\n";
         assert!(pe.is_empty(), "parse: {pe:?}");
         let analysis = analyze(&module);
         assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
-        let hir = compiler::hir::lower_program(&analysis);
+        let hir = &analysis.hir;
         let body_of = |name: &str| -> &compiler::hir::Body {
             hir.bodies
                 .iter()

@@ -2051,7 +2051,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             }
             // -- concurrency (build/return runtime handle & future objects;
             //    no async state machine needed here) -------------------------
-            hir::Intrinsic::ChannelNew => self.gen_channel_new(span),
+            hir::Intrinsic::ChannelNew => self.gen_channel_new(ty, span),
             hir::Intrinsic::SharedNew => {
                 let elem = args[0].ty;
                 let v = self.h_expr(&args[0])?;

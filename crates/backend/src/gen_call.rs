@@ -636,11 +636,10 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
 
     /// Lower `channel<T>()` (`docs/20` §2): allocate a runtime channel and build
     /// the `(Sender<T>, Receiver<T>)` tuple, both carrying the channel id.
-    pub(crate) fn gen_channel_new(&mut self, span: Span) -> CgResult<Option<Value>> {
+    pub(crate) fn gen_channel_new(&mut self, result_ty: Ty, span: Span) -> CgResult<Option<Value>> {
         let id = self.call_intrinsic("lang_channel_new", &[], Some(types::I64), &[])
             .expect("channel id");
-        let result_ty = self.cx.analysis.results.expr_ty(span)
-            .unwrap_or(self.cx.analysis.tcx.error);
+        // The `(Sender<T>, Receiver<T>)` tuple type rides on the intrinsic node.
         let elem_tys = match self.cx.analysis.tcx.kind(result_ty).clone() {
             TyKind::Tuple(ts) => ts,
             _ => return Err(CodegenError::new(span, "`channel` result is not a tuple")),

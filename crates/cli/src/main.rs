@@ -145,8 +145,10 @@ fn emit(path: &Path, ir: EmitIr) -> ExitCode {
             for e in &analysis.errors {
                 render(&map, e.span, "error", &e.kind.to_string());
             }
-            let hir = compiler::hir::lower_program(&analysis);
-            print!("{}", compiler::hir::print_program(&hir, &analysis.tcx, &analysis.program));
+            print!(
+                "{}",
+                compiler::hir::print_program(&analysis.hir, &analysis.tcx, &analysis.program)
+            );
         }
         EmitIr::Clif => {
             let mut externals = Externals::new();
@@ -336,7 +338,7 @@ fn build_executable(map: &SourceMap, analysis: &Analysis, exe: &Path) -> ExitCod
     }
     // Libraries requested via `@Link(lib = "…")` (`docs/19` §13), derived from
     // the program's attributes (no checker side table).
-    for lib in compiler::hir::collect_link_libs(analysis) {
+    for lib in &analysis.hir.link_libs {
         cmd.arg(format!("-l{lib}"));
     }
 

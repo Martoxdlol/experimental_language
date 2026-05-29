@@ -16,7 +16,7 @@ use crate::ast::*;
 use crate::ids::{DefId, LocalId, ModId};
 use crate::sema::diag::{SemaError, SemaErrorKind};
 use crate::sema::lower::{Lowerer, TypeEnv};
-use crate::sema::results::{Adjust, Builtin, CheckResults, TryBranch, ValueRes};
+use crate::sema::results::{Adjust, Builtin, TryBranch, ValueRes};
 use crate::sema::symbols::{DefKind, Program};
 use crate::span::Span;
 use crate::token::IntBase;
@@ -90,8 +90,19 @@ pub struct Checker<'a> {
     /// `closures` / `async_blocks` tables), consumed by `build_hir_node`.
     pending_closure: std::cell::Cell<Option<crate::sema::results::ClosureInfo>>,
     pending_async: std::cell::Cell<Option<crate::sema::results::AsyncInfo>>,
-    /// Side tables recorded for downstream phases.
-    pub results: CheckResults,
+    /// The typed HIR the checker emits directly: the def-keyed maps
+    /// (`structs`/`fn_sigs`/`extern_sigs`/`iface_impls`/`local_decls`/
+    /// `local_types`) are filled as the checker resolves each definition;
+    /// [`Checker::finish`] then assembles the bodies + link libs. There is no
+    /// `CheckResults` side-table struct any more.
+    pub hir: crate::hir::Hir,
+    /// Working accumulator: the typed HIR node built for each expression as it is
+    /// checked, keyed by span. Parents read their already-built children from
+    /// here (`hir_child`); `finish` assembles function bodies from it. Dropped
+    /// after the HIR is assembled — not part of the emitted program.
+    node_hir: HashMap<Span, crate::hir::Expr>,
+    /// Working accumulator: each function/method's built body `Block`, by def.
+    fn_bodies: HashMap<DefId, crate::hir::Block>,
 }
 
 /// A closure being checked: the first local id it owns (params/body locals have
@@ -137,8 +148,32 @@ impl<'a> Checker<'a> {
             pending_stringify: std::cell::Cell::new(None),
             pending_closure: std::cell::Cell::new(None),
             pending_async: std::cell::Cell::new(None),
-            results: CheckResults::new(),
+            hir: crate::hir::Hir::new(),
+            node_hir: HashMap::new(),
+            fn_bodies: HashMap::new(),
         }
+    }
+
+    /// What the value-position name / callee / binding at `span` resolves to,
+    /// read off the `Name` HIR node the checker recorded there.
+    pub(crate) fn resolution(&self, span: Span) -> Option<ValueRes> {
+        match &self.node_hir.get(&span)?.kind {
+            crate::hir::ExprKind::Name(res) => Some(*res),
+            crate::hir::ExprKind::Adjust { expr, .. } => match &expr.kind {
+                crate::hir::ExprKind::Name(res) => Some(*res),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// The checked type of the expression at `span`, read off its built HIR node
+    /// (a baked `Adjust` carries the post-coercion type, so unwrap it).
+    pub(crate) fn expr_ty(&self, span: Span) -> Option<Ty> {
+        self.node_hir.get(&span).map(|n| match &n.kind {
+            crate::hir::ExprKind::Adjust { expr, .. } => expr.ty,
+            _ => n.ty,
+        })
     }
 
     /// Check every checkable definition in the program.
@@ -157,6 +192,63 @@ impl<'a> Checker<'a> {
                 _ => {}
             }
         }
+    }
+
+    /// Consume the checker and produce the complete [`crate::hir::Hir`]. The
+    /// def-keyed maps were filled during checking; here we add the
+    /// `@Link`-derived libraries and assemble each function's `Body` from the
+    /// checker-built block plus its locals (walked out of the block).
+    pub fn finish(mut self) -> crate::hir::Hir {
+        use crate::hir::Body;
+        self.hir.link_libs = crate::hir::collect_link_libs(self.prog);
+        let null = self.tcx.null;
+        let err = self.tcx.error;
+
+        // Collect (def, params, ret, async_output, block, span) first, draining
+        // the per-body blocks, so the locals walk below borrows `hir.local_types`
+        // without conflicting with the `fn_bodies` drain.
+        let mut pending: Vec<(DefId, Vec<LocalId>, Ty, Option<Ty>, crate::hir::Block, Span)> =
+            Vec::new();
+        for id in 0..self.prog.defs.len() {
+            let def = DefId(id as u32);
+            let d = self.prog.def(def);
+            if !matches!(d.kind, DefKind::Function | DefKind::ExtendMethod) {
+                continue;
+            }
+            let Some(ItemKind::Function(f)) = &d.item else { continue };
+            let Some(body) = &f.body else { continue };
+            let span = body.span;
+            let (params, ret, async_output) = match self.hir.fn_sigs.get(&def) {
+                Some(s) => (
+                    s.params.iter().map(|(l, _)| *l).collect::<Vec<_>>(),
+                    s.ret,
+                    s.async_output,
+                ),
+                None => (Vec::new(), null, None),
+            };
+            // `build_block` is total, so there is always a block; default to an
+            // empty one only for the unreachable bodyless case.
+            let block = self.fn_bodies.remove(&def).unwrap_or(crate::hir::Block {
+                stmts: Vec::new(),
+                trailing: None,
+                ty: null,
+                span,
+            });
+            pending.push((def, params, ret, async_output, block, span));
+        }
+
+        for (def, params, ret, async_output, block, span) in pending {
+            let mut locals = HashMap::new();
+            for &l in &params {
+                record_local(l, &self.hir.local_types, err, &mut locals);
+            }
+            record_block_locals(&block, &self.hir.local_types, err, &mut locals);
+            self.hir.bodies.insert(
+                def,
+                Body { def, params, locals, ret, async_output, block, span },
+            );
+        }
+        self.hir
     }
 
     /// Lower and record an `extern function`'s parameter and return types, so
@@ -178,7 +270,7 @@ impl<'a> Checker<'a> {
             Some(t) => self.lower_ty(t, &env),
             None => self.tcx.null,
         };
-        self.results.extern_sigs.insert(def, crate::hir::ExternSig { params: ptys, ret: rty });
+        self.hir.extern_sigs.insert(def, crate::hir::ExternSig { params: ptys, ret: rty });
         // `@Link(lib = "…")` libraries (`docs/19` §13) are no longer recorded
         // here: they are derived from the program's attributes by
         // `hir::collect_link_libs` (consumed as `Hir::link_libs`).
@@ -223,7 +315,7 @@ impl<'a> Checker<'a> {
             // `@Transparent` (ABI newtype, `docs/19` §3): the struct must have
             // exactly one field, whose representation/ABI it inherits.
             if self.prog.def(def).attrs.iter().any(|a| a.name.name == "Transparent") {
-                match self.results.struct_fields.get(&def) {
+                match self.hir.structs.get(&def) {
                     Some(SF::Tuple(ts)) if ts.len() == 1 => {}
                     Some(SF::Tuple(ts)) => self.emit(span, SemaErrorKind::Message(format!(
                         "`@Transparent` requires exactly one field, but `{}` has {} \
@@ -247,7 +339,7 @@ impl<'a> Checker<'a> {
                 }
                 continue;
             }
-            let fields: Vec<(String, Ty)> = match self.results.struct_fields.get(&def) {
+            let fields: Vec<(String, Ty)> = match self.hir.structs.get(&def) {
                 Some(SF::Record(fs)) => fs.clone(),
                 Some(SF::Tuple(ts)) => {
                     ts.iter().enumerate().map(|(i, t)| (i.to_string(), *t)).collect()
@@ -287,7 +379,7 @@ impl<'a> Checker<'a> {
                 let TypeKind::Named { name, .. } = &itf.kind else { continue };
                 if let Some(idef) = self.prog.resolve_type_in(module, &name.name) {
                     if self.prog.def(idef).kind == DefKind::Interface {
-                        self.results.iface_impls.insert((tdef, idef), ext);
+                        self.hir.iface_impls.insert((tdef, idef), ext);
                     }
                 }
             }
@@ -315,7 +407,7 @@ impl<'a> Checker<'a> {
                         .collect(),
                 ),
             };
-            self.results.struct_fields.insert(def, fields);
+            self.hir.structs.insert(def, fields);
         }
     }
 
@@ -366,3 +458,192 @@ mod helpers;
 
 #[cfg(test)]
 mod tests;
+
+// ---------------------------------------------------------------------------
+// Body-locals collection (used by `Checker::finish` to fill `Body.locals` from
+// the checker-built HIR block). Walks the typed HIR recording every bound or
+// referenced local with its type.
+// ---------------------------------------------------------------------------
+
+fn record_local(
+    id: LocalId,
+    local_types: &HashMap<LocalId, Ty>,
+    err: Ty,
+    out: &mut HashMap<LocalId, Ty>,
+) {
+    if let Some(ty) = local_types.get(&id) {
+        out.insert(id, *ty);
+    } else {
+        out.entry(id).or_insert(err);
+    }
+}
+
+fn record_block_locals(
+    b: &crate::hir::Block,
+    local_types: &HashMap<LocalId, Ty>,
+    err: Ty,
+    out: &mut HashMap<LocalId, Ty>,
+) {
+    use crate::hir::StmtKind as S;
+    for s in &b.stmts {
+        match &s.kind {
+            S::Let { pattern, init } => {
+                record_pattern_locals(pattern, local_types, err, out);
+                record_node_locals(init, local_types, err, out);
+            }
+            S::Assign { target, value } => {
+                record_node_locals(target, local_types, err, out);
+                record_node_locals(value, local_types, err, out);
+            }
+            S::Expr(e) => record_node_locals(e, local_types, err, out),
+            S::Item(_) => {}
+        }
+    }
+    if let Some(t) = &b.trailing {
+        record_node_locals(t, local_types, err, out);
+    }
+}
+
+fn record_pattern_locals(
+    p: &crate::hir::Pattern,
+    local_types: &HashMap<LocalId, Ty>,
+    err: Ty,
+    out: &mut HashMap<LocalId, Ty>,
+) {
+    use crate::hir::PatternKind as P;
+    match &p.kind {
+        P::Bind(id) => record_local(*id, local_types, err, out),
+        P::TypeBind { bind, .. } => {
+            if let Some(id) = bind {
+                record_local(*id, local_types, err, out);
+            }
+        }
+        P::Literal(e) => record_node_locals(e, local_types, err, out),
+        P::TupleStruct { fields, rest, .. } => {
+            fields.iter().for_each(|f| record_pattern_locals(f, local_types, err, out));
+            if let Some(r) = rest {
+                if let Some(id) = r.bind {
+                    record_local(id, local_types, err, out);
+                }
+            }
+        }
+        P::RecordStruct { fields, .. } => {
+            fields.iter().for_each(|f| record_pattern_locals(&f.pattern, local_types, err, out))
+        }
+        P::Tuple { elems, rest } | P::List { elems, rest } => {
+            elems.iter().for_each(|e| record_pattern_locals(e, local_types, err, out));
+            if let Some((_, r)) = rest {
+                if let Some(id) = r.bind {
+                    record_local(id, local_types, err, out);
+                }
+            }
+        }
+        P::Or(ps) => ps.iter().for_each(|p| record_pattern_locals(p, local_types, err, out)),
+        P::Wildcard | P::UnitPath { .. } => {}
+    }
+}
+
+fn record_node_locals(
+    e: &crate::hir::Expr,
+    local_types: &HashMap<LocalId, Ty>,
+    err: Ty,
+    out: &mut HashMap<LocalId, Ty>,
+) {
+    use crate::hir::{CallKind, ExprKind as K, MapEntry, StrPart};
+    let rec = |x, out: &mut HashMap<LocalId, Ty>| record_node_locals(x, local_types, err, out);
+    if let K::Name(ValueRes::Local(id)) = &e.kind {
+        record_local(*id, local_types, err, out);
+    }
+    match &e.kind {
+        K::Tuple(xs) | K::List(xs) => xs.iter().for_each(|x| rec(x, out)),
+        K::Unary { operand, .. } => rec(operand, out),
+        K::Binary { left, right, .. } => {
+            rec(left, out);
+            rec(right, out);
+        }
+        K::Cast { expr, .. }
+        | K::Ref(expr)
+        | K::Deref(expr)
+        | K::Adjust { expr, .. }
+        | K::Try { expr, .. }
+        | K::Await { expr, .. }
+        | K::Spawn { expr, .. }
+        | K::Field { receiver: expr, .. }
+        | K::TupleIndex { receiver: expr, .. } => rec(expr, out),
+        K::Index { receiver, index } => {
+            rec(receiver, out);
+            rec(index, out);
+        }
+        K::Return(v) | K::Break(v) => {
+            if let Some(e) = v {
+                rec(e, out);
+            }
+        }
+        K::Call { args, kind, .. } => {
+            if let CallKind::Closure { callee } = kind {
+                rec(callee, out);
+            }
+            args.iter().for_each(|a| rec(a, out));
+        }
+        K::Intrinsic { args, .. } => args.iter().for_each(|a| rec(a, out)),
+        K::Struct { fields, spread, .. } => {
+            fields.iter().for_each(|f| rec(&f.value, out));
+            if let Some(s) = spread {
+                rec(s, out);
+            }
+        }
+        K::Str(parts) => parts.iter().for_each(|p| {
+            if let StrPart::Interp { expr, .. } = p {
+                rec(expr, out);
+            }
+        }),
+        K::Map(items) => items.iter().for_each(|it| match it {
+            MapEntry::Kv { key, value } => {
+                rec(key, out);
+                rec(value, out);
+            }
+            MapEntry::Spread(e) => rec(e, out),
+        }),
+        K::If { cond, then_block, else_branch } => {
+            rec(cond, out);
+            record_block_locals(then_block, local_types, err, out);
+            if let Some(e) = else_branch {
+                rec(e, out);
+            }
+        }
+        K::Match { scrutinee, arms } => {
+            rec(scrutinee, out);
+            for a in arms {
+                record_pattern_locals(&a.pattern, local_types, err, out);
+                if let Some(g) = &a.guard {
+                    rec(g, out);
+                }
+                rec(&a.body, out);
+            }
+        }
+        K::Block(b) | K::Loop(b) => record_block_locals(b, local_types, err, out),
+        K::While { cond, body } => {
+            rec(cond, out);
+            record_block_locals(body, local_types, err, out);
+        }
+        K::For { pattern, iter, body, .. } => {
+            record_pattern_locals(pattern, local_types, err, out);
+            rec(iter, out);
+            record_block_locals(body, local_types, err, out);
+        }
+        K::Closure { params, captures, body, .. } => {
+            for (id, _) in params.iter().chain(captures) {
+                record_local(*id, local_types, err, out);
+            }
+            rec(body, out);
+        }
+        K::AsyncBlock { params, captures, body, .. } => {
+            for (id, _) in params.iter().chain(captures) {
+                record_local(*id, local_types, err, out);
+            }
+            record_block_locals(body, local_types, err, out);
+        }
+        K::Int(_) | K::Float(_) | K::Bool(_) | K::Null | K::Char(_) | K::Name(_)
+        | K::Discard | K::Continue | K::Error => {}
+    }
+}

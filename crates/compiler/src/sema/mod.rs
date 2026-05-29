@@ -24,20 +24,38 @@ pub mod symbols;
 pub use check::Checker;
 pub use diag::{SemaError, SemaErrorKind};
 pub use lower::{Lowerer, TypeEnv};
-pub use results::{Adjust, Builtin, CheckResults, CloneKind, NumIntrinsic, StructFields, ValueRes};
+pub use results::{Adjust, Builtin, CloneKind, NumIntrinsic, StructFields, ValueRes};
 pub use symbols::{Def, DefKind, ModuleInfo, Program};
 
 use crate::ast::Module;
 use crate::ty::TyCtxt;
 
 /// The complete result of analysing one parsed module: the definition tables,
-/// the type context that owns every interned [`crate::ty::Ty`], the checker's
-/// side tables, and every semantic diagnostic produced along the way.
+/// the type context that owns every interned [`crate::ty::Ty`], the fully-built
+/// typed HIR, and every semantic diagnostic produced along the way.
 pub struct Analysis {
     pub program: Program,
     pub tcx: TyCtxt,
-    pub results: CheckResults,
+    /// The typed HIR the checker emits directly: signatures, structs,
+    /// iface-impls, link-libs, locals, and every function `Body`. Codegen and
+    /// the LSP consume this exclusively — there is no `CheckResults` side table.
+    pub hir: crate::hir::Hir,
     pub errors: Vec<SemaError>,
+}
+
+impl Analysis {
+    /// The checked type of the expression at `span`, recovered from the HIR by
+    /// scanning bodies for a node at that span. Used by tests and tooling that
+    /// key off source spans; codegen walks the HIR structurally instead.
+    pub fn expr_ty(&self, span: crate::span::Span) -> Option<crate::ty::Ty> {
+        self.hir.expr_ty(span)
+    }
+
+    /// What the value-position name at `span` resolves to, recovered from the
+    /// HIR `Name` node recorded there.
+    pub fn resolution(&self, span: crate::span::Span) -> Option<ValueRes> {
+        self.hir.resolution(span)
+    }
 }
 
 /// Run the full semantic pipeline (collect → check) over a single parsed
@@ -65,10 +83,13 @@ pub fn analyze_multi(root: &Module, externals: &symbols::Externals) -> Analysis 
     let program = Program::collect_multi(&root, &externals);
     let mut tcx = TyCtxt::new();
     let mut errors = program.errors.clone();
-    let results = {
+    // The checker emits the def-keyed HIR (`structs`/`fn_sigs`/…) directly as it
+    // checks; `finish` then assembles the function bodies and link libs into the
+    // complete `Hir`. There is no separate lowering pass.
+    let hir = {
         let mut ck = Checker::new(&program, &mut tcx, &mut errors);
         ck.check_program();
-        std::mem::take(&mut ck.results)
+        ck.finish()
     };
-    Analysis { program, tcx, results, errors }
+    Analysis { program, tcx, hir, errors }
 }

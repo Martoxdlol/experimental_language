@@ -58,12 +58,11 @@ pub struct Compiled {
     pub tokens: Vec<Token>,
     /// The parsed module (pre-`@Derive` expansion — the user's actual items).
     pub module: Module,
+    /// The full analysis, including the typed, resolved, desugared HIR
+    /// (`analysis.hir` — the same tree codegen consumes). The server's position
+    /// queries read provenance off its nodes rather than span-keyed side tables.
     pub analysis: Analysis,
-    /// The typed, resolved, desugared HIR (the same tree codegen consumes). The
-    /// server's position queries read provenance off its nodes rather than the
-    /// checker's span-keyed side tables.
-    pub hir: Hir,
-    /// Position-query index built by walking [`Compiled::hir`].
+    /// Position-query index built by walking `analysis.hir`.
     pub index: HirIndex,
     /// Span + message for every lexer/parser/semantic error, already filtered
     /// to the document file.
@@ -281,8 +280,7 @@ impl Compiled {
         let (tokens, lex_errors) = lex(&text, file);
         let (module, parse_errors) = parse(&text, &tokens);
         let analysis = analyze(&module);
-        let hir = compiler::hir::lower_program(&analysis);
-        let index = HirIndex::build(&hir);
+        let index = HirIndex::build(&analysis.hir);
 
         let mut diagnostics = Vec::new();
         for e in &lex_errors {
@@ -299,7 +297,7 @@ impl Compiled {
         // location.
         diagnostics.retain(|(s, _)| s.file == DOC_FILE);
 
-        Compiled { text, map, tokens, module, analysis, hir, index, diagnostics }
+        Compiled { text, map, tokens, module, analysis, index, diagnostics }
     }
 
     /// Render a type using the program's definition names.

@@ -74,7 +74,7 @@ pub(crate) fn async_state_layout(
             ptr_offsets.push(off as u32);
             continue;
         }
-        let ty = analysis.results.local_ty(*l).unwrap_or(analysis.tcx.error);
+        let ty = analysis.hir.local_ty(*l).unwrap_or(analysis.tcx.error);
         let resolved = resolve_shallow(analysis, ty, subst);
         if let Some(ct) = clty_of(analysis, resolved) {
             live.push((*l, off, ct));
@@ -137,7 +137,7 @@ pub(crate) fn signature_of(
 ) -> CgResult<Option<cranelift_codegen::ir::Signature>> {
     // The function's HIR signature carries its parameter (LocalId, Ty) pairs and
     // return type (the checker built it; Stage 5 retired `fn_params`/`fn_return`).
-    let fsig = analysis.results.fn_sigs.get(&def);
+    let fsig = analysis.hir.fn_sigs.get(&def);
     let ret = fsig.map(|s| s.ret).unwrap_or(analysis.tcx.null);
     let mut sig = module.make_signature();
     if let Some(fsig) = fsig {
@@ -412,7 +412,7 @@ pub(crate) fn transparent_inner(analysis: &Analysis, ty: Ty) -> Option<Ty> {
     if !d.attrs.iter().any(|a| a.name.name == "Transparent") {
         return None;
     }
-    let inner = match analysis.results.struct_fields.get(def)? {
+    let inner = match analysis.hir.structs.get(def)? {
         StructFields::Tuple(ts) if ts.len() == 1 => ts[0],
         StructFields::Record(fs) if fs.len() == 1 => fs[0].1,
         _ => return None,
@@ -559,7 +559,7 @@ pub(crate) fn extern_layout_of_fields(
 
 /// The field-block layout of a (non-generic) struct, by its recorded fields.
 pub(crate) fn compute_layout(analysis: &Analysis, def: DefId, args: &[Ty]) -> Layout {
-    let fields: Vec<(String, Ty)> = match analysis.results.struct_fields.get(&def) {
+    let fields: Vec<(String, Ty)> = match analysis.hir.structs.get(&def) {
         Some(StructFields::Record(fs)) => fs.clone(),
         Some(StructFields::Tuple(ts)) => {
             ts.iter().enumerate().map(|(i, t)| (i.to_string(), *t)).collect()

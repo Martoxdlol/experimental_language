@@ -152,7 +152,7 @@ impl<'a> Checker<'a> {
                             // Inference already checked the value (with no
                             // expectation); reuse that type so we don't
                             // double-check. Otherwise check against the field.
-                            let vt = match self.results.expr_ty(v.span) {
+                            let vt = match self.expr_ty(v.span) {
                                 Some(t) if inferring => t,
                                 _ => self.check_expr(v, Some(fty)),
                             };
@@ -166,9 +166,9 @@ impl<'a> Checker<'a> {
                             // `expect` can bake a widening coercion onto it in
                             // place — exactly the order `build_hir_node` relies on.
                             let lt = self.check_ident(&fi.name.name, fi.name.span);
-                            if let Some(res) = self.results.resolution(fi.name.span) {
+                            if let Some(res) = self.resolution(fi.name.span) {
                                 let node = self.build_name_node(res, lt, fi.name.span);
-                                self.results.node_hir.insert(fi.name.span, node);
+                                self.node_hir.insert(fi.name.span, node);
                             }
                             self.expect(lt, fty, fi.name.span);
                         }
@@ -281,7 +281,7 @@ impl<'a> Checker<'a> {
         // type already computed during inference).
         if let Some(concrete) = self.tuple_fields(def, &targs) {
             for (a, fty) in args.iter().zip(&concrete) {
-                let vt = self.results.expr_ty(a.span).unwrap_or(self.tcx.error);
+                let vt = self.expr_ty(a.span).unwrap_or(self.tcx.error);
                 self.expect(vt, *fty, a.span);
             }
         }

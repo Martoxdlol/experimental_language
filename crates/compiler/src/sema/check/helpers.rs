@@ -116,7 +116,7 @@ impl<'a> Checker<'a> {
             return false;
         }
         let TyKind::Named { def: cdef, .. } = self.tcx.kind(found) else { return false };
-        self.results.iface_impls.contains_key(&(*cdef, *idef))
+        self.hir.iface_impls.contains_key(&(*cdef, *idef))
     }
 
     pub(crate) fn expect(&mut self, found: Ty, expected: Ty, span: Span) {
@@ -197,8 +197,8 @@ impl<'a> Checker<'a> {
     pub(crate) fn bind(&mut self, name: &str, span: Span, ty: Ty) -> LocalId {
         let id = LocalId(self.next_local);
         self.next_local += 1;
-        self.results.local_types.insert(id, ty);
-        self.results.local_decls.insert(id, span);
+        self.hir.local_types.insert(id, ty);
+        self.hir.local_decls.insert(id, span);
         // Record the binding's resolution as a `Name(Local)` HIR node at its span
         // (was `resolutions.insert`); `resolution(span)`/`hir_local_at` read it.
         self.record_res(span, ValueRes::Local(id), ty);

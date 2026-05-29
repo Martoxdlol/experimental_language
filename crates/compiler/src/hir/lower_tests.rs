@@ -22,8 +22,17 @@ fn analyzed(src: &str) -> Analysis {
 
 fn lower(src: &str) -> (Analysis, Hir) {
     let a = analyzed(src);
-    let hir = lower_program(&a);
+    // The checker emits the HIR directly now; these tests inspect a clone of it
+    // alongside the analysis (the analysis still owns the authoritative `hir`).
+    let hir = a.hir.clone();
     (a, hir)
+}
+
+/// True if any expression in `name`'s body satisfies `pred` (walks the whole
+/// body tree). Scopes the search to a single user function so the ~97-def
+/// prelude can't accidentally satisfy a predicate.
+fn any_in<'h>(a: &Analysis, hir: &'h Hir, name: &str, pred: impl FnMut(&Expr) -> bool) -> bool {
+    find_expr(a, hir, name, pred)
 }
 
 /// The lowered body of the (uniquely-named) user function `name`. Analysis
@@ -215,7 +224,7 @@ fn expr_types_match_the_checker_table() {
         if matches!(e.kind, ExprKind::Adjust { .. }) {
             return;
         }
-        if let Some(t) = a.results.expr_ty(e.span) {
+        if let Some(t) = a.expr_ty(e.span) {
             assert_eq!(e.ty, t, "type mismatch at {:?} for {:?}", e.span, e.kind);
             checked += 1;
         }
@@ -234,8 +243,8 @@ fn program_level_tables_lowered() {
     let (a, hir) = lower(src);
 
     // struct layouts and extern sigs mirror the checker tables.
-    assert_eq!(hir.structs.len(), a.results.struct_fields.len());
-    assert_eq!(hir.extern_sigs.len(), a.results.extern_sigs.len());
+    assert_eq!(hir.structs.len(), a.hir.structs.len());
+    assert_eq!(hir.extern_sigs.len(), a.hir.extern_sigs.len());
     assert!(hir.extern_sigs.values().any(|s| s.params.len() == 1));
 
     // The user functions each have a lowered signature and body.
@@ -427,14 +436,14 @@ function main() {}
     let (a, hir) = lower(src);
     assert_eq!(hir.link_libs, vec!["m".to_string(), "z".to_string()]);
     // The free function agrees with the HIR field.
-    assert_eq!(super::collect_link_libs(&a), hir.link_libs);
+    assert_eq!(super::collect_link_libs(&a.program), hir.link_libs);
 }
 
 #[test]
 fn no_link_attrs_yields_no_libs() {
     let (a, hir) = lower("extern function puts(s: i64): i64;\nfunction main() {}");
     assert!(hir.link_libs.is_empty());
-    assert!(super::collect_link_libs(&a).is_empty());
+    assert!(super::collect_link_libs(&a.program).is_empty());
 }
 
 #[test]
@@ -638,18 +647,17 @@ fn checker_builds_hir_leaf_nodes_directly() {
     // for leaf expressions as it checks them (`results.node_hir`), and lowering
     // consumes those instead of re-deriving from side tables. Verify the leaves
     // are present and correctly typed/valued.
-    let (a, _hir) = lower("function f(): i64 { var b = true; var c = 'A'; 42 }");
-    let nh = &a.results.node_hir;
+    let (a, hir) = lower("function f(): i64 { var b = true; var c = 'A'; 42 }");
     assert!(
-        nh.values().any(|e| matches!(e.kind, ExprKind::Int(42))),
+        any_in(&a, &hir, "f", |e| matches!(e.kind, ExprKind::Int(42))),
         "checker should have built the `42` literal node"
     );
     assert!(
-        nh.values().any(|e| matches!(e.kind, ExprKind::Bool(true))),
+        any_in(&a, &hir, "f", |e| matches!(e.kind, ExprKind::Bool(true))),
         "checker should have built the `true` literal node"
     );
     assert!(
-        nh.values().any(|e| matches!(&e.kind, ExprKind::Char(c) if *c == 'A' as u32)),
+        any_in(&a, &hir, "f", |e| matches!(&e.kind, ExprKind::Char(c) if *c == 'A' as u32)),
         "checker should have built the `'A'` literal node"
     );
 }
@@ -658,24 +666,23 @@ fn checker_builds_hir_leaf_nodes_directly() {
 fn checker_builds_hir_recursive_nodes_directly() {
     // Stage 5: composite expressions whose every child is already checker-built
     // are themselves built during checking (Cast/Ref/Deref/TupleIndex/Index/Tuple).
-    let (a, _hir) = lower(
+    let (a, hir) = lower(
         "function f(): i64 { var t = (1, 2); var xs = [10, 20]; var i = (3 as i64); t.0 + xs[1] + i }",
     );
-    let nh = &a.results.node_hir;
     assert!(
-        nh.values().any(|e| matches!(e.kind, ExprKind::Cast { .. })),
+        any_in(&a, &hir, "f", |e| matches!(e.kind, ExprKind::Cast { .. })),
         "checker should have built the `3 as i64` cast node"
     );
     assert!(
-        nh.values().any(|e| matches!(e.kind, ExprKind::Index { .. })),
+        any_in(&a, &hir, "f", |e| matches!(e.kind, ExprKind::Index { .. })),
         "checker should have built the `xs[1]` index node"
     );
     assert!(
-        nh.values().any(|e| matches!(e.kind, ExprKind::TupleIndex { index: 0, .. })),
+        any_in(&a, &hir, "f", |e| matches!(e.kind, ExprKind::TupleIndex { index: 0, .. })),
         "checker should have built the `t.0` tuple-index node"
     );
     assert!(
-        nh.values().any(|e| matches!(e.kind, ExprKind::Tuple(_))),
+        any_in(&a, &hir, "f", |e| matches!(e.kind, ExprKind::Tuple(_))),
         "checker should have built the `(1, 2)` tuple node"
     );
 }
@@ -684,25 +691,24 @@ fn checker_builds_hir_recursive_nodes_directly() {
 fn checker_builds_hir_aggregate_nodes_directly() {
     // Stage 5: string interpolation, map literals, struct literals and field
     // access are checker-built once their sub-expressions are migrated.
-    let (a, _hir) = lower(
+    let (a, hir) = lower(
         "struct P { x: i64, y: i64 }\n\
          function f(): i64 { var p = P { x: 1, y: 2 }; var m = { \"a\": p.x }; var s = \"v=${p.x}\"; p.y }",
     );
-    let nh = &a.results.node_hir;
     assert!(
-        nh.values().any(|e| matches!(e.kind, ExprKind::Struct { .. })),
+        any_in(&a, &hir, "f", |e| matches!(e.kind, ExprKind::Struct { .. })),
         "checker should have built the `P {{ .. }}` struct literal node"
     );
     assert!(
-        nh.values().any(|e| matches!(e.kind, ExprKind::Map(_))),
+        any_in(&a, &hir, "f", |e| matches!(e.kind, ExprKind::Map(_))),
         "checker should have built the map literal node"
     );
     assert!(
-        nh.values().any(|e| matches!(e.kind, ExprKind::Str(_))),
+        any_in(&a, &hir, "f", |e| matches!(e.kind, ExprKind::Str(_))),
         "checker should have built the interpolated string node"
     );
     assert!(
-        nh.values().any(|e| matches!(e.kind, ExprKind::Field { .. })),
+        any_in(&a, &hir, "f", |e| matches!(e.kind, ExprKind::Field { .. })),
         "checker should have built the `p.x` field-access node"
     );
 }
@@ -712,20 +718,19 @@ fn checker_builds_hir_call_nodes_directly() {
     // Stage 5: call dispatch (direct calls, builtin methods, intrinsics) is
     // classified by the checker into the same `Call`/`Intrinsic` HIR variants
     // that `lower_call` produced from side tables.
-    let (a, _hir) = lower(
+    let (a, hir) = lower(
         "function g(n: i64): i64 { n + 1 }\n\
          function f(): i64 { var xs = [1, 2]; xs.push(3); g(xs.size()) }",
     );
-    let nh = &a.results.node_hir;
     assert!(
-        nh.values().any(|e| matches!(
+        any_in(&a, &hir, "f", |e| matches!(
             &e.kind,
             ExprKind::Call { kind: CallKind::Direct { .. }, .. }
         )),
         "checker should have built the direct call `g(..)`"
     );
     assert!(
-        nh.values().any(|e| matches!(
+        any_in(&a, &hir, "f", |e| matches!(
             &e.kind,
             ExprKind::Call { kind: CallKind::BuiltinMethod { .. }, .. }
         )),
@@ -737,7 +742,7 @@ fn checker_builds_hir_call_nodes_directly() {
 fn checker_builds_hir_control_flow_directly() {
     // Stage 5: control-flow expressions (and the blocks/patterns they contain)
     // are built by the checker — `if`, `match`, `while`, `for`, and bare blocks.
-    let (a, _hir) = lower(
+    let (a, hir) = lower(
         "function f(xs: List<i64>): i64 {\n\
          var total = 0;\n\
          for x in xs { total = total + x; }\n\
@@ -747,21 +752,20 @@ fn checker_builds_hir_control_flow_directly() {
          match n { 0 => 0, _ => c }\n\
          }",
     );
-    let nh = &a.results.node_hir;
     assert!(
-        nh.values().any(|e| matches!(e.kind, ExprKind::For { .. })),
+        any_in(&a, &hir, "f", |e| matches!(e.kind, ExprKind::For { .. })),
         "checker should have built the `for` loop node"
     );
     assert!(
-        nh.values().any(|e| matches!(e.kind, ExprKind::If { .. })),
+        any_in(&a, &hir, "f", |e| matches!(e.kind, ExprKind::If { .. })),
         "checker should have built the `if` node"
     );
     assert!(
-        nh.values().any(|e| matches!(e.kind, ExprKind::While { .. })),
+        any_in(&a, &hir, "f", |e| matches!(e.kind, ExprKind::While { .. })),
         "checker should have built the `while` node"
     );
     assert!(
-        nh.values().any(|e| matches!(e.kind, ExprKind::Match { .. })),
+        any_in(&a, &hir, "f", |e| matches!(e.kind, ExprKind::Match { .. })),
         "checker should have built the `match` node"
     );
 }
@@ -771,17 +775,16 @@ fn checker_builds_hir_closure_and_async_block_directly() {
     // Stage 5: closures and `async { … }` blocks are checker-built, carrying the
     // capture/param/output info the checker computed (was `closures` /
     // `async_blocks` consulted only at lowering time).
-    let (a, _hir) = lower(
+    let (a, hir) = lower(
         "function f(): i64 { var add = (x: i64): i64 => x + 1; add(41) }\n\
          function g(): Future<i64> { async { 7 } }",
     );
-    let nh = &a.results.node_hir;
     assert!(
-        nh.values().any(|e| matches!(e.kind, ExprKind::Closure { .. })),
+        any_in(&a, &hir, "f", |e| matches!(e.kind, ExprKind::Closure { .. })),
         "checker should have built the closure node"
     );
     assert!(
-        nh.values().any(|e| matches!(e.kind, ExprKind::AsyncBlock { .. })),
+        any_in(&a, &hir, "g", |e| matches!(e.kind, ExprKind::AsyncBlock { .. })),
         "checker should have built the `async` block node"
     );
 }
@@ -883,6 +886,28 @@ function f(): str { var p = P { x: 1 }; var n = id(5); \"n=${n} p=${p}\" }
 }
 
 #[test]
+fn checker_emits_def_keyed_hir_directly() {
+    // The def-keyed data (structs / fn_sigs / extern_sigs / iface_impls /
+    // local_decls) is written by the checker straight onto `analysis.hir` — no
+    // `CheckResults` side tables. Assert it's populated on the analysis HIR
+    // before any separate lowering step.
+    let src = r#"
+struct P { x: i64 }
+extern function abs(n: i32): i32;
+interface Show { function show(self): str; }
+extend P: Show { function show(self): str { "p" } }
+function f(p: P): i64 { var y = p.x; y }
+"#;
+    let a = analyzed(src);
+    let pdef = a.program.defs.iter().position(|d| d.name == "P").map(|i| crate::ids::DefId(i as u32)).unwrap();
+    assert!(a.hir.structs.contains_key(&pdef), "checker emitted struct layout onto hir");
+    assert!(!a.hir.fn_sigs.is_empty(), "checker emitted fn sigs onto hir");
+    assert!(!a.hir.extern_sigs.is_empty(), "checker emitted extern sig onto hir (`abs`)");
+    assert!(!a.hir.iface_impls.is_empty(), "checker emitted the P:Show impl onto hir");
+    assert!(!a.hir.local_decls.is_empty(), "checker emitted local decls onto hir");
+}
+
+#[test]
 fn resolutions_live_on_hir_name_nodes_not_a_table() {
     // The `resolutions` table is deleted; `results.resolution(span)` reads the
     // resolution off the `Name` HIR node the checker recorded there (value uses,
@@ -946,21 +971,23 @@ fn narrowing_unbox_is_baked_into_the_hir_not_a_table() {
 
 #[test]
 fn checker_emits_whole_function_bodies_directly() {
-    // Stage 5: the checker builds each function's entire HIR body `Block` into
-    // `results.fn_bodies`; lowering assembles the `Body` from it (no re-lowering
-    // of the block/statements/patterns for a well-formed program).
+    // Stage 5: the checker builds each function's entire HIR body `Block`
+    // directly into the emitted `Hir` — there is no intermediate `fn_bodies`
+    // side table and no separate lowering pass. Verify `f`'s body landed in the
+    // HIR with the statements the source declares and a non-dummy span.
     let src = "\
 function f(n: i64): i64 { var t = 0; for i in [1, 2, 3] { t = t + i; } t + n }
 function g(): i64 { f(10) }
 ";
     let (a, hir) = lower(src);
     let f = a.program.defs.iter().position(|d| d.name == "f").map(|i| crate::ids::DefId(i as u32)).unwrap();
-    assert!(a.results.fn_bodies.contains_key(&f), "checker should have built f's body block");
-    // The HIR body lowering used the checker-built block verbatim.
-    let checker_block = &a.results.fn_bodies[&f];
     let hir_body = hir.body(f).expect("f has an HIR body");
-    assert_eq!(checker_block.stmts.len(), hir_body.block.stmts.len());
-    assert_eq!(checker_block.span, hir_body.block.span);
+    // `var t = 0;` and the `for` loop are the two statements; `t + n` trails.
+    assert_eq!(hir_body.block.stmts.len(), 2, "f's body has two statements");
+    assert!(hir_body.block.trailing.is_some(), "f's body has a trailing expression");
+    assert!(hir_body.block.span.lo.0 < hir_body.block.span.hi.0, "body block keeps its span");
+    // The same `Hir` is the one the analysis owns (the clone is structural).
+    assert_eq!(a.hir.body(f).unwrap().block.stmts.len(), hir_body.block.stmts.len());
 }
 
 #[test]
@@ -973,7 +1000,7 @@ function spin(): Future<null> async { }
 ";
     let (a, hir) = lower(src);
     // The checker populated `fn_sigs`; lowering carried it onto the HIR verbatim.
-    assert_eq!(hir.fn_sigs.len(), a.results.fn_sigs.len());
+    assert_eq!(hir.fn_sigs.len(), a.hir.fn_sigs.len());
     let add = a.program.defs.iter().position(|d| d.name == "add").map(|i| crate::ids::DefId(i as u32)).unwrap();
     let sig = &hir.fn_sigs[&add];
     assert_eq!(sig.params.len(), 2, "add has two params");

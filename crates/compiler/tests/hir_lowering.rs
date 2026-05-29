@@ -11,7 +11,7 @@
 //! This complements the focused unit tests in `hir::lower_tests` by exercising
 //! the lowering against the whole example corpus at once.
 
-use compiler::hir::{self, Block, CallKind, Expr, ExprKind, Hir, MapEntry, StmtKind, StrPart};
+use compiler::hir::{Block, CallKind, Expr, ExprKind, Hir, MapEntry, StmtKind, StrPart};
 use compiler::lexer::lex;
 use compiler::parser::parse;
 use compiler::sema::{analyze, Analysis};
@@ -175,7 +175,7 @@ fn check_hir(name: &str, a: &Analysis, hir: &Hir) -> Stats {
             // Type-table consistency on non-coerced nodes (a baked `Adjust`
             // wrapper carries the post-coercion type; its inner node matches).
             if !matches!(e.kind, ExprKind::Adjust { .. }) {
-                if let Some(t) = a.results.expr_ty(e.span) {
+                if let Some(t) = a.expr_ty(e.span) {
                     assert_eq!(
                         e.ty, t,
                         "{name}: type mismatch at {:?} for {:?}",
@@ -224,8 +224,7 @@ fn lowers_every_clean_example_losslessly() {
             skipped.push(format!("{name} (analysis)"));
             continue;
         }
-        let hir = hir::lower_program(&a);
-        let st = check_hir(&name, &a, &hir);
+        let st = check_hir(&name, &a, &a.hir);
         total_nodes += st.user_nodes;
         synth_errors += st.synth_errors;
         lowered += 1;

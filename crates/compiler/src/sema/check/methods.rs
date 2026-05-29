@@ -206,7 +206,7 @@ impl<'a> Checker<'a> {
                 // re-`expect` against the substituted param. Otherwise check
                 // normally with the substituted param as the expected type.
                 if need_inference {
-                    let at = self.results.expr_ty(a.span).unwrap_or(self.tcx.error);
+                    let at = self.expr_ty(a.span).unwrap_or(self.tcx.error);
                     self.expect(at, *pt, a.span);
                 } else {
                     let at = self.check_expr(a, Some(*pt));
@@ -765,7 +765,7 @@ impl<'a> Checker<'a> {
         for (i, a) in args.iter().enumerate() {
             if let Some(pty) = param_tys.get(i) {
                 let expected = self.subst_ty(*pty, &map);
-                let aty = self.results.expr_ty(a.span).unwrap_or(self.tcx.error);
+                let aty = self.expr_ty(a.span).unwrap_or(self.tcx.error);
                 self.expect(aty, expected, a.span);
             }
         }
@@ -845,7 +845,7 @@ impl<'a> Checker<'a> {
         ) && self.is_extern_struct(ty);
         // `&arr[i]` — the address of a fixed-array element; result `*Elem`.
         let array_elem = if let ExprKind::Index { receiver, .. } = &operand.kind {
-            let rty = self.results.expr_ty(receiver.span).unwrap_or(self.tcx.error);
+            let rty = self.expr_ty(receiver.span).unwrap_or(self.tcx.error);
             matches!(self.tcx.kind(rty), TyKind::Array { .. })
         } else {
             false

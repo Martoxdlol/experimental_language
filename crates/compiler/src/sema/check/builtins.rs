@@ -522,7 +522,7 @@ impl<'a> Checker<'a> {
         // would need a deep clone at the boundary (a follow-up — `docs/20` §1).
         // The closure was just checked, so its HIR node (with the resolved
         // captures) is already in `node_hir` (was the `closures` side table).
-        let cap_tys: Vec<Ty> = match self.results.node_hir.get(&clo.span).map(|n| &n.kind) {
+        let cap_tys: Vec<Ty> = match self.node_hir.get(&clo.span).map(|n| &n.kind) {
             Some(crate::hir::ExprKind::Closure { captures, .. }) => {
                 captures.iter().map(|(_, t)| *t).collect()
             }
@@ -783,7 +783,7 @@ impl<'a> Checker<'a> {
         }
         for (i, a) in args.iter().enumerate() {
             if let Some(pt) = param_tys.get(i) {
-                let at = self.results.expr_ty(a.span).unwrap_or(self.tcx.error);
+                let at = self.expr_ty(a.span).unwrap_or(self.tcx.error);
                 self.expect(at, *pt, a.span);
             }
         }

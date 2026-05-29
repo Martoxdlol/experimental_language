@@ -216,7 +216,7 @@
         let mut errors = Vec::new();
         let mut ck = Checker::new(&prog, &mut tcx, &mut errors);
         ck.check_program();
-        let baked_widen = ck.results.node_hir.values().any(|e| {
+        let baked_widen = ck.node_hir.values().any(|e| {
             matches!(&e.kind, crate::hir::ExprKind::Adjust {
                 adjust: crate::sema::results::Adjust::Widen(_), ..
             })

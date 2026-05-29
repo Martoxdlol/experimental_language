@@ -79,7 +79,7 @@ impl<'a> Checker<'a> {
     pub(crate) fn check_lvalue(&mut self, target: &Expr) -> Ty {
         let ty = self.check_lvalue_inner(target);
         if let Some(node) = self.build_hir_node(target, ty) {
-            self.results.node_hir.insert(target.span, node);
+            self.node_hir.insert(target.span, node);
         }
         ty
     }

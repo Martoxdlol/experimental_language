@@ -1,15 +1,14 @@
-//! The output of type checking that downstream phases (monomorphization, code
-//! generation, the LSP) consume.
+//! Shared semantic vocabulary the checker bakes onto HIR nodes and that
+//! downstream phases (monomorphization, code generation, the LSP) consume:
+//! value resolutions, type adjustments, builtin/intrinsic descriptors, and the
+//! codegen-shape records (`TryBranch`, `ForIter`, `CloneKind`, …).
 //!
-//! The checker walks the AST and, rather than building a separate typed tree,
-//! records side tables keyed by source [`Span`] (every AST node has a unique
-//! span) and by [`DefId`]/[`LocalId`]. Codegen re-walks the same AST and looks
-//! up each node's type and each name's resolution here.
+//! The checker no longer keeps span-keyed side tables — it emits a fully typed
+//! [`crate::hir::Hir`] directly. These types are the leaf data those HIR nodes
+//! carry.
 
 use crate::ids::{DefId, LocalId};
-use crate::span::Span;
 use crate::ty::Ty;
-use std::collections::HashMap;
 
 /// What a value-position name (an identifier or call target) resolves to.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
@@ -82,45 +81,6 @@ pub enum StructFields {
     Unit,
     Tuple(Vec<Ty>),
     Record(Vec<(String, Ty)>),
-}
-
-/// Everything the checker learns about a program.
-#[derive(Default)]
-pub struct CheckResults {
-    /// The type of every local binding.
-    pub local_types: HashMap<LocalId, Ty>,
-    /// The declaration (binding occurrence) span of every local — its `var`
-    /// name, parameter name, or pattern binding. Consumed by the LSP for
-    /// go-to-definition / find-references on locals.
-    pub local_decls: HashMap<LocalId, Span>,
-    /// Per `extern function`: its C-ABI signature, built by the checker as the
-    /// HIR [`crate::hir::ExternSig`] node data (Stage 5). An extern function has
-    /// no body, so codegen reads its signature from here.
-    pub extern_sigs: HashMap<DefId, crate::hir::ExternSig>,
-    /// Per struct def: its lowered field-type layout template.
-    pub struct_fields: HashMap<DefId, StructFields>,
-    /// Interface implementations: `(implementing type def, interface def) →
-    /// extend block def`. Lets codegen monomorphize an interface-method call on
-    /// a generic type parameter to the concrete `extend` impl.
-    pub iface_impls: HashMap<(DefId, DefId), DefId>,
-    /// The HIR signature of every checked function / `extend` method, built by
-    /// the checker as it types each one (Stage 5: the checker emits HIR node
-    /// data directly rather than the separate `fn_params`/`fn_return`/`async_fns`
-    /// span tables). Consumed by HIR lowering (→ `Hir::fn_sigs`) and the backend.
-    pub fn_sigs: HashMap<DefId, crate::hir::FnSig>,
-    /// Stage-5 migration bridge: the typed HIR node the checker builds for an
-    /// expression as it checks it, keyed by span. As each `check_expr` arm is
-    /// migrated to construct its `hir::Expr` here (using already-built children),
-    /// HIR lowering consumes the prebuilt node instead of re-deriving it from the
-    /// span side tables; once every arm is migrated the per-expression tables
-    /// (`expr_types`/`resolutions`/`adjustments`/…) are deleted and this becomes
-    /// the checker's direct HIR output. Currently holds the leaf nodes.
-    pub node_hir: HashMap<Span, crate::hir::Expr>,
-    /// The checker-built HIR body `Block` of each function / `extend` method,
-    /// keyed by `DefId` (Stage 5: the checker emits the whole body, not just
-    /// individual expressions). `lower_program` assembles each `Body` from this
-    /// directly instead of re-running its own block/statement/pattern lowering.
-    pub fn_bodies: HashMap<DefId, crate::hir::Block>,
 }
 
 /// What codegen needs to lower a bare `async { … }` block or an `async`
@@ -322,40 +282,3 @@ pub struct ForIter {
     pub item_ty: Ty,
 }
 
-impl CheckResults {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// The checked type of the expression at `span`, read off its built HIR node
-    /// (was the `expr_types` side table). The node's *checked* type is the inner
-    /// type: a baked `Adjust` wrapper carries the post-coercion type, so unwrap
-    /// it to recover the pre-coercion type the checker recorded.
-    pub fn expr_ty(&self, span: Span) -> Option<Ty> {
-        self.node_hir.get(&span).map(|n| match &n.kind {
-            crate::hir::ExprKind::Adjust { expr, .. } => expr.ty,
-            _ => n.ty,
-        })
-    }
-
-    /// What the value-position name / callee / binding at `span` resolves to,
-    /// read off the `Name` HIR node the checker recorded there (was the
-    /// `resolutions` side table). Value uses, call-dispatch markers, and pattern
-    /// bindings all store a `Name(res)` node at their span (a narrowed use wraps
-    /// it in `Adjust`, so unwrap that).
-    pub fn resolution(&self, span: Span) -> Option<ValueRes> {
-        let node = self.node_hir.get(&span)?;
-        match &node.kind {
-            crate::hir::ExprKind::Name(res) => Some(*res),
-            crate::hir::ExprKind::Adjust { expr, .. } => match &expr.kind {
-                crate::hir::ExprKind::Name(res) => Some(*res),
-                _ => None,
-            },
-            _ => None,
-        }
-    }
-
-    pub fn local_ty(&self, id: LocalId) -> Option<Ty> {
-        self.local_types.get(&id).copied()
-    }
-}

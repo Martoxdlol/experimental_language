@@ -86,9 +86,18 @@ pub struct Hir {
     /// name, parameter name, or pattern binding (was `local_decls`). Consumed by
     /// the LSP for go-to-definition / find-references on locals.
     pub local_decls: HashMap<LocalId, Span>,
+    /// The type of every local in the program, by its (globally-unique)
+    /// [`LocalId`] (was `CheckResults::local_types`). A program-wide map the
+    /// backend reads directly; each [`Body::locals`] is the per-body slice of it.
+    pub local_types: HashMap<LocalId, Ty>,
 }
 
 impl Hir {
+    /// The type of local `id` anywhere in the program.
+    pub fn local_ty(&self, id: LocalId) -> Option<Ty> {
+        self.local_types.get(&id).copied()
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -113,6 +122,164 @@ impl Hir {
             collect_captures_block(&body.block, &mut set);
         }
         set
+    }
+
+    /// The checked type of the expression whose source span is `span`, found by
+    /// scanning the HIR bodies for a node at that span. A baked `Adjust` carries
+    /// the post-coercion type on its wrapper, so its inner (pre-coercion) type is
+    /// returned to match what the checker recorded for the original node.
+    pub fn expr_ty(&self, span: crate::span::Span) -> Option<Ty> {
+        self.find_expr(span).map(|e| match &e.kind {
+            ExprKind::Adjust { expr, .. } => expr.ty,
+            _ => e.ty,
+        })
+    }
+
+    /// What the value-position name at `span` resolves to, read off the `Name`
+    /// HIR node there (unwrapping a baked `Adjust` wrapper).
+    pub fn resolution(&self, span: crate::span::Span) -> Option<crate::sema::results::ValueRes> {
+        match &self.find_expr(span)?.kind {
+            ExprKind::Name(res) => Some(*res),
+            ExprKind::Adjust { expr, .. } => match &expr.kind {
+                ExprKind::Name(res) => Some(*res),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// Find the HIR expression node whose span exactly matches `span`, scanning
+    /// every function body. Returns the first match in body iteration order.
+    pub fn find_expr(&self, span: crate::span::Span) -> Option<&Expr> {
+        for body in self.bodies.values() {
+            if let Some(e) = find_expr_block(&body.block, span) {
+                return Some(e);
+            }
+        }
+        None
+    }
+}
+
+fn find_expr_block(b: &Block, span: crate::span::Span) -> Option<&Expr> {
+    for s in &b.stmts {
+        match &s.kind {
+            StmtKind::Let { pattern, init } => {
+                if let Some(e) = find_expr_pattern(pattern, span) {
+                    return Some(e);
+                }
+                if let Some(e) = find_expr(init, span) {
+                    return Some(e);
+                }
+            }
+            StmtKind::Assign { target, value } => {
+                if let Some(e) = find_expr(target, span) {
+                    return Some(e);
+                }
+                if let Some(e) = find_expr(value, span) {
+                    return Some(e);
+                }
+            }
+            StmtKind::Expr(e) => {
+                if let Some(found) = find_expr(e, span) {
+                    return Some(found);
+                }
+            }
+            StmtKind::Item(_) => {}
+        }
+    }
+    if let Some(t) = &b.trailing {
+        if let Some(e) = find_expr(t, span) {
+            return Some(e);
+        }
+    }
+    None
+}
+
+fn find_expr_pattern(p: &Pattern, span: crate::span::Span) -> Option<&Expr> {
+    match &p.kind {
+        PatternKind::Literal(e) => find_expr(e, span),
+        PatternKind::TupleStruct { fields, .. } => {
+            fields.iter().find_map(|f| find_expr_pattern(f, span))
+        }
+        PatternKind::RecordStruct { fields, .. } => {
+            fields.iter().find_map(|f| find_expr_pattern(&f.pattern, span))
+        }
+        PatternKind::Tuple { elems, .. } | PatternKind::List { elems, .. } => {
+            elems.iter().find_map(|e| find_expr_pattern(e, span))
+        }
+        PatternKind::Or(ps) => ps.iter().find_map(|p| find_expr_pattern(p, span)),
+        _ => None,
+    }
+}
+
+fn find_expr(e: &Expr, span: crate::span::Span) -> Option<&Expr> {
+    if e.span == span {
+        return Some(e);
+    }
+    use ExprKind as K;
+    match &e.kind {
+        K::Tuple(xs) | K::List(xs) => xs.iter().find_map(|x| find_expr(x, span)),
+        K::Unary { operand, .. } => find_expr(operand, span),
+        K::Binary { left, right, .. } => {
+            find_expr(left, span).or_else(|| find_expr(right, span))
+        }
+        K::Cast { expr, .. }
+        | K::Ref(expr)
+        | K::Deref(expr)
+        | K::Adjust { expr, .. }
+        | K::Try { expr, .. }
+        | K::Await { expr, .. }
+        | K::Spawn { expr, .. }
+        | K::Field { receiver: expr, .. }
+        | K::TupleIndex { receiver: expr, .. } => find_expr(expr, span),
+        K::Index { receiver, index } => {
+            find_expr(receiver, span).or_else(|| find_expr(index, span))
+        }
+        K::Return(v) | K::Break(v) => v.as_deref().and_then(|x| find_expr(x, span)),
+        K::Call { args, kind, .. } => {
+            if let CallKind::Closure { callee } = kind {
+                if let Some(found) = find_expr(callee, span) {
+                    return Some(found);
+                }
+            }
+            args.iter().find_map(|a| find_expr(a, span))
+        }
+        K::Intrinsic { args, .. } => args.iter().find_map(|a| find_expr(a, span)),
+        K::Struct { fields, spread, .. } => fields
+            .iter()
+            .find_map(|f| find_expr(&f.value, span))
+            .or_else(|| spread.as_deref().and_then(|x| find_expr(x, span))),
+        K::Str(parts) => parts.iter().find_map(|p| match p {
+            StrPart::Interp { expr, .. } => find_expr(expr, span),
+            _ => None,
+        }),
+        K::Map(items) => items.iter().find_map(|it| match it {
+            MapEntry::Kv { key, value } => {
+                find_expr(key, span).or_else(|| find_expr(value, span))
+            }
+            MapEntry::Spread(e) => find_expr(e, span),
+        }),
+        K::If { cond, then_block, else_branch } => find_expr(cond, span)
+            .or_else(|| find_expr_block(then_block, span))
+            .or_else(|| else_branch.as_deref().and_then(|x| find_expr(x, span))),
+        K::Match { scrutinee, arms } => find_expr(scrutinee, span).or_else(|| {
+            arms.iter().find_map(|a| {
+                find_expr_pattern(&a.pattern, span)
+                    .or_else(|| a.guard.as_ref().and_then(|x| find_expr(x, span)))
+                    .or_else(|| find_expr(&a.body, span))
+            })
+        }),
+        K::Block(b) | K::Loop(b) => find_expr_block(b, span),
+        K::While { cond, body } => {
+            find_expr(cond, span).or_else(|| find_expr_block(body, span))
+        }
+        K::For { pattern, iter, body, .. } => find_expr_pattern(pattern, span)
+            .or_else(|| find_expr(iter, span))
+            .or_else(|| find_expr_block(body, span)),
+        K::Closure { body, .. } => find_expr(body, span),
+        K::AsyncBlock { body, .. } => find_expr_block(body, span),
+        K::Int(_) | K::Float(_) | K::Bool(_) | K::Null | K::Char(_) | K::Name(_)
+        | K::Discard | K::Continue | K::Error => None,
     }
 }
 
@@ -715,14 +882,138 @@ pub struct FieldPattern {
     pub span: Span,
 }
 
-mod lower;
-pub use lower::{collect_link_libs, lower_program};
-pub(crate) use lower::{
-    lower_binop, lower_castop, lower_unop, parse_char_lit, parse_float_lit, parse_int_lit,
-};
+// ===========================================================================
+// HIR build utilities (used by the type-checker as it emits the HIR directly)
+// ===========================================================================
+
+/// The libraries named by `@Link(lib = "…")` / `@Link("…")` on `extern function`
+/// declarations (`docs/19` §13), de-duplicated in first-seen order. Consumed as
+/// [`Hir::link_libs`] (JIT `dlopen`) and by the CLI's native linker (`-l`).
+pub fn collect_link_libs(prog: &crate::sema::symbols::Program) -> Vec<String> {
+    use crate::ast;
+    let mut libs: Vec<String> = Vec::new();
+    for def in &prog.defs {
+        if !matches!(def.item, Some(ast::ItemKind::Extern(ast::ExternItem::Function(_)))) {
+            continue;
+        }
+        for attr in &def.attrs {
+            if attr.name.name != "Link" {
+                continue;
+            }
+            for a in &attr.args {
+                let value = match a {
+                    ast::AttrArg::Named { name, value, .. } if name.name == "lib" => value,
+                    ast::AttrArg::Positional(e) => e,
+                    _ => continue,
+                };
+                if let ast::ExprKind::Str(s) = &value.kind {
+                    let lib = match s.parts.as_slice() {
+                        [] => Some(String::new()),
+                        [ast::StringPart::Text { text, .. }] => Some(text.clone()),
+                        _ => None,
+                    };
+                    if let Some(lib) = lib {
+                        if !lib.is_empty() && !libs.contains(&lib) {
+                            libs.push(lib);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    libs
+}
+
+pub(crate) fn parse_int_lit(lit: &crate::ast::IntLit) -> u128 {
+    let digits: String = lit.raw.chars().filter(|c| *c != '_').collect();
+    let radix = match lit.base {
+        crate::token::IntBase::Dec => 10,
+        crate::token::IntBase::Hex => 16,
+        crate::token::IntBase::Oct => 8,
+        crate::token::IntBase::Bin => 2,
+    };
+    u128::from_str_radix(&digits, radix).unwrap_or(0)
+}
+
+pub(crate) fn parse_float_lit(lit: &crate::ast::FloatLit) -> f64 {
+    let raw: String = lit.raw.chars().filter(|c| *c != '_').collect();
+    raw.parse().unwrap_or(0.0)
+}
+
+/// Parse a char literal to its Unicode scalar value, mirroring the backend's
+/// `parse_char` so HIR and codegen agree byte-for-byte.
+pub(crate) fn parse_char_lit(raw: &str) -> Option<u32> {
+    let inner = raw.strip_prefix('\'')?.strip_suffix('\'')?;
+    let mut chars = inner.chars();
+    let first = chars.next()?;
+    if first != '\\' {
+        return if chars.next().is_none() { Some(first as u32) } else { None };
+    }
+    let esc = chars.next()?;
+    let val = match esc {
+        'n' => '\n' as u32,
+        'r' => '\r' as u32,
+        't' => '\t' as u32,
+        '\\' => '\\' as u32,
+        '\'' => '\'' as u32,
+        '"' => '"' as u32,
+        '0' => 0,
+        'u' => {
+            let rest: String = chars.collect();
+            let hex = rest.strip_prefix('{')?.strip_suffix('}')?;
+            return u32::from_str_radix(hex, 16).ok();
+        }
+        _ => return None,
+    };
+    if chars.next().is_none() { Some(val) } else { None }
+}
+
+pub(crate) fn lower_unop(op: crate::ast::UnaryOp) -> UnaryOp {
+    use crate::ast::UnaryOp as A;
+    match op {
+        A::Neg => UnaryOp::Neg,
+        A::Not | A::BitNot => UnaryOp::Not,
+    }
+}
+
+pub(crate) fn lower_binop(op: crate::ast::BinaryOp) -> BinaryOp {
+    use crate::ast::BinaryOp as A;
+    match op {
+        A::Add => BinaryOp::Add,
+        A::Sub => BinaryOp::Sub,
+        A::Mul => BinaryOp::Mul,
+        A::Div => BinaryOp::Div,
+        A::Rem => BinaryOp::Rem,
+        A::Eq => BinaryOp::Eq,
+        A::Ne => BinaryOp::Ne,
+        A::Lt => BinaryOp::Lt,
+        A::Le => BinaryOp::Le,
+        A::Gt => BinaryOp::Gt,
+        A::Ge => BinaryOp::Ge,
+        A::And => BinaryOp::And,
+        A::Or => BinaryOp::Or,
+        A::BitAnd => BinaryOp::BitAnd,
+        A::BitOr => BinaryOp::BitOr,
+        A::BitXor => BinaryOp::BitXor,
+        A::Shl => BinaryOp::Shl,
+        A::Shr => BinaryOp::Shr,
+    }
+}
+
+pub(crate) fn lower_castop(op: crate::ast::CastOp) -> CastOp {
+    match op {
+        crate::ast::CastOp::As => CastOp::As,
+        crate::ast::CastOp::Is => CastOp::Is,
+    }
+}
 
 pub mod pretty;
 pub use pretty::print_program;
+
+// (The former `hir::lower` pass is gone: the type-checker emits the HIR directly
+// and assembles it in `Checker::finish`. The small build utilities above —
+// `collect_link_libs`, the literal parsers, and operator lowering — are all that
+// remains, and the checker calls them as it builds nodes.)
 
 #[cfg(test)]
 mod tests;

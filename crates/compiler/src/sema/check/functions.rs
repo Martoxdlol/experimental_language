@@ -88,7 +88,7 @@ impl<'a> Checker<'a> {
         }
         // The checker emits the HIR signature directly (Stage 5): no separate
         // `fn_params`/`fn_return`/`async_fns` side tables.
-        self.results.fn_sigs.insert(
+        self.hir.fn_sigs.insert(
             def,
             crate::hir::FnSig { params: param_sig, ret: ret_ty, async_output },
         );
@@ -99,10 +99,10 @@ impl<'a> Checker<'a> {
             self.expect(bty, body_ret, body.span);
             // Stage 5: emit the whole body's HIR `Block` directly (every
             // expression was just checker-built into `node_hir`), so lowering
-            // assembles the `Body` from it instead of re-lowering the block.
-            if let Some(block) = self.build_block(body) {
-                self.results.fn_bodies.insert(def, block);
-            }
+            // assembles the `Body` from it. `build_block` is total, so this is
+            // populated for every function — `lower` keeps no fallback.
+            let block = self.build_block(body);
+            self.fn_bodies.insert(def, block);
         }
         self.in_async = prev_async;
         self.pop_scope();

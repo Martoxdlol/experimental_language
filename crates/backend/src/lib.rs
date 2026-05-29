@@ -316,7 +316,7 @@ fn run_codegen<M: Module>(
 /// async `poll`s as the worklist drains). The module is never finalized — only
 /// the IR text is collected, so this is side-effect-free.
 pub fn compile_clif(analysis: &Analysis) -> CgResult<String> {
-    let hir = compiler::hir::lower_program(analysis);
+    let hir = &analysis.hir;
     let isa = make_isa(target_lexicon::Triple::host(), false);
     let builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
     let mut module = JITModule::new(builder);
@@ -326,7 +326,7 @@ pub fn compile_clif(analysis: &Analysis) -> CgResult<String> {
     let captured_locals: HashSet<LocalId> = hir.captured_locals();
     let mut cg = Codegen {
         analysis,
-        hir: &hir,
+        hir,
         module: &mut module,
         funcs: HashMap::new(),
         by_name: HashMap::new(),
@@ -383,19 +383,19 @@ pub fn compile_hir(analysis: &Analysis) -> CgResult<Jit> {
 /// The number of lowerable function bodies (every body is HIR-lowered). Retained
 /// by tests that assert the HIR code path is exercised.
 pub fn hir_eligible_fns(analysis: &Analysis) -> usize {
-    compiler::hir::lower_program(analysis).bodies.len()
+    analysis.hir.bodies.len()
 }
 
 fn compile_jit(analysis: &Analysis) -> CgResult<Jit> {
-    let hir = compiler::hir::lower_program(analysis);
-    dlopen_link_libs(&hir);
+    let hir = &analysis.hir;
+    dlopen_link_libs(hir);
     let isa = make_isa(target_lexicon::Triple::host(), false);
     let mut builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
     register_runtime_symbols(&mut builder);
     let mut module = JITModule::new(builder);
 
     let (by_name, safepoints, drops, line_info, _func_len) =
-        run_codegen(analysis, &hir, &mut module)?;
+        run_codegen(analysis, hir, &mut module)?;
 
     module.finalize_definitions().expect("finalize");
 
@@ -416,7 +416,7 @@ fn compile_jit(analysis: &Analysis) -> CgResult<Jit> {
         unsafe { runtime::gc::lang_gc_register_drop(*type_id as u64, f) };
     }
 
-    let main_is_async = main_is_async(analysis, &hir);
+    let main_is_async = main_is_async(analysis, hir);
     let pending_tid = Some(1000 + analysis.program.pending_def.index() as i64);
     Ok(Jit { module, funcs: by_name, pending_tid, main_is_async, line_info })
 }
@@ -470,15 +470,15 @@ pub fn compile_object(analysis: &Analysis, out: &Path, src: &str, src_name: &str
     // Symbol names are written verbatim; the `object` crate applies the
     // platform mangling (the leading `_` on Mach-O), so the bare `lang_*`
     // runtime names match `libruntime.a`'s exported symbols after linking.
-    let hir = compiler::hir::lower_program(analysis);
+    let hir = &analysis.hir;
     let (by_name, safepoints, drops, line_info, func_len) =
-        run_codegen(analysis, &hir, &mut module)?;
+        run_codegen(analysis, hir, &mut module)?;
 
     let user_main = *by_name
         .get("main")
         .ok_or_else(|| CodegenError::new(Span::dummy(), "no `main` function to build"))?;
 
-    let main_async = main_is_async(analysis, &hir);
+    let main_async = main_is_async(analysis, hir);
     let pending_tid = 1000 + analysis.program.pending_def.index() as i64;
     emit_native_entry(&mut module, user_main, main_async, pending_tid, &safepoints, &drops)?;
 
@@ -898,7 +898,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     async_ctx: None,
                 };
                 for (i, local) in param_locals.iter().enumerate() {
-                    let ty = fg.cx.analysis.results.local_ty(*local).unwrap();
+                    let ty = fg.cx.analysis.hir.local_ty(*local).unwrap();
                     let ct = fg.cx_clty(ty).expect("param clty");
                     fg.bind_local(*local, ct, param_vals[i]);
                 }
@@ -1065,7 +1065,7 @@ impl<'a, M: Module> Codegen<'a, M> {
         let mut param_cltys = Vec::with_capacity(param_locals.len());
         let mut ptr_offsets = Vec::new();
         for (i, local) in param_locals.iter().enumerate() {
-            let ty = self.analysis.results.local_ty(*local).unwrap_or(self.analysis.tcx.error);
+            let ty = self.analysis.hir.local_ty(*local).unwrap_or(self.analysis.tcx.error);
             let resolved = resolve_shallow(self.analysis, ty, &subst);
             let ct = clty_of(self.analysis, resolved);
             if is_managed_ptr(self.analysis, resolved) {
@@ -1595,7 +1595,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         let var = self.b.declare_var(ct);
         // Managed-pointer locals are GC roots: Cranelift records them in the
         // precise stack map at each safepoint (call).
-        if let Some(ty) = self.cx.analysis.results.local_ty(local) {
+        if let Some(ty) = self.cx.analysis.hir.local_ty(local) {
             let resolved = resolve_shallow(self.cx.analysis, ty, &self.subst);
             if is_managed_ptr(self.cx.analysis, resolved) {
                 self.b.declare_var_needs_stack_map(var);
@@ -1617,7 +1617,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             // across the cell allocation — otherwise a GC stress collect
             // between `lang_alloc` and the store would free the pointee
             // (this bit the closure-tagger GC-stress test).
-            if let Some(ty) = self.cx.analysis.results.local_ty(local) {
+            if let Some(ty) = self.cx.analysis.hir.local_ty(local) {
                 let resolved = resolve_shallow(self.cx.analysis, ty, &self.subst);
                 if is_managed_ptr(self.cx.analysis, resolved) {
                     self.mark_root(init);
@@ -1648,7 +1648,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     /// `ptr_offsets = [0]` so the collector traces it.
     fn alloc_local_cell(&mut self, local: LocalId) -> Value {
         let mut ptr_offsets: Vec<u32> = Vec::new();
-        if let Some(ty) = self.cx.analysis.results.local_ty(local) {
+        if let Some(ty) = self.cx.analysis.hir.local_ty(local) {
             let resolved = resolve_shallow(self.cx.analysis, ty, &self.subst);
             if is_managed_ptr(self.cx.analysis, resolved) {
                 ptr_offsets.push(0);

@@ -68,7 +68,8 @@ Lexer, parser, AST, spans, diagnostics. 205 tests.
       operators (numeric/comparison/logical/bitwise), blocks, `if`/`else`
       (branch-type union), `return`, direct function calls (arity + arg types),
       union & `dynamic` widening assignability. 15 tests.
-- [ ] Records expression types + name resolutions for codegen (`CheckResults`).
+- [x] Records expression types + name resolutions for codegen — now baked onto
+      typed HIR nodes the checker emits (see Phase 2.5; `CheckResults` is gone).
 - [ ] Flow narrowing (`is`/`as`, if/else/match, `&&`/`||`).
 - [ ] `while`/`loop`/`for`, `break`/`continue`, `match` + exhaustiveness.
 - [ ] Structs: construction, field access, methods; interfaces/`extend`;
@@ -84,12 +85,14 @@ Lexer, parser, AST, spans, diagnostics. 205 tests.
 - [ ] Closures + capture analysis; trailing closures; implicit `it`.
 - [ ] Operator → interface desugaring; `ToStr` interpolation.
 
-### Phase 2.5 — Typed HIR (retire span side-tables)  🚧 IN PROGRESS
+### Phase 2.5 — Typed HIR (retire span side-tables)  ✅ DONE
 
 The architecture (README §"The central decision") moves the compiler off the
 implicit, span-keyed `CheckResults` side-tables and onto a **typed, resolved,
 desugared HIR** that the checker produces and codegen + the LSP consume. Done
-incrementally, test-gated, all existing tests green at every step.
+incrementally, test-gated, all existing tests green at every step. **Complete:
+`CheckResults` and the `hir::lower` pass are both deleted — the checker emits
+the full typed `Hir` directly and every consumer reads `analysis.hir`.**
 
 - [x] **Stage 1 — define the complete HIR** (`compiler::hir`). A typed tree
       where every `Expr` carries its `Ty`, every name a `Res`, every call a
@@ -222,9 +225,11 @@ incrementally, test-gated, all existing tests green at every step.
       dispatch had dropped the callee name). 5 new HIR-backed LSP tests
       (go-to-def on a method call, ctor-call resolution, references via the
       folded callee, local hover type, callee function-type hover). 795 total.
-- [~] **Stage 5 — checker emits HIR directly**, deleting `CheckResults` tables
-      one at a time until none remain. **Status:** codegen (Stage 3) and the LSP
-      (Stage 4) no longer read `CheckResults`.
+- [x] **Stage 5 — checker emits HIR directly**, deleting `CheckResults` tables
+      one at a time until none remain. **DONE: the `CheckResults` struct is
+      deleted entirely and the `hir::lower` pass is gone.** The type-checker
+      assembles the complete typed `Hir` itself (`Checker::finish`); codegen and
+      the LSP consume `analysis.hir` exclusively.
   - [x] **`link_libs` retired** (first table deleted) — `@Link(lib="…")` is a
         pure attribute scan with no type inference, so it now derives straight
         from the program via `hir::collect_link_libs` (consumed as
@@ -441,12 +446,50 @@ incrementally, test-gated, all existing tests green at every step.
       - **ALL ~21 span-keyed `CheckResults` side tables are now retired.** The
         only `HashMap<Span, _>` left in `CheckResults` is `node_hir` — the typed
         HIR the checker emits (the bridge itself, not a side table).
-  - [ ] **Def-keyed tables** (`fn_sigs` / `struct_fields` / `extern_sigs` /
-        `iface_impls` / `local_decls` / `local_types`) — not span-keyed. They
-        already mirror HIR data (`lower_program` copies them onto the `Hir`), and
-        drop once `lower_program` is folded into the checker so it assembles the
-        `Hir` (bodies + sigs + structs) outright, retiring `node_hir`/`fn_bodies`
-        as the hand-off too. That collapses the last of the `lower` pass.
+  - [x] **HIR construction is now total; the `lower` construction/fallback path
+        is deleted.** `build_block`/`build_stmt`/`build_pattern`/`build_else`/
+        `build_field_pattern` no longer return `Option` — an expression the
+        checker couldn't build (only in an already-erroring program) degrades to
+        an `Error` node via `hir_child_or_error`. So `check_function` emits a body
+        `Block` for *every* function, and `lower_program` no longer needs its
+        parallel table-driven builder: `lower_block`/`lower_stmt`/`lower_pattern`/
+        `lower_expr`/`lower_field_pattern`/`pat_ty`/`path_def`/`local_at`/
+        `build_span_index` and the `span2def`/`module` plumbing are all removed.
+        `hir::lower` is now just `collect_link_libs` + a thin `lower_program`
+        assembler (copies the def-keyed tables, records `Body.locals` by walking
+        the checker's block) + the literal parsers the checker's build uses. 853
+        tests green, examples JIT + native.
+  - [x] **The checker emits the def-keyed HIR directly; 5 of 6 def-keyed tables
+        retired from `CheckResults`.** The `Checker` owns a `hir: Hir` and writes
+        `hir.structs` / `hir.fn_sigs` / `hir.extern_sigs` / `hir.iface_impls` /
+        `hir.local_decls` as it resolves each definition (and reads them back —
+        `hir_field_index`→`hir.structs`, `implements_dyn`→`hir.iface_impls`).
+        `Analysis` now carries `hir`; `analyze()` finishes it via `lower_program`
+        (which adds link-libs + assembles `Body` blocks from the checker's blocks).
+        The backend reads `analysis.hir.{fn_sigs,structs}`. Those 5 fields are
+        **deleted** from `CheckResults`, which now holds only its transient
+        working state: `local_types`, `node_hir`, `fn_bodies`. 853 tests green,
+        examples JIT + native, 0 warnings.
+  - [x] **Final: `CheckResults` deleted, `hir::lower` deleted, `lower_program`
+        gone.** The 6th def-keyed table `local_types` moved to `Hir::local_types`
+        (a program-wide map; `Hir::local_ty` reads it, the backend's global
+        `local_ty` repointed there). The `node_hir`/`fn_bodies` hand-off became
+        checker-private working fields (`Checker.node_hir` keyed by span,
+        `Checker.fn_bodies` keyed by `DefId`); `Checker::finish` drains them into
+        the emitted `Hir` — adding link-libs (`hir::collect_link_libs`) and
+        assembling each `Body` (params + locals walked out of the block by the
+        relocated `record_block_locals`/`record_node_locals`/`record_pattern_locals`
+        walkers). `analyze_multi` now does `ck.check_program(); ck.finish()` with
+        no separate lowering step. `Analysis` dropped its `results` field; its
+        span-keyed `expr_ty(span)`/`resolution(span)` tooling accessors now scan
+        the `Hir` (`Hir::find_expr`). Every external `lower_program` caller
+        (backend ×4, cli, lsp, pretty/test harnesses) reads `analysis.hir`
+        directly. The `CheckResults` struct and the entire `hir::lower` module
+        (`lower.rs`) are **physically deleted**; `results.rs` keeps only the
+        shared leaf vocabulary (`ValueRes`, `Adjust`, `Builtin`, `TryBranch`,
+        `CloneKind`, `ForIter`, `NumIntrinsic`, …) the HIR nodes carry. All
+        ~854 tests green (0 warnings), every example JIT + native, all four
+        `--emit` modes + DWARF intact.
 - [ ] **Debuggability:** `--emit=tokens|ast|hir|clif` with stable pretty-
       printers; DWARF line tables for built programs.
   - [x] `hir::pretty::print_program` — a stable, deterministic HIR printer
