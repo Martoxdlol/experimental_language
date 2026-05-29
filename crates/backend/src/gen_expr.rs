@@ -72,6 +72,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             .declare_data(&name, Linkage::Local, false, false)
             .expect("declare vtable data");
         let mut desc = DataDescription::new();
+        desc.set_align(8); // slots are 8-byte function pointers
         desc.define(vec![0u8; func_ids.len() * 8].into_boxed_slice());
         for (slot, fid) in func_ids.iter().enumerate() {
             let fref = self.module.declare_func_in_data(*fid, &mut desc);

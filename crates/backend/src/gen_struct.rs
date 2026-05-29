@@ -29,6 +29,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             .declare_data(&name, Linkage::Local, false, false)
             .expect("declare descriptor");
         let mut desc = DataDescription::new();
+        desc.set_align(8); // the runtime reads `size`/`kind`/`type_id`/`n_ptrs` as `u64`
         desc.define(bytes.into_boxed_slice());
         self.module.define_data(data_id, &desc).expect("define descriptor");
         let gv = self.module.declare_data_in_func(data_id, self.b.func);
