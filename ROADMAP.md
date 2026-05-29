@@ -733,13 +733,16 @@ The tracing GC is functionally complete for single-threaded programs.
       object. Enabling collection under concurrency was attempted end-to-end (the
       stop-the-world machinery — cooperative safepoints, park/native states,
       per-thread published roots unioned by the collector — is correct for the
-      `stop_the_world_coordinates_mutator_threads` unit test and **every
-      concurrency e2e case under `OTTER_FUSION_GC=stress`**: threads, channels,
-      `Shared`, the 100-thread storm, spawn snapshots). But a **use-after-free
-      surfaces under *heavy* concurrent allocation** (e.g. each worker building
-      many strings/lists in a loop): a managed object reachable only through a
-      cross-thread root that is not in the union of published roots gets swept,
-      crashing later (control-flow corruption / a `memmove` from freed bytes).
+      `stop_the_world_coordinates_mutator_threads` unit test and **every existing
+      concurrency e2e case under `OTTER_FUSION_GC=stress`** — but those barely
+      exercise *true* concurrent collection: their workers are short-lived and
+      (mostly) non-allocating (`Thread.spawn(() => ident(n))`), so they finish
+      almost immediately and the program is effectively single-mutator whenever a
+      collection actually runs. The **first genuine test — several long-lived
+      workers each allocating heavily in a loop — reveals a use-after-free**: a
+      managed object reachable only through a cross-thread root not in the union
+      of published roots gets swept, crashing later (control-flow corruption / a
+      `memmove` from freed bytes).
       The single-threaded path is unaffected (one stack, scanned at the exact
       alloc point — verified clean under the same heavy load). Initiating
       collection only from clean generated safepoints did **not** close it, so the
