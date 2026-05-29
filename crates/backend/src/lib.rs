@@ -74,6 +74,7 @@ fn register_runtime_symbols(b: &mut JITBuilder) {
     b.symbol("lang_block_on", runtime::async_rt::lang_block_on as *const u8);
     b.symbol("lang_async_yield", runtime::async_rt::lang_async_yield as *const u8);
     b.symbol("lang_async_sleep", runtime::async_rt::lang_async_sleep as *const u8);
+    b.symbol("lang_async_timeout", runtime::async_rt::lang_async_timeout as *const u8);
     b.symbol("lang_async_spawn", runtime::threads::lang_async_spawn as *const u8);
     b.symbol("lang_async_spawn_future", runtime::threads::lang_async_spawn_future as *const u8);
     b.symbol("lang_thread_spawn", runtime::threads::lang_thread_spawn as *const u8);
@@ -105,6 +106,7 @@ fn register_runtime_symbols(b: &mut JITBuilder) {
     b.symbol("lang_list_insert", runtime::lang_list_insert as *const u8);
     b.symbol("lang_list_remove", runtime::lang_list_remove as *const u8);
     b.symbol("lang_list_truncate", runtime::lang_list_truncate as *const u8);
+    b.symbol("lang_list_slice", runtime::lang_list_slice as *const u8);
     b.symbol("lang_map_new", runtime::lang_map_new as *const u8);
     b.symbol("lang_map_set", runtime::lang_map_set as *const u8);
     b.symbol("lang_map_get", runtime::lang_map_get as *const u8);

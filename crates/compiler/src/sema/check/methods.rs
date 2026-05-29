@@ -300,22 +300,43 @@ impl<'a> Checker<'a> {
         if self.tcx.is_error(ity) {
             return None;
         }
-        let (next_async, ext_subst) = self.resolve_method(ity, "next_async")?;
-        let next_targs: Vec<Ty> = match self.prog.def(next_async).parent {
-            Some(p) => self.prog.def(p).generics.clone()
-                .iter()
-                .map(|g| ext_subst.get(g).copied().unwrap_or(self.tcx.error))
-                .collect(),
-            None => Vec::new(),
-        };
-        let (env, _) = self.fn_env(next_async);
-        let Some(ItemKind::Function(f)) = self.prog.def(next_async).item.clone() else {
-            return None;
+        // A bounded type parameter (`T: AsyncIterator<U>`) or an interface object
+        // drives the stream through its `next_async` interface method (resolved
+        // to the concrete impl, or vtable-dispatched, in codegen). Otherwise a
+        // concrete `extend … : AsyncIterator` is resolved directly.
+        let (next_async, fut_ret, next_targs) = if let TyKind::Param(p) = self.tcx.kind(ity).clone() {
+            let (method, iface, iargs) = self.resolve_bound_method(p, "next_async")?;
+            let (_, ret) = self.iface_method_sig(method, iface, &iargs, ity);
+            (method, ret, Vec::new())
+        } else if self.is_interface(ity) {
+            let TyKind::Named { def: iface, args } = self.tcx.kind(ity).clone() else {
+                return None;
+            };
+            let method = (0..self.prog.defs.len() as u32).map(DefId).find(|&d| {
+                let def = self.prog.def(d);
+                def.kind == DefKind::InterfaceMethod && def.parent == Some(iface) && def.name == "next_async"
+            })?;
+            let (_, ret) = self.iface_method_sig(method, iface, &args, ity);
+            (method, ret, Vec::new())
+        } else {
+            let (next_async, ext_subst) = self.resolve_method(ity, "next_async")?;
+            let next_targs: Vec<Ty> = match self.prog.def(next_async).parent {
+                Some(p) => self.prog.def(p).generics.clone()
+                    .iter()
+                    .map(|g| ext_subst.get(g).copied().unwrap_or(self.tcx.error))
+                    .collect(),
+                None => Vec::new(),
+            };
+            let (env, _) = self.fn_env(next_async);
+            let Some(ItemKind::Function(f)) = self.prog.def(next_async).item.clone() else {
+                return None;
+            };
+            let ret = self.lower_ty(f.return_type.as_ref()?, &env);
+            let ret = self.subst_ty(ret, &ext_subst);
+            (next_async, ret, next_targs)
         };
         // The return type is `Future<Item<T> | Done>`; unwrap to `Item<T> | Done`.
-        let ret = self.lower_ty(f.return_type.as_ref()?, &env);
-        let ret = self.subst_ty(ret, &ext_subst);
-        let union_ty = self.future_output(ret)?;
+        let union_ty = self.future_output(fut_ret)?;
         let members = match self.tcx.kind(union_ty).clone() {
             TyKind::Union(ms) => ms,
             _ => vec![union_ty],

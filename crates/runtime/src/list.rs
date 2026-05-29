@@ -96,6 +96,31 @@ pub unsafe extern "C" fn lang_list_clear(h: *mut u8) {
     unsafe { lset(h, L_LEN, 0) };
 }
 
+/// Build a fresh `List<T>` from the half-open slice `[start, end)` of `h`
+/// (clamped to the list's bounds). Used to bind the `..tail` of a list pattern.
+/// Built under a GC pause — the new list is not yet rooted.
+///
+/// # Safety
+/// `h` must be a valid list handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lang_list_slice(h: *mut u8, start: i64, end: i64) -> *mut u8 {
+    let len = unsafe { lfield(h, L_LEN) } as i64;
+    let lo = start.clamp(0, len);
+    let hi = end.clamp(lo, len);
+    let elem_is_ptr = unsafe { lfield(h, L_ELEMPTR) } as i64;
+    gc::pause();
+    let out = unsafe { lang_list_new(elem_is_ptr) };
+    let mut i = lo;
+    while i < hi {
+        let buf = unsafe { lfield(h, L_BUF) } as *const i64;
+        let v = unsafe { buf.add(i as usize).read() };
+        unsafe { lang_list_push(out, v) };
+        i += 1;
+    }
+    gc::resume();
+    out
+}
+
 /// `xs.truncate(n)` (`docs/18`): shorten the list to at most `n` elements
 /// (no-op if `n >= size`; capacity kept). `n < 0` is treated as `0`.
 ///

@@ -163,7 +163,7 @@ keeping <code>std:</code> for everything that needs an OS.</p>
         <rect x="330" width="80" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="370" y="16" text-anchor="middle">core:ffi</text>
       </g>
 
-      <text x="60" y="298" font-size="11" class="small">prelude (auto): str · Iterator · Item/Done · Buffer · numeric helpers · Deque · Bytes</text>
+      <text x="60" y="298" font-size="11" class="small">prelude (no import — syntax desugaring): str · Iterator · Item/Done · Buffer · numeric helpers · Deque · Bytes</text>
       <text x="60" y="316" font-size="11" class="small">collections (explicit): List · Map · Set — opt-in to keep prelude small and the GC-heap surface visible at import sites</text>
       <text x="60" y="334" font-size="11" class="small">Interfaces / value types in their own modules: Reader · Writer · Display · Debug · Error · Duration · Json · Url · HttpRequest · ...</text>
 
@@ -281,15 +281,17 @@ interface + <code>Annotated</code> wrapper, and the numeric helper namespaces. T
     <a href="#error"><code>core:error</code></a>.</li>
 </ul>
 <p>The prelude gains <code>Deque</code> and <code>Bytes</code>. After the move, the
-auto-imported surface contains only language-fundamental shapes (text, iteration, FFI bytes,
-numeric helpers).</p>
+import-free surface (what built-in syntax desugars to) contains only language-fundamental
+shapes (text, iteration, FFI bytes, numeric helpers); see
+<a href="17-modules.html#the-prelude-rule">the prelude rule</a> — these are resolved without
+an import, but naming any of them still requires one.</p>
 
 <div class="callout">
   <strong>Why explicit collections</strong>
   <code>List&lt;T&gt;</code> and <code>Map&lt;K, V&gt;</code> are heap-allocated, GC-managed
   containers. Pulling them out of the prelude makes their use visible at every import site
-  rather than implicit. It also keeps the auto-imported surface minimal: the prelude after
-  this change contains language-fundamental shapes only (text, iteration, FFI bytes, numeric
+  rather than implicit. It also keeps the import-free surface minimal: the prelude after
+  this change holds language-fundamental shapes only (text, iteration, FFI bytes, numeric
   helpers).
 </div>
 
@@ -373,11 +375,21 @@ var c = List&lt;i64&gt;()</code></pre>
 
 <h3 id="map-collections"><code>Map&lt;K, V&gt;</code> where <code>K: Eq + Hash</code></h3>
 
-<p>Hash map. Full definition in <a href="./18-stdlib.html#map">18.4</a>; module location
-moves to <code>core:collections</code>.</p>
+<p>Hash map. Full definition in <a href="./18-stdlib.html#map">18.4</a>; the type lives
+in <code>core:collections</code>.</p>
 
-<pre><code>var m: Map&lt;str, i64&gt; = { "x": 1, "y": 2 }
-var n = Map.new&lt;str, i64&gt;()</code></pre>
+<pre><code>var m: Map&lt;str, i64&gt; = { "x": 1, "y": 2 }   // deterministic core:hash DefaultHasher
+var n = Map.new&lt;str, i64&gt;()
+var k = Map.with_hasher&lt;str, i64&gt;(my_hasher) // opt-in keyed hasher for untrusted keys</code></pre>
+
+<div class="callout warn">
+  <strong>Deterministic default hasher</strong>
+  <code>Map</code>/<code>Set</code> default to a <strong>deterministic</strong> fixed-seed hasher
+  (<a href="#hash"><code>core:hash</code></a>) — fast and freestanding-safe, but <strong>not</strong>
+  HashDoS-resistant. For maps fed <em>untrusted, attacker-chosen keys</em>, supply a keyed hasher
+  via <code>with_hasher</code>. A HashDoS-safe, OS-auto-seeded convenience constructor is planned
+  for when an entropy source exists.
+</div>
 
 <h3 id="set-collections"><code>Set&lt;T&gt;</code> where <code>T: Eq + Hash</code></h3>
 
@@ -595,18 +607,20 @@ pub interface Hash {
   function hash&lt;H: Hasher&gt;(self, h: H): null
 }
 
-// Default hasher. Implementation-defined (SipHash-1-3 or similar). Randomized per-process.
+// Default hasher: deterministic, fixed-seed (SipHash-1-3 or similar). No OS entropy → freestanding-safe.
 pub struct DefaultHasher { ... }
 extend DefaultHasher: Hasher { ... }
 extend DefaultHasher {
-  function new(): DefaultHasher
+  function new(): DefaultHasher            // fixed, deterministic seed
 }
 
-// Deterministic / fast / cryptographic variants are pkg:-tier.</code></pre>
+// A HashDoS-safe keyed hasher is opt-in: supply your own seed via Map.with_hasher.
+// An OS-auto-seeded convenience version is planned. Fast / cryptographic variants are pkg:-tier.</code></pre>
 
 <p>The shape of <code>Hash</code> changes slightly from §15: it now writes <em>into</em> a
-hasher rather than returning <code>u64</code> directly. <code>Map</code> and <code>Set</code>
-construct a <code>DefaultHasher</code> internally.</p>
+hasher rather than returning <code>u64</code> directly. <code>Map</code>/<code>Set</code> default
+to this deterministic <code>DefaultHasher</code>; for untrusted keys, pass a keyed hasher via
+<code>with_hasher</code> (a HashDoS-safe, OS-auto-seeded constructor is planned).</p>
 
 <!-- =========================================================== -->
 <h2 id="async-core">11. <code>core:async</code> — shapes only <span class="pill planned">planned</span></h2>
@@ -1096,7 +1110,7 @@ pub function info_with(message: str, fields: Map&lt;str, str&gt;): null
     <tr><td><code>core:prelude</code></td><td>core</td><td></td>
         <td><code>str</code>, <code>Iterator</code>, <code>Item</code>/<code>Done</code>, <code>Buffer</code>, <code>Deque</code>, <code>Bytes</code>, numeric helpers</td></tr>
     <tr><td><code>core:collections</code></td><td>core</td><td></td>
-        <td><code>List</code>, <code>Map</code>, <code>Set</code> — explicit import</td></tr>
+        <td><code>List</code>, <code>Map</code>, <code>Set</code> — explicit import; deterministic default hasher, keyed hasher opt-in</td></tr>
     <tr><td><code>core:ffi</code></td><td>core</td><td><span class="pill spec">spec</span></td>
         <td>Pinning, C-width aliases, <code>Foreign</code> allocator</td></tr>
     <tr><td><code>core:io</code></td><td>core</td><td></td>
@@ -1108,7 +1122,7 @@ pub function info_with(message: str, fields: Map&lt;str, str&gt;): null
     <tr><td><code>core:time</code></td><td>core</td><td></td>
         <td><code>Duration</code> only (no clock)</td></tr>
     <tr><td><code>core:hash</code></td><td>core</td><td></td>
-        <td><code>Hasher</code>, <code>Hash</code>, <code>DefaultHasher</code></td></tr>
+        <td><code>Hasher</code>, <code>Hash</code>, deterministic <code>DefaultHasher</code> (keyed hasher opt-in)</td></tr>
     <tr><td><code>core:async</code></td><td>core</td><td><span class="pill spec">spec (re-export)</span></td>
         <td><code>Future</code>, <code>Ready</code>, <code>Pending</code>, <code>Context</code>, <code>AsyncIterator</code></td></tr>
     <tr><td><code>core:json</code></td><td>core</td><td></td>

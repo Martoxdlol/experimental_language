@@ -236,9 +236,44 @@ impl<'a> Checker<'a> {
                     self.bind_pattern(p, self.tcx.error);
                 }
             }
+            // `Pair(a, b)` — tuple-struct destructuring. Field types come from
+            // the matched type's `def`/args (positional, trailing `..` skips the
+            // rest).
+            PatternKind::TupleStruct { fields, .. } => {
+                if let TyKind::Named { def, args } = self.tcx.kind(ty).clone() {
+                    if let Some(fts) = self.tuple_fields(def, &args) {
+                        for (i, p) in fields.iter().enumerate() {
+                            self.bind_pattern(p, fts.get(i).copied().unwrap_or(self.tcx.error));
+                        }
+                        return;
+                    }
+                }
+                for p in fields {
+                    self.bind_pattern(p, self.tcx.error);
+                }
+            }
+            // `Point { x, y }` / `Point { x: a, .. }` — record destructuring.
+            PatternKind::RecordStruct { fields, .. } => {
+                let rfs = match self.tcx.kind(ty).clone() {
+                    TyKind::Named { def, args } => self.record_fields(def, &args),
+                    _ => None,
+                };
+                for fp in fields {
+                    let fty = rfs
+                        .as_ref()
+                        .and_then(|fs| fs.iter().find(|(n, _)| *n == fp.name.name))
+                        .map(|(_, t)| *t)
+                        .unwrap_or(self.tcx.error);
+                    match &fp.pattern {
+                        Some(sub) => self.bind_pattern(sub, fty),
+                        None => {
+                            self.bind(&fp.name.name, fp.name.span, fty);
+                        }
+                    }
+                }
+            }
             _ => {
-                // Other irrefutable patterns (record destructuring, etc.)
-                // land with struct support.
+                // Remaining irrefutable patterns (list destructuring, etc.).
                 self.emit(pattern.span, SemaErrorKind::Message(
                     "this binding pattern is not yet supported".into(),
                 ));

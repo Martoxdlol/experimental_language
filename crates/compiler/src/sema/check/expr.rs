@@ -668,6 +668,26 @@ impl<'a> Checker<'a> {
                     "channel" => return intrinsic(Intrinsic::ChannelNew, &[]),
                     "yield_now" => return intrinsic(Intrinsic::YieldNow, &[]),
                     "sleep" => return intrinsic(Intrinsic::AsyncSleep, head1),
+                    "timeout" => {
+                        // `output` = the awaited future's `T` (read-only: the
+                        // first arg is a `Future<T>`).
+                        let out = all
+                            .first()
+                            .and_then(|a| self.expr_ty(a.span))
+                            .and_then(|t| match self.tcx.kind(t) {
+                                TyKind::Named { def, args }
+                                    if *def == self.prog.future_def && args.len() == 1 =>
+                                {
+                                    Some(args[0])
+                                }
+                                _ => None,
+                            })
+                            .unwrap_or(self.tcx.error);
+                        return intrinsic(
+                            Intrinsic::AsyncTimeout { output: out },
+                            &all[..2.min(all.len())],
+                        );
+                    }
                     _ => {}
                 }
             }
@@ -1656,6 +1676,33 @@ impl<'a> Checker<'a> {
                     self.expect(a, i64t, args[0].span);
                 }
                 return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.null]);
+            }
+            // `timeout(fut, ms): Future<T | TimedOut>` (`docs/21` §9): race a
+            // future against a deadline.
+            if name.name == "timeout"
+                && self.lookup("timeout").is_none()
+                && self.prog.resolve_value_in(self.current_module(), "timeout").is_none()
+            {
+                if args.len() != 2 {
+                    self.emit(span, SemaErrorKind::ArgCount { expected: 2, found: args.len() });
+                    return self.tcx.error;
+                }
+                let ft = self.check_expr(&args[0], None);
+                let i64t = self.tcx.int(IntTy::I64);
+                let m = self.check_expr(&args[1], Some(i64t));
+                self.expect(m, i64t, args[1].span);
+                let Some(out) = self.future_output(ft) else {
+                    if !self.tcx.is_error(ft) {
+                        self.emit(args[0].span, SemaErrorKind::Message(format!(
+                            "`timeout` expects a future as its first argument, found `{}`",
+                            self.display(ft)
+                        )));
+                    }
+                    return self.tcx.error;
+                };
+                let timedout = self.tcx.mk_named(self.prog.timed_out_def, vec![]);
+                let union = self.tcx.mk_union([out, timedout]);
+                return self.tcx.mk_named(self.prog.future_def, vec![union]);
             }
         }
         // `Shared.new(value)` (`docs/20` §4): construct a mutex-protected cell.

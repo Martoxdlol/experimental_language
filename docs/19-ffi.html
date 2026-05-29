@@ -81,7 +81,7 @@
     <li><a href="#handles">Handles — long-lived foreign rooting</a></li>
     <li><a href="#runtime">Runtime semantics — safepoints &amp; trampolines</a></li>
     <li><a href="#manifest">Linkage &amp; the manifest</a></li>
-    <li><a href="#tools">Tooling — <code>lang ffi</code></a></li>
+    <li><a href="#tools">Tooling — <code>otter_fusion ffi</code></a></li>
     <li><a href="#restr">Restrictions on extern signatures</a></li>
     <li><a href="#summary">Summary</a></li>
   </ol>
@@ -726,15 +726,15 @@ exports = [
 ]</code></pre>
 
 <!-- =========================================================== -->
-<h2 id="tools">14. Tooling — <code>lang ffi</code></h2>
+<h2 id="tools">14. Tooling — <code>otter_fusion ffi</code></h2>
 
 <table>
   <thead><tr><th>Command</th><th>Purpose</th></tr></thead>
   <tbody>
-    <tr><td><code>lang ffi bindgen &lt;header&gt;</code></td><td>Generate extern declarations from a C header (libclang).</td></tr>
-    <tr><td><code>lang ffi cbindgen</code></td><td>Emit a C header for <code>pub extern</code> items. Round-trips with bindgen.</td></tr>
-    <tr><td><code>lang ffi check</code></td><td>Verify extern signatures still match a named C header. CI gate.</td></tr>
-    <tr><td><code>lang ffi layout</code></td><td>Print size/alignment/field offsets for extern structs.</td></tr>
+    <tr><td><code>otter_fusion ffi bindgen &lt;header&gt;</code></td><td>Generate extern declarations from a C header (libclang).</td></tr>
+    <tr><td><code>otter_fusion ffi cbindgen</code></td><td>Emit a C header for <code>pub extern</code> items. Round-trips with bindgen.</td></tr>
+    <tr><td><code>otter_fusion ffi check</code></td><td>Verify extern signatures still match a named C header. CI gate.</td></tr>
+    <tr><td><code>otter_fusion ffi layout</code></td><td>Print size/alignment/field offsets for extern structs.</td></tr>
   </tbody>
 </table>
 
@@ -782,7 +782,7 @@ exports = [
     <li><strong>Handles</strong> — <code>Handle&lt;T&gt;</code> for long-lived foreign-stored references; movement-friendly alternative to pinning; <code>.release()</code> explicitly.</li>
     <li><strong>Runtime</strong> — every extern boundary is a safepoint with precise stack maps; exports get entry trampolines; <code>@Reentrant</code> for foreign threads; <code>@OnPanic</code> for export panic policy.</li>
     <li><strong>Auto-materialization</strong> — <code>str</code> → <code>*const c_char</code> at call sites becomes a stack temporary, no foreign alloc.</li>
-    <li><strong>Tooling</strong> — <code>lang ffi bindgen</code>/<code>cbindgen</code>/<code>check</code>/<code>layout</code>.</li>
+    <li><strong>Tooling</strong> — <code>otter_fusion ffi bindgen</code>/<code>cbindgen</code>/<code>check</code>/<code>layout</code>.</li>
   </ul>
 </div>
 

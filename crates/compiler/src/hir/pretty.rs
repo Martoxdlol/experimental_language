@@ -444,6 +444,7 @@ fn intrinsic_str(i: &Intrinsic) -> &'static str {
         Intrinsic::ThreadJoin { .. } => "thread-join",
         Intrinsic::YieldNow => "yield-now",
         Intrinsic::AsyncSleep => "async-sleep",
+        Intrinsic::AsyncTimeout { .. } => "async-timeout",
         Intrinsic::FutureCancel => "future-cancel",
         Intrinsic::ForeignAlloc { .. } => "foreign-alloc",
         Intrinsic::ForeignFree => "foreign-free",

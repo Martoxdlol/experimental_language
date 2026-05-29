@@ -74,7 +74,7 @@
 <h1>25. Language Server (LSP)</h1>
 <p class="lead">
   <code>lang-lsp</code> — the editor brain. A standalone server that speaks the
-  Language Server Protocol over stdio and reuses <code>liblangc</code>
+  Language Server Protocol over stdio and reuses <code>libotterc</code>
   (<code>crates/compiler</code>) so the IDE sees <em>exactly</em> what the
   compiler sees. Ships with a VS Code extension in <code>editors/vscode</code>.
 </p>
@@ -132,7 +132,7 @@
 
       <!-- compiler -->
       <rect x="700" y="14" width="180" height="120" rx="8" fill="#f3eefa" stroke="#6b4ba8" stroke-width="2"/>
-      <text x="790" y="36" text-anchor="middle" class="label" font-weight="700" fill="#6b4ba8">liblangc</text>
+      <text x="790" y="36" text-anchor="middle" class="label" font-weight="700" fill="#6b4ba8">libotterc</text>
       <text x="790" y="58" text-anchor="middle" class="small">lex · parse</text>
       <text x="790" y="76" text-anchor="middle" class="small">collect · resolve</text>
       <text x="790" y="94" text-anchor="middle" class="small">type check</text>
@@ -151,7 +151,7 @@
 <div class="callout good">
   <strong>One source of truth</strong>
   Diagnostics in the editor are the identical lexer / parser / type-checker
-  errors <code>lang check</code> reports. There is no second, drifting analysis.
+  errors <code>otter_fusion check</code> reports. There is no second, drifting analysis.
 </div>
 
 <!-- =========================================================== -->
@@ -289,7 +289,7 @@ Property <span style="opacity:0.45">· Keyword · Number · String · Comment ·
   <code>vscode-languageclient</code>:</p>
 
 <ul>
-  <li>Registers the <code>lang</code> language for <code>.otter</code> files with
+  <li>Registers the <code>otter_fusion</code> language for <code>.otter</code> files with
     a TextMate grammar and bracket/comment/indentation rules.</li>
   <li>Launches <code>lang-lsp</code> over stdio (path configurable via
     <code>lang.server.path</code>; LSP tracing via <code>lang.trace.server</code>).</li>
@@ -324,7 +324,7 @@ Property <span style="opacity:0.45">· Keyword · Number · String · Comment ·
     <tr><td>Single-file diagnostics, hover, goto, references, rename, symbols, completion (with dot context), semantic tokens, signature help, document highlights</td><td><span class="status done">done</span></td></tr>
     <tr><td>Multi-file workspaces (cross-module goto/diagnostics with unsaved-buffer overlay)</td><td><span class="status todo">next</span></td></tr>
     <tr><td>Type-position go-to-definition (the checker records value-position resolutions today)</td><td><span class="status todo">next</span></td></tr>
-    <tr><td>Code actions / quick-fixes, formatting (<code>lang fmt</code>), inlay hints, folding ranges</td><td><span class="status todo">next</span></td></tr>
+    <tr><td>Code actions / quick-fixes, formatting (<code>otter_fusion fmt</code>), inlay hints, folding ranges</td><td><span class="status todo">next</span></td></tr>
     <tr><td>Incremental sync &amp; cached analysis for very large files</td><td><span class="status todo">next</span></td></tr>
   </tbody>
 </table>
@@ -332,7 +332,7 @@ Property <span style="opacity:0.45">· Keyword · Number · String · Comment ·
 <div class="callout">
   <strong>See also</strong>
   Chapter <a href="23-cli.html">23 · CLI &amp; toolchain</a> for the driver this
-  shares <code>liblangc</code> with, and <code>crates/lsp</code> /
+  shares <code>libotterc</code> with, and <code>crates/lsp</code> /
   <code>editors/vscode</code> in the tree.
 </div>
 

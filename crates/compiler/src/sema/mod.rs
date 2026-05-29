@@ -14,7 +14,9 @@
 //! All phases hang off a single [`symbols::Program`] that owns the parsed
 //! modules and the growing side tables keyed by `DefId`.
 
+pub mod anf;
 pub mod check;
+pub mod defaults;
 pub mod derive;
 pub mod diag;
 pub mod lower;
@@ -72,11 +74,19 @@ pub fn analyze_multi(root: &Module, externals: &symbols::Externals) -> Analysis 
     // on the root and every loaded submodule.
     let mut root = root.clone();
     derive::expand_derives(&mut root);
+    // Copy interface default-method bodies into implementing `extend` blocks
+    // (`docs/10`) before collection.
+    defaults::expand_default_methods(&mut root);
+    // Hoist nested `await`s into statement-level `var` bindings so the async
+    // state machine can suspend at every surviving `await` (`docs/21`).
+    anf::hoist_awaits(&mut root);
     let externals: symbols::Externals = externals
         .iter()
         .map(|(path, m)| {
             let mut m = m.clone();
             derive::expand_derives(&mut m);
+            defaults::expand_default_methods(&mut m);
+            anf::hoist_awaits(&mut m);
             (path.clone(), m)
         })
         .collect();

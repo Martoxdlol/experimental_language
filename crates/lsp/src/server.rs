@@ -50,9 +50,32 @@ impl Backend {
         Backend { client, documents: DashMap::new() }
     }
 
-    /// Compile a document's current text, if it is open.
+    /// Compile a document's current text, if it is open. When the document has
+    /// a filesystem path, its file-backed submodules are loaded too (preferring
+    /// open editor buffers over disk) so cross-module imports resolve.
     fn compile(&self, uri: &Url) -> Option<Compiled> {
         let text = self.documents.get(uri)?.clone();
+        if let Ok(path) = uri.to_file_path() {
+            if let (Some(parent), Some(stem)) =
+                (path.parent(), path.file_stem().and_then(|s| s.to_str()))
+            {
+                let docs = &self.documents;
+                let read = |p: &std::path::Path| -> Option<String> {
+                    if let Ok(u) = Url::from_file_path(p) {
+                        if let Some(t) = docs.get(&u) {
+                            return Some(t.clone());
+                        }
+                    }
+                    std::fs::read_to_string(p).ok()
+                };
+                return Some(Compiled::new_multi(
+                    text,
+                    parent.to_path_buf(),
+                    stem.to_string(),
+                    &read,
+                ));
+            }
+        }
         Some(Compiled::new(text))
     }
 
@@ -242,7 +265,21 @@ impl LanguageServer for Backend {
         let Some(def_span) = c.definition_span(res) else {
             return Ok(None);
         };
-        let loc = Location { uri, range: span_to_range(&c.text, def_span) };
+        // The definition may live in another file (a loaded submodule). Map its
+        // span's `FileId` back to that file's URI + text; a virtual file (the
+        // prelude or synthesised code, beyond the real file count) has no editor
+        // location.
+        let loc = if def_span.file == DOC_FILE {
+            Location { uri, range: span_to_range(&c.text, def_span) }
+        } else if (def_span.file.0 as usize) < c.map.file_count() {
+            let sf = c.map.file(def_span.file);
+            match Url::from_file_path(&sf.name) {
+                Ok(u) => Location { uri: u, range: span_to_range(&sf.src, def_span) },
+                Err(()) => return Ok(None),
+            }
+        } else {
+            return Ok(None);
+        };
         Ok(Some(GotoDefinitionResponse::Scalar(loc)))
     }
 

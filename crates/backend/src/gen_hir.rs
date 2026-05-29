@@ -82,7 +82,50 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 }
                 Ok(())
             }
+            // Irrefutable tuple-struct destructuring `Pair(a, b)`: load each
+            // field (positionally) from the struct's layout and bind it.
+            hir::PatternKind::TupleStruct { fields, .. } => {
+                let ptr = val
+                    .ok_or_else(|| CodegenError::new(pattern.span, "destructured value has no pointer"))?;
+                let layout = self
+                    .layout_for_ty(ty)
+                    .ok_or_else(|| CodegenError::new(pattern.span, "struct pattern on non-aggregate"))?;
+                for (i, sub) in fields.iter().enumerate() {
+                    let fv = self.h_load_field(ptr, &layout, i);
+                    let fty = layout.tys.get(i).copied().unwrap_or(self.cx.analysis.tcx.error);
+                    self.h_bind_pattern(sub, fv, fty)?;
+                }
+                Ok(())
+            }
+            // Irrefutable record destructuring `Point { x, y }` / `{ x: a, .. }`:
+            // each field carries its index into the struct layout.
+            hir::PatternKind::RecordStruct { fields, .. } => {
+                let ptr = val
+                    .ok_or_else(|| CodegenError::new(pattern.span, "destructured value has no pointer"))?;
+                let layout = self
+                    .layout_for_ty(ty)
+                    .ok_or_else(|| CodegenError::new(pattern.span, "struct pattern on non-aggregate"))?;
+                for fp in fields {
+                    let i = fp.index as usize;
+                    let fv = self.h_load_field(ptr, &layout, i);
+                    let fty = layout.tys.get(i).copied().unwrap_or(self.cx.analysis.tcx.error);
+                    self.h_bind_pattern(&fp.pattern, fv, fty)?;
+                }
+                Ok(())
+            }
             _ => Err(CodegenError::new(pattern.span, "HIR codegen: pattern not yet supported")),
+        }
+    }
+
+    /// Load field `i` of an aggregate at `ptr` per `layout`, or `None` for a
+    /// zero-sized (no-clty) field.
+    fn h_load_field(&mut self, ptr: Value, layout: &Layout, i: usize) -> Option<Value> {
+        match layout.cltys.get(i) {
+            Some(Some(ct)) => {
+                let v = self.b.ins().load(*ct, MemFlags::trusted(), ptr, layout.offsets[i] as i32);
+                Some(v)
+            }
+            _ => None,
         }
     }
 
@@ -1343,8 +1386,59 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                     _ => Ok(self.b.ins().icmp(IntCC::Equal, scrut, lit)),
                 }
             }
-            _ => Err(CodegenError::new(pattern.span, "HIR codegen: pattern not yet supported in match")),
+            // `A | B | C` — match if any alternative matches.
+            P::Or(alts) => {
+                let mut acc = self.b.ins().iconst(types::I8, 0);
+                for alt in alts {
+                    let m = self.h_pattern_matches(alt, sty, scrut, tag)?;
+                    acc = self.b.ins().bor(acc, m);
+                }
+                Ok(acc)
+            }
+            // `[a, b]` / `[head, ..tail]` — a length test on the list.
+            P::List { elems, rest } => {
+                let lv = scrut
+                    .ok_or_else(|| CodegenError::new(pattern.span, "list scrutinee has no value"))?;
+                let n = self
+                    .call_intrinsic("lang_list_size", &[PTR], Some(types::I64), &[lv])
+                    .expect("list size");
+                let fixed = self.b.ins().iconst(types::I64, elems.len() as i64);
+                let cc = if rest.is_some() {
+                    IntCC::SignedGreaterThanOrEqual // `[a, ..t]` needs at least the fixed count
+                } else {
+                    IntCC::Equal
+                };
+                Ok(self.b.ins().icmp(cc, n, fixed))
+            }
+            // A struct variant pattern: in a union the box tag is checked
+            // against the struct's type id; for a concrete scrutinee it is known.
+            P::TupleStruct { def, .. } | P::RecordStruct { def, .. } => {
+                let vt = self.struct_variant_ty(sty, *def);
+                match tag {
+                    Some(tag) => Ok(self.tag_in_target(tag, vt)),
+                    None => {
+                        let yes = sty == vt;
+                        Ok(self.b.ins().iconst(types::I8, i64::from(yes)))
+                    }
+                }
+            }
         }
+    }
+
+    /// The matched variant type of a struct pattern given the scrutinee `sty`:
+    /// the union member with `def` (carrying concrete args), else the bare type.
+    fn struct_variant_ty(&self, sty: Ty, def: DefId) -> Ty {
+        for v in self.cx.analysis.tcx.variants(sty) {
+            if let TyKind::Named { def: vd, .. } = self.cx.analysis.tcx.kind(v) {
+                if *vd == def {
+                    return v;
+                }
+            }
+        }
+        // The checker validated that `def` is `sty` or one of its variants, so
+        // a concrete scrutinee is already the struct type itself.
+        let _ = def;
+        sty
     }
 
     fn h_bind_match_pattern(&mut self, pattern: &hir::Pattern, sty: Ty, scrut: Option<Value>, _tag: Option<Value>)
@@ -1400,6 +1494,77 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                     self.h_bind_match_pattern(sub, elem_tys[i], elem_val, None)?;
                 }
                 Ok(())
+            }
+            // Or-patterns bind nothing (the checker rejects binding alternatives).
+            P::Or(_) => Ok(()),
+            // `[a, b]` / `[head, ..tail]`: bind the leading/trailing elements and
+            // the `..rest` as a fresh sub-list.
+            P::List { elems, rest } => {
+                let lv = scrut
+                    .ok_or_else(|| CodegenError::new(pattern.span, "list scrutinee has no value"))?;
+                let elem = self
+                    .list_elem_of(sty)
+                    .ok_or_else(|| CodegenError::new(pattern.span, "list pattern on non-list"))?;
+                let load_at = |this: &mut Self, idx: Value| -> CgResult<Option<Value>> {
+                    let raw = this
+                        .call_intrinsic("lang_list_get", &[PTR, types::I64], Some(types::I64), &[lv, idx])
+                        .expect("list get");
+                    this.i64_to_elem(raw, elem, pattern.span)
+                };
+                match rest {
+                    None => {
+                        for (i, sub) in elems.iter().enumerate() {
+                            let idx = self.b.ins().iconst(types::I64, i as i64);
+                            let v = load_at(self, idx)?;
+                            self.h_bind_pattern(sub, v, elem)?;
+                        }
+                    }
+                    Some((rp, r)) => {
+                        let rp = *rp;
+                        let trailing = elems.len() - rp;
+                        let n = self
+                            .call_intrinsic("lang_list_size", &[PTR], Some(types::I64), &[lv])
+                            .expect("list size");
+                        // Leading fixed elements at 0..rp.
+                        for (i, sub) in elems.iter().take(rp).enumerate() {
+                            let idx = self.b.ins().iconst(types::I64, i as i64);
+                            let v = load_at(self, idx)?;
+                            self.h_bind_pattern(sub, v, elem)?;
+                        }
+                        // Trailing fixed elements at n - trailing + j.
+                        let base = self.b.ins().iadd_imm(n, -(trailing as i64));
+                        for (j, sub) in elems.iter().skip(rp).enumerate() {
+                            let idx = self.b.ins().iadd_imm(base, j as i64);
+                            let v = load_at(self, idx)?;
+                            self.h_bind_pattern(sub, v, elem)?;
+                        }
+                        // `..rest` binds the middle slice [rp, n - trailing).
+                        if let Some(local) = r.bind {
+                            let start = self.b.ins().iconst(types::I64, rp as i64);
+                            let end = self.b.ins().iadd_imm(n, -(trailing as i64));
+                            let sub = self
+                                .call_intrinsic("lang_list_slice", &[PTR, types::I64, types::I64], Some(PTR), &[lv, start, end])
+                                .expect("list slice");
+                            self.bind_local(local, PTR, sub);
+                        }
+                    }
+                }
+                Ok(())
+            }
+            // Struct variant binding: unbox the payload pointer (load `[8]` from
+            // a union box, else use the scrutinee directly) and bind the fields
+            // through the irrefutable struct-destructuring path.
+            P::TupleStruct { def, .. } | P::RecordStruct { def, .. } => {
+                let vt = self.struct_variant_ty(sty, *def);
+                let payload = if matches!(
+                    self.cx.analysis.tcx.kind(sty),
+                    TyKind::Union(_) | TyKind::Dynamic
+                ) {
+                    scrut.map(|p| self.b.ins().load(PTR, MemFlags::trusted(), p, 8))
+                } else {
+                    scrut
+                };
+                self.h_bind_pattern(pattern, payload, vt)
             }
             _ => Err(CodegenError::new(pattern.span, "HIR codegen: pattern not yet supported in match")),
         }
@@ -1510,14 +1675,31 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         let iter_val = self
             .h_expr(iter)?
             .ok_or_else(|| CodegenError::new(iter.span, "stream has no value"))?;
-        let next_targs: Vec<Ty> = info
-            .next_targs
-            .iter()
-            .map(|t| resolve_shallow(self.cx.analysis, *t, &self.subst))
-            .collect();
-        let fut = self
-            .emit_call(info.next_async, next_targs, &[iter_val], iter.span)?
-            .ok_or_else(|| CodegenError::new(iter.span, "`next_async` returned no value"))?;
+        // Resolve `next_async`: an interface-object stream dispatches through the
+        // vtable; a concrete `extend … : AsyncIterator` resolves to the impl
+        // (mirrors the synchronous `h_for_iterator`).
+        let fut = if self.cx.analysis.program.def(info.next_async).kind == DefKind::InterfaceMethod {
+            let recv = resolve_shallow(self.cx.analysis, info.iter_ty, &self.subst);
+            if self.is_interface_ty(recv) {
+                let slot = self
+                    .vtable_slot(info.next_async)
+                    .ok_or_else(|| CodegenError::new(iter.span, "`next_async` not in interface"))?;
+                self.emit_vtable_call(slot, iter_val, &[], Some(PTR))?
+            } else {
+                let (target, targs) = self
+                    .resolve_iface_method(info.next_async, recv)
+                    .ok_or_else(|| CodegenError::new(iter.span, "cannot resolve `next_async`"))?;
+                self.emit_call(target, targs, &[iter_val], iter.span)?
+            }
+        } else {
+            let next_targs: Vec<Ty> = info
+                .next_targs
+                .iter()
+                .map(|t| resolve_shallow(self.cx.analysis, *t, &self.subst))
+                .collect();
+            self.emit_call(info.next_async, next_targs, &[iter_val], iter.span)?
+        }
+        .ok_or_else(|| CodegenError::new(iter.span, "`next_async` returned no value"))?;
         let u = self
             .emit_await_suspend(fut, iter.span, info.union_ty)?
             .ok_or_else(|| CodegenError::new(iter.span, "awaited `next_async` has no value"))?;
@@ -2148,6 +2330,32 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                     &[types::I64, types::I64, types::I64],
                     Some(PTR),
                     &[ms, rt, pt],
+                ))
+            }
+            hir::Intrinsic::AsyncTimeout { output } => {
+                let fut = self
+                    .h_expr(&args[0])?
+                    .ok_or_else(|| CodegenError::new(args[0].span, "timeout future has no value"))?;
+                self.mark_root(fut);
+                let ms = self
+                    .h_expr(&args[1])?
+                    .ok_or_else(|| CodegenError::new(args[1].span, "timeout duration has no value"))?;
+                let out = resolve_shallow(self.cx.analysis, *output, &self.subst);
+                let t_id = self.type_id_of(out);
+                let t_is_ptr = i64::from(is_managed_ptr(self.cx.analysis, out));
+                let timedout_tid = 1000 + self.cx.analysis.program.timed_out_def.index() as i64;
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let t_id = self.b.ins().iconst(types::I64, t_id);
+                let tp = self.b.ins().iconst(types::I64, t_is_ptr);
+                let to = self.b.ins().iconst(types::I64, timedout_tid);
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                Ok(self.call_intrinsic(
+                    "lang_async_timeout",
+                    &[PTR, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64],
+                    Some(PTR),
+                    &[fut, ms, t_id, tp, to, rt, pt],
                 ))
             }
             hir::Intrinsic::FutureCancel => {

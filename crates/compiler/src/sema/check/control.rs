@@ -336,10 +336,144 @@ impl<'a> Checker<'a> {
                     "tuple pattern does not match the scrutinee shape".into(),
                 ));
             }
+            // `Rect(w, h)` — a tuple-struct variant pattern. Resolve the matched
+            // variant type (a union member with this struct's `def`, else the
+            // struct itself) and bind the positional field sub-patterns.
+            PatternKind::TupleStruct { path, fields, .. } => {
+                let vt = self.struct_pattern_ty(path, sty);
+                if let TyKind::Named { def, args } = self.tcx.kind(vt).clone() {
+                    if let Some(fts) = self.tuple_fields(def, &args) {
+                        for (i, p) in fields.iter().enumerate() {
+                            self.check_pattern(p, fts.get(i).copied().unwrap_or(self.tcx.error));
+                        }
+                        return;
+                    }
+                }
+                for p in fields {
+                    self.check_pattern(p, self.tcx.error);
+                }
+            }
+            // `Circle { radius }` — a record-struct variant pattern.
+            PatternKind::RecordStruct { path, fields, .. } => {
+                let vt = self.struct_pattern_ty(path, sty);
+                let rfs = match self.tcx.kind(vt).clone() {
+                    TyKind::Named { def, args } => self.record_fields(def, &args),
+                    _ => None,
+                };
+                for fp in fields {
+                    let fty = rfs
+                        .as_ref()
+                        .and_then(|fs| fs.iter().find(|(n, _)| *n == fp.name.name))
+                        .map(|(_, t)| *t)
+                        .unwrap_or(self.tcx.error);
+                    match &fp.pattern {
+                        Some(sub) => self.check_pattern(sub, fty),
+                        None => {
+                            self.bind(&fp.name.name, fp.name.span, fty);
+                        }
+                    }
+                }
+            }
+            // `A | B | C` — an or-pattern matches if any alternative does. The
+            // alternatives must not bind variables (codegen can't know which one
+            // matched), so each is restricted to a non-binding pattern.
+            PatternKind::Or(alts) => {
+                for alt in alts {
+                    if self.pattern_binds(alt) {
+                        self.emit(alt.span, SemaErrorKind::Message(
+                            "an alternative in an `|` or-pattern may not bind variables".into(),
+                        ));
+                    }
+                    self.check_pattern(alt, sty);
+                }
+            }
+            // `[a, b]` / `[head, ..tail]` — list patterns (refutable: a length
+            // test). Bind the fixed elements (and the rest as a `List<T>`).
+            PatternKind::List { elems, rest } => {
+                let elem = self.list_elem(sty).unwrap_or_else(|| {
+                    if !self.tcx.is_error(sty) {
+                        self.emit(pattern.span, SemaErrorKind::Message(format!(
+                            "list pattern on non-list type `{}`", self.display(sty)
+                        )));
+                    }
+                    self.tcx.error
+                });
+                for p in elems {
+                    self.check_pattern(p, elem);
+                }
+                if let Some((_, r)) = rest {
+                    if let Some(name) = &r.name {
+                        let list_ty = self.mk_list(elem);
+                        self.bind(&name.name, name.span, list_ty);
+                    }
+                }
+            }
             _ => self.emit(pattern.span, SemaErrorKind::Message(
                 "this pattern is not yet supported".into(),
             )),
         }
+    }
+
+    /// Accumulate the union-variant types a pattern covers (for exhaustiveness),
+    /// flattening or-patterns and recognizing the `null` literal.
+    fn collect_covered(&mut self, pattern: &Pattern, covered: &mut Vec<Ty>) {
+        match &pattern.kind {
+            PatternKind::Or(alts) => {
+                for alt in alts {
+                    self.collect_covered(alt, covered);
+                }
+            }
+            PatternKind::Literal(e) if matches!(e.kind, ExprKind::Null) => {
+                covered.push(self.tcx.null);
+            }
+            _ => {
+                if let Some(t) = self.pattern_test_ty(pattern) {
+                    covered.push(t);
+                }
+            }
+        }
+    }
+
+    /// Whether `pattern` binds any variable (used to reject binding alternatives
+    /// inside an or-pattern, where codegen can't tell which alternative matched).
+    pub(crate) fn pattern_binds(&self, pattern: &Pattern) -> bool {
+        match &pattern.kind {
+            PatternKind::Binding(_) => true,
+            PatternKind::TypeBinding { binding, .. } => binding.is_some(),
+            PatternKind::Wildcard | PatternKind::Literal(_) | PatternKind::UnitPath(_) => false,
+            PatternKind::Tuple { elems, .. } | PatternKind::List { elems, .. } => {
+                elems.iter().any(|p| self.pattern_binds(p))
+            }
+            PatternKind::TupleStruct { fields, .. } => fields.iter().any(|p| self.pattern_binds(p)),
+            PatternKind::RecordStruct { fields, .. } => fields
+                .iter()
+                .any(|fp| fp.pattern.as_ref().map_or(true, |p| self.pattern_binds(p))),
+            PatternKind::Or(alts) => alts.iter().any(|p| self.pattern_binds(p)),
+        }
+    }
+
+    /// The matched variant type of a struct pattern (`Path(..)` / `Path { .. }`)
+    /// given the scrutinee type `sty`: the union member sharing the path's
+    /// struct `def` (carrying its concrete generic args), else the bare struct.
+    pub(crate) fn struct_pattern_ty(&mut self, path: &TypePath, sty: Ty) -> Ty {
+        let module = self.current_module();
+        let Some(def) = self.prog.resolve_type_in(module, &path.name.name) else {
+            self.emit(path.span, SemaErrorKind::UnknownType { name: path.name.name.clone() });
+            return self.tcx.error;
+        };
+        for v in self.tcx.variants(sty) {
+            if let TyKind::Named { def: vd, .. } = self.tcx.kind(v) {
+                if *vd == def {
+                    return v;
+                }
+            }
+        }
+        if let TyKind::Named { def: sd, .. } = self.tcx.kind(sty) {
+            if *sd == def {
+                return sty;
+            }
+        }
+        self.tcx.mk_named(def, Vec::new())
     }
 
     /// Basic exhaustiveness (`docs/07` §3): a wildcard/binding arm covers
@@ -355,15 +489,7 @@ impl<'a> Checker<'a> {
         if let TyKind::Union(variants) = self.tcx.kind(sty).clone() {
             let mut covered: Vec<Ty> = Vec::new();
             for a in arms.iter().filter(|a| a.guard.is_none()) {
-                if let Some(t) = self.pattern_test_ty(&a.pattern) {
-                    covered.push(t);
-                }
-                // A `null` literal pattern covers the `null` variant.
-                if let PatternKind::Literal(e) = &a.pattern.kind {
-                    if matches!(e.kind, ExprKind::Null) {
-                        covered.push(self.tcx.null);
-                    }
-                }
+                self.collect_covered(&a.pattern, &mut covered);
             }
             let missing: Vec<Ty> =
                 variants.iter().copied().filter(|v| !covered.contains(v)).collect();
@@ -389,7 +515,9 @@ impl<'a> Checker<'a> {
                 let env = self.local_env();
                 Some(self.lower_ty(ty, &env))
             }
-            PatternKind::UnitPath(path) => {
+            PatternKind::UnitPath(path)
+            | PatternKind::TupleStruct { path, .. }
+            | PatternKind::RecordStruct { path, .. } => {
                 let module = self.current_module();
                 let def = self.prog.resolve_type_in(module, &path.name.name)?;
                 Some(self.tcx.mk_named(def, Vec::new()))
@@ -415,6 +543,57 @@ impl<'a> Checker<'a> {
                 // (i.e. a non-union match on its own type).
                 !matches!(self.tcx.kind(sty), TyKind::Union(_) | TyKind::Dynamic)
                     && self.pattern_test_ty(pattern) == Some(sty)
+            }
+            // A lone `[..]` / `[..rest]` (no fixed elements) matches any list, so
+            // it is irrefutable; any fixed-length list pattern is a length test
+            // and needs a catch-all arm.
+            PatternKind::List { elems, rest } => elems.is_empty() && rest.is_some(),
+            // An or-pattern is irrefutable if any alternative is.
+            PatternKind::Or(alts) => alts.iter().any(|p| self.is_irrefutable(p, sty)),
+            // A struct pattern covers the scrutinee only when it is exactly that
+            // single (non-union) struct type and its fields are all irrefutable.
+            PatternKind::TupleStruct { path, fields, rest: None } => {
+                if matches!(self.tcx.kind(sty), TyKind::Union(_) | TyKind::Dynamic) {
+                    return false;
+                }
+                let vt = self.struct_pattern_ty(path, sty);
+                if vt != sty {
+                    return false;
+                }
+                match self.tcx.kind(sty).clone() {
+                    TyKind::Named { def, args } => match self.tuple_fields(def, &args) {
+                        Some(fts) => fields
+                            .iter()
+                            .enumerate()
+                            .all(|(i, p)| self.is_irrefutable(p, fts.get(i).copied().unwrap_or(self.tcx.error))),
+                        None => false,
+                    },
+                    _ => false,
+                }
+            }
+            PatternKind::RecordStruct { path, fields, has_rest: _ } => {
+                if matches!(self.tcx.kind(sty), TyKind::Union(_) | TyKind::Dynamic) {
+                    return false;
+                }
+                let vt = self.struct_pattern_ty(path, sty);
+                if vt != sty {
+                    return false;
+                }
+                let rfs = match self.tcx.kind(sty).clone() {
+                    TyKind::Named { def, args } => self.record_fields(def, &args),
+                    _ => None,
+                };
+                fields.iter().all(|fp| match &fp.pattern {
+                    Some(sub) => {
+                        let fty = rfs
+                            .as_ref()
+                            .and_then(|fs| fs.iter().find(|(n, _)| *n == fp.name.name))
+                            .map(|(_, t)| *t)
+                            .unwrap_or(self.tcx.error);
+                        self.is_irrefutable(sub, fty)
+                    }
+                    None => true, // a bare field binding is irrefutable
+                })
             }
             _ => false,
         }

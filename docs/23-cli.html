@@ -84,8 +84,8 @@
 
 <h1>23. CLI and Toolchain</h1>
 <p class="lead">
-  One binary, subcommands. Placeholder name <code>lang</code>; final name undecided. Built on
-  <code>liblangc</code> — the same frontend used by the LSP, build systems, and third-party tools.
+  One binary, subcommands — the driver is <code>otter_fusion</code>. Built on
+  <code>libotterc</code> — the same frontend used by the LSP, build systems, and third-party tools.
 </p>
 
 <div class="toc">
@@ -94,8 +94,8 @@
     <li><a href="#shape">Shape</a></li>
     <li><a href="#globals">Global flags</a></li>
     <li><a href="#subcmds">Subcommand map</a></li>
-    <li><a href="#build"><code>lang build</code></a></li>
-    <li><a href="#emit"><code>lang emit</code> — stages</a></li>
+    <li><a href="#build"><code>otter_fusion build</code></a></li>
+    <li><a href="#emit"><code>otter_fusion emit</code> — stages</a></li>
     <li><a href="#sysroot">Sysroot &amp; <code>--sysroot</code></a></li>
     <li><a href="#deps">Dependency model</a></li>
     <li><a href="#manifest">Manifest — <code>project.toml</code></a></li>
@@ -117,12 +117,12 @@
 
       <!-- Driver layer -->
       <rect x="40" y="32" width="800" height="50" rx="6" fill="#eaf0f8" stroke="#1a4a8a" stroke-width="2"/>
-      <text x="14" y="58" font-weight="700" fill="#1a4a8a">Driver — `lang`</text>
+      <text x="14" y="58" font-weight="700" fill="#1a4a8a">Driver — `otter_fusion`</text>
       <text x="450" y="62" text-anchor="middle" font-size="11">argument parsing · project loading · dep resolution · linker · debugger</text>
 
       <!-- Library layer -->
       <rect x="40" y="100" width="800" height="70" rx="6" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
-      <text x="14" y="126" font-weight="700" fill="#2a6f4d">Library — `liblangc`</text>
+      <text x="14" y="126" font-weight="700" fill="#2a6f4d">Library — `libotterc`</text>
       <text x="450" y="125" text-anchor="middle" font-size="11">lexer · parser · resolver · type checker · IR lowering · codegen driver</text>
       <text x="450" y="146" text-anchor="middle" font-size="11">formatter · doc extractor</text>
       <text x="450" y="162" text-anchor="middle" class="small">the same library is what an LSP, an external build system, or a 3rd-party tool embeds</text>
@@ -155,66 +155,66 @@
 
 <h3>Building &amp; running</h3>
 <div class="cmd-grid">
-  <div class="cmd build"><span class="name">lang new</span><span class="desc">create a new project</span></div>
-  <div class="cmd build"><span class="name">lang init</span><span class="desc">init in cwd</span></div>
-  <div class="cmd build"><span class="name">lang build</span><span class="desc">compile to default artifact</span></div>
-  <div class="cmd build"><span class="name">lang check</span><span class="desc">parse + typecheck, no codegen</span></div>
-  <div class="cmd build"><span class="name">lang run</span><span class="desc">build (if bin) + execute</span></div>
-  <div class="cmd build"><span class="name">lang test</span><span class="desc">build + run tests</span></div>
-  <div class="cmd build"><span class="name">lang bench</span><span class="desc">build + run benches</span></div>
-  <div class="cmd build"><span class="name">lang clean</span><span class="desc">delete build artifacts</span></div>
+  <div class="cmd build"><span class="name">otter_fusion new</span><span class="desc">create a new project</span></div>
+  <div class="cmd build"><span class="name">otter_fusion init</span><span class="desc">init in cwd</span></div>
+  <div class="cmd build"><span class="name">otter_fusion build</span><span class="desc">compile to default artifact</span></div>
+  <div class="cmd build"><span class="name">otter_fusion check</span><span class="desc">parse + typecheck, no codegen</span></div>
+  <div class="cmd build"><span class="name">otter_fusion run</span><span class="desc">build (if bin) + execute</span></div>
+  <div class="cmd build"><span class="name">otter_fusion test</span><span class="desc">build + run tests</span></div>
+  <div class="cmd build"><span class="name">otter_fusion bench</span><span class="desc">build + run benches</span></div>
+  <div class="cmd build"><span class="name">otter_fusion clean</span><span class="desc">delete build artifacts</span></div>
 </div>
 
 <h3>Code quality &amp; introspection</h3>
 <div class="cmd-grid">
-  <div class="cmd tools"><span class="name">lang fmt</span><span class="desc">format files</span></div>
-  <div class="cmd tools"><span class="name">lang lint</span><span class="desc">run lints</span></div>
-  <div class="cmd tools"><span class="name">lang fix</span><span class="desc">auto-fix / migrate</span></div>
-  <div class="cmd tools"><span class="name">lang doc</span><span class="desc">generate API docs</span></div>
-  <div class="cmd tools"><span class="name">lang repl</span><span class="desc">interactive REPL</span></div>
-  <div class="cmd tools"><span class="name">lang lsp</span><span class="desc">language server (stdio)</span></div>
-  <div class="cmd tools"><span class="name">lang explain</span><span class="desc">long-form diagnostic explanation</span></div>
-  <div class="cmd tools"><span class="name">lang expand</span><span class="desc">print macro-expanded source</span></div>
-  <div class="cmd tools"><span class="name">lang emit</span><span class="desc">dump a specific compilation stage</span></div>
-  <div class="cmd tools"><span class="name">lang inspect</span><span class="desc">introspect types, modules, deps</span></div>
+  <div class="cmd tools"><span class="name">otter_fusion fmt</span><span class="desc">format files</span></div>
+  <div class="cmd tools"><span class="name">otter_fusion lint</span><span class="desc">run lints</span></div>
+  <div class="cmd tools"><span class="name">otter_fusion fix</span><span class="desc">auto-fix / migrate</span></div>
+  <div class="cmd tools"><span class="name">otter_fusion doc</span><span class="desc">generate API docs</span></div>
+  <div class="cmd tools"><span class="name">otter_fusion repl</span><span class="desc">interactive REPL</span></div>
+  <div class="cmd tools"><span class="name">otter_fusion lsp</span><span class="desc">language server (stdio)</span></div>
+  <div class="cmd tools"><span class="name">otter_fusion explain</span><span class="desc">long-form diagnostic explanation</span></div>
+  <div class="cmd tools"><span class="name">otter_fusion expand</span><span class="desc">print macro-expanded source</span></div>
+  <div class="cmd tools"><span class="name">otter_fusion emit</span><span class="desc">dump a specific compilation stage</span></div>
+  <div class="cmd tools"><span class="name">otter_fusion inspect</span><span class="desc">introspect types, modules, deps</span></div>
 </div>
 
 <h3>Dependencies</h3>
 <div class="cmd-grid">
-  <div class="cmd deps"><span class="name">lang add</span><span class="desc">add a dependency</span></div>
-  <div class="cmd deps"><span class="name">lang remove</span><span class="desc">remove a dependency</span></div>
-  <div class="cmd deps"><span class="name">lang update</span><span class="desc">refresh lockfile</span></div>
-  <div class="cmd deps"><span class="name">lang tree</span><span class="desc">print resolved dep graph</span></div>
-  <div class="cmd deps"><span class="name">lang why</span><span class="desc">why is <pkg> in the graph?</span></div>
-  <div class="cmd deps"><span class="name">lang vendor</span><span class="desc">copy deps into project</span></div>
-  <div class="cmd deps"><span class="name">lang lock</span><span class="desc">regenerate / validate lockfile</span></div>
+  <div class="cmd deps"><span class="name">otter_fusion add</span><span class="desc">add a dependency</span></div>
+  <div class="cmd deps"><span class="name">otter_fusion remove</span><span class="desc">remove a dependency</span></div>
+  <div class="cmd deps"><span class="name">otter_fusion update</span><span class="desc">refresh lockfile</span></div>
+  <div class="cmd deps"><span class="name">otter_fusion tree</span><span class="desc">print resolved dep graph</span></div>
+  <div class="cmd deps"><span class="name">otter_fusion why</span><span class="desc">why is <pkg> in the graph?</span></div>
+  <div class="cmd deps"><span class="name">otter_fusion vendor</span><span class="desc">copy deps into project</span></div>
+  <div class="cmd deps"><span class="name">otter_fusion lock</span><span class="desc">regenerate / validate lockfile</span></div>
 </div>
 
 <h3>Registry</h3>
 <div class="cmd-grid">
-  <div class="cmd regist"><span class="name">lang search</span><span class="desc">search registry</span></div>
-  <div class="cmd regist"><span class="name">lang publish</span><span class="desc">publish a package</span></div>
-  <div class="cmd regist"><span class="name">lang yank</span><span class="desc">yank a published version</span></div>
-  <div class="cmd regist"><span class="name">lang login / logout</span><span class="desc">registry credentials</span></div>
-  <div class="cmd regist"><span class="name">lang audit</span><span class="desc">vulnerability DB check</span></div>
+  <div class="cmd regist"><span class="name">otter_fusion search</span><span class="desc">search registry</span></div>
+  <div class="cmd regist"><span class="name">otter_fusion publish</span><span class="desc">publish a package</span></div>
+  <div class="cmd regist"><span class="name">otter_fusion yank</span><span class="desc">yank a published version</span></div>
+  <div class="cmd regist"><span class="name">otter_fusion login / logout</span><span class="desc">registry credentials</span></div>
+  <div class="cmd regist"><span class="name">otter_fusion audit</span><span class="desc">vulnerability DB check</span></div>
 </div>
 
 <h3>Toolchain &amp; meta</h3>
 <div class="cmd-grid">
-  <div class="cmd meta"><span class="name">lang toolchain</span><span class="desc">list / install / default / remove / run</span></div>
-  <div class="cmd meta"><span class="name">lang target</span><span class="desc">list / add / remove cross-targets</span></div>
-  <div class="cmd meta"><span class="name">lang sysroot</span><span class="desc">show / build the stdlib</span></div>
-  <div class="cmd meta"><span class="name">lang ffi</span><span class="desc">bindgen / cbindgen / check / layout</span></div>
-  <div class="cmd meta"><span class="name">lang script</span><span class="desc">single-file shebang run</span></div>
-  <div class="cmd meta"><span class="name">lang completions</span><span class="desc">shell completion script</span></div>
-  <div class="cmd meta"><span class="name">lang config</span><span class="desc">get / set / list</span></div>
-  <div class="cmd meta"><span class="name">lang env</span><span class="desc">effective build environment</span></div>
-  <div class="cmd meta"><span class="name">lang version</span><span class="desc">driver / frontend / linker</span></div>
-  <div class="cmd meta"><span class="name">lang self</span><span class="desc">update / uninstall</span></div>
+  <div class="cmd meta"><span class="name">otter_fusion toolchain</span><span class="desc">list / install / default / remove / run</span></div>
+  <div class="cmd meta"><span class="name">otter_fusion target</span><span class="desc">list / add / remove cross-targets</span></div>
+  <div class="cmd meta"><span class="name">otter_fusion sysroot</span><span class="desc">show / build the stdlib</span></div>
+  <div class="cmd meta"><span class="name">otter_fusion ffi</span><span class="desc">bindgen / cbindgen / check / layout</span></div>
+  <div class="cmd meta"><span class="name">otter_fusion script</span><span class="desc">single-file shebang run</span></div>
+  <div class="cmd meta"><span class="name">otter_fusion completions</span><span class="desc">shell completion script</span></div>
+  <div class="cmd meta"><span class="name">otter_fusion config</span><span class="desc">get / set / list</span></div>
+  <div class="cmd meta"><span class="name">otter_fusion env</span><span class="desc">effective build environment</span></div>
+  <div class="cmd meta"><span class="name">otter_fusion version</span><span class="desc">driver / frontend / linker</span></div>
+  <div class="cmd meta"><span class="name">otter_fusion self</span><span class="desc">update / uninstall</span></div>
 </div>
 
 <!-- =========================================================== -->
-<h2 id="build">4. <code>lang build</code> — the main path</h2>
+<h2 id="build">4. <code>otter_fusion build</code> — the main path</h2>
 
 <p>Output layout under <code>target/</code>:</p>
 
@@ -228,7 +228,7 @@
 │       ├── incremental/         <span class="note"># incremental cache</span>
 │       └── examples/, tests/, benches/
 ├── cache/                       <span class="note"># content-addressed: ASTs, type tables, IR</span>
-├── doc/                         <span class="note"># output of `lang doc`</span>
+├── doc/                         <span class="note"># output of `otter_fusion doc`</span>
 └── tmp/                         <span class="note"># transient files when --keep-temps</span>
 </div>
 
@@ -239,7 +239,7 @@
 </div>
 
 <!-- =========================================================== -->
-<h2 id="emit">5. <code>lang emit</code> — intermediate-stage artifacts</h2>
+<h2 id="emit">5. <code>otter_fusion emit</code> — intermediate-stage artifacts</h2>
 
 <p>The "show me the lexer / parser / IR" entry point. Pulls from the pipeline without altering the normal build cache.</p>
 
@@ -288,36 +288,36 @@
     <g transform="translate(20, 220)">
       <rect width="880" height="60" rx="8" fill="#fafafa" stroke="#d6d3cd"/>
       <text x="14" y="22" font-weight="700">Separate-compilation contract</text>
-      <text x="14" y="42" font-size="11"><tspan font-family="SF Mono, Menlo, monospace">lang emit obj</tspan> + <tspan font-family="SF Mono, Menlo, monospace">lang emit metadata</tspan> together let a third-party build system drive per-module compilation</text>
+      <text x="14" y="42" font-size="11"><tspan font-family="SF Mono, Menlo, monospace">otter_fusion emit obj</tspan> + <tspan font-family="SF Mono, Menlo, monospace">otter_fusion emit metadata</tspan> together let a third-party build system drive per-module compilation</text>
       <text x="14" y="58" font-size="11">and call the system linker itself.</text>
     </g>
   </svg>
   <div class="diagram-caption">Comma-separate stages or use <code>all</code>. Most stages emit <code>s-expr</code>/<code>json</code> or platform-native files.</div>
 </div>
 
-<pre><code>lang emit tokens src/util/log.otter
-lang emit ast,types --format json src/lib.otter -o ast.json
-lang emit obj --all -o target/objs/        # one .o per module
-lang emit mod-graph --format dot | dot -Tpng &gt; modules.png</code></pre>
+<pre><code>otter_fusion emit tokens src/util/log.otter
+otter_fusion emit ast,types --format json src/lib.otter -o ast.json
+otter_fusion emit obj --all -o target/objs/        # one .o per module
+otter_fusion emit mod-graph --format dot | dot -Tpng &gt; modules.png</code></pre>
 
 <!-- =========================================================== -->
 <h2 id="sysroot">6. Sysroot &amp; <code>--sysroot</code></h2>
 
-<div class="file-tree">~/.lang/toolchains/&lt;channel&gt;/lib/sysroot/&lt;triple&gt;/
-├── core/                  <span class="note"># source + prebuilt .langmeta + .a</span>
-├── std/                   <span class="note"># source + prebuilt .langmeta + .a</span>
+<div class="file-tree">~/.otter_fusion/toolchains/&lt;channel&gt;/lib/sysroot/&lt;triple&gt;/
+├── core/                  <span class="note"># source + prebuilt .ottermeta + .a</span>
+├── std/                   <span class="note"># source + prebuilt .ottermeta + .a</span>
 └── manifest.toml          <span class="note"># versions, supported targets, ABI hash</span>
 </div>
 
 <p>Resolution order: <code>--sysroot</code> CLI override → <code>[build] sysroot</code> in manifest →
-<code>LANG_SYSROOT</code> env var → active toolchain's default.</p>
+<code>OTTER_FUSION_SYSROOT</code> env var → active toolchain's default.</p>
 
 <table>
   <thead><tr><th>You want…</th><th>Mechanism</th></tr></thead>
   <tbody>
     <tr><td>Different <code>core:</code> (freestanding, custom allocator)</td><td><code>[build] sysroot = "&lt;path&gt;"</code> where <code>path/core/manifest.toml</code> declares it provides <code>core</code>.</td></tr>
     <tr><td>Different <code>std:</code> (embedded shim)</td><td>Same, providing <code>std</code>.</td></tr>
-    <tr><td>Build the sysroot from source</td><td><code>lang sysroot build --features … --target &lt;triple&gt;</code></td></tr>
+    <tr><td>Build the sysroot from source</td><td><code>otter_fusion sysroot build --features … --target &lt;triple&gt;</code></td></tr>
     <tr><td>Drop <code>std:</code> entirely</td><td>Manifest <code>[package] no-std = true</code>. <code>std:*</code> import → hard error.</td></tr>
   </tbody>
 </table>
@@ -336,7 +336,7 @@ lang emit mod-graph --format dot | dot -Tpng &gt; modules.png</code></pre>
   <svg viewBox="0 0 920 320" role="img" aria-label="Dependency layout">
     <g transform="translate(20, 30)">
       <rect width="430" height="280" rx="8" fill="#eaf0f8" stroke="#1a4a8a" stroke-width="2"/>
-      <text x="14" y="22" font-weight="700" fill="#1a4a8a">~/.lang — user-global</text>
+      <text x="14" y="22" font-weight="700" fill="#1a4a8a">~/.otter_fusion — user-global</text>
 
       <g transform="translate(14, 42)" font-size="11">
         <text y="0">toolchains/&lt;channel&gt;/</text>
@@ -351,7 +351,7 @@ lang emit mod-graph --format dot | dot -Tpng &gt; modules.png</code></pre>
         <text y="138" class="small">  git deps</text>
 
         <text y="166">bin/</text>
-        <text y="184" class="small">  `lang install` targets</text>
+        <text y="184" class="small">  `otter_fusion install` targets</text>
 
         <text y="212">config.toml</text>
         <text y="230">credentials.toml</text>
@@ -372,13 +372,13 @@ lang emit mod-graph --format dot | dot -Tpng &gt; modules.png</code></pre>
         <text y="88">target/</text>
         <text y="106" class="small">build artifacts</text>
 
-        <text y="134">.lang/</text>
+        <text y="134">.otter_fusion/</text>
         <text y="152" class="small">per-project local state (vendoring opt-in)</text>
       </g>
 
       <text x="14" y="200" font-weight="700" fill="#2a6f4d">Resolution flow</text>
       <text x="14" y="218" font-size="11">1. Read manifest, resolve graph against lockfile</text>
-      <text x="14" y="236" font-size="11">2. Fetch missing → ~/.lang/registry</text>
+      <text x="14" y="236" font-size="11">2. Fetch missing → ~/.otter_fusion/registry</text>
       <text x="14" y="254" font-size="11">3. Compile (pkg, ver, profile, features, target) once</text>
       <text x="14" y="272" font-size="11">4. Pass --extern pkg=&lt;meta&gt; — no filesystem walk</text>
     </g>
@@ -401,18 +401,81 @@ lang emit mod-graph --format dot | dot -Tpng &gt; modules.png</code></pre>
   <li>Binary packages: <code>project.lock</code> <strong>must</strong> be committed.</li>
   <li>Library packages: <code>project.lock</code> is generated for the lib's own dev/test builds but is <strong>ignored by consumers</strong>.</li>
   <li><code>--locked</code> / <code>--frozen</code> / <code>--offline</code> are the CI / reproducibility levers.</li>
-  <li><code>lang lock --check</code> is the CI gate: fails if a build would mutate the lockfile.</li>
+  <li><code>otter_fusion lock --check</code> is the CI gate: fails if a build would mutate the lockfile.</li>
 </ul>
 
-<h3>Path-form mapping</h3>
+<h3 id="lockfile-contents">Lockfile contents</h3>
+<p>Each resolved package pins an exact version, its source, and a content hash. The
+<code>sha256</code> is verified on every fetch and extraction — a mismatch is a hard error, never a
+silent re-download. The lockfile is generated; do not hand-edit it.</p>
+
+<pre><code># project.lock  (excerpt)
+version = 4
+
+[[package]]
+name     = "serde"
+version  = "1.2.7"
+source   = "registry+https://pkgs.example.dev/index"
+checksum = "sha256:9f8b…c41a"
+
+[[package]]
+name     = "foo-local"
+version  = "0.1.0"
+source   = "path+../foo"            # path deps carry no checksum
+
+[[package]]
+name     = "bar-git"
+version  = "0.4.0"
+source   = "git+https://…#abc123"   # pinned to the resolved commit</code></pre>
+
+<h3 id="registry-protocol">Registries &amp; the registry protocol</h3>
+<p>A <strong>registry</strong> is a named index the resolver maps <code>pkg:</code> dependencies to. The
+default registry and any extras are declared in the manifest / <code>~/.otter_fusion/config.toml</code>
+(see <a href="#manifest">§8</a>). <strong>The location of a package never appears in source</strong> — import
+paths stay location-free (<code>import … from "pkg:foo/bar"</code>); <em>where</em> a package comes from
+lives entirely in the manifest and lockfile. Fetching a raw remote file is a different operation behind
+its own reserved scheme family (<a href="17-modules.html#17-14-reserved-and-deferred">17 §17.14</a>) — there
+is no <code>pkg+https://…</code> import form.</p>
+
+<p>The wire protocol is the <strong>sparse HTTP</strong> index: the client fetches only the per-package
+metadata files it needs over <code>https</code>, never a full clone. The index root serves a
+<code>config.json</code>:</p>
+
+<pre><code>{
+  "dl":  "https://pkgs.example.dev/api/v1/{crate}/{version}/{sha256-checksum}.tar.gz",
+  "api": "https://pkgs.example.dev",
+  "auth-required": false
+}</code></pre>
+
 <table>
-  <thead><tr><th>Source syntax</th><th>Compiler input</th></tr></thead>
+  <thead><tr><th>Key</th><th>Meaning</th></tr></thead>
   <tbody>
-    <tr><td><code>import "x/y"</code></td><td>absolute in current crate → known file</td></tr>
-    <tr><td><code>import "./x"</code></td><td>relative in current crate → known file</td></tr>
-    <tr><td><code>import "pkg:foo/bar"</code></td><td><code>--extern foo=&lt;meta&gt;</code>, then lookup <code>bar</code> in foo's pub tree</td></tr>
-    <tr><td><code>import "core:prelude"</code></td><td>sysroot</td></tr>
-    <tr><td><code>import "std:io"</code></td><td>sysroot</td></tr>
+    <tr><td><code>dl</code></td><td>Tarball download URL template. Markers <code>{crate}</code>, <code>{version}</code>, <code>{prefix}</code>, <code>{sha256-checksum}</code> are substituted; if none are present, <code>/{crate}/{version}/download</code> is appended.</td></tr>
+    <tr><td><code>api</code></td><td>Base URL for write/query operations (<code>publish</code>, <code>yank</code>, <code>search</code>, <code>login</code>). Optional; without it those commands are unavailable.</td></tr>
+    <tr><td><code>auth-required</code></td><td>Private registry — every request (index, download, API) carries credentials from <code>~/.otter_fusion/credentials.toml</code>.</td></tr>
+  </tbody>
+</table>
+
+<div class="callout good">
+  <strong>Artifacts are tarballs, verified by hash</strong>
+  A package is a <code>.tar.gz</code> resolved through <code>dl</code>, extracted into the
+  content-addressed store at <code>~/.otter_fusion/registry/src/</code> and keyed by its
+  <code>sha256</code>. The same checksum is recorded in the lockfile, so a registry cannot serve
+  different bytes for an already-locked version without the build failing.
+</div>
+
+<h3>Path-form mapping</h3>
+<p>Every import path carries an explicit scheme (see <a href="17-modules.html#17-4-path-forms">17 §17.4</a>);
+the column below shows the path written as <code>import { … } from "&lt;path&gt;"</code> and what the driver
+hands the compiler.</p>
+<table>
+  <thead><tr><th>Path in source</th><th>Compiler input</th></tr></thead>
+  <tbody>
+    <tr><td><code>"self:util/log"</code></td><td>module-tree root form → known file in this package</td></tr>
+    <tr><td><code>"self:./sib"</code>, <code>"self:../up"</code></td><td>relative module-tree lookup → known file</td></tr>
+    <tr><td><code>"file:../shared/x"</code></td><td>literal filesystem path (allowlisted in project mode; unrestricted in direct mode)</td></tr>
+    <tr><td><code>"pkg:foo/bar"</code></td><td>resolved via lockfile + registry → <code>--extern foo=&lt;meta&gt;</code>, then look up <code>bar</code> in foo's pub tree</td></tr>
+    <tr><td><code>"core:prelude"</code>, <code>"std:io"</code></td><td>sysroot</td></tr>
   </tbody>
 </table>
 
@@ -429,10 +492,18 @@ no-std = false
 default-features = ["json"]
 
 [dependencies]
-serde     = "1.2"
+serde     = "1.2"                                   # default registry
 http      = { version = "0.4", features = ["tls"] }
-foo-local = { path = "../foo" }
-bar-git   = { git = "https://...", rev = "abc123" }
+internal  = { version = "2.0", registry = "myco" }  # from a named registry
+foo-local = { path = "../foo" }                     # local path
+bar-git   = { git = "https://...", rev = "abc123" } # git, pinned to a rev
+
+[registry]
+default = "public"             # which registry bare `pkg:` deps resolve against
+
+[registries]
+public = { index = "sparse+https://pkgs.example.dev/index" }
+myco   = { index = "sparse+https://pkgs.internal/index", auth = true }
 
 [features]
 json = ["dep:serde"]
@@ -448,10 +519,10 @@ codegen-units = 1
 
 [target.x86_64-linux-gnu]
 linker = "lld"
-langflags = []
+otterflags = []
 
-[scripts]                      # `lang run-script <name>`
-ci = "lang fmt --check &amp;&amp; lang lint &amp;&amp; lang test"</code></pre>
+[scripts]                      # `otter_fusion run-script <name>`
+ci = "otter_fusion fmt --check &amp;&amp; otter_fusion lint &amp;&amp; otter_fusion test"</code></pre>
 
 <!-- =========================================================== -->
 <h2 id="ffi">9. FFI &amp; linking</h2>
@@ -475,15 +546,15 @@ exports = [
   { module = "lib", output = "target/include/mylib.h" },
 ]</code></pre>
 
-<h3><code>lang ffi</code> subcommands</h3>
+<h3><code>otter_fusion ffi</code> subcommands</h3>
 
 <table>
   <thead><tr><th>Command</th><th>Purpose</th></tr></thead>
   <tbody>
-    <tr><td><code>lang ffi bindgen &lt;header&gt;</code></td><td>Generate extern declarations from a C header (libclang). Deterministic output — safe to commit.</td></tr>
-    <tr><td><code>lang ffi cbindgen</code></td><td>Emit a C header for <code>pub extern</code> items in a module. Round-trips with bindgen.</td></tr>
-    <tr><td><code>lang ffi check --against</code></td><td>Verify extern signatures match a named C header. CI gate.</td></tr>
-    <tr><td><code>lang ffi layout</code></td><td>Print size / alignment / field offsets for extern structs, target-aware.</td></tr>
+    <tr><td><code>otter_fusion ffi bindgen &lt;header&gt;</code></td><td>Generate extern declarations from a C header (libclang). Deterministic output — safe to commit.</td></tr>
+    <tr><td><code>otter_fusion ffi cbindgen</code></td><td>Emit a C header for <code>pub extern</code> items in a module. Round-trips with bindgen.</td></tr>
+    <tr><td><code>otter_fusion ffi check --against</code></td><td>Verify extern signatures match a named C header. CI gate.</td></tr>
+    <tr><td><code>otter_fusion ffi layout</code></td><td>Print size / alignment / field offsets for extern structs, target-aware.</td></tr>
   </tbody>
 </table>
 
@@ -494,15 +565,15 @@ file = "build.otter"           # compiled and run before the main build</code></
 
 <p>Writes link directives on stdout:</p>
 
-<pre><code>lang:link-lib=dylib=z
-lang:link-search=native=/opt/lib
-lang:rerun-if-changed=vendor/libmylib.a
-lang:emit-cfg=has_openssl
-lang:ffi-bindgen=vendor/generated.h:src/bindings/generated.otter</code></pre>
+<pre><code>otter_fusion:link-lib=dylib=z
+otter_fusion:link-search=native=/opt/lib
+otter_fusion:rerun-if-changed=vendor/libmylib.a
+otter_fusion:emit-cfg=has_openssl
+otter_fusion:ffi-bindgen=vendor/generated.h:src/bindings/generated.otter</code></pre>
 
 <div class="callout warn">
   <strong>Build scripts are arbitrary code</strong>
-  Not run under <code>lang check</code>. Sandboxed when possible (filesystem read-only outside
+  Not run under <code>otter_fusion check</code>. Sandboxed when possible (filesystem read-only outside
   <code>OUT_DIR</code>). The driver prints a clear "running build script for <code>&lt;pkg&gt;</code>"
   line so they are never silent.
 </div>
@@ -510,14 +581,14 @@ lang:ffi-bindgen=vendor/generated.h:src/bindings/generated.otter</code></pre>
 <!-- =========================================================== -->
 <h2 id="toolchain">10. Toolchain management</h2>
 
-<pre><code>lang toolchain list
-lang toolchain install stable
-lang toolchain install nightly-2026-05-01
-lang toolchain default stable
-lang toolchain run nightly -- build
-lang toolchain remove &lt;name&gt;</code></pre>
+<pre><code>otter_fusion toolchain list
+otter_fusion toolchain install stable
+otter_fusion toolchain install nightly-2026-05-01
+otter_fusion toolchain default stable
+otter_fusion toolchain run nightly -- build
+otter_fusion toolchain remove &lt;name&gt;</code></pre>
 
-<p>Project-pin file at <code>&lt;project&gt;/.lang-toolchain.toml</code>:</p>
+<p>Project-pin file at <code>&lt;project&gt;/.otter_fusion-toolchain.toml</code>:</p>
 
 <pre><code>[toolchain]
 channel = "stable"
@@ -525,7 +596,7 @@ components = ["fmt", "lsp", "src"]
 targets = ["x86_64-linux-gnu", "aarch64-apple-darwin"]</code></pre>
 
 <div class="callout">
-  <strong><code>lang</code> is a proxy</strong>
+  <strong><code>otter_fusion</code> is a proxy</strong>
   Dispatches to the active toolchain's real binary — same shape as <code>rustup</code>. Lets
   multiple projects on one machine use different language versions without conflict.
 </div>
@@ -541,11 +612,11 @@ targets = ["x86_64-linux-gnu", "aarch64-apple-darwin"]</code></pre>
     </g>
     <g transform="translate(60, 78)">
       <rect width="800" height="40" rx="6" fill="#f3eefa" stroke="#6b4ba8"/>
-      <text x="14" y="26" font-weight="700" fill="#6b4ba8">2. Environment variables — <tspan font-family="SF Mono, Menlo, monospace">LANG_*</tspan></text>
+      <text x="14" y="26" font-weight="700" fill="#6b4ba8">2. Environment variables — <tspan font-family="SF Mono, Menlo, monospace">OTTER_FUSION_*</tspan></text>
     </g>
     <g transform="translate(60, 126)">
       <rect width="800" height="40" rx="6" fill="#eaf0f8" stroke="#1a4a8a"/>
-      <text x="14" y="26" font-weight="700" fill="#1a4a8a">3. &lt;project&gt;/.lang/config.toml (per-project, not committed)</text>
+      <text x="14" y="26" font-weight="700" fill="#1a4a8a">3. &lt;project&gt;/.otter_fusion/config.toml (per-project, not committed)</text>
     </g>
     <g transform="translate(60, 174)">
       <rect width="800" height="40" rx="6" fill="#eef6f1" stroke="#2a6f4d"/>
@@ -553,10 +624,10 @@ targets = ["x86_64-linux-gnu", "aarch64-apple-darwin"]</code></pre>
     </g>
     <g transform="translate(60, 222)">
       <rect width="800" height="40" rx="6" fill="#fafafa" stroke="#d6d3cd"/>
-      <text x="14" y="26" font-weight="700">5. ~/.lang/config.toml &nbsp;&nbsp;·&nbsp;&nbsp; 6. Built-in defaults</text>
+      <text x="14" y="26" font-weight="700">5. ~/.otter_fusion/config.toml &nbsp;&nbsp;·&nbsp;&nbsp; 6. Built-in defaults</text>
     </g>
   </svg>
-  <div class="diagram-caption"><code>lang env</code> prints the fully resolved configuration with each value's source.</div>
+  <div class="diagram-caption"><code>otter_fusion env</code> prints the fully resolved configuration with each value's source.</div>
 </div>
 
 <!-- =========================================================== -->
@@ -580,21 +651,21 @@ targets = ["x86_64-linux-gnu", "aarch64-apple-darwin"]</code></pre>
 <div class="callout good">
   <strong>Checklist of small things that bite later</strong>
   <ul>
-    <li><strong>Stable diagnostic codes</strong> (<code>E0123</code>) — wire <code>lang explain</code> from day one.</li>
+    <li><strong>Stable diagnostic codes</strong> (<code>E0123</code>) — wire <code>otter_fusion explain</code> from day one.</li>
     <li><strong><code>--deterministic</code> flag</strong> — forbids timestamps, ASLR'd hashes, parallel-codegen reordering.</li>
-    <li><strong><code>--print</code> introspection</strong>: <code>lang --print sysroot|target-list|cfg|target-features|file-names</code>.</li>
+    <li><strong><code>--print</code> introspection</strong>: <code>otter_fusion --print sysroot|target-list|cfg|target-features|file-names</code>.</li>
     <li><strong>Color env vars</strong>: respect <code>NO_COLOR</code>, <code>CLICOLOR</code>, <code>CLICOLOR_FORCE</code>.</li>
     <li><strong>CI-friendly output</strong>: <code>--message-format short|json|human</code>; no ANSI in non-TTY unless <code>--color always</code>.</li>
-    <li><strong>Editor format-on-save</strong>: <code>lang fmt --check</code> for CI, <code>lang fmt --emit stdout</code> for editors.</li>
+    <li><strong>Editor format-on-save</strong>: <code>otter_fusion fmt --check</code> for CI, <code>otter_fusion fmt --emit stdout</code> for editors.</li>
     <li><strong><code>--dry-run</code></strong> on every destructive command (<code>publish</code>, <code>update</code>, <code>clean</code>, <code>vendor</code>, <code>remove</code>).</li>
-    <li><strong><code>lang clean</code> granularity</strong>: <code>--profile</code>, <code>--target</code>, <code>--package</code>, <code>--doc</code>.</li>
-    <li><strong>External subcommands</strong>: <code>lang foo</code> → <code>lang-foo</code> on PATH. Community tools without core changes.</li>
+    <li><strong><code>otter_fusion clean</code> granularity</strong>: <code>--profile</code>, <code>--target</code>, <code>--package</code>, <code>--doc</code>.</li>
+    <li><strong>External subcommands</strong>: <code>otter_fusion foo</code> → <code>otter_fusion-foo</code> on PATH. Community tools without core changes.</li>
     <li><strong>Hook points</strong>: build scripts vs proc macros vs plugins — three distinct, documented mechanisms.</li>
-    <li><strong><code>lang audit</code></strong> — vulnerability DB endpoint from day one.</li>
-    <li><strong><code>lang self update</code></strong> — toolchain manages itself.</li>
-    <li><strong>Standard <code>OUT_DIR</code> and <code>LANG_*</code> envs</strong> — document them as stable contract.</li>
-    <li><strong>"What would change" resolver mode</strong>: <code>lang update --dry-run --verbose</code> printing the lock diff.</li>
-    <li><strong>Single-file ABI for shipping libraries</strong>: <code>.langmeta</code> with explicit compatibility policy.</li>
+    <li><strong><code>otter_fusion audit</code></strong> — vulnerability DB endpoint from day one.</li>
+    <li><strong><code>otter_fusion self update</code></strong> — toolchain manages itself.</li>
+    <li><strong>Standard <code>OUT_DIR</code> and <code>OTTER_FUSION_*</code> envs</strong> — document them as stable contract.</li>
+    <li><strong>"What would change" resolver mode</strong>: <code>otter_fusion update --dry-run --verbose</code> printing the lock diff.</li>
+    <li><strong>Single-file ABI for shipping libraries</strong>: <code>.ottermeta</code> with explicit compatibility policy.</li>
     <li><strong>Shell completions</strong>: <code>bash|zsh|fish|powershell|nushell</code>.</li>
   </ul>
 </div>

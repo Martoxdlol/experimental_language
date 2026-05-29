@@ -712,13 +712,38 @@ The tracing GC is functionally complete for single-threaded programs.
       program-wide `local_types` map (could mis-type any multi-function program);
       ids are now globally unique.
 - [x] **`match` expression**: scrutinee dispatch over wildcard/binding/literal/
-      type-binding (`i64 n`)/unit-struct/tuple patterns, with guards (`if`),
-      payload extraction (unbox union variants, destructure tuples), and
-      compile-time **exhaustiveness** (irrefutable arm, or all union variants +
-      `null`-literal covered). Codegen is a top-to-bottom test/bind/body chain
-      on the union tag. Unit-struct values lower as null-pointer placeholders
-      (only their type id matters). 8 backend + 4 checker tests, `examples/
-      match.otter` (Shape areas + `i64|str|null` describe).
+      type-binding (`i64 n`)/unit-struct/tuple patterns + **struct destructuring**
+      patterns (record `Circle { radius }` / `{ x: a, .. }` and tuple-struct
+      `Rect(w, h)`), with guards (`if`), payload extraction (unbox union variants,
+      destructure tuples/structs), and compile-time **exhaustiveness** (irrefutable
+      arm, or all union variants + `null`-literal covered). Codegen is a
+      top-to-bottom test/bind/body chain on the union tag; a struct pattern tests
+      the box tag against the variant's type id, then binds fields from the
+      unboxed struct via its layout. Unit-struct values lower as null-pointer
+      placeholders (only their type id matters). `examples/match.otter` (Shape
+      areas + destructuring perimeters + `i64|str|null` describe).
+- [x] **Or-patterns + list patterns** (`docs/07`): `1 | 2 | 3 => …` /
+      `Red | Green => …` (alternatives must not bind — the checker rejects a
+      binding alternative; codegen ORs each alternative's match test). List
+      patterns `[]` / `[x]` / `[a, b]` / `[head, ..tail]` over a `List<T>`: a
+      runtime length test (`==` fixed, or `>=` when a `..rest` is present) then
+      element binds (leading at `0..rp`, trailing at `n-k+j`) plus the `..tail`
+      bound as a fresh sub-list (`lang_list_slice`, GC-paused). Exhaustiveness:
+      or-patterns flatten into the covered-variant set; a lone `[..]`/`[..rest]`
+      is irrefutable (any other list pattern is a length test needing a
+      catch-all). 4 CLI tests (or / or-binding-rejection / list incl. GC-stress);
+      JIT + native + GC-stress parity. Pattern matching is now complete:
+      wildcard, binding, literal, type-binding, unit, tuple, tuple-struct,
+      record-struct, list, and or.
+- [x] **Struct destructuring patterns** (`docs/07`): `var Point { x, y } = p;` /
+      `var Pair(a, b) = pr;` in irrefutable `var` bindings and as `match` arms —
+      record (with field rename `{ x: a }` and `..` rest) and tuple-struct forms,
+      nesting (`Wrap { p: Point { x, y }, tag }`). Checker `bind_pattern` /
+      `check_pattern` resolve field types via `tuple_fields`/`record_fields` and
+      the matched variant via `struct_pattern_ty`; codegen `h_bind_pattern` loads
+      each field from the struct layout (`h_load_field`) and the match path
+      unboxes the payload then delegates to it. 3 CLI tests (var / match /
+      non-exhaustive rejection); JIT + native + GC-stress parity.
 - [x] **Flow narrowing** (`docs/12` §4): `if x is T { … }` narrows `x` to `T`
       in the then-branch and to the complement in the else-branch — no explicit
       `as` needed (`x + 1`, `x.v`, `"$x"` all work in-branch). Implemented via a
@@ -846,6 +871,19 @@ The tracing GC is functionally complete for single-threaded programs.
       `write_function_addr`), `gen_widen_dyn` boxes `{vtable, data}`, and
       `gen_dyn_method_call` loads the slot and `call_indirect`s. GC traces the
       data pointer through the box. 5 tests + `examples/dynamic_dispatch.otter`.
+- [x] **Interface default methods** (`docs/10`): an interface method may carry a
+      default body (`function greet(self): str { "Hi " + self.name() }`); an
+      implementer that does not override it uses the default. Implemented by a
+      pre-collection pass `sema/defaults.rs::expand_default_methods` that copies
+      each un-overridden default body into the implementing `extend` block as an
+      ordinary method (so `Self` resolves to the `extend`'s target for free — no
+      new monomorphisation path), re-spanning every copied node to keep the
+      span-keyed HIR collision-free across implementers (the `derive` rule).
+      Works with overrides, defaults calling other (possibly overridden) methods
+      through `self`, multiple implementers, and dynamic dispatch (the synthesised
+      method is in the vtable). 1 CLI test; JIT + native + GC-stress parity.
+      Scope: the interface must be non-generic and declared in the same module
+      (generic / cross-module interface defaults are a follow-up).
 - [x] **Generic `extend` method resolution** (`docs/11`): `resolve_method` now
       unifies a generic `extend<…> Target<…>`'s target against the receiver and
       returns the solved substitution; method param/return types are substituted,
@@ -992,6 +1030,13 @@ The tracing GC is functionally complete for single-threaded programs.
       span; both call sites use it as the close-span fallback so the Call's
       span properly extends past the callee. 4 new CLI tests
       (i64 return / capture+mutate / `str` return / native).
+- [x] **Anonymous function expressions** (`docs/09` §4): `function(params): Ret
+      [async] { body }` in expression position is the same kind of value as an
+      arrow closure (uniform by-reference capture). `sema/anf.rs` desugars a
+      (non-generic) `AnonFn` into the equivalent `Closure` with a block body, so
+      it reuses closure codegen verbatim — and, when `async`, composes with the
+      async-closure → async-block desugar. Works bound, capturing, as a `map`
+      argument, and `async`. 2 CLI tests; JIT + native + GC-stress parity.
 - [x] **`Try` for non-union wrapper types** (`docs/13` §3): prelude
       `interface Try<Output, Residual> { function branch(self): Output |
       Residual }`. A wrapper struct now participates in `?` by writing
@@ -1111,24 +1156,58 @@ The tracing GC is functionally complete for single-threaded programs.
       timer-thread-backed future; **`.cancel()`** is a (no-op) abort for the
       compute-only futures we build. `examples/async.otter` exercises the whole
       surface; 14 CLI tests + 2 runtime tests; JIT + native + GC-stress parity.
-      TODO: `timeout(fut, ms)` (a racing future — needs language-level `select`
-      or type-id plumbing to rebox the value variant), async closures (closure
-      call constructs a future), ANF hoisting so `await` may nest in
-      sub-expressions (today it must be a statement / trailing / `return` operand
-      / `for await`), and `for await` over an interface `AsyncIterator` object or
-      a non-variable stream expression.
-      **ANF design note (next focused effort):** a HIR normalization pass run in
-      the checker (where fresh `LocalId`s can be minted into `Hir::local_types`)
-      that hoists any suspending sub-expression into a preceding `Let` in
-      evaluation order — e.g. `f(await x)` → `var t = await x; f(t)`. CRITICAL
-      correctness caveat: it must **respect short-circuit / conditional
-      evaluation** — `a && (await b)`, `a || (await b)`, and a `match`/`if` arm's
-      operand may only suspend *when that branch actually runs*, so a naive
-      left-to-right hoist is WRONG (it would await `b` unconditionally). The pass
-      must hoist only within the same unconditional evaluation region, lowering
-      conditional suspends into the branch they belong to. Needs its own broad
-      test matrix (operators, calls, interpolation, indexing, short-circuit,
-      nested control flow) before it can be trusted — not a quick add.
+- [x] **`await` ANF hoisting** (`docs/21`): `await` may now appear nested in a
+      larger expression — function arguments, operands of `+`/`-`/comparisons,
+      index `xs[await i]`, field receivers, `?`, casts, tuple/list/struct/map
+      literals, string interpolation `"${await e}"`, and `if`/`match`
+      conditions. A source-level pass `sema/anf.rs::hoist_awaits` (run before
+      collection, like `derive`) rewrites each nested `await` into a preceding
+      `var __await_N = …;` binding, preserving left-to-right evaluation order
+      (every *effectful* prior operand is also hoisted so side effects don't
+      reorder). **Conditional positions are deliberately NOT hoisted**: the right
+      operand of `&&`/`||` and a `while` condition only suspend conditionally, so
+      hoisting would change semantics — those are left in place and the backend
+      reports the clear "await in this position is not yet supported" error
+      rather than miscompiling. `if`/`match` branch blocks and `match` arm bodies
+      are already statement/trailing-level, so awaits there work (hoisted bindings
+      stay inside the arm via a wrapper block). The pass is a strict no-op for
+      await-free code. 3 CLI tests (nested-arg/operand/index ordering;
+      if-cond/struct/tuple/interpolation; short-circuit rejection). JIT + native
+      + GC-stress parity; all examples + 863 prior tests green.
+- [x] **Async closures** (`docs/21` §7): `(p) async => E` is desugared by
+      `sema/anf.rs` into a plain closure returning an async block —
+      `(p) => async { E }` — reusing the closure-environment + async-block
+      state-machine codegen with no special case. Calling it builds the future
+      (capturing `p` + the outer environment) without running `E`; `await`
+      drives it. Works with captures, suspension inside the body, and as a
+      higher-order argument (`(i64) => Future<i64>`). 2 CLI tests; JIT + native +
+      GC-stress parity; `examples/async.otter`. (Async *anonymous functions*
+      `function(..) async { }` as expressions remain unsupported — anonymous-fn
+      expressions are not yet accepted by the checker at all, async or not.)
+- [x] **`for await` over a non-variable stream**: `for await x in make()` now
+      works — `sema/anf.rs` hoists a non-`Ident`/`self` stream expression into a
+      preceding `var` (gaining a state-machine slot so it survives the
+      per-iteration suspends). 1 CLI test; JIT + native + GC-stress parity.
+- [x] **`for await` over an interface `AsyncIterator` object** (or a bounded
+      `T: AsyncIterator<U>` param): the checker's `async_iterator_elem` now
+      resolves `next_async` through the interface (mirroring the sync
+      `iterator_elem`), and `h_for_async` dispatches it via the vtable for an
+      interface receiver (else through the concrete impl). 1 CLI test; JIT +
+      native + GC-stress parity.
+- [x] **`timeout(fut, ms): Future<T | TimedOut>`** (`docs/21` §9): a racing
+      future. The runtime `lang_async_timeout` builds a future whose `poll`
+      polls the inner future first (reboxing its `Ready<T>` value into the `T`
+      variant of `T | TimedOut`) and, on the inner being pending, arms a deadline
+      timer that resolves the race to `TimedOut`. The code generator supplies
+      `T`'s type id + pointer-ness (so the runtime builds the variant box and the
+      collector traces its payload) plus the `TimedOut`/`Ready`/`Pending` ids —
+      the "type-id plumbing" that lets the runtime rebox the value variant
+      without `select`. Recognized as the `timeout` builtin
+      (`Intrinsic::AsyncTimeout { output }`). 2 CLI tests (value vs `TimedOut`;
+      managed `str` value under GC stress); JIT + native + GC-stress parity;
+      `examples/async.otter`.
+      TODO async: `await` in a short-circuit operand / loop condition (the
+      genuinely-conditional cases — would change evaluation order/frequency).
 - [~] FFI (`docs/19`): **extern functions + extern structs + raw pointers work.**
       *Extern functions* over the C ABI: primitives and raw pointers (`*T`),
       called by their real symbol name (JIT resolves via `dlsym`, native via the
@@ -1308,10 +1387,40 @@ The tracing GC is functionally complete for single-threaded programs.
       tokens (resolution-driven classes refining a bundled TextMate grammar).
       Editor positions are converted UTF-16↔UTF-8 (`LineIndex` on the hot path).
       11 unit tests in `crates/lsp`; the extension compiles (`npm run compile`).
-- [ ] `project.toml`, multi-file LSP workspaces (the server is currently
-      single-file: cross-module diagnostics/goto need disk + unsaved-buffer
-      overlay), sysroot/stdlib, fmt, doc, the rest of the `docs/23` subcommand
-      surface.
+- [x] **`project.toml` manifest** (`docs/17` §17.1): `otter_fusion run|build|emit`
+      accept a project directory or a `project.toml` path and resolve the entry
+      source file from the manifest — explicit `entry = "..."`, else the
+      `kind`-derived default (`{src}/main.otter` for `binary`, `{src}/lib.otter`
+      for `library`/`library+bins`; `src` defaults to `src`). A hand-rolled
+      `key = "value"` reader (no TOML dependency) parses the fields the toolchain
+      uses; a missing entry is a clear error. Submodules load from the entry via
+      the existing convention. 3 CLI tests (dir + manifest-path + default entry +
+      submodule + missing-entry). A `.otter` path still works directly.
+- [x] **Multi-file LSP analysis**: the server now loads a document's file-backed
+      submodules (`docs/17`) before analysis, so cross-module `import`s resolve
+      and the open file type-checks against them (previously every import errored
+      "cannot find module"). `Compiled::new_multi` parses each `mod` file into the
+      same `SourceMap`/`Externals` and runs `analyze_multi`; the server's reader
+      prefers an open, unsaved editor buffer over the on-disk copy (the
+      unsaved-buffer overlay). A missing submodule degrades gracefully (the
+      import surfaces as a diagnostic; no crash). Diagnostics/queries stay scoped
+      to the open document. 2 LSP tests.
+- [x] **Cross-file LSP goto-definition**: `definition_span` now accepts a
+      definition in any loaded file (not just the open document), excluding
+      virtual files (prelude / synthesised code) via the real `file_count`. The
+      `goto_definition` handler maps the def span's `FileId` back to that file's
+      URI (`Url::from_file_path` on the `SourceMap` entry) and computes the range
+      against that file's text, so jumping to an imported symbol opens the
+      correct submodule file. 1 LSP test.
+- [x] **`otter_fusion doc`** (`docs/23`): generate Markdown API documentation for a
+      file or project's `pub` items — doc comments (`///`) rendered as prose, each
+      signature sliced from source (a function shows its header up to the body;
+      a struct/interface/alias/var shows the whole declaration), private items
+      omitted, attributes (`@Derive`) kept. Printed to stdout. 1 CLI test.
+- [ ] Cross-file LSP hover/references, manifest dependencies (`pkg:`),
+      sysroot/stdlib, `fmt` (needs comment-preserving lexing — ordinary comments
+      are not tokens), `lint`/`fix`/`test`/`bench`/`repl`, the rest of the
+      `docs/23` subcommand surface.
 
 ## Current vertical-slice target
 Smallest end-to-end program that exercises the full pipeline, expanded each

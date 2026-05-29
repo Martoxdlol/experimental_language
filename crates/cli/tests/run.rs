@@ -2088,6 +2088,487 @@ fn stdlib_list_contains_requires_eq() {
 }
 
 #[test]
+fn async_anf_hoists_nested_awaits() {
+    // `docs/21`: `await` in operand positions (call args, binary operands,
+    // index) is hoisted into preceding `var` bindings, preserving evaluation
+    // order, so the async state machine can suspend at every `await`.
+    let src = "function id(x: i64): Future<i64> async { x }\n\
+               function add(a: i64, b: i64): Future<i64> async { a + b }\n\
+               function compute(): Future<i64> async {\n\
+                 var a = await add(await id(10), await id(20));\n\
+                 var b = await id(5) + await id(7);\n\
+                 var xs: List<i64> = [100, 200, 300];\n\
+                 var c = xs[await id(1)];\n\
+                 var d = await add(await id(a), await id(b));\n\
+                 a + b + c + d\n\
+               }\n\
+               function main(): Future<null> async {\n\
+                 var r = await compute();\n\
+                 println(\"${r}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    assert_eq!(nat, "284\n"); // 30 + 12 + 200 + 42
+}
+
+#[test]
+fn async_anf_in_conditions_and_aggregates() {
+    // `await` in an `if` condition, `struct` field, tuple, and string
+    // interpolation are all unconditional positions and are hoisted; the
+    // program runs end to end (GC-stress to exercise managed temporaries).
+    let src = "function tf(): Future<bool> async { true }\n\
+               function ti(): Future<i64> async { 42 }\n\
+               struct P { x: i64, y: i64 }\n\
+               function compute(): Future<i64> async {\n\
+                 var acc = 0;\n\
+                 if await tf() { acc = acc + 1; }\n\
+                 var p = P { x: await ti(), y: await ti() };\n\
+                 acc = acc + p.x + p.y;\n\
+                 var t = (await ti(), await ti());\n\
+                 acc + t.0 + t.1\n\
+               }\n\
+               function main(): Future<null> async {\n\
+                 var r = await compute();\n\
+                 println(\"${r}\");\n\
+               }";
+    let (out, err, ok) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "169\n"); // 1 + 42 + 42 + 42 + 42
+}
+
+#[test]
+fn async_timeout_value_and_timed_out() {
+    // `docs/21` §9: `timeout(fut, ms): Future<T | TimedOut>` resolves to the
+    // value when the future wins the race, and to `TimedOut` when the deadline
+    // does — the success value is reboxed into the `T` variant.
+    let src = "function slow(): Future<i64> async { var _ = await sleep(60); 99 }\n\
+               function fast(): Future<i64> async { 42 }\n\
+               function main(): Future<null> async {\n\
+                 var r1 = await timeout(fast(), 100);\n\
+                 match r1 { i64 n => println(\"v ${n}\"), TimedOut => println(\"to\") }\n\
+                 var r2 = await timeout(slow(), 5);\n\
+                 match r2 { i64 n => println(\"v ${n}\"), TimedOut => println(\"to\") }\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    assert_eq!(nat, "v 42\nto\n");
+}
+
+#[test]
+fn async_timeout_managed_value_survives_gc() {
+    // A managed (`str`) success value is traced through the timeout future's
+    // reboxing (`t_is_ptr`), so GC stress does not corrupt it.
+    let src = "function greet(): Future<str> async { \"hello\" }\n\
+               function main(): Future<null> async {\n\
+                 var r = await timeout(greet(), 100);\n\
+                 match r { str s => println(s), TimedOut => println(\"to\") }\n\
+               }";
+    let (out, err, ok) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "hello\n");
+}
+
+#[test]
+fn async_closure_captures_and_suspends() {
+    // `docs/21` §7: `(p) async => E` is a closure that returns a future. It
+    // captures the outer environment and may `await` inside; calling it builds
+    // the future, `await` drives it. GC-stress exercises managed state.
+    let src = "function id(x: i64): Future<i64> async { x }\n\
+               function main(): Future<null> async {\n\
+                 var base = 100;\n\
+                 var f = (x: i64): Future<i64> async => {\n\
+                   var y = await id(x);\n\
+                   base + y\n\
+                 };\n\
+                 var r1 = await f(5);\n\
+                 var r2 = await f(20);\n\
+                 println(\"${r1} ${r2}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    assert_eq!(nat, "105 120\n");
+    let (gc, gerr, gok) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
+    assert!(gok, "gc: {gerr}");
+    assert_eq!(gc, "105 120\n");
+}
+
+#[test]
+fn doc_generates_markdown_for_public_items() {
+    // `docs/23`: `otter_fusion doc` emits Markdown for `pub` items — doc comments
+    // as prose, signatures sliced from source — and omits private items.
+    let src = "/// Adds two integers.\n\
+               pub function add(a: i64, b: i64): i64 { a + b }\n\
+               function secret(): i64 { 0 }\n\
+               /// A 2-D point.\n\
+               pub struct Point { x: i64, y: i64 }\n";
+    let (out, err, ok) = lang("doc", src);
+    assert!(ok, "stderr: {err}");
+    assert!(out.contains("## function `add`"), "got:\n{out}");
+    assert!(out.contains("pub function add(a: i64, b: i64): i64"), "got:\n{out}");
+    assert!(out.contains("Adds two integers."), "got:\n{out}");
+    assert!(out.contains("## struct `Point`"), "got:\n{out}");
+    assert!(out.contains("A 2-D point."), "got:\n{out}");
+    // Private items are not documented, and bodies are not shown for functions.
+    assert!(!out.contains("secret"), "private item leaked:\n{out}");
+    assert!(!out.contains("a + b"), "function body leaked:\n{out}");
+}
+
+#[test]
+fn project_manifest_resolves_entry() {
+    // `docs/17` §17.1: `otter_fusion run <dir>` reads `project.toml` and runs the
+    // declared (or default `src/main.otter`) entry.
+    let (out, err, ok) = lang_run_project(
+        "",
+        &[
+            ("project.toml", "[package]\nname = \"demo\"\nkind = \"binary\"\nentry = \"src/main.otter\"\n"),
+            ("src/main.otter", "function main() { println(\"manifest ok\"); }"),
+        ],
+    );
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "manifest ok\n");
+}
+
+#[test]
+fn project_manifest_default_entry_and_submodule() {
+    // No explicit `entry` → defaults to `src/main.otter`; a `mod` submodule loads
+    // relative to the entry (existing module convention).
+    let (out, err, ok) = lang_run_project(
+        "",
+        &[
+            ("project.toml", "name = \"app\"\nkind = \"binary\"\n"),
+            ("src/main.otter", "mod util;\nimport { double } from \"util\";\nfunction main() { println(\"${double(21)}\"); }"),
+            ("src/main/util.otter", "pub function double(x: i64): i64 { x * 2 }"),
+        ],
+    );
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn project_manifest_missing_entry_errors() {
+    let (_out, err, ok) = lang_run_project(
+        "",
+        &[("project.toml", "kind = \"binary\"\n")],
+    );
+    assert!(!ok);
+    assert!(err.contains("does not exist"), "got: {err}");
+}
+
+#[test]
+fn interface_default_methods() {
+    // `docs/10`: an interface method may carry a default body; an implementer
+    // that does not override it uses the default, which can call other methods
+    // through `self` (dispatching to the concrete type, incl. overrides).
+    let src = "interface Greet {\n\
+                 function name(self): str;\n\
+                 function hello(self): str { \"Hi, \" + self.name() }\n\
+                 function loud(self): str { self.hello() + \"!\" }\n\
+               }\n\
+               struct Cat { n: str }\n\
+               struct Dog { n: str }\n\
+               extend Cat: Greet { function name(self): str { self.n } }\n\
+               extend Dog: Greet {\n\
+                 function name(self): str { self.n }\n\
+                 function hello(self): str { \"Woof \" + self.n }\n\
+               }\n\
+               function via_dyn(g: Greet): str { g.hello() }\n\
+               function main() {\n\
+                 var c = Cat { n: \"Tom\" };\n\
+                 var d = Dog { n: \"Rex\" };\n\
+                 println(c.hello());\n\
+                 println(c.loud());\n\
+                 println(d.hello());\n\
+                 println(d.loud());\n\
+                 println(via_dyn(c));\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    assert_eq!(nat, "Hi, Tom\nHi, Tom!\nWoof Rex\nWoof Rex!\nHi, Tom\n");
+}
+
+#[test]
+fn or_patterns_in_match() {
+    // `docs/07`: `A | B | C` matches if any alternative does (alternatives must
+    // not bind variables).
+    let src = "function classify(n: i64): str {\n\
+                 match n {\n\
+                   1 | 2 | 3 => \"small\",\n\
+                   10 | 20 => \"round\",\n\
+                   _ => \"other\",\n\
+                 }\n\
+               }\n\
+               function main() {\n\
+                 println(classify(2));\n\
+                 println(classify(20));\n\
+                 println(classify(99));\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    assert_eq!(nat, "small\nround\nother\n");
+}
+
+#[test]
+fn or_pattern_binding_alternative_is_rejected() {
+    let src = "function f(x: i64 | str): i64 { match x { i64 n | str n => 0, } }\n\
+               function main() { println(\"${f(1)}\"); }";
+    let (_out, err, ok) = lang("check", src);
+    assert!(!ok);
+    assert!(err.contains("may not bind variables"), "got: {err}");
+}
+
+#[test]
+fn list_patterns_in_match() {
+    // `docs/07`: list patterns `[]` / `[x]` / `[a, b]` / `[head, ..tail]` with a
+    // length test and a `..tail` sub-list binding; `[..]` is the catch-all.
+    let src = "function describe(xs: List<i64>): str {\n\
+                 match xs {\n\
+                   [] => \"empty\",\n\
+                   [x] => \"one: ${x}\",\n\
+                   [a, b] => \"two: ${a},${b}\",\n\
+                   [head, ..tail] => \"head ${head} rest ${tail.size()}\",\n\
+                   [..] => \"x\",\n\
+                 }\n\
+               }\n\
+               function main() {\n\
+                 println(describe([]));\n\
+                 println(describe([7]));\n\
+                 println(describe([3, 4]));\n\
+                 println(describe([1, 2, 3, 4, 5]));\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    assert_eq!(nat, "empty\none: 7\ntwo: 3,4\nhead 1 rest 4\n");
+    // GC-stress: the `..tail` slice and managed temporaries survive.
+    let (gc, gerr, gok) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
+    assert!(gok, "gc: {gerr}");
+    assert_eq!(gc, jit);
+}
+
+#[test]
+fn struct_destructuring_in_var() {
+    // `docs/07`: record (`Point { x, y }` / `{ x: a, .. }`) and tuple-struct
+    // (`Pair(a, b)`) destructuring in `var`, including nesting and field rename.
+    let src = "struct Point { x: i64, y: i64 }\n\
+               struct Pair(i64, i64)\n\
+               struct Wrap { p: Point, tag: str }\n\
+               function main() {\n\
+                 var Point { x, y } = Point { x: 3, y: 4 };\n\
+                 println(\"${x} ${y}\");\n\
+                 var Pair(a, b) = Pair(10, 20);\n\
+                 println(\"${a} ${b}\");\n\
+                 var Point { x: px, .. } = Point { x: 7, y: 9 };\n\
+                 println(\"${px}\");\n\
+                 var Wrap { p: Point { x: nx, y: ny }, tag } = Wrap { p: Point { x: 1, y: 2 }, tag: \"hi\" };\n\
+                 println(\"${nx} ${ny} ${tag}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    assert_eq!(nat, "3 4\n10 20\n7\n1 2 hi\n");
+}
+
+#[test]
+fn struct_patterns_in_match() {
+    // Struct variant patterns in `match` over a union, with field binding; the
+    // two variants make the match exhaustive without a `_` arm.
+    let src = "struct Circle { radius: i64 }\n\
+               struct Rect(i64, i64)\n\
+               function area(s: Circle | Rect): i64 {\n\
+                 match s {\n\
+                   Circle { radius } => radius * radius * 3,\n\
+                   Rect(w, h) => w * h,\n\
+                 }\n\
+               }\n\
+               function main() {\n\
+                 println(\"${area(Circle { radius: 10 })}\");\n\
+                 println(\"${area(Rect(4, 5))}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    assert_eq!(nat, "300\n20\n");
+    // GC-stress parity (managed payloads survive the tag tests).
+    let (gc, gerr, gok) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
+    assert!(gok, "gc: {gerr}");
+    assert_eq!(gc, "300\n20\n");
+}
+
+#[test]
+fn struct_pattern_match_non_exhaustive_is_rejected() {
+    // Omitting a union variant's struct pattern is a non-exhaustive match.
+    let src = "struct A { v: i64 }\n\
+               struct B { v: i64 }\n\
+               function f(x: A | B): i64 { match x { A { v } => v, } }\n\
+               function main() { println(\"${f(A { v: 1 })}\"); }";
+    let (_out, err, ok) = lang("check", src);
+    assert!(!ok);
+    assert!(err.contains("non-exhaustive"), "got: {err}");
+}
+
+#[test]
+fn anonymous_function_expressions() {
+    // `docs/09` §4: `function(params): Ret { body }` is the same kind of value
+    // as an arrow closure — it captures by reference and is usable wherever a
+    // closure is (here: bound, capturing, and as a `map` argument).
+    let src = "function main() {\n\
+                 var double = function(x: i64): i64 { x * 2 };\n\
+                 println(\"${double(21)}\");\n\
+                 var n = 10;\n\
+                 var addn = function(y: i64): i64 { y + n };\n\
+                 println(\"${addn(5)}\");\n\
+                 var nums: List<i64> = [1, 2, 3];\n\
+                 var doubled = nums.map(function(x: i64): i64 { x * 2 });\n\
+                 println(\"${doubled[0]} ${doubled[1]} ${doubled[2]}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    assert_eq!(nat, "42\n15\n2 4 6\n");
+}
+
+#[test]
+fn anonymous_function_async() {
+    // An `async` anonymous function expression returns a future when called.
+    let src = "function main(): Future<null> async {\n\
+                 var g = function(n: i64): Future<i64> async { n * 2 };\n\
+                 var r = await g(21);\n\
+                 println(\"${r}\");\n\
+               }";
+    let (out, err, ok) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn async_for_await_over_non_variable_stream() {
+    // `docs/21` §10: `for await x in EXPR` where the stream is a call (not a
+    // bare variable) — the stream is hoisted into a `var` so it survives the
+    // per-iteration suspends.
+    let src = "struct Range { current: i64, end: i64 }\n\
+               extend Range: AsyncIterator<i64> {\n\
+                 function next_async(self): Future<Item<i64> | Done> {\n\
+                   async {\n\
+                     if self.current >= self.end { Done {} }\n\
+                     else {\n\
+                       var _ = await yield_now();\n\
+                       var v: i64 = self.current;\n\
+                       self.current = self.current + 1;\n\
+                       Item { value: v }\n\
+                     }\n\
+                   }\n\
+                 }\n\
+               }\n\
+               function make(n: i64): Range { Range { current: 0, end: n } }\n\
+               function main(): Future<null> async {\n\
+                 var sum = 0;\n\
+                 for await x in make(5) { sum = sum + x; }\n\
+                 println(\"${sum}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    assert_eq!(nat, "10\n"); // 0+1+2+3+4
+}
+
+#[test]
+fn async_for_await_over_interface_object() {
+    // `docs/21` §10: `for await` over an `AsyncIterator<T>` *interface object*
+    // (a `dyn` value), dispatching `next_async` through the vtable.
+    let src = "struct Range { current: i64, end: i64 }\n\
+               extend Range: AsyncIterator<i64> {\n\
+                 function next_async(self): Future<Item<i64> | Done> {\n\
+                   async {\n\
+                     if self.current >= self.end { Done {} }\n\
+                     else {\n\
+                       var _ = await yield_now();\n\
+                       var v: i64 = self.current;\n\
+                       self.current = self.current + 1;\n\
+                       Item { value: v }\n\
+                     }\n\
+                   }\n\
+                 }\n\
+               }\n\
+               function drain(s: AsyncIterator<i64>): Future<i64> async {\n\
+                 var sum = 0;\n\
+                 for await x in s { sum = sum + x; }\n\
+                 sum\n\
+               }\n\
+               function main(): Future<null> async {\n\
+                 var r: Range = Range { current: 0, end: 5 };\n\
+                 var total = await drain(r);\n\
+                 println(\"${total}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    assert_eq!(nat, "10\n");
+}
+
+#[test]
+fn async_closure_as_higher_order_argument() {
+    // An async closure passed where a `(i64) => Future<i64>` is expected.
+    let src = "function apply(f: (i64) => Future<i64>, x: i64): Future<i64> async {\n\
+                 var r = await f(x);\n\
+                 r\n\
+               }\n\
+               function main(): Future<null> async {\n\
+                 var mult = 3;\n\
+                 var r = await apply((n: i64): Future<i64> async => n * mult, 14);\n\
+                 println(\"${r}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    assert_eq!(nat, "42\n");
+}
+
+#[test]
+fn async_await_in_short_circuit_operand_is_rejected() {
+    // An `await` in the *right* operand of `&&`/`||` is conditional; hoisting it
+    // would change evaluation. It is left in place and reported clearly rather
+    // than miscompiled.
+    let src = "function tf(): Future<bool> async { true }\n\
+               function compute(): Future<bool> async {\n\
+                 var r = true && await tf();\n\
+                 r\n\
+               }\n\
+               function main(): Future<null> async { var _ = await compute(); }";
+    let (_out, err, ok) = lang("run", src);
+    assert!(!ok);
+    assert!(err.contains("`await` in this position is not yet supported"), "got: {err}");
+}
+
+#[test]
 fn stdlib_list_iter() {
     // `docs/18` §5: `List.iter(): Iterator<E>` — a cursor view driven by the
     // `Iterator` protocol.

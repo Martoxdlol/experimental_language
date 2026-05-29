@@ -317,6 +317,172 @@ pub unsafe extern "C" fn lang_async_sleep(ms: i64, ready_tid: i64, pending_tid: 
     bx
 }
 
+// -- timeout: race a future against a deadline -------------------------------
+//
+// `timeout(fut, ms): Future<T | TimedOut>` polls `fut`; if it is ready the value
+// is reboxed as the `T` variant of `T | TimedOut`, otherwise once `ms` elapses
+// the future resolves to `TimedOut`. The code generator supplies `t_id` /
+// `t_is_ptr` (so the runtime can build the `T`-variant box and the collector can
+// trace its payload) plus the `TimedOut` / `Ready` / `Pending` type ids.
+
+struct TimeoutCell {
+    ms: i64,
+    started: AtomicBool,
+    fired: AtomicBool,
+}
+fn timeout_registry() -> &'static Mutex<HashMap<u64, std::sync::Arc<TimeoutCell>>> {
+    static R: OnceLock<Mutex<HashMap<u64, std::sync::Arc<TimeoutCell>>>> = OnceLock::new();
+    R.get_or_init(|| Mutex::new(HashMap::new()))
+}
+static TIMEOUT_NEXT: AtomicU64 = AtomicU64::new(1);
+
+fn timeout_data_desc() -> *const u8 {
+    // [inner_fut @0 (managed)][ready_tid][pending_tid][t_id][t_is_ptr]
+    // [timedout_tid][id] — only the inner future is a managed pointer.
+    static D: OnceLock<usize> = OnceLock::new();
+    *D.get_or_init(|| make_desc(56, &[0]) as usize) as *const u8
+}
+fn timeout_vtable() -> *const u8 {
+    static V: OnceLock<usize> = OnceLock::new();
+    *V.get_or_init(|| {
+        let f: extern "C" fn(*mut u8, *mut Context) -> *mut u8 = timeout_poll;
+        Box::leak(Box::new([f as usize])) as *const [usize; 1] as usize
+    }) as *const u8
+}
+
+/// Wrap a `T | TimedOut` union box (`tbox`) in a `Ready<Out>` struct and then in
+/// an outer `Ready<Out> | Pending` box tagged `ready_tid`. Caller holds a GC
+/// pause around the whole sequence.
+unsafe fn wrap_ready(tbox: *mut u8, ready_tid: i64) -> *mut u8 {
+    let ready_out = unsafe { gc::alloc(value_desc_ptr()) }; // Ready<Out>.value @0 (managed)
+    unsafe { (ready_out as *mut usize).write(tbox as usize) };
+    let outer = unsafe { gc::alloc(union_managed_desc()) };
+    unsafe {
+        (outer as *mut i64).write(ready_tid);
+        ((outer as usize + 8) as *mut usize).write(ready_out as usize);
+    }
+    outer
+}
+fn value_desc_ptr() -> *const u8 {
+    // A `Ready<Out>` struct holding one managed pointer field.
+    static D: OnceLock<usize> = OnceLock::new();
+    *D.get_or_init(|| make_desc(8, &[0]) as usize) as *const u8
+}
+
+extern "C" fn timeout_poll(data: *mut u8, ctx: *mut Context) -> *mut u8 {
+    let inner_fut = unsafe { (data as *const usize).read() } as *mut u8;
+    let ready_tid = unsafe { ((data as usize + 8) as *const i64).read() };
+    let pending_tid = unsafe { ((data as usize + 16) as *const i64).read() };
+    let t_id = unsafe { ((data as usize + 24) as *const i64).read() };
+    let t_is_ptr = unsafe { ((data as usize + 32) as *const i64).read() };
+    let timedout_tid = unsafe { ((data as usize + 40) as *const i64).read() };
+    let id = unsafe { ((data as usize + 48) as *const i64).read() } as u64;
+
+    // Poll the inner future once.
+    let vtable = unsafe { (inner_fut as *const usize).read() } as *const usize;
+    let poll: extern "C" fn(*mut u8, *mut Context) -> *mut u8 =
+        unsafe { std::mem::transmute(vtable.read()) };
+    let inner_data = unsafe { ((inner_fut as usize + 8) as *const usize).read() } as *mut u8;
+    let r = poll(inner_data, ctx);
+    let tag = unsafe { (r as *const i64).read() };
+
+    if tag != pending_tid {
+        // Inner ready: rebox its value as the `T` variant of `T | TimedOut`.
+        let ready_struct = unsafe { ((r as usize + 8) as *const usize).read() };
+        let value = unsafe { (ready_struct as *const i64).read() };
+        gc::pause();
+        let tbox = unsafe {
+            gc::alloc(if t_is_ptr != 0 { union_managed_desc() } else { union_plain_desc() })
+        };
+        unsafe {
+            (tbox as *mut i64).write(t_id);
+            ((tbox as usize + 8) as *mut i64).write(value);
+        }
+        let out = unsafe { wrap_ready(tbox, ready_tid) };
+        gc::resume();
+        return out;
+    }
+
+    // Inner pending: arm the deadline timer on first poll, then report
+    // `TimedOut` once it fires (the inner future's own waker covers the
+    // ready case; either wake re-polls us).
+    let cell = timeout_registry().lock().unwrap().get(&id).cloned();
+    if let Some(cell) = cell {
+        if cell.fired.load(Ordering::SeqCst) {
+            gc::pause();
+            let tbox = unsafe { gc::alloc(union_plain_desc()) };
+            unsafe { (tbox as *mut i64).write(timedout_tid) };
+            let out = unsafe { wrap_ready(tbox, ready_tid) };
+            gc::resume();
+            return out;
+        }
+        if !cell.started.swap(true, Ordering::SeqCst) {
+            let c = unsafe { &*ctx };
+            let waker_data = c.waker_data as usize;
+            let wake_fn = c.wake_fn;
+            let cell2 = cell.clone();
+            let ms = cell.ms.max(0) as u64;
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(ms));
+                cell2.fired.store(true, Ordering::SeqCst);
+                wake_fn(waker_data as *mut u8);
+            });
+        }
+    }
+    gc::pause();
+    let p = unsafe { pending_box(pending_tid) };
+    gc::resume();
+    p
+}
+
+/// Construct a `timeout(fut, ms)` future (`docs/21` §9).
+///
+/// # Safety
+/// Callable only from generated code; `fut` is a managed `Future<T>` box.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lang_async_timeout(
+    fut: *mut u8,
+    ms: i64,
+    t_id: i64,
+    t_is_ptr: i64,
+    timedout_tid: i64,
+    ready_tid: i64,
+    pending_tid: i64,
+) -> *mut u8 {
+    let id = TIMEOUT_NEXT.fetch_add(1, Ordering::Relaxed);
+    timeout_registry().lock().unwrap().insert(
+        id,
+        std::sync::Arc::new(TimeoutCell {
+            ms,
+            started: AtomicBool::new(false),
+            fired: AtomicBool::new(false),
+        }),
+    );
+    // `fut` is unrooted while we build the timeout future — pin it across the
+    // allocations so a collection cannot free it before it is stored.
+    gc::add_extra_root(fut as usize);
+    gc::pause();
+    let data = unsafe { gc::alloc(timeout_data_desc()) };
+    unsafe {
+        (data as *mut usize).write(fut as usize);
+        ((data as usize + 8) as *mut i64).write(ready_tid);
+        ((data as usize + 16) as *mut i64).write(pending_tid);
+        ((data as usize + 24) as *mut i64).write(t_id);
+        ((data as usize + 32) as *mut i64).write(t_is_ptr);
+        ((data as usize + 40) as *mut i64).write(timedout_tid);
+        ((data as usize + 48) as *mut i64).write(id as i64);
+    }
+    let bx = unsafe { gc::alloc(yield_box_desc()) };
+    unsafe {
+        (bx as *mut usize).write(timeout_vtable() as usize);
+        ((bx as usize + 8) as *mut usize).write(data as usize);
+        ((bx as usize + 16) as *mut i64).write(0);
+    }
+    gc::resume();
+    gc::remove_extra_root(fut as usize);
+    bx
+}
+
 /// Construct a `yield_now()` future (`docs/21`). `ready_tid` / `pending_tid` are
 /// the code generator's `Ready<null>` and `Pending` type ids, so the future's
 /// `poll` returns a `Ready<null> | Pending` union the awaiting state machine and

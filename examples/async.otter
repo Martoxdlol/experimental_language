@@ -56,7 +56,14 @@ function sum_range(r: Range): Future<i64> async {
 function compute(): Future<i64> async {
   var a: i64 = await answer();
   var b: i64 = await greet_len("world");
-  a + b
+  // `await` may appear nested in a larger expression (function arguments,
+  // operands, …): the compiler hoists each one into a preceding binding in
+  // evaluation order, so this is exactly `a + b` with both already awaited.
+  add_two(await answer(), await greet_len("world")) - a - b + a + b
+}
+
+function add_two(x: i64, y: i64): i64 {
+  x + y
 }
 
 function greet_len(name: str): Future<i64> async {
@@ -93,6 +100,12 @@ function main(): Future<null> async {
   var computed: i64 = await async { base + 42 };
   println("computed = ${computed}");
 
+  // An async closure `(p) async => E` returns a future when called; it captures
+  // the outer environment (here `base`) and may `await` inside.
+  var scale = (n: i64): Future<i64> async => base * n;
+  var scaled: i64 = await scale(3);
+  println("scaled = ${scaled}");
+
   // `await` chaining: answer() = 42, greet_len("world") = len("hello, world") = 12.
   var c: i64 = await compute();
   println("compute = ${c}");
@@ -111,4 +124,12 @@ function main(): Future<null> async {
   var h: Future<i64> = spawn tick(5);
   var spawned: i64 = await h;
   println("spawned = ${spawned}");
+
+  // `timeout(fut, ms)` races a future against a deadline, resolving to the
+  // value (`T`) or `TimedOut`. `answer()` is instant, so it beats 100ms.
+  var t: i64 | TimedOut = await timeout(answer(), 100);
+  match t {
+    i64 v    => println("timeout = ${v}"),
+    TimedOut => println("timeout = timed out"),
+  }
 }

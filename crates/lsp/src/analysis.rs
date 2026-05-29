@@ -13,13 +13,15 @@ use compiler::hir::{self, Hir};
 use compiler::ids::{DefId, LocalId};
 use compiler::lexer::lex;
 use compiler::parser::parse;
-use compiler::sema::symbols::{Def, DefKind, Program};
-use compiler::sema::{analyze, Analysis, Builtin, ValueRes};
+use compiler::ast::ModuleKind;
+use compiler::sema::symbols::{Def, DefKind, Externals, Program};
+use compiler::sema::{analyze, analyze_multi, Analysis, Builtin, ValueRes};
 use compiler::span::{FileId, SourceMap, Span};
 use compiler::token::{Token, TokenKind};
 use compiler::ty::Ty;
 
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
 use tower_lsp::lsp_types::{Position, Range};
 
@@ -256,6 +258,38 @@ impl HirIndex {
     }
 }
 
+/// Discover the file-backed submodules declared in `module`, parse each into
+/// `map`/`externals` (recursively), and key them by their module path from the
+/// crate root. Mirrors the CLI's `load_submodules` but reads through `read` (so
+/// an open, unsaved editor buffer wins over the on-disk copy) and silently skips
+/// modules that cannot be read (the open document still analyses, with an
+/// "unloaded module" the checker reports against the import).
+fn load_subs(
+    map: &mut SourceMap,
+    dir: &Path,
+    module: &Module,
+    mod_path: &mut Vec<String>,
+    externals: &mut Externals,
+    read: &dyn Fn(&Path) -> Option<String>,
+) {
+    for item in &module.items {
+        let ItemKind::Module(m) = &item.kind else { continue };
+        if !matches!(m.kind, ModuleKind::External) {
+            continue;
+        }
+        let child_path = dir.join(format!("{}.otter", m.name.name));
+        let Some(src) = read(&child_path) else { continue };
+        let file = map.add_file(child_path.display().to_string(), src.clone());
+        let (tokens, _lex_errors) = lex(&src, file);
+        let (child_module, _parse_errors) = parse(&src, &tokens);
+        mod_path.push(m.name.name.clone());
+        let child_dir = dir.join(&m.name.name);
+        load_subs(map, &child_dir, &child_module, mod_path, externals, read);
+        externals.insert(mod_path.clone(), child_module);
+        mod_path.pop();
+    }
+}
+
 /// The value resolution a call's callee name folds into (for IDE queries on the
 /// call name). Builtin methods and closure-value calls have no callee def — the
 /// former resolves structurally, the latter is a `Name`/expression handled
@@ -272,14 +306,52 @@ fn callee_resolution(kind: &hir::CallKind) -> Option<ValueRes> {
 }
 
 impl Compiled {
-    /// Run the whole front-end over `text`.
+    /// Run the whole front-end over a single document's `text` (no submodule
+    /// loading — used by tests and for documents without a filesystem path).
     pub fn new(text: String) -> Compiled {
+        Compiled::build(text, None, &|_| None)
+    }
+
+    /// Run the front-end over an on-disk document, loading the file-backed
+    /// submodules it declares so cross-module imports resolve (`docs/17`). The
+    /// document is at `base_dir/<stem>.otter`; its submodules live under
+    /// `base_dir/<stem>/`. `read` resolves a submodule path to its text —
+    /// the server passes a reader that prefers an open editor buffer over disk.
+    pub fn new_multi(
+        text: String,
+        base_dir: std::path::PathBuf,
+        stem: String,
+        read: &dyn Fn(&Path) -> Option<String>,
+    ) -> Compiled {
+        Compiled::build(text, Some((base_dir, stem)), read)
+    }
+
+    fn build(
+        text: String,
+        project: Option<(std::path::PathBuf, String)>,
+        read: &dyn Fn(&Path) -> Option<String>,
+    ) -> Compiled {
         let mut map = SourceMap::new();
         let file = map.add_file("<doc>", text.clone());
 
         let (tokens, lex_errors) = lex(&text, file);
         let (module, parse_errors) = parse(&text, &tokens);
-        let analysis = analyze(&module);
+
+        // Load file-backed submodules into `externals` so the open document
+        // type-checks against them (a `mod foo` in `<stem>.otter` lives at
+        // `<stem>/foo.otter`).
+        let mut externals = Externals::new();
+        if let Some((base_dir, stem)) = project {
+            let dir = base_dir.join(stem);
+            let mut mod_path = Vec::new();
+            load_subs(&mut map, &dir, &module, &mut mod_path, &mut externals, read);
+        }
+
+        let analysis = if externals.is_empty() {
+            analyze(&module)
+        } else {
+            analyze_multi(&module, &externals)
+        };
         let index = HirIndex::build(&analysis.hir);
 
         let mut diagnostics = Vec::new();
@@ -293,8 +365,8 @@ impl Compiled {
             diagnostics.push((e.span, e.kind.to_string()));
         }
         // Keep only diagnostics that point into the document itself; spans in
-        // the prelude or `@Derive`-synthesised virtual files have no editor
-        // location.
+        // the prelude, `@Derive`-synthesised virtual files, or loaded submodules
+        // have no editor location in this document.
         diagnostics.retain(|(s, _)| s.file == DOC_FILE);
 
         Compiled { text, map, tokens, module, analysis, index, diagnostics }
@@ -356,7 +428,10 @@ impl Compiled {
             }
             ValueRes::Builtin(_) => return None,
         };
-        (span.file == DOC_FILE).then_some(span)
+        // Accept the open document and any loaded submodule file; a virtual file
+        // (the prelude or synthesised code, beyond the real file count) has no
+        // editor location.
+        ((span.file.0 as usize) < self.map.file_count()).then_some(span)
     }
 
     /// A human-readable definition for `def`, used in hover popups.
@@ -983,6 +1058,49 @@ function main() {
     }
 
     #[test]
+    fn multi_file_import_resolves_submodule() {
+        // `main.otter` imports from a `util` submodule. With submodule loading
+        // the import resolves and the program has no diagnostics; without it the
+        // checker would report "cannot find module `util`".
+        let main = "mod util;\n\
+                    import { double } from \"util\";\n\
+                    function main() { var x = double(21); }";
+        let util = "pub function double(x: i64): i64 { x * 2 }";
+        let read = |p: &Path| -> Option<String> {
+            if p.ends_with("main/util.otter") {
+                Some(util.to_string())
+            } else {
+                None
+            }
+        };
+        let c = Compiled::new_multi(
+            main.into(),
+            std::path::PathBuf::from("/proj/src"),
+            "main".to_string(),
+            &read,
+        );
+        assert!(c.diagnostics.is_empty(), "unexpected: {:?}", c.diagnostics);
+    }
+
+    #[test]
+    fn missing_submodule_does_not_panic() {
+        // A `mod` whose file cannot be read leaves the import unresolved (a
+        // diagnostic against the open doc) but must not crash the server.
+        let main = "mod util;\n\
+                    import { double } from \"util\";\n\
+                    function main() { var x = double(21); }";
+        let read = |_: &Path| -> Option<String> { None };
+        let c = Compiled::new_multi(
+            main.into(),
+            std::path::PathBuf::from("/proj/src"),
+            "main".to_string(),
+            &read,
+        );
+        // It analysed (no panic); the unresolved import surfaces as a diagnostic.
+        assert!(!c.diagnostics.is_empty());
+    }
+
+    #[test]
     fn resolution_and_goto_for_function_call() {
         let c = Compiled::new(PROG.into());
         let off = find_at(PROG, "add(1");
@@ -992,6 +1110,34 @@ function main() {
         // Definition points at the `add` in `function add`.
         assert_eq!(c.map.slice(def), "add");
         assert_eq!(def.lo.to_usize(), PROG.find("add").unwrap());
+    }
+
+    #[test]
+    fn cross_file_goto_resolves_into_submodule() {
+        // Goto-definition on a call to an imported function resolves into the
+        // submodule's file (a non-`DOC_FILE` span the server maps to that file).
+        let main = "mod util;\n\
+                    import { double } from \"util\";\n\
+                    function main() { var x = double(21); }";
+        let util = "pub function double(x: i64): i64 { x * 2 }";
+        let read = |p: &Path| -> Option<String> {
+            if p.ends_with("main/util.otter") { Some(util.to_string()) } else { None }
+        };
+        let c = Compiled::new_multi(
+            main.into(),
+            std::path::PathBuf::from("/proj/src"),
+            "main".to_string(),
+            &read,
+        );
+        let off = main.find("double(21)").unwrap();
+        let (_, res) = c.resolution_at(off).expect("resolution at call");
+        let def = c.definition_span(res).expect("def span");
+        // The definition lives in the submodule file (not the open document).
+        assert_ne!(def.file, DOC_FILE);
+        assert!((def.file.0 as usize) < c.map.file_count());
+        let sf = c.map.file(def.file);
+        assert!(sf.name.ends_with("main/util.otter"), "got: {}", sf.name);
+        assert_eq!(&sf.src[def.lo.to_usize()..def.hi.to_usize()], "double");
     }
 
     #[test]

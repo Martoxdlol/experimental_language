@@ -762,6 +762,9 @@ pub enum Intrinsic {
     YieldNow,
     /// `sleep(ms)`. Was `async_sleeps`.
     AsyncSleep,
+    /// `timeout(fut, ms): Future<T | TimedOut>` — `output` is the success type
+    /// `T` (so codegen can pass its type id + pointer-ness to the runtime).
+    AsyncTimeout { output: Ty },
     /// `fut.cancel()` — a no-op for compute-only futures. Was `future_cancels`.
     FutureCancel,
     /// `Foreign.alloc<T>()` / `alloc_zeroed<T>()`. Was `foreign_allocs`.

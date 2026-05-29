@@ -10,6 +10,15 @@ function area(s: Shape): f64 {
   }
 }
 
+// Destructuring patterns bind a variant's fields directly: `Circle { radius }`
+// (record) pulls the field out without a separate `.field` access.
+function perimeter(s: Shape): f64 {
+  match s {
+    Circle { radius } => 2.0 * 3.14159 * radius,
+    Rect { w, h }     => 2.0 * (w + h),
+  }
+}
+
 function describe(x: i64 | str | null): str {
   match x {
     i64 n => "int " + (n as str),
@@ -21,6 +30,8 @@ function describe(x: i64 | str | null): str {
 function main() {
   println("circle area = " + (area(Circle { radius: 2.0 }) as str));
   println("rect area = " + (area(Rect { w: 3.0, h: 4.0 }) as str));
+  println("circle perim = " + (perimeter(Circle { radius: 2.0 }) as str));
+  println("rect perim = " + (perimeter(Rect { w: 3.0, h: 4.0 }) as str));
   println(describe(42));
   println(describe("hello"));
   println(describe(null));

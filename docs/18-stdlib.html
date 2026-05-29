@@ -58,8 +58,10 @@
 
 <h1>18. Standard Library</h1>
 <p class="lead">
-  Two tiers — <code>core:prelude</code> (auto-imported, needs only an allocator) and
-  <code>std:*</code> (explicit, needs an OS).
+  Two tiers — <code>core:*</code> (needs only an allocator) and
+  <code>std:*</code> (needs an OS). Nothing is auto-imported: built-in <em>syntax</em>
+  works without an import, but every <em>name</em> — including <code>List</code> — is imported
+  (see <a href="17-modules.html#the-prelude-rule">the prelude rule</a>).
 </p>
 
 <div class="toc">
@@ -95,12 +97,12 @@
 
       <!-- core:prelude -->
       <rect x="40" y="120" width="800" height="100" rx="6" fill="#f3eefa" stroke="#6b4ba8" stroke-width="2"/>
-      <text x="60" y="146" font-weight="700" fill="#6b4ba8">core:prelude · auto-imported, OS not required</text>
+      <text x="60" y="146" font-weight="700" fill="#6b4ba8">core: tier · no import for syntax · OS not required</text>
 
       <g transform="translate(60, 158)" font-size="10.5">
         <rect width="120" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="60" y="16" text-anchor="middle">str</text>
-        <rect x="130" width="90" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="175" y="16" text-anchor="middle">List&lt;T&gt;</text>
-        <rect x="230" width="100" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="280" y="16" text-anchor="middle">Map&lt;K, V&gt;</text>
+        <rect x="130" width="90" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="175" y="16" text-anchor="middle">List → coll.</text>
+        <rect x="230" width="100" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="280" y="16" text-anchor="middle">Map → coll.</text>
         <rect x="340" width="110" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="395" y="16" text-anchor="middle">Iterator&lt;T&gt;</text>
         <rect x="460" width="110" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="515" y="16" text-anchor="middle">Item&lt;T&gt; · Done</text>
         <rect x="580" width="80" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="620" y="16" text-anchor="middle">Buffer</text>
@@ -127,7 +129,7 @@
       </g>
     </g>
   </svg>
-  <div class="diagram-caption">This chapter documents the data-oriented parts of <code>core:prelude</code>. Interfaces are in 15-operators; concurrency in 20/21.</div>
+  <div class="diagram-caption">This chapter documents the data-oriented parts of the <code>core:</code> tier. <code>List</code>/<code>Map</code>/<code>Set</code> live in <code>core:collections</code> (imported by name) and use a deterministic default hasher. Interfaces are in 15-operators; concurrency in 20/21.</div>
 </div>
 
 <!-- =========================================================== -->
@@ -318,6 +320,8 @@ pub function with_context&lt;T, E: Error&gt;(
 <!-- =========================================================== -->
 <h2 id="list">5. <code>List&lt;T&gt;</code></h2>
 
+<p>Lives in <code>core:collections</code> (allocator-only, freestanding-safe): <code>import { List } from "core:collections"</code>. The <code>[…]</code> literal needs no import; naming <code>List</code> does.</p>
+
 <pre><code>var a: List&lt;i64&gt; = [1, 2, 3]
 var b = List.new&lt;i64&gt;()
 var c = List&lt;i64&gt;()          // shorthand — same as List.new&lt;i64&gt;()</code></pre>
@@ -387,6 +391,8 @@ if <code>T: Eq</code>; <code>Hash</code> if <code>T: Hash</code>.</p>
 
 <!-- =========================================================== -->
 <h2 id="map">6. <code>Map&lt;K, V&gt;</code></h2>
+
+<p>Lives in <code>core:collections</code>: <code>import { Map } from "core:collections"</code>. It uses a deterministic default hasher (<code>core:hash</code>) — fast and freestanding-safe, but not HashDoS-resistant; supply a keyed hasher for untrusted keys.</p>
 
 <pre><code>var a: Map&lt;str, i64&gt; = { "x": 1, "y": 2 }
 var b = Map.new&lt;str, i64&gt;()

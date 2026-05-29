@@ -16,7 +16,7 @@ use std::process::{Command as ProcCommand, ExitCode};
 
 use clap::{Parser, Subcommand, ValueEnum};
 
-use compiler::ast::{ItemKind, Module, ModuleKind};
+use compiler::ast::{Item, ItemKind, Module, ModuleKind, Visibility};
 use compiler::lexer::lex;
 use compiler::parser::parse;
 use compiler::sema::symbols::Externals;
@@ -59,6 +59,12 @@ enum Command {
         #[arg(long)]
         release: bool,
     },
+    /// Generate Markdown API documentation for a file or project's public items
+    /// (`docs/23`), printed to stdout.
+    Doc {
+        /// Path to the `.otter` source file, project directory, or `project.toml`.
+        file: PathBuf,
+    },
     /// Pretty-print an intermediate representation to stdout (observability).
     /// Output is stable and deterministic, so it is safe to snapshot-test.
     Emit {
@@ -96,9 +102,195 @@ fn main() -> ExitCode {
         Command::Check { file } => (file, Stage::Check, false),
         Command::Build { file, output, release } => (file, Stage::Build { output }, release),
         Command::Run { file, release } => (file, Stage::Run, release),
-        Command::Emit { ir, file } => return emit(&file, ir),
+        Command::Emit { ir, file } => {
+            let entry = match resolve_entry(&file) {
+                Ok(e) => e,
+                Err(msg) => {
+                    eprintln!("error: {msg}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            return emit(&entry, ir);
+        }
+        Command::Doc { file } => {
+            let entry = match resolve_entry(&file) {
+                Ok(e) => e,
+                Err(msg) => {
+                    eprintln!("error: {msg}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            return gen_doc(&entry);
+        }
     };
-    drive(&file, stage, release)
+    // Resolve the entry source file: a `.otter` file is used directly; a
+    // directory or `project.toml` is read as a project manifest (`docs/17`).
+    let entry = match resolve_entry(&file) {
+        Ok(e) => e,
+        Err(msg) => {
+            eprintln!("error: {msg}");
+            return ExitCode::FAILURE;
+        }
+    };
+    drive(&entry, stage, release)
+}
+
+/// A parsed `project.toml` manifest (`docs/17` §17.1) — the subset the
+/// toolchain currently uses.
+struct Manifest {
+    /// `kind = "binary" | "library" | "library+bins"` (default `"binary"`).
+    kind: String,
+    /// Explicit `entry = "..."`, if given.
+    entry: Option<String>,
+    /// `src = "..."` source root (default `"src"`).
+    src: String,
+}
+
+/// Resolve the entry `.otter` source file from a CLI path argument: a `.otter`
+/// file (or any non-directory, non-manifest path) is used directly; a directory
+/// or a `project.toml` path is read as a project manifest and its entry file is
+/// returned (relative to the project root).
+fn resolve_entry(input: &Path) -> Result<PathBuf, String> {
+    if input.extension().and_then(|e| e.to_str()) == Some("otter") {
+        return Ok(input.to_path_buf());
+    }
+    let (manifest_path, root) = if input.is_dir() {
+        (input.join("project.toml"), input.to_path_buf())
+    } else if input.file_name().and_then(|n| n.to_str()) == Some("project.toml") {
+        (input.to_path_buf(), input.parent().unwrap_or(Path::new(".")).to_path_buf())
+    } else {
+        // Not a `.otter` file, directory, or manifest — treat it as a source path
+        // and let the reader report a clear error if it does not exist.
+        return Ok(input.to_path_buf());
+    };
+    let text = std::fs::read_to_string(&manifest_path)
+        .map_err(|e| format!("cannot read manifest `{}`: {e}", manifest_path.display()))?;
+    let m = parse_manifest(&text);
+    let entry_rel = match m.entry {
+        Some(e) => e,
+        None => match m.kind.as_str() {
+            "library" | "library+bins" => format!("{}/lib.otter", m.src),
+            // "binary" and any unrecognised kind default to a binary entry.
+            _ => format!("{}/main.otter", m.src),
+        },
+    };
+    let entry = root.join(entry_rel);
+    if !entry.exists() {
+        return Err(format!(
+            "manifest `{}` points at entry `{}`, which does not exist",
+            manifest_path.display(),
+            entry.display()
+        ));
+    }
+    Ok(entry)
+}
+
+/// Generate Markdown API documentation for `path`'s public items (`docs/23`),
+/// printed to stdout. Doc comments (`///`) become prose; each item's signature
+/// is sliced from source so it matches the author's exact syntax.
+fn gen_doc(path: &Path) -> ExitCode {
+    let src = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: cannot read `{}`: {e}", path.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut map = SourceMap::new();
+    let file = map.add_file(path.display().to_string(), src.clone());
+    let (tokens, _lex_errors) = lex(&src, file);
+    let (module, parse_errors) = parse(&src, &tokens);
+    for e in &parse_errors {
+        render(&map, e.span, "error", &e.kind.to_string());
+    }
+
+    println!("# API Documentation\n");
+    let mut any = false;
+    for item in &module.items {
+        if !matches!(item.visibility, Visibility::Public(_)) {
+            continue;
+        }
+        let Some((label, name)) = doc_item_label(item) else { continue };
+        any = true;
+        println!("## {label} `{name}`\n");
+        println!("```otter\n{}\n```\n", doc_signature(&src, item));
+        let prose = render_doc_comments(item);
+        if !prose.is_empty() {
+            println!("{prose}\n");
+        }
+    }
+    if !any {
+        println!("_No public items._");
+    }
+    ExitCode::SUCCESS
+}
+
+/// The `(kind label, name)` of a documentable top-level item, or `None` for
+/// kinds that are not documented as standalone API entries.
+fn doc_item_label(item: &Item) -> Option<(&'static str, String)> {
+    Some(match &item.kind {
+        ItemKind::Function(f) => ("function", f.name.name.clone()),
+        ItemKind::Struct(s) => ("struct", s.name.name.clone()),
+        ItemKind::Interface(i) => ("interface", i.name.name.clone()),
+        ItemKind::TypeAlias(t) => ("type", t.name.name.clone()),
+        ItemKind::Var(v) => ("var", v.name.name.clone()),
+        _ => return None, // extends/externs/modules/imports: follow-up
+    })
+}
+
+/// The signature shown for an item: a function's header (up to its body), else
+/// the whole item source (struct fields, interface methods, alias body…).
+fn doc_signature(src: &str, item: &Item) -> String {
+    // Start after the doc comments (rendered separately below); attributes that
+    // follow the docs are kept as part of the signature.
+    let start = item
+        .docs
+        .iter()
+        .map(|d| d.span.hi.to_usize())
+        .max()
+        .unwrap_or(item.span.lo.to_usize());
+    let end = if let ItemKind::Function(f) = &item.kind {
+        f.body.as_ref().map(|b| b.span.lo.to_usize()).unwrap_or(item.span.hi.to_usize())
+    } else {
+        item.span.hi.to_usize()
+    };
+    src.get(start..end).unwrap_or("").trim().to_string()
+}
+
+/// Join an item's `///` doc comments into Markdown prose (the leading marker and
+/// one optional space are stripped from each line).
+fn render_doc_comments(item: &Item) -> String {
+    item.docs
+        .iter()
+        .map(|d| {
+            let t = d.text.trim_start();
+            let t = t.strip_prefix("///").or_else(|| t.strip_prefix("//!")).unwrap_or(t);
+            t.strip_prefix(' ').unwrap_or(t).trim_end()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Parse the manifest subset we use: `key = "value"` pairs (sections and other
+/// keys are tolerated and ignored). A hand-rolled reader avoids a TOML
+/// dependency for the few fields the toolchain currently reads.
+fn parse_manifest(text: &str) -> Manifest {
+    let mut kind = "binary".to_string();
+    let mut entry = None;
+    let mut src = "src".to_string();
+    for raw in text.lines() {
+        let line = raw.split('#').next().unwrap_or("").trim();
+        let Some((key, val)) = line.split_once('=') else { continue };
+        let key = key.trim();
+        let val = val.trim().trim_matches('"').to_string();
+        match key {
+            "kind" => kind = val,
+            "entry" => entry = Some(val),
+            "src" => src = val,
+            _ => {}
+        }
+    }
+    Manifest { kind, entry, src }
 }
 
 /// Pretty-print one intermediate representation of `path` to stdout. Front-end
