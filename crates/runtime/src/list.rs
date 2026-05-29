@@ -96,6 +96,21 @@ pub unsafe extern "C" fn lang_list_clear(h: *mut u8) {
     unsafe { lset(h, L_LEN, 0) };
 }
 
+/// `xs.truncate(n)` (`docs/18`): shorten the list to at most `n` elements
+/// (no-op if `n >= size`; capacity kept). `n < 0` is treated as `0`.
+///
+/// # Safety
+/// `h` must be a valid list handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lang_list_truncate(h: *mut u8, n: i64) {
+    let len = unsafe { lfield(h, L_LEN) } as i64;
+    if n < 0 {
+        unsafe { lset(h, L_LEN, 0) };
+    } else if n < len {
+        unsafe { lset(h, L_LEN, n as u64) };
+    }
+}
+
 /// Remove the last element, decrement the length, and return its raw slot.
 /// The caller (codegen) guards `len > 0` before calling.
 #[unsafe(no_mangle)]

@@ -1417,7 +1417,66 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             }
             hir::ForDriver::ListFast { elem } => self.h_for_list(pattern, iter, body, *elem),
             hir::ForDriver::AsyncIter(info) => self.h_for_async(pattern, iter, body, info),
+            hir::ForDriver::StrChars => self.h_for_str_chars(pattern, iter, body),
         }
+    }
+
+    /// `for ch in s` over a `str` (`docs/18` §4): snapshot the Unicode scalars
+    /// into a `List<char>` (`lang_str_to_chars`) and index-loop them — exactly
+    /// the desugaring `for ch in s.chars()` with no intermediate iterator
+    /// struct. The snapshot is rooted across the loop's safepoints.
+    fn h_for_str_chars(&mut self, pattern: &hir::Pattern, iter: &hir::Expr, body: &hir::Block)
+        -> CgResult<Option<Value>>
+    {
+        let s = self
+            .h_expr(iter)?
+            .ok_or_else(|| CodegenError::new(iter.span, "string has no value"))?;
+        let list = self
+            .call_intrinsic("lang_str_to_chars", &[PTR], Some(PTR), &[s])
+            .expect("str chars snapshot returns a list");
+        self.mark_root(list);
+        let elem = self.cx.analysis.tcx.char;
+        let iv = self.b.declare_var(types::I64);
+        let zero = self.b.ins().iconst(types::I64, 0);
+        self.b.def_var(iv, zero);
+        let header = self.b.create_block();
+        let body_bb = self.b.create_block();
+        let latch = self.b.create_block();
+        let exit = self.b.create_block();
+        self.b.ins().jump(header, &[]);
+        self.term = true;
+        self.switch(header);
+        self.emit_safepoint();
+        let i = self.b.use_var(iv);
+        let size = self
+            .call_intrinsic("lang_list_size", &[PTR], Some(types::I64), &[list])
+            .expect("size");
+        let cond = self.b.ins().icmp(IntCC::SignedLessThan, i, size);
+        self.b.ins().brif(cond, body_bb, &[], exit, &[]);
+        self.term = true;
+        self.switch(body_bb);
+        let i2 = self.b.use_var(iv);
+        let raw = self
+            .call_intrinsic("lang_list_get", &[PTR, types::I64], Some(types::I64), &[list, i2])
+            .expect("get");
+        let elem_val = self.i64_to_elem(raw, elem, iter.span)?;
+        self.h_bind_pattern(pattern, elem_val, elem)?;
+        self.loops.push(LoopCg { continue_block: latch, break_block: exit, has_value: false });
+        self.h_block(body)?;
+        if !self.term {
+            self.b.ins().jump(latch, &[]);
+            self.term = true;
+        }
+        self.loops.pop();
+        self.switch(latch);
+        let i3 = self.b.use_var(iv);
+        let one = self.b.ins().iconst(types::I64, 1);
+        let inc = self.b.ins().iadd(i3, one);
+        self.b.def_var(iv, inc);
+        self.b.ins().jump(header, &[]);
+        self.term = true;
+        self.switch(exit);
+        Ok(None)
     }
 
     /// `for await x in stream { body }` (`docs/21` §10): each iteration awaits

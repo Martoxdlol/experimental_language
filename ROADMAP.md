@@ -764,8 +764,14 @@ The tracing GC is functionally complete for single-threaded programs.
       `xs[i] = v` (panic OOB), and methods `push`/`size`/`is_empty`/`set`/
       `clear`/`pop`/`insert`/`remove` (`pop`/`remove` → `T|null`, boxed-union
       pattern; `insert` shifts + panics if `i > size`) + `get`/`map`/`filter`/
-      `each`/`fold`. 7 backend + (checker) + 4 CLI tests; `examples/lists.otter`.
-      (TODO `docs/18`: `contains`/`index_of` — need `Eq` dispatch.)
+      `each`/`fold` + `truncate`/`contains`/`index_of`. `contains(v): bool` /
+      `index_of(v): i64|null` require `T: Eq` (checker `is_equatable`) and
+      dispatch element equality through `gen_elem_eq` (intrinsic `icmp`/`fcmp`/
+      `lang_str_eq` for scalars/`str`; the type's `eq` impl via `extend_method_
+      fref` for user types). `truncate(n)` shortens to ≤ `n` (`lang_list_
+      truncate`). `iter(): Iterator<E>` returns a prelude `ListIter<E>` cursor
+      view (drives `for x in xs.iter()` via the protocol). 7 backend + (checker)
+      + 10 CLI tests; `examples/lists.otter`. docs/18 §5 `List` API now COMPLETE.
 - [x] **`for x in xs`** over a `List<T>`: lowered to an index loop (size/get),
       pattern binding per element, with `break`/`continue` (via the loop stack).
       `for await` rejected; general `Iterator` protocol is a follow-up. 4 tests.
@@ -775,10 +781,18 @@ The tracing GC is functionally complete for single-threaded programs.
       `results.operator_methods[op_span]`; codegen emits a method call. 4 tests.
 - [x] **`str` methods + content comparison**: `size`/`byte_size`/`is_empty`/
       `contains`/`starts_with`/`ends_with`/`substring`/`to_upper`/`to_lower`/
-      `trim`/`repeat`/`replace`/`index_of` (→ `i64|null`) (runtime intrinsics;
-      checker `check_str_method`). Fixed a real bug: `==`/`!=`/`<`/… on `str` now
-      compare *content* (lang_str_eq/cmp), not pointer identity. 8 tests.
-      (TODO `docs/18`: `split(): List<str>`, `chars(): Iterator<char>`.)
+      `trim`/`repeat`/`replace`/`index_of` (→ `i64|null`) + `split(): List<str>`
+      and `get(i): char|null` (runtime intrinsics; checker `check_str_method`).
+      `split` builds the result `List<str>` under a GC pause (`lang_str_split`);
+      `get` returns the `i`-th USV or the `null` variant (`lang_str_char_at`).
+      Fixed a real bug: `==`/`!=`/`<`/… on `str` now compare *content*
+      (lang_str_eq/cmp), not pointer identity. 8 + 2 + 2 tests.
+      `chars(): Iterator<char>` / `bytes(): Iterator<u8>` are snapshot-backed
+      prelude iterators (`StrChars`/`StrBytes` holding a `List<char>`/`List<u8>`
+      built by `lang_str_to_chars`/`lang_str_to_bytes`), driven by the standard
+      `Iterator` protocol; direct `for ch in s` desugars to `s.chars()` via the
+      new `ForDriver::StrChars` (codegen index-loops the snapshot). docs/18 §4
+      `str` API now COMPLETE.
 - [x] **`List.get(i): E | null`** — bounds-checked, returns a boxed union
       (establishes the union-returning-method codegen pattern). 3 tests.
 - [x] **`Map<K, V>`** (`docs/18` §6): open-addressing hash table (a `KIND_MAP`
@@ -1103,6 +1117,18 @@ The tracing GC is functionally complete for single-threaded programs.
       sub-expressions (today it must be a statement / trailing / `return` operand
       / `for await`), and `for await` over an interface `AsyncIterator` object or
       a non-variable stream expression.
+      **ANF design note (next focused effort):** a HIR normalization pass run in
+      the checker (where fresh `LocalId`s can be minted into `Hir::local_types`)
+      that hoists any suspending sub-expression into a preceding `Let` in
+      evaluation order — e.g. `f(await x)` → `var t = await x; f(t)`. CRITICAL
+      correctness caveat: it must **respect short-circuit / conditional
+      evaluation** — `a && (await b)`, `a || (await b)`, and a `match`/`if` arm's
+      operand may only suspend *when that branch actually runs*, so a naive
+      left-to-right hoist is WRONG (it would await `b` unconditionally). The pass
+      must hoist only within the same unconditional evaluation region, lowering
+      conditional suspends into the branch they belong to. Needs its own broad
+      test matrix (operators, calls, interpolation, indexing, short-circuit,
+      nested control flow) before it can be trusted — not a quick add.
 - [~] FFI (`docs/19`): **extern functions + extern structs + raw pointers work.**
       *Extern functions* over the C ABI: primitives and raw pointers (`*T`),
       called by their real symbol name (JIT resolves via `dlsym`, native via the

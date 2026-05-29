@@ -104,6 +104,7 @@ fn register_runtime_symbols(b: &mut JITBuilder) {
     b.symbol("lang_list_pop", runtime::lang_list_pop as *const u8);
     b.symbol("lang_list_insert", runtime::lang_list_insert as *const u8);
     b.symbol("lang_list_remove", runtime::lang_list_remove as *const u8);
+    b.symbol("lang_list_truncate", runtime::lang_list_truncate as *const u8);
     b.symbol("lang_map_new", runtime::lang_map_new as *const u8);
     b.symbol("lang_map_set", runtime::lang_map_set as *const u8);
     b.symbol("lang_map_get", runtime::lang_map_get as *const u8);
@@ -130,6 +131,10 @@ fn register_runtime_symbols(b: &mut JITBuilder) {
     b.symbol("lang_str_repeat", runtime::lang_str_repeat as *const u8);
     b.symbol("lang_str_replace", runtime::lang_str_replace as *const u8);
     b.symbol("lang_str_index_of", runtime::lang_str_index_of as *const u8);
+    b.symbol("lang_str_split", runtime::lang_str_split as *const u8);
+    b.symbol("lang_str_char_at", runtime::lang_str_char_at as *const u8);
+    b.symbol("lang_str_to_chars", runtime::lang_str_to_chars as *const u8);
+    b.symbol("lang_str_to_bytes", runtime::lang_str_to_bytes as *const u8);
     b.symbol("lang_str_concat", runtime::lang_str_concat as *const u8);
     b.symbol("lang_hash_i64", runtime::hash::lang_hash_i64 as *const u8);
     b.symbol("lang_hash_str", runtime::hash::lang_hash_str as *const u8);

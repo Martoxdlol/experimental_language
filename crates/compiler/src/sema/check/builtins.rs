@@ -248,6 +248,33 @@ impl<'a> Checker<'a> {
                 check_args(self, &[i64t]);
                 self.tcx.mk_union([elem, self.tcx.null])
             }
+            "truncate" => {
+                check_args(self, &[i64t]);
+                self.tcx.null
+            }
+            // `iter(): Iterator<E>` — a cursor view over the live list
+            // (`docs/18` §5); drives `for x in xs.iter()` via the protocol.
+            "iter" => {
+                check_args(self, &[]);
+                self.tcx.mk_named(self.prog.list_iter_def, vec![elem])
+            }
+            // `contains(v): bool` / `index_of(v): i64 | null` — require `T: Eq`
+            // (`docs/18` §5); element equality dispatches through the element
+            // type's `eq` (intrinsic for primitives/`str`, the impl otherwise).
+            "contains" | "index_of" => {
+                check_args(self, &[elem]);
+                if !self.is_equatable(elem) {
+                    self.emit(span, SemaErrorKind::Message(format!(
+                        "`List.{}` requires the element type to implement `Eq`",
+                        name.name
+                    )));
+                }
+                if name.name == "contains" {
+                    self.tcx.bool
+                } else {
+                    self.tcx.mk_union([i64t, self.tcx.null])
+                }
+            }
             // Higher-order methods take a closure (often written as a trailing
             // closure with an implicit `it`).
             "map" => {
@@ -351,6 +378,25 @@ impl<'a> Checker<'a> {
                 check(self, &[str_ty]);
                 self.tcx.mk_union([i64t, self.tcx.null])
             }
+            "split" => {
+                check(self, &[str_ty]);
+                self.mk_list(str_ty)
+            }
+            "get" => {
+                check(self, &[i64t]);
+                self.tcx.mk_union([self.tcx.char, self.tcx.null])
+            }
+            // `chars(): Iterator<char>` / `bytes(): Iterator<u8>` — snapshot
+            // iterators (prelude `StrChars`/`StrBytes`), driven by the general
+            // `Iterator` protocol in `for ch in s.chars()` (`docs/18` §4).
+            "chars" => {
+                check(self, &[]);
+                self.tcx.mk_named(self.prog.str_chars_def, vec![])
+            }
+            "bytes" => {
+                check(self, &[]);
+                self.tcx.mk_named(self.prog.str_bytes_def, vec![])
+            }
             other => {
                 self.emit(name.span, SemaErrorKind::Message(format!(
                     "`str` has no method `{other}`"
@@ -366,6 +412,14 @@ impl<'a> Checker<'a> {
     /// Whether `ty` is an immutable value: cloning it can share the existing
     /// value (no observable mutation). Primitives, `char`, `bool`, `str`, and
     /// `null` qualify (`docs/15` §8 — `str` is immutable, so sharing is sound).
+    /// Whether `ty` supports value equality (`docs/18` §5 — `List.contains`/
+    /// `index_of` require `T: Eq`). Primitives and `str` are intrinsically
+    /// equatable; user types qualify through an `Eq` impl (derived or
+    /// hand-written), including a type parameter bounded by `Eq`.
+    pub(crate) fn is_equatable(&mut self, ty: Ty) -> bool {
+        self.is_immutable_value(ty) || self.type_implements(ty, self.prog.eq_def)
+    }
+
     pub(crate) fn is_immutable_value(&self, ty: Ty) -> bool {
         matches!(
             self.tcx.kind(ty),

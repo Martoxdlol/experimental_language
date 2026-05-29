@@ -196,6 +196,54 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 self.switch(merge);
                 Ok(Some(self.b.block_params(merge)[0]))
             }
+            "truncate" => {
+                let n = arg(0).ok_or_else(|| CodegenError::new(recv_span, "count has no value"))?;
+                self.call_intrinsic("lang_list_truncate", &[PTR, types::I64], None, &[list, n]);
+                Ok(None)
+            }
+            // `iter(): Iterator<E>` — wrap the live list in a prelude `ListIter`
+            // struct with `index = 0` (reads through to the list per `next()`).
+            "iter" => {
+                self.mark_root(list);
+                let def = self.cx.analysis.program.list_iter_def;
+                Ok(Some(self.build_iter_struct(def, &[elem], &[("list", list)])))
+            }
+            // `contains(v): bool` — true iff some element equals `v`.
+            "contains" => {
+                let target = arg(0).ok_or_else(|| CodegenError::new(recv_span, "argument has no value"))?;
+                let idx = self.emit_list_find(list, elem, target, recv_span)?;
+                let neg1 = self.b.ins().iconst(types::I64, -1);
+                Ok(Some(self.b.ins().icmp(IntCC::NotEqual, idx, neg1)))
+            }
+            // `index_of(v): i64 | null` — index of the first equal element, or
+            // the `null` variant if absent.
+            "index_of" => {
+                let target = arg(0).ok_or_else(|| CodegenError::new(recv_span, "argument has no value"))?;
+                let idx = self.emit_list_find(list, elem, target, recv_span)?;
+                let zero = self.b.ins().iconst(types::I64, 0);
+                let found = self.b.ins().icmp(IntCC::SignedGreaterThanOrEqual, idx, zero);
+
+                let then_bb = self.b.create_block();
+                let else_bb = self.b.create_block();
+                let merge = self.b.create_block();
+                self.b.append_block_param(merge, PTR);
+                self.b.ins().brif(found, then_bb, &[], else_bb, &[]);
+                self.term = true;
+
+                self.switch(then_bb);
+                let i64t = self.cx.analysis.tcx.int(IntTy::I64);
+                let boxed = self.box_value(Some(idx), i64t);
+                self.b.ins().jump(merge, &[boxed.into()]);
+                self.term = true;
+
+                self.switch(else_bb);
+                let null_box = self.box_value(None, self.cx.analysis.tcx.null);
+                self.b.ins().jump(merge, &[null_box.into()]);
+                self.term = true;
+
+                self.switch(merge);
+                Ok(Some(self.b.block_params(merge)[0]))
+            }
             "map" => {
                 let f = arg(0).ok_or_else(|| CodegenError::new(recv_span, "closure has no value"))?;
                 let u = self.func_ret(arg_tys.first().copied().unwrap_or(elem));
@@ -449,6 +497,22 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         iface: DefId,
         mname: &str,
     ) -> Option<Value> {
+        let fref = self.extend_method_fref(cdef, cargs, iface, mname)?;
+        Some(self.b.ins().func_addr(PTR, fref))
+    }
+
+    /// Resolve `extend Type<args>: Iface`'s method `mname` to a callable
+    /// `FuncRef` in the current function (declaring its monomorphized instance
+    /// on demand). Returns `None` if the type does not implement `iface`.
+    /// Shared by `extend_method_addr` (which needs the address as a value) and
+    /// direct callers like the `List.contains`/`index_of` element-equality path.
+    fn extend_method_fref(
+        &mut self,
+        cdef: DefId,
+        cargs: &[Ty],
+        iface: DefId,
+        mname: &str,
+    ) -> Option<cranelift_codegen::ir::FuncRef> {
         if iface == DefId(0) {
             return None;
         }
@@ -477,8 +541,102 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             )
             .ok()??,
         };
-        let fref = self.module.declare_func_in_func(func_id, self.b.func);
-        Some(self.b.ins().func_addr(PTR, fref))
+        Some(self.module.declare_func_in_func(func_id, self.b.func))
+    }
+
+    /// Emit value equality between two already-evaluated elements of type
+    /// `elem` (resolved), returning an `i8` boolean. Primitives/`char` compare
+    /// with `icmp`, floats with `fcmp`, `str` via `lang_str_eq`, and user types
+    /// through their `Eq` impl's `eq(self, other): bool` method (the checker has
+    /// already required `T: Eq`). Used by `List.contains`/`index_of`.
+    fn gen_elem_eq(&mut self, a: Value, b: Value, elem: Ty, span: Span) -> CgResult<Value> {
+        let elem_r = resolve_shallow(self.cx.analysis, elem, &self.subst);
+        match self.cx.analysis.tcx.kind(elem_r) {
+            TyKind::Int(_) | TyKind::Bool | TyKind::Char => {
+                Ok(self.b.ins().icmp(IntCC::Equal, a, b))
+            }
+            TyKind::Float(_) => Ok(self.b.ins().fcmp(FloatCC::Equal, a, b)),
+            TyKind::Str => Ok(self.gen_str_compare(BinaryOp::Eq, a, b)),
+            TyKind::Named { def, args } => {
+                let cdef = *def;
+                let cargs = args.clone();
+                let eq_def = self.cx.analysis.program.eq_def;
+                let fref = self
+                    .extend_method_fref(cdef, &cargs, eq_def, "eq")
+                    .ok_or_else(|| {
+                        CodegenError::new(span, "element type does not implement `Eq`")
+                    })?;
+                let call = self.b.ins().call(fref, &[a, b]);
+                Ok(self.b.inst_results(call)[0])
+            }
+            _ => Err(CodegenError::new(
+                span,
+                "list element type does not support equality",
+            )),
+        }
+    }
+
+    /// Linear search for `target` in `list`; returns the `i64` index of the
+    /// first equal element, or `-1` if absent. Shared by `List.contains`
+    /// (`!= -1`) and `List.index_of` (boxed `i64 | null`).
+    fn emit_list_find(&mut self, list: Value, elem: Ty, target: Value, span: Span)
+        -> CgResult<Value>
+    {
+        self.mark_root(list);
+        let elem_r = resolve_shallow(self.cx.analysis, elem, &self.subst);
+        if is_managed_ptr(self.cx.analysis, elem_r) {
+            self.mark_root(target);
+        }
+        let result = self.b.declare_var(types::I64);
+        let neg1 = self.b.ins().iconst(types::I64, -1);
+        self.b.def_var(result, neg1);
+        let iv = self.b.declare_var(types::I64);
+        let zero = self.b.ins().iconst(types::I64, 0);
+        self.b.def_var(iv, zero);
+
+        let header = self.b.create_block();
+        let body_bb = self.b.create_block();
+        let found_bb = self.b.create_block();
+        let cont_bb = self.b.create_block();
+        let exit = self.b.create_block();
+        self.b.ins().jump(header, &[]);
+        self.term = true;
+
+        self.switch(header);
+        self.emit_safepoint();
+        let i = self.b.use_var(iv);
+        let size = self.call_intrinsic("lang_list_size", &[PTR], Some(types::I64), &[list])
+            .expect("size");
+        let cond = self.b.ins().icmp(IntCC::SignedLessThan, i, size);
+        self.b.ins().brif(cond, body_bb, &[], exit, &[]);
+        self.term = true;
+
+        self.switch(body_bb);
+        let i2 = self.b.use_var(iv);
+        let raw = self.call_intrinsic("lang_list_get", &[PTR, types::I64], Some(types::I64), &[list, i2])
+            .expect("get");
+        let ev = self.i64_to_elem(raw, elem, span)?
+            .ok_or_else(|| CodegenError::new(span, "list element is zero-sized"))?;
+        let eq = self.gen_elem_eq(target, ev, elem, span)?;
+        self.b.ins().brif(eq, found_bb, &[], cont_bb, &[]);
+        self.term = true;
+
+        self.switch(found_bb);
+        let i3 = self.b.use_var(iv);
+        self.b.def_var(result, i3);
+        self.b.ins().jump(exit, &[]);
+        self.term = true;
+
+        self.switch(cont_bb);
+        let i4 = self.b.use_var(iv);
+        let one = self.b.ins().iconst(types::I64, 1);
+        let inc = self.b.ins().iadd(i4, one);
+        self.b.def_var(iv, inc);
+        self.b.ins().jump(header, &[]);
+        self.term = true;
+
+        self.switch(exit);
+        Ok(self.b.use_var(result))
     }
 
     /// Lower a builtin `Map<K, V>` method call.
@@ -626,6 +784,18 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         ptr
     }
 
+    /// Build a prelude `StrChars`/`StrBytes` iterator: call `rt` to snapshot the
+    /// scalars/bytes into a fresh `List`, then wrap it in the `def` struct with
+    /// `index = 0`. The snapshot is rooted across the `alloc_struct` (a stress
+    /// collect there would otherwise free the unrooted list).
+    fn gen_str_iter(&mut self, rt: &str, def: DefId, s: Value) -> Value {
+        let snapshot = self
+            .call_intrinsic(rt, &[PTR], Some(PTR), &[s])
+            .expect("str iterator snapshot returns a list");
+        self.mark_root(snapshot);
+        self.build_iter_struct(def, &[], &[("snapshot", snapshot)])
+    }
+
     /// Builtin `str` method dispatch over an already-evaluated receiver `s` and
     /// argument values.
     pub(crate) fn emit_str_method(
@@ -709,6 +879,54 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 self.switch(then_bb);
                 let i64t = self.cx.analysis.tcx.int(compiler::ty::IntTy::I64);
                 let boxed = self.box_value(Some(raw), i64t);
+                self.b.ins().jump(merge, &[boxed.into()]);
+                self.term = true;
+
+                self.switch(else_bb);
+                let null_box = self.box_value(None, self.cx.analysis.tcx.null);
+                self.b.ins().jump(merge, &[null_box.into()]);
+                self.term = true;
+
+                self.switch(merge);
+                Ok(Some(self.b.block_params(merge)[0]))
+            }
+            // `chars(): Iterator<char>` / `bytes(): Iterator<u8>` — snapshot the
+            // scalars/bytes into a `List` and wrap it in a prelude `StrChars`/
+            // `StrBytes` iterator struct (driven by the `Iterator` protocol).
+            "chars" => {
+                let def = self.cx.analysis.program.str_chars_def;
+                Ok(Some(self.gen_str_iter("lang_str_to_chars", def, s)))
+            }
+            "bytes" => {
+                let def = self.cx.analysis.program.str_bytes_def;
+                Ok(Some(self.gen_str_iter("lang_str_to_bytes", def, s)))
+            }
+            // `split(sep): List<str>` — the runtime builds the list (under a GC
+            // pause) and returns the managed handle.
+            "split" => {
+                let sep = arg_str(self, 0)?;
+                Ok(self.call_intrinsic("lang_str_split", &[PTR, PTR], Some(PTR), &[s, sep]))
+            }
+            // `get(i): char | null` — runtime returns the codepoint or `-1` when
+            // out of range; box the `char` or the `null` variant accordingly.
+            "get" => {
+                let idx = arg_str(self, 0)?;
+                let raw = self.call_intrinsic("lang_str_char_at", &[PTR, types::I64], Some(types::I64), &[s, idx])
+                    .expect("char_at");
+                let zero = self.b.ins().iconst(types::I64, 0);
+                let found = self.b.ins().icmp(IntCC::SignedGreaterThanOrEqual, raw, zero);
+
+                let then_bb = self.b.create_block();
+                let else_bb = self.b.create_block();
+                let merge = self.b.create_block();
+                self.b.append_block_param(merge, PTR);
+                self.b.ins().brif(found, then_bb, &[], else_bb, &[]);
+                self.term = true;
+
+                self.switch(then_bb);
+                let char_ty = self.cx.analysis.tcx.char;
+                let ev = self.i64_to_elem(raw, char_ty, recv_span)?;
+                let boxed = self.box_value(ev, char_ty);
                 self.b.ins().jump(merge, &[boxed.into()]);
                 self.term = true;
 

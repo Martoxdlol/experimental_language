@@ -234,6 +234,87 @@ pub unsafe extern "C" fn lang_str_replace(
     make_str(out.as_bytes())
 }
 
+/// `s.split(sep)` (`docs/18`): a `List<str>` of the substrings between each
+/// occurrence of `sep`. An empty separator splits into individual characters
+/// (matching Rust's behaviour minus the empty edge fragments). The result list
+/// and its element strings are built under a GC pause: they are freshly
+/// allocated and not yet reachable from any stack root, so a collection mid-way
+/// must not reclaim them.
+///
+/// # Safety
+/// `s` and `sep` must be valid `str` pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lang_str_split(s: *const LangStr, sep: *const LangStr) -> *mut u8 {
+    let hay = unsafe { s_str(s) }.into_owned();
+    let pat = unsafe { s_str(sep) }.into_owned();
+    let parts: Vec<String> = if pat.is_empty() {
+        hay.chars().map(|c| c.to_string()).collect()
+    } else {
+        hay.split(pat.as_str()).map(|p| p.to_string()).collect()
+    };
+    gc::pause();
+    let list = unsafe { crate::list::lang_list_new(1) }; // elements are managed `str`s
+    for p in &parts {
+        let item = make_str(p.as_bytes()) as i64;
+        unsafe { crate::list::lang_list_push(list, item) };
+    }
+    gc::resume();
+    list
+}
+
+/// `s.chars()` (`docs/18` §4): a `List<char>` snapshot of the string's Unicode
+/// scalars (codepoints stored in the `i64` element slots). Built under a GC
+/// pause — the fresh list is not yet reachable from a stack root. The codegen
+/// wraps this list in a prelude `StrChars` iterator struct.
+///
+/// # Safety
+/// `s` must be a valid `str` pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lang_str_to_chars(s: *const LangStr) -> *mut u8 {
+    let chars: Vec<char> = unsafe { s_str(s) }.chars().collect();
+    gc::pause();
+    let list = unsafe { crate::list::lang_list_new(0) }; // codepoints are plain values
+    for c in &chars {
+        unsafe { crate::list::lang_list_push(list, *c as i64) };
+    }
+    gc::resume();
+    list
+}
+
+/// `s.bytes()` (`docs/18` §4): a `List<u8>` snapshot of the string's UTF-8
+/// bytes (each byte stored in an `i64` element slot). Built under a GC pause.
+/// The codegen wraps this list in a prelude `StrBytes` iterator struct.
+///
+/// # Safety
+/// `s` must be a valid `str` pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lang_str_to_bytes(s: *const LangStr) -> *mut u8 {
+    let bytes: Vec<u8> = unsafe { str_bytes(s) }.to_vec();
+    gc::pause();
+    let list = unsafe { crate::list::lang_list_new(0) }; // bytes are plain values
+    for b in &bytes {
+        unsafe { crate::list::lang_list_push(list, i64::from(*b)) };
+    }
+    gc::resume();
+    list
+}
+
+/// `s.get(i)` (`docs/18`): the `i`-th Unicode scalar's codepoint, or `-1` if `i`
+/// is out of range (codegen turns `-1` into the `char | null` `null` variant).
+///
+/// # Safety
+/// `s` must be a valid `str` pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lang_str_char_at(s: *const LangStr, i: i64) -> i64 {
+    if i < 0 {
+        return -1;
+    }
+    match unsafe { s_str(s) }.chars().nth(i as usize) {
+        Some(c) => c as i64,
+        None => -1,
+    }
+}
+
 fn write_str(s: *const LangStr, newline: bool) {
     let bytes = unsafe { str_bytes(s) };
     let stdout = std::io::stdout();

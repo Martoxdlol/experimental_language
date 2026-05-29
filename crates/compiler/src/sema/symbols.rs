@@ -263,6 +263,17 @@ pub struct Program {
     /// by `Map.entries()`. Holds a reference to the map plus a snapshot of its
     /// keys; values are looked up lazily as each `next()` runs.
     pub map_entries_def: DefId,
+    /// Prelude `struct ListIter<T>` — the `Iterator<T>` returned by `List.iter()`
+    /// (`docs/18` §5). Holds the live list plus a cursor (reads through to the
+    /// list, so it is a view, not a snapshot).
+    pub list_iter_def: DefId,
+    /// Prelude `struct StrChars` — the `Iterator<char>` returned by `str.chars()`
+    /// (`docs/18` §4). Holds a snapshot `List<char>` of the string's Unicode
+    /// scalars at call time.
+    pub str_chars_def: DefId,
+    /// Prelude `struct StrBytes` — the `Iterator<u8>` returned by `str.bytes()`.
+    /// Holds a snapshot `List<u8>` of the string's UTF-8 bytes at call time.
+    pub str_bytes_def: DefId,
     /// Names the language prelude + builtins put in *every* module's scope
     /// (`List`, `Map`, `Item`, `Done`, `Iterator`, `Entry`, …), so a submodule
     /// resolves them without an `import`. Snapshotted from the root after the
@@ -305,6 +316,18 @@ interface ToStr {
 interface Hash {
   function hash(self): u64;
 }
+struct ListIter<T> { list: List<T>, index: i64 }
+extend<T> ListIter<T>: Iterator<T> {
+  function next(self): Item<T> | Done {
+    if self.index >= self.list.size() {
+      Done {}
+    } else {
+      var v = self.list[self.index];
+      self.index = self.index + 1;
+      Item { value: v }
+    }
+  }
+}
 struct MapKeys<K> { snapshot: List<K>, index: i64 }
 struct MapValues<V> { snapshot: List<V>, index: i64 }
 struct MapEntries<K, V> { map: Map<K, V>, keys: List<K>, index: i64 }
@@ -339,6 +362,30 @@ extend<K, V> MapEntries<K, V>: Iterator<Entry<K, V>> {
       self.index = self.index + 1;
       var v = self.map[k];
       Item { value: Entry { key: k, value: v } }
+    }
+  }
+}
+struct StrChars { snapshot: List<char>, index: i64 }
+struct StrBytes { snapshot: List<u8>, index: i64 }
+extend StrChars: Iterator<char> {
+  function next(self): Item<char> | Done {
+    if self.index >= self.snapshot.size() {
+      Done {}
+    } else {
+      var v = self.snapshot[self.index];
+      self.index = self.index + 1;
+      Item { value: v }
+    }
+  }
+}
+extend StrBytes: Iterator<u8> {
+  function next(self): Item<u8> | Done {
+    if self.index >= self.snapshot.size() {
+      Done {}
+    } else {
+      var v = self.snapshot[self.index];
+      self.index = self.index + 1;
+      Item { value: v }
     }
   }
 }
@@ -412,6 +459,9 @@ impl Program {
             map_keys_def: DefId(0),
             map_values_def: DefId(0),
             map_entries_def: DefId(0),
+            list_iter_def: DefId(0),
+            str_chars_def: DefId(0),
+            str_bytes_def: DefId(0),
             prelude_types: HashMap::new(),
             prelude_values: HashMap::new(),
         }
@@ -483,6 +533,9 @@ impl Program {
         self.map_keys_def = types.get("MapKeys").copied().unwrap_or(DefId(0));
         self.map_values_def = types.get("MapValues").copied().unwrap_or(DefId(0));
         self.map_entries_def = types.get("MapEntries").copied().unwrap_or(DefId(0));
+        self.list_iter_def = types.get("ListIter").copied().unwrap_or(DefId(0));
+        self.str_chars_def = types.get("StrChars").copied().unwrap_or(DefId(0));
+        self.str_bytes_def = types.get("StrBytes").copied().unwrap_or(DefId(0));
     }
 
     /// Inject compiler-provided prelude types (currently `List<T>`). These have

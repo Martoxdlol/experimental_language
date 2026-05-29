@@ -790,6 +790,9 @@ pub enum ForDriver {
     Map { key: Ty, value: Ty, entry: Ty },
     /// `for await x in stream` — the `AsyncIterator` protocol.
     AsyncIter(ForAsyncIter),
+    /// `for ch in s` over a `str` — desugars to iterating `s.chars()`
+    /// (`docs/18` §4); codegen snapshots the scalars and index-loops them.
+    StrChars,
 }
 
 /// One arm of a `match`.

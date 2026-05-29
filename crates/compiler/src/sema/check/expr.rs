@@ -1033,6 +1033,10 @@ impl<'a> Checker<'a> {
                         let entry_ty = self.tcx.mk_named(self.prog.entry_def, vec![kt, vt]);
                         (entry_ty, Some(crate::hir::ForDriver::Map { key: kt, value: vt, entry: entry_ty }))
                     }
+                    None if matches!(self.tcx.kind(ity), TyKind::Str) => {
+                        // `for ch in s` ≡ `for ch in s.chars()` (docs/18 §4).
+                        (self.tcx.char, Some(crate::hir::ForDriver::StrChars))
+                    }
                     None => match self.iterator_elem(ity) {
                         Some((elem, next, next_targs, item_ty, done_ty)) => {
                             let info = crate::sema::results::ForIter {

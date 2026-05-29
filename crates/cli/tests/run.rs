@@ -1978,6 +1978,171 @@ fn stdlib_list_pop_and_clear() {
 }
 
 #[test]
+fn stdlib_str_split_and_get() {
+    // `docs/18` §4: `str.split(sep): List<str>` and `str.get(i): char | null`.
+    let src = "function main() {\n\
+                 var ps = \"a,b,c\".split(\",\");\n\
+                 println(\"${ps.size()}\");\n\
+                 for p in ps { println(p); }\n\
+                 println(\"${\"hi\".split(\"\").size()}\");\n\
+                 var g = \"abc\".get(1);\n\
+                 if g is char { println(\"${g as char}\"); }\n\
+                 println(\"${\"x\".get(9) is null}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    assert_eq!(nat, "3\na\nb\nc\n2\nb\ntrue\n");
+}
+
+#[test]
+fn stdlib_str_split_survives_gc_stress() {
+    // The split result list + its element strings are freshly allocated; a
+    // collection mid-build must not reclaim them.
+    let src = "function main() {\n\
+                 var total = 0;\n\
+                 var i = 0;\n\
+                 while i < 50 {\n\
+                   var ps = \"one two three four\".split(\" \");\n\
+                   total = total + ps.size();\n\
+                   i = i + 1;\n\
+                 }\n\
+                 println(\"${total}\");\n\
+               }";
+    let (out, err, ok) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "200\n");
+}
+
+#[test]
+fn stdlib_list_truncate() {
+    // `docs/18` §5: `List.truncate(n)` shortens to at most `n` (no-op if larger).
+    let src = "function main() {\n\
+                 var xs = [1, 2, 3, 4, 5];\n\
+                 xs.truncate(2);\n\
+                 println(\"${xs.size()}\");\n\
+                 xs.truncate(99);\n\
+                 println(\"${xs.size()} ${xs[0]} ${xs[1]}\");\n\
+                 xs.truncate(0);\n\
+                 println(\"${xs.size()}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    assert_eq!(nat, "2\n2 1 2\n0\n");
+}
+
+#[test]
+fn stdlib_list_contains_and_index_of_primitives() {
+    // `docs/18` §5: `List.contains(v): bool` / `index_of(v): i64 | null` over
+    // `i64` (intrinsic `Eq`) and `str` (content equality).
+    let src = "function main() {\n\
+                 var ys = [10, 20, 30];\n\
+                 println(\"${ys.contains(20)} ${ys.contains(99)}\");\n\
+                 var ix = ys.index_of(30);\n\
+                 if ix is i64 { println(\"${ix as i64}\"); }\n\
+                 println(\"${ys.index_of(7) is null}\");\n\
+                 var ss: List<str> = [\"foo\", \"bar\"];\n\
+                 println(\"${ss.contains(\"bar\")} ${ss.contains(\"zzz\")}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    assert_eq!(nat, "true false\n2\ntrue\ntrue false\n");
+}
+
+#[test]
+fn stdlib_list_contains_user_eq_type_under_gc_stress() {
+    // Element equality on a user type dispatches through its `Eq` impl; managed
+    // elements must stay rooted across the search safepoints.
+    let src = "@Derive(Eq)\n\
+               struct Point(i64, i64)\n\
+               function main() {\n\
+                 var ps: List<Point> = [Point(1, 2), Point(3, 4)];\n\
+                 println(\"${ps.contains(Point(3, 4))} ${ps.contains(Point(9, 9))}\");\n\
+                 var ix = ps.index_of(Point(1, 2));\n\
+                 if ix is i64 { println(\"${ix as i64}\"); }\n\
+               }";
+    let (out, err, ok) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "true false\n0\n");
+}
+
+#[test]
+fn stdlib_list_contains_requires_eq() {
+    // A non-`Eq` element type is rejected at type-check time.
+    let src = "struct Bare(i64)\n\
+               function main() {\n\
+                 var ps: List<Bare> = [Bare(1)];\n\
+                 println(\"${ps.contains(Bare(1))}\");\n\
+               }";
+    let (_out, err, ok) = lang("check", src);
+    assert!(!ok);
+    assert!(err.contains("requires the element type to implement `Eq`"), "got: {err}");
+}
+
+#[test]
+fn stdlib_list_iter() {
+    // `docs/18` §5: `List.iter(): Iterator<E>` — a cursor view driven by the
+    // `Iterator` protocol.
+    let src = "function main() {\n\
+                 var xs = [5, 10, 15];\n\
+                 var sum = 0;\n\
+                 for v in xs.iter() { sum = sum + v; }\n\
+                 println(\"${sum}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    assert_eq!(nat, "30\n");
+}
+
+#[test]
+fn stdlib_str_chars_and_bytes_iterators() {
+    // `docs/18` §4: `str.chars(): Iterator<char>` and `bytes(): Iterator<u8>`
+    // drive `for` via the standard `Iterator` protocol (snapshot-backed).
+    let src = "function main() {\n\
+                 var n = 0;\n\
+                 for ch in \"héllo\".chars() { n = n + 1; }\n\
+                 println(\"${n}\");\n\
+                 var sum = 0;\n\
+                 for b in \"abc\".bytes() { sum = sum + (b as i64); }\n\
+                 println(\"${sum}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    assert_eq!(nat, "5\n294\n");
+}
+
+#[test]
+fn stdlib_for_char_in_str_desugars_to_chars() {
+    // `docs/18` §4: `for ch in s` ≡ `for ch in s.chars()`.
+    let src = "function main() {\n\
+                 var sum = 0;\n\
+                 for ch in \"héllo\" { sum = sum + (ch as i64); }\n\
+                 println(\"${sum}\");\n\
+                 var e = 0;\n\
+                 for ch in \"\" { e = e + 1; }\n\
+                 println(\"${e}\");\n\
+               }";
+    let (out, err, ok) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
+    assert!(ok, "stderr: {err}");
+    // h=104 é=233 l=108 l=108 o=111 → 664
+    assert_eq!(out, "664\n0\n");
+}
+
+#[test]
 fn ffi_transparent_newtype_has_inner_abi() {
     // `docs/19` §3: a `@Transparent` newtype has its single field's
     // representation and ABI — `Num(-5)` is just an `i32`, so it can be passed
