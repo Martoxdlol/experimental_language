@@ -1595,6 +1595,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     fn h_for_str_chars(&mut self, pattern: &hir::Pattern, iter: &hir::Expr, body: &hir::Block)
         -> CgResult<Option<Value>>
     {
+        let slots = self.for_async_slots(iter.span);
         let s = self
             .h_expr(iter)?
             .ok_or_else(|| CodegenError::new(iter.span, "string has no value"))?;
@@ -1605,7 +1606,13 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         let elem = self.cx.analysis.tcx.char;
         let iv = self.b.declare_var(types::I64);
         let zero = self.b.ins().iconst(types::I64, 0);
-        self.b.def_var(iv, zero);
+        match slots {
+            Some((sv, primary, _sec, idx_off)) => {
+                self.b.ins().store(MemFlags::trusted(), list, sv, primary);
+                self.b.ins().store(MemFlags::trusted(), zero, sv, idx_off);
+            }
+            None => self.b.def_var(iv, zero),
+        }
         let header = self.b.create_block();
         let body_bb = self.b.create_block();
         let latch = self.b.create_block();
@@ -1614,17 +1621,19 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         self.term = true;
         self.switch(header);
         self.emit_safepoint();
-        let i = self.b.use_var(iv);
+        let i = self.load_for_index(slots, iv);
+        let list_h = self.load_for_iterable(slots, list);
         let size = self
-            .call_intrinsic("lang_list_size", &[PTR], Some(types::I64), &[list])
+            .call_intrinsic("lang_list_size", &[PTR], Some(types::I64), &[list_h])
             .expect("size");
         let cond = self.b.ins().icmp(IntCC::SignedLessThan, i, size);
         self.b.ins().brif(cond, body_bb, &[], exit, &[]);
         self.term = true;
         self.switch(body_bb);
-        let i2 = self.b.use_var(iv);
+        let i2 = self.load_for_index(slots, iv);
+        let list_b = self.load_for_iterable(slots, list);
         let raw = self
-            .call_intrinsic("lang_list_get", &[PTR, types::I64], Some(types::I64), &[list, i2])
+            .call_intrinsic("lang_list_get", &[PTR, types::I64], Some(types::I64), &[list_b, i2])
             .expect("get");
         let elem_val = self.i64_to_elem(raw, elem, iter.span)?;
         self.h_bind_pattern(pattern, elem_val, elem)?;
@@ -1636,10 +1645,10 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         }
         self.loops.pop();
         self.switch(latch);
-        let i3 = self.b.use_var(iv);
+        let i3 = self.load_for_index(slots, iv);
         let one = self.b.ins().iconst(types::I64, 1);
         let inc = self.b.ins().iadd(i3, one);
-        self.b.def_var(iv, inc);
+        self.store_for_index(slots, iv, inc);
         self.b.ins().jump(header, &[]);
         self.term = true;
         self.switch(exit);
@@ -1747,16 +1756,65 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         Ok(None)
     }
 
+    /// The async state-struct slots `(self_ptr, iterable_off, index_off)` reserved
+    /// for a sync `for` loop (keyed by `iter.span`) whose body awaits, or `None`
+    /// for an ordinary (non-suspending) loop. When `Some`, the loop's iterable
+    /// pointer and index counter must be held in the persistent state struct (not
+    /// in Cranelift SSA, which does not survive a `poll` return) — see
+    /// `async_state_layout` / `h_scan_for_state`.
+    fn for_async_slots(&self, span: Span) -> Option<(Value, i32, i32, i32)> {
+        let actx = self.async_ctx.as_ref()?;
+        let &(primary, secondary, idx_off) = actx.for_slots.get(&span)?;
+        Some((actx.self_val, primary, secondary, idx_off))
+    }
+
+    /// Read the loop's primary iterable pointer: from its state slot (async) or
+    /// the already-evaluated SSA value (ordinary loop).
+    fn load_for_iterable(&mut self, slots: Option<(Value, i32, i32, i32)>, fallback: Value) -> Value {
+        match slots {
+            Some((sv, primary, _, _)) => self.b.ins().load(PTR, MemFlags::trusted(), sv, primary),
+            None => fallback,
+        }
+    }
+    /// Read the loop's secondary iterable pointer (the `Map` driver's map handle).
+    fn load_for_secondary(&mut self, slots: Option<(Value, i32, i32, i32)>, fallback: Value) -> Value {
+        match slots {
+            Some((sv, _, secondary, _)) => self.b.ins().load(PTR, MemFlags::trusted(), sv, secondary),
+            None => fallback,
+        }
+    }
+    /// Read the loop's index counter (state slot when async, else the var).
+    fn load_for_index(&mut self, slots: Option<(Value, i32, i32, i32)>, iv: Variable) -> Value {
+        match slots {
+            Some((sv, _, _, idx_off)) => self.b.ins().load(types::I64, MemFlags::trusted(), sv, idx_off),
+            None => self.b.use_var(iv),
+        }
+    }
+    /// Write the loop's index counter (state slot when async, else the var).
+    fn store_for_index(&mut self, slots: Option<(Value, i32, i32, i32)>, iv: Variable, v: Value) {
+        match slots {
+            Some((sv, _, _, idx_off)) => { self.b.ins().store(MemFlags::trusted(), v, sv, idx_off); }
+            None => self.b.def_var(iv, v),
+        }
+    }
+
     fn h_for_list(&mut self, pattern: &hir::Pattern, iter: &hir::Expr, body: &hir::Block, elem: Ty)
         -> CgResult<Option<Value>>
     {
+        let slots = self.for_async_slots(iter.span);
         let list = self
             .h_expr(iter)?
             .ok_or_else(|| CodegenError::new(iter.span, "iterable has no value"))?;
         self.mark_root(list);
         let iv = self.b.declare_var(types::I64);
         let zero = self.b.ins().iconst(types::I64, 0);
-        self.b.def_var(iv, zero);
+        match slots {
+            Some((sv, primary, _sec, idx_off)) => {
+                self.b.ins().store(MemFlags::trusted(), list, sv, primary);
+                self.b.ins().store(MemFlags::trusted(), zero, sv, idx_off);
+            }
+            None => self.b.def_var(iv, zero),
+        }
         let header = self.b.create_block();
         let body_bb = self.b.create_block();
         let latch = self.b.create_block();
@@ -1765,17 +1823,19 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         self.term = true;
         self.switch(header);
         self.emit_safepoint();
-        let i = self.b.use_var(iv);
+        let i = self.load_for_index(slots, iv);
+        let list_h = self.load_for_iterable(slots, list);
         let size = self
-            .call_intrinsic("lang_list_size", &[PTR], Some(types::I64), &[list])
+            .call_intrinsic("lang_list_size", &[PTR], Some(types::I64), &[list_h])
             .expect("size");
         let cond = self.b.ins().icmp(IntCC::SignedLessThan, i, size);
         self.b.ins().brif(cond, body_bb, &[], exit, &[]);
         self.term = true;
         self.switch(body_bb);
-        let i2 = self.b.use_var(iv);
+        let i2 = self.load_for_index(slots, iv);
+        let list_b = self.load_for_iterable(slots, list);
         let raw = self
-            .call_intrinsic("lang_list_get", &[PTR, types::I64], Some(types::I64), &[list, i2])
+            .call_intrinsic("lang_list_get", &[PTR, types::I64], Some(types::I64), &[list_b, i2])
             .expect("get");
         let elem_val = self.i64_to_elem(raw, elem, iter.span)?;
         self.h_bind_pattern(pattern, elem_val, elem)?;
@@ -1787,10 +1847,10 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         }
         self.loops.pop();
         self.switch(latch);
-        let i3 = self.b.use_var(iv);
+        let i3 = self.load_for_index(slots, iv);
         let one = self.b.ins().iconst(types::I64, 1);
         let inc = self.b.ins().iadd(i3, one);
-        self.b.def_var(iv, inc);
+        self.store_for_index(slots, iv, inc);
         self.b.ins().jump(header, &[]);
         self.term = true;
         self.switch(exit);
@@ -1800,10 +1860,14 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     fn h_for_iterator(&mut self, pattern: &hir::Pattern, iter: &hir::Expr, body: &hir::Block, info: &ForIter)
         -> CgResult<Option<Value>>
     {
-        let iter_val = self
+        let slots = self.for_async_slots(iter.span);
+        let iter_val0 = self
             .h_expr(iter)?
             .ok_or_else(|| CodegenError::new(iter.span, "iterator has no value"))?;
-        self.mark_root(iter_val);
+        self.mark_root(iter_val0);
+        if let Some((sv, primary, _, _)) = slots {
+            self.b.ins().store(MemFlags::trusted(), iter_val0, sv, primary);
+        }
         let header = self.b.create_block();
         let body_bb = self.b.create_block();
         let exit = self.b.create_block();
@@ -1811,6 +1875,10 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         self.term = true;
         self.switch(header);
         self.emit_safepoint();
+        // The iterator object must survive suspends in an awaiting loop body, so
+        // (in an async loop) it lives in a state slot and is reloaded each step.
+        let iter_val = self.load_for_iterable(slots, iter_val0);
+        self.mark_root(iter_val);
         let u = if self.cx.analysis.program.def(info.next).kind == DefKind::InterfaceMethod {
             let recv = resolve_shallow(self.cx.analysis, info.iter_ty, &self.subst);
             if self.is_interface_ty(recv) {
@@ -1881,6 +1949,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         vt: Ty,
         entry_ty: Ty,
     ) -> CgResult<Option<Value>> {
+        let slots = self.for_async_slots(iter.span);
         let map = self
             .h_expr(iter)?
             .ok_or_else(|| CodegenError::new(iter.span, "map has no value"))?;
@@ -1890,6 +1959,12 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             .call_intrinsic("lang_map_entries", &[PTR, types::I64], Some(PTR), &[map, one])
             .expect("map_entries returns a list");
         self.mark_root(keys);
+        // In an awaiting loop, the keys snapshot (primary) and the map
+        // (secondary) must survive suspends — hold them in the state struct.
+        if let Some((sv, primary, secondary, _)) = slots {
+            self.b.ins().store(MemFlags::trusted(), keys, sv, primary);
+            self.b.ins().store(MemFlags::trusted(), map, sv, secondary);
+        }
         let layout = self.struct_layout(
             match self
                 .cx
@@ -1905,7 +1980,10 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         );
         let iv = self.b.declare_var(types::I64);
         let zero = self.b.ins().iconst(types::I64, 0);
-        self.b.def_var(iv, zero);
+        match slots {
+            Some((sv, _, _, idx_off)) => { self.b.ins().store(MemFlags::trusted(), zero, sv, idx_off); }
+            None => self.b.def_var(iv, zero),
+        }
         let header = self.b.create_block();
         let body_bb = self.b.create_block();
         let latch = self.b.create_block();
@@ -1914,20 +1992,23 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         self.term = true;
         self.switch(header);
         self.emit_safepoint();
-        let i = self.b.use_var(iv);
+        let i = self.load_for_index(slots, iv);
+        let keys_h = self.load_for_iterable(slots, keys);
         let size = self
-            .call_intrinsic("lang_list_size", &[PTR], Some(types::I64), &[keys])
+            .call_intrinsic("lang_list_size", &[PTR], Some(types::I64), &[keys_h])
             .expect("size");
         let cond = self.b.ins().icmp(IntCC::SignedLessThan, i, size);
         self.b.ins().brif(cond, body_bb, &[], exit, &[]);
         self.term = true;
         self.switch(body_bb);
-        let i2 = self.b.use_var(iv);
+        let i2 = self.load_for_index(slots, iv);
+        let keys_b = self.load_for_iterable(slots, keys);
+        let map_b = self.load_for_secondary(slots, map);
         let key_raw = self
-            .call_intrinsic("lang_list_get", &[PTR, types::I64], Some(types::I64), &[keys, i2])
+            .call_intrinsic("lang_list_get", &[PTR, types::I64], Some(types::I64), &[keys_b, i2])
             .expect("get key");
         let val_raw = self
-            .call_intrinsic("lang_map_index", &[PTR, types::I64], Some(types::I64), &[map, key_raw])
+            .call_intrinsic("lang_map_index", &[PTR, types::I64], Some(types::I64), &[map_b, key_raw])
             .expect("get value");
         let entry = self.alloc_struct(&layout);
         if let Some(ko) = layout.index_of("key") {
@@ -1949,9 +2030,10 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         }
         self.loops.pop();
         self.switch(latch);
-        let i3 = self.b.use_var(iv);
-        let inc = self.b.ins().iadd(i3, one);
-        self.b.def_var(iv, inc);
+        let i3 = self.load_for_index(slots, iv);
+        let one_latch = self.b.ins().iconst(types::I64, 1);
+        let inc = self.b.ins().iadd(i3, one_latch);
+        self.store_for_index(slots, iv, inc);
         self.b.ins().jump(header, &[]);
         self.term = true;
         self.switch(exit);
@@ -2585,6 +2667,56 @@ fn h_scan_value_await(e: &hir::Expr, out: &mut Vec<Span>) {
         K::Match { arms, .. } => {
             for arm in arms {
                 h_scan_value_await(&arm.body, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Enumerate the `iter.span` of every **sync** `for` loop in `block` whose body
+/// contains an `await` (so the async state struct can reserve slots for the
+/// loop's iterable pointer + index). Such a loop suspends mid-iteration, and its
+/// codegen-internal iteration state (the iterable value + the index counter) is
+/// otherwise held in Cranelift SSA values that do not survive a `poll` return —
+/// they must live in the (persistent) state struct instead. `for await` loops
+/// (`in_async`) drive their own state and are excluded.
+pub(crate) fn h_scan_for_state(block: &hir::Block, out: &mut Vec<Span>) {
+    for s in &block.stmts {
+        match &s.kind {
+            hir::StmtKind::Let { init, .. } => h_scan_for_state_expr(init, out),
+            hir::StmtKind::Assign { value, .. } => h_scan_for_state_expr(value, out),
+            hir::StmtKind::Expr(e) => h_scan_for_state_expr(e, out),
+            hir::StmtKind::Item(_) => {}
+        }
+    }
+    if let Some(t) = &block.trailing {
+        h_scan_for_state_expr(t, out);
+    }
+}
+
+fn h_scan_for_state_expr(e: &hir::Expr, out: &mut Vec<Span>) {
+    use hir::ExprKind as K;
+    match &e.kind {
+        K::For { in_async, iter, body, .. } => {
+            if !*in_async && h_block_has_await(body) {
+                out.push(iter.span);
+            }
+            h_scan_for_state(body, out);
+        }
+        K::Block(b) | K::Loop(b) => h_scan_for_state(b, out),
+        K::While { body, .. } => h_scan_for_state(body, out),
+        K::Adjust { expr, .. } | K::Return(Some(expr)) | K::Break(Some(expr)) => {
+            h_scan_for_state_expr(expr, out)
+        }
+        K::If { then_block, else_branch, .. } => {
+            h_scan_for_state(then_block, out);
+            if let Some(e) = else_branch {
+                h_scan_for_state_expr(e, out);
+            }
+        }
+        K::Match { arms, .. } => {
+            for arm in arms {
+                h_scan_for_state_expr(&arm.body, out);
             }
         }
         _ => {}

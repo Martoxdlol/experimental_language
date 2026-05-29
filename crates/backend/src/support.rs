@@ -29,6 +29,13 @@ pub(crate) struct AsyncLayout {
     pub(crate) ptr_offsets: Vec<u32>,
     /// Total state-struct size in bytes.
     pub(crate) state_size: u32,
+    /// For each sync `for` loop (keyed by its `iter.span`) whose body contains an
+    /// `await`: the state-struct offsets `(primary, secondary, index)` reserved to
+    /// hold its iteration state across suspends. `primary`/`secondary` are managed
+    /// (traced) iterable/snapshot pointers — the `Map` driver uses both (the
+    /// snapshot keys list + the map), other drivers only `primary`; `index` is a
+    /// plain `i64` counter.
+    pub(crate) for_slots: HashMap<Span, (i32, i32, i32)>,
 }
 
 /// Offset of the suspended-inner-future slot in every async state struct.
@@ -83,8 +90,27 @@ pub(crate) fn async_state_layout(
             }
         }
     }
-    let state_size = (16 + all_locals.len() * 8) as u32;
-    AsyncLayout { slot_off, live, ptr_offsets, state_size }
+    // Reserve two slots — an (managed) iterable pointer and an `i64` index — for
+    // each sync `for` loop whose body awaits, so its iteration state survives the
+    // `poll` returns (it is otherwise held in non-persistent Cranelift SSA).
+    let mut for_spans = Vec::new();
+    crate::gen_hir::h_scan_for_state(body.0, &mut for_spans);
+    let mut for_slots = HashMap::new();
+    let mut next_off = 16 + all_locals.len() * 8;
+    for sp in for_spans {
+        if for_slots.contains_key(&sp) {
+            continue;
+        }
+        let primary = next_off as i32;
+        let secondary = (next_off + 8) as i32;
+        let idx_off = (next_off + 16) as i32;
+        ptr_offsets.push(primary as u32); // both iterable slots are managed roots
+        ptr_offsets.push(secondary as u32);
+        for_slots.insert(sp, (primary, secondary, idx_off));
+        next_off += 24;
+    }
+    let state_size = next_off as u32;
+    AsyncLayout { slot_off, live, ptr_offsets, state_size, for_slots }
 }
 
 /// The generic-parameter → argument substitution for an instance.

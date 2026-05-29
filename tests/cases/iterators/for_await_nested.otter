@@ -1,0 +1,24 @@
+//@ kind: run
+//@ description: nested sync `for` loops inside an async body, both with awaits — each loop's iteration state is independently preserved across suspends
+//@ stdout:
+//~ 36
+import { List } from "core:collections";
+import { println } from "std:io";
+import { Future } from "core:prelude";
+import { yield_now } from "std:async";
+function grid(rows: List<i64>, cols: List<i64>): Future<i64> async {
+  var total = 0;
+  for r in rows {
+    await yield_now();
+    for c in cols {
+      await yield_now();
+      total = total + r * c;
+    }
+  }
+  total
+}
+function main(): Future<null> async {
+  var rows = [1, 2];
+  var cols = [3, 9];
+  println("${await grid(rows, cols)}");
+}

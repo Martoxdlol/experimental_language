@@ -713,6 +713,10 @@ struct AsyncCtx {
     awaits: HashMap<Span, (i64, cranelift_codegen::ir::Block, cranelift_codegen::ir::Block)>,
     /// Shared block that builds a `Pending` result and returns it.
     pending_block: cranelift_codegen::ir::Block,
+    /// Sync `for` loop `iter.span` → `(primary, secondary, index)` state-struct
+    /// slots, for loops whose body awaits (so their iteration state survives a
+    /// suspend). Empty when no such loop exists.
+    for_slots: HashMap<Span, (i32, i32, i32)>,
 }
 
 struct Codegen<'a, M: Module> {
@@ -1233,6 +1237,7 @@ impl<'a, M: Module> Codegen<'a, M> {
         body: BodyView,
         entry_set: &HashSet<LocalId>,
         live: &[(LocalId, i32, ClType)],
+        for_slots: &HashMap<Span, (i32, i32, i32)>,
         err_span: Span,
     ) -> CgResult<()> {
         let mut await_spans = Vec::new();
@@ -1311,6 +1316,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                 fg.async_ctx = Some(AsyncCtx {
                     self_val, ctx_val, inner_off: ASYNC_INNER_OFF, save_locals,
                     awaits: awaits.clone(), pending_block,
+                    for_slots: for_slots.clone(),
                 });
                 let val = fg.gen_body_view(&body)?;
                 fg.emit_return(val)?;
@@ -1381,7 +1387,7 @@ impl<'a, M: Module> Codegen<'a, M> {
         let poll_fid = self.module
             .declare_function(&poll_name, Linkage::Local, &poll_sig)
             .map_err(|e| CodegenError::new(span, format!("declare poll: {e}")))?;
-        self.build_stateful_poll(poll_fid, &subst, out, body, &entry_set, &layout.live, span)?;
+        self.build_stateful_poll(poll_fid, &subst, out, body, &entry_set, &layout.live, &layout.for_slots, span)?;
 
         // -- constructor body ----------------------------------------------
         let mut cctx = self.module.make_context();
@@ -1460,7 +1466,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                 let layout = async_state_layout(self.analysis, &subst, &cap_ids, bv, &self.captured_locals);
                 let entry_set: HashSet<LocalId> = cap_ids.into_iter().collect();
                 return self.build_stateful_poll(
-                    poll_fid, &subst, out, bv, &entry_set, &layout.live, span,
+                    poll_fid, &subst, out, bv, &entry_set, &layout.live, &layout.for_slots, span,
                 );
             }
         }
