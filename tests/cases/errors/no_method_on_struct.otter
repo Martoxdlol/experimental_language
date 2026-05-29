@@ -1,0 +1,5 @@
+//@ kind: compile-error
+//@ description: no method on struct
+//@ stderr: no method `nope` on type `P`
+struct P { x: i64 }
+function main() { var p = P { x: 1 }; p.nope(); }

@@ -1,0 +1,5 @@
+//@ kind: compile-error
+//@ description: no builtin module
+//@ stderr: no built-in module `core:bogus`
+import { x } from "core:bogus";
+function main() {}

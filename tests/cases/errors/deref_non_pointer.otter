@@ -1,0 +1,4 @@
+//@ kind: compile-error
+//@ description: deref non pointer
+//@ stderr: expects a raw pointer
+function main() { var n = 5; var x = *n; }

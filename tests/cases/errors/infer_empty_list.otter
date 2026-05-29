@@ -1,0 +1,4 @@
+//@ kind: compile-error
+//@ description: infer empty list
+//@ stderr: cannot infer the element type of an empty list
+function main() { var xs = []; }

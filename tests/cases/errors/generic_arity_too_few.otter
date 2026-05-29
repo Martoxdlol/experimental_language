@@ -1,0 +1,5 @@
+//@ kind: compile-error
+//@ description: generic arity too few
+//@ stderr: expects 2 generic argument(s), found 1
+struct Pair<A, B> { a: A, b: B }
+function main() { var p: Pair<i64> = Pair<i64> { a: 1, b: 2 }; }

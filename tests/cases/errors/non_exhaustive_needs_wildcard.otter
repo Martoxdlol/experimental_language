@@ -1,0 +1,5 @@
+//@ kind: compile-error
+//@ description: non exhaustive needs wildcard
+//@ stderr: add a `_` arm
+function f(n: i64): i64 { match n { 1 => 1 } }
+function main() { f(1); }

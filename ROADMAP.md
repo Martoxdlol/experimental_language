@@ -1465,15 +1465,28 @@ The tracing GC is functionally complete for single-threaded programs.
       `crates/cli/tests/{framework,suite}.rs`). Every case is a self-contained
       `.otter` program with its own `import`s, carrying its expectations inline as
       `//@` directives (`kind: run|compile-error|panic`, `exit`, `stderr`,
-      `release`) and `//~` exact-stdout lines. The runner discovers the corpus,
-      runs each via the real `otter_fusion` binary (with `--time` for run/panic
-      cases), checks stdout/exit/stderr, and prints a per-category timing report
-      (sum/avg + slowest cases). `OTTER_TEST_BLESS=1` regenerates `//~` blocks for
-      passing `run` cases. 115 cases across 22 categories: core language, data
-      types, generics/interfaces/closures/iterators, casts/derives/error-handling,
-      release-profile wrapping, edge cases, runtime panics, compile errors, and
-      every program in `examples/` (concurrency/async/FFI/drop/dispatch). See
-      `tests/README.md`. Runs under `cargo test -p cli --test suite`.
+      `release`, `serial`, `env: K=V`, `known-bug`) and `//~` exact-stdout lines.
+      The runner discovers the corpus, runs each via the real `otter_fusion`
+      binary (with `--time` for run/panic cases), checks stdout/exit/stderr, and
+      prints a status + per-category timing report. `OTTER_TEST_BLESS=1`
+      regenerates `//~` blocks for passing `run` cases. **165 cases**: 100 run,
+      13 panic, 52 compile-error, plus 7 GC-stress (`LANG_GC=stress`) and
+      concurrency cases (incl. a 100-thread storm). We test failure modes, not
+      just happy paths.
+  - **Known-bug / XFAIL catalog** (LLVM-style): a `known-bug` case states the
+    *spec-correct* behaviour the implementation does not yet meet; it is expected
+    to fail today (reported XFAIL, does not fail the suite) and is flagged XPASS
+    (suite failure) if it ever starts passing, so the marker gets removed. The
+    suite thus **catalogs the unfinished surface instead of hiding it**. Current
+    XFAILs surfaced: tuple-pattern arity mismatch (backend *crash* / silent
+    accept), duplicate field in struct literal (silent accept), record pattern on
+    a tuple struct (misleading diagnostic), named function as a first-class value
+    (unimplemented), `Thread.spawn` of a float-returning fn (rejected), and
+    capturing a *mutable loop variable* into `Thread.spawn` (accepted but
+    data-races — should be rejected per docs/20 §6). Also observed (load-
+    dependent, not a test): the threaded runtime can abort under heavy
+    cross-process contention, so thread-spawning cases run `serial`. See
+    `tests/README.md`. Runs under `cargo test -p cli --test suite`.
 - [ ] Cross-file LSP hover/references, manifest dependencies (`pkg:`),
       sysroot/stdlib, `fmt` (needs comment-preserving lexing — ordinary comments
       are not tokens), `lint`/`fix`/`test`/`bench`/`repl`, the rest of the

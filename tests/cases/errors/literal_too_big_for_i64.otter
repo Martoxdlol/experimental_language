@@ -1,0 +1,4 @@
+//@ kind: compile-error
+//@ description: literal too big for i64
+//@ stderr: does not fit in `i64`
+function main() { var x = 99999999999999999999999999; }

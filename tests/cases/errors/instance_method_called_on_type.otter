@@ -1,0 +1,6 @@
+//@ kind: compile-error
+//@ description: instance method called on type
+//@ stderr: is an instance method on `P`
+struct P { x: i64 }
+extend P { function get(self): i64 { self.x } }
+function main() { var v = P.get(); }

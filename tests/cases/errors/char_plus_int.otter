@@ -1,0 +1,5 @@
+//@ kind: compile-error
+//@ description: char plus int
+//@ stderr: operator `+` cannot be applied to `char`
+import { println } from "std:io";
+function main() { var c = 'a'; println("${c + 1}"); }

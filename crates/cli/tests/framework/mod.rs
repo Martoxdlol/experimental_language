@@ -24,6 +24,23 @@
 //!   * `stderr: <substring>`                  — a substring required in stderr
 //!                                              (repeatable; for errors/panics).
 //!   * `release`                              — run under `--release`.
+//!   * `serial`                                — run alone (after the parallel
+//!                                              batch); for OS-thread-spawning
+//!                                              cases that are fragile under
+//!                                              cross-process CPU contention.
+//!   * `env: KEY=VALUE`                        — set an environment variable for
+//!                                              the run (repeatable; e.g.
+//!                                              `LANG_GC=stress` to hammer the GC).
+//!   * `known-bug: <note>`                     — this case states the *desired*
+//!                                              (spec-correct) behaviour, which
+//!                                              the implementation does NOT yet
+//!                                              satisfy. It is expected to fail
+//!                                              today (reported `XFAIL`); if it
+//!                                              ever passes it is flagged `XPASS`
+//!                                              and the suite fails so the marker
+//!                                              is removed. This is how the suite
+//!                                              catalogs the unfinished surface
+//!                                              instead of hiding it.
 //!   * `description: <text>`                  — free-form documentation.
 //!
 //! Every case is a complete program that declares its own `import`s (the
@@ -82,6 +99,22 @@ pub struct Case {
     /// Exact expected stdout lines (from `//~` directives).
     pub stdout_lines: Vec<String>,
     pub release: bool,
+    /// Run this case alone, after the parallel batch — no other `otter_fusion`
+    /// subprocess running concurrently. Used for OS-thread-spawning cases: the
+    /// runtime's thread/abort machinery is fragile under heavy *cross-process*
+    /// CPU contention (many processes each spawning threads can abort), which is
+    /// a real but load-dependent issue; serial execution keeps these cases
+    /// deterministic. See `tests/README.md`.
+    pub serial: bool,
+    /// Environment variables to set for the run (e.g. `LANG_GC=stress`).
+    pub env: Vec<(String, String)>,
+    /// If set, this case documents *desired* (spec-correct) behaviour that the
+    /// implementation does **not** yet satisfy — a known bug or unimplemented
+    /// feature. It is expected to currently FAIL its stated expectations; the
+    /// runner reports it as an `XFAIL` (does not fail the suite). If it ever
+    /// starts *meeting* its expectations, the runner flags it as `XPASS` and
+    /// fails the suite, so the marker gets removed when the bug is fixed.
+    pub known_bug: Option<String>,
     #[allow(dead_code)]
     pub description: Option<String>,
 }
@@ -101,6 +134,9 @@ impl Case {
         let mut stderr_contains = Vec::new();
         let mut stdout_lines = Vec::new();
         let mut release = false;
+        let mut serial = false;
+        let mut env = Vec::new();
+        let mut known_bug = None;
         let mut description = None;
 
         for raw in source.lines() {
@@ -128,6 +164,14 @@ impl Case {
                     }
                     "stderr" => stderr_contains.push(val),
                     "release" => release = true,
+                    "serial" => serial = true,
+                    "env" => {
+                        let (k, v) = val
+                            .split_once('=')
+                            .ok_or_else(|| format!("bad env `{val}` (expected KEY=VALUE)"))?;
+                        env.push((k.trim().to_string(), v.trim().to_string()));
+                    }
+                    "known-bug" => known_bug = Some(val),
                     "description" => description = Some(val),
                     // A pure readability marker introducing the `//~` block.
                     "stdout" => {}
@@ -149,6 +193,9 @@ impl Case {
             stderr_contains,
             stdout_lines,
             release,
+            serial,
+            env,
+            known_bug,
             description,
         })
     }
@@ -162,16 +209,38 @@ impl Case {
     }
 }
 
+/// How a case turned out, relative to its expectations (and any `known-bug`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Status {
+    /// Met its expectations.
+    Pass,
+    /// Did not meet its expectations (and is not a known bug) — a real failure.
+    Fail,
+    /// A `known-bug` case that (as expected) still does not meet its
+    /// expectations — the documented gap is still present. Not a suite failure.
+    XFail,
+    /// A `known-bug` case that unexpectedly *met* its expectations — the bug
+    /// looks fixed, so the marker should be removed. A suite failure.
+    XPass,
+}
+
 /// The result of executing one case.
 pub struct Outcome {
     pub name: String,
-    pub passed: bool,
+    pub status: Status,
     /// Pure execution time (excluding compilation), parsed from `--time`.
     pub exec_time: Option<Duration>,
-    /// A human-readable explanation when `passed` is false.
+    /// A human-readable explanation (failure detail, or the known-bug note).
     pub failure: Option<String>,
     /// The program's actual stdout (used by the bless workflow).
     pub actual_stdout: String,
+}
+
+impl Outcome {
+    /// Whether this outcome should *not* fail the suite (Pass or XFail).
+    pub fn ok(&self) -> bool {
+        matches!(self.status, Status::Pass | Status::XFail)
+    }
 }
 
 /// Run a single case through the `otter_fusion` binary and check it against its
@@ -188,6 +257,9 @@ pub fn run_case(otter: &Path, case: &Case) -> Outcome {
     cmd.arg("run").arg(&file);
     if case.release {
         cmd.arg("--release");
+    }
+    for (k, v) in &case.env {
+        cmd.env(k, v);
     }
     // Time the execution of run/panic cases (compile-error cases never reach
     // execution, so timing is meaningless there).
@@ -244,13 +316,23 @@ pub fn run_case(otter: &Path, case: &Case) -> Outcome {
         }
     }
 
-    Outcome {
-        name: case.name.clone(),
-        passed: errs.is_empty(),
-        exec_time,
-        failure: if errs.is_empty() { None } else { Some(errs.join("\n")) },
-        actual_stdout: stdout,
-    }
+    let meets = errs.is_empty();
+    let (status, failure) = match &case.known_bug {
+        // A normal case: meeting expectations passes; otherwise it fails.
+        None if meets => (Status::Pass, None),
+        None => (Status::Fail, Some(errs.join("\n"))),
+        // A known-bug case is *expected* to currently miss its expectations.
+        Some(note) if !meets => (Status::XFail, Some(note.clone())),
+        Some(note) => (
+            Status::XPass,
+            Some(format!(
+                "this `known-bug` case now MEETS its (spec-correct) expectations — \
+                 the bug appears fixed. Remove the `//@ known-bug` marker.\nnote: {note}"
+            )),
+        ),
+    };
+
+    Outcome { name: case.name.clone(), status, exec_time, failure, actual_stdout: stdout }
 }
 
 /// Compare actual stdout against the case's `//~` lines (trailing newlines are
@@ -278,9 +360,11 @@ fn check_stderr(case: &Case, stderr: &str, errs: &mut Vec<String>) {
 }
 
 fn fail(case: &Case, msg: String) -> Outcome {
+    // An infrastructure failure (could not write/spawn) is always a hard fail,
+    // even for a known-bug case.
     Outcome {
         name: case.name.clone(),
-        passed: false,
+        status: Status::Fail,
         exec_time: None,
         failure: Some(msg),
         actual_stdout: String::new(),

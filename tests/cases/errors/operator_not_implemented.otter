@@ -1,0 +1,5 @@
+//@ kind: compile-error
+//@ description: operator not implemented
+//@ stderr: operator `+` is not implemented for `P`
+struct P { x: i64 }
+function main() { var a = P { x: 1 }; var b = P { x: 2 }; var c = a + b; }

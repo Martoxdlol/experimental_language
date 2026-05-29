@@ -1,0 +1,7 @@
+//@ kind: compile-error
+//@ description: recursive type alias
+//@ stderr: references itself
+type A = B;
+type B = A;
+function f(x: A): i64 { 0 }
+function main() {}

@@ -1,0 +1,9 @@
+//@ kind: compile-error
+//@ known-bug: a tuple pattern with FEWER elements than the scrutinee is silently accepted (the extra element is dropped); it should be a shape-mismatch compile error
+//@ description: `var (a,b) = (1,2,3)` — pattern/scrutinee arity mismatch
+//@ stderr: tuple pattern
+import { println } from "std:io";
+function main() {
+  var (a, b) = (1, 2, 3);
+  println("${a} ${b}");
+}

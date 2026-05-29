@@ -1,0 +1,4 @@
+//@ kind: compile-error
+//@ description: union assign wrong type
+//@ stderr: found `str`
+function main() { var x: i64 | bool = "hi"; }

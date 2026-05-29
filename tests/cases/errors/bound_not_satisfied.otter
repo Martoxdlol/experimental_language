@@ -1,0 +1,7 @@
+//@ kind: compile-error
+//@ description: bound not satisfied
+//@ stderr: does not implement `Foo`, required by this bound
+interface Foo { function foo(self): i64; }
+function need<T: Foo>(x: T): i64 { x.foo() }
+struct Bar {}
+function main() { need(Bar {}); }

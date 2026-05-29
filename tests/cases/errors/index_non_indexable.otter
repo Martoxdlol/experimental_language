@@ -1,0 +1,4 @@
+//@ kind: compile-error
+//@ description: index non indexable
+//@ stderr: cannot be indexed with `[]`
+function main() { var n = 5; var x = n[0]; }

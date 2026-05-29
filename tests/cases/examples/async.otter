@@ -1,4 +1,5 @@
 //@ kind: run
+//@ serial
 //@ description: example program — async (self-contained, real imports)
 //@ stdout:
 //~ answer = 42

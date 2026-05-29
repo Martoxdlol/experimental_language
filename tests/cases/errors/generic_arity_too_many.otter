@@ -1,0 +1,5 @@
+//@ kind: compile-error
+//@ description: generic arity too many
+//@ stderr: expects 1 generic argument(s), found 2
+struct B<T> { v: T }
+function main() { var b: B<i64, str> = B<i64, str> { v: 1 }; }

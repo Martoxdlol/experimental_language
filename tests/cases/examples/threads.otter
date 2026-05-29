@@ -1,4 +1,5 @@
 //@ kind: run
+//@ serial
 //@ description: example program — threads (self-contained, real imports)
 //@ stdout:
 //~ worker a (sum 0..1000) = 499500

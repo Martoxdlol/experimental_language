@@ -1,0 +1,12 @@
+//@ kind: run
+//@ env: LANG_GC=stress
+//@ description: string interpolation/concat churn under GC stress (temps must be rooted)
+//@ stdout:
+//~ tail=acc-99
+import { println } from "std:io";
+function main() {
+  var s = "";
+  var i = 0;
+  while i < 100 { s = "acc-${i}"; i = i + 1; }
+  println("tail=${s}");
+}

@@ -1,0 +1,11 @@
+//@ kind: run
+//@ known-bug: binding a named function to a variable (using it as a first-class value) fails in codegen with "value reference not yet supported"; per docs/09 functions should be first-class values
+//@ description: named function used as a first-class value
+//@ stdout:
+//~ 42
+import { println } from "std:io";
+function inc(n: i64): i64 { n + 1 }
+function main() {
+  var f = inc;
+  println("${f(41)}");
+}

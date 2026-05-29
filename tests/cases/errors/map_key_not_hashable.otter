@@ -1,0 +1,6 @@
+//@ kind: compile-error
+//@ description: map key not hashable
+//@ stderr: cannot be used as a map key
+import { Map } from "core:collections";
+struct P { x: i64 }
+function main() { var m: Map<P, i64> = Map<P, i64>(); }

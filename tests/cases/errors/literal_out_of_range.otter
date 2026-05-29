@@ -1,0 +1,4 @@
+//@ kind: compile-error
+//@ description: literal out of range
+//@ stderr: does not fit in `u8`
+function main() { var x: u8 = 300; }

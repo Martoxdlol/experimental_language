@@ -1,0 +1,5 @@
+//@ kind: compile-error
+//@ description: non bool condition
+//@ stderr: condition must be `bool`
+import { println } from "std:io";
+function main() { if 5 { println("x"); } }

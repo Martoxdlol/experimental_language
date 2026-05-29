@@ -1,0 +1,12 @@
+//@ kind: run
+//@ serial
+//@ description: Shared<T> mutual-exclusion lock returns the closure's result
+//@ stdout:
+//~ 15
+import { println } from "std:io";
+import { Shared, LockBusy } from "std:sync";
+function main() {
+  var cell = Shared.new(10);
+  var r = cell.lock((v: i64): i64 => v + 5);
+  println("${r}");
+}

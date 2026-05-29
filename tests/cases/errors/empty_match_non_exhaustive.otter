@@ -1,0 +1,5 @@
+//@ kind: compile-error
+//@ description: empty match non exhaustive
+//@ stderr: non-exhaustive match
+function f(x: i64 | str): i64 { match x {} }
+function main() { f(1); }

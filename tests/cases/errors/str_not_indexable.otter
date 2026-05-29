@@ -1,0 +1,4 @@
+//@ kind: compile-error
+//@ description: str not indexable
+//@ stderr: type `str` cannot be indexed with `[]`
+function main() { var s = "abc"; var c = s[0]; }

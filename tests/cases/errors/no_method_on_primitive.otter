@@ -1,0 +1,4 @@
+//@ kind: compile-error
+//@ description: no method on primitive
+//@ stderr: no method `frobnicate` on type `i64`
+function main() { var n = 5; n.frobnicate(); }

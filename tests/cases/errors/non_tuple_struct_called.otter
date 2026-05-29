@@ -1,0 +1,5 @@
+//@ kind: compile-error
+//@ description: non tuple struct called
+//@ stderr: only tuple structs are constructed by call
+struct P { x: i64 }
+function main() { var p = P(1); }

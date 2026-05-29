@@ -1,0 +1,17 @@
+//@ kind: run
+//@ env: LANG_GC=stress
+//@ description: Map allocation + insertion churn under GC stress
+//@ stdout:
+//~ done
+import { Map } from "core:collections";
+import { println } from "std:io";
+function main() {
+  var i = 0;
+  while i < 50 {
+    var m: Map<str, i64> = { "a": i };
+    m.set("b", i * 2);
+    m.set("c", i * 3);
+    i = i + 1;
+  }
+  println("done");
+}

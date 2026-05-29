@@ -1,0 +1,11 @@
+//@ kind: compile-error
+//@ known-bug: matching a tuple struct with a record pattern (`P { x }` where `P` is `P(i64)`) yields a misleading "type is not stringifiable" codegen error instead of a clear "not a record struct" diagnostic
+//@ description: record pattern applied to a tuple struct
+//@ stderr: record struct
+import { println } from "std:io";
+struct P(i64)
+function main() {
+  match P(1) {
+    P { x } => println("${x}"),
+  };
+}

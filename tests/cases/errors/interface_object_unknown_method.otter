@@ -1,0 +1,7 @@
+//@ kind: compile-error
+//@ description: interface object unknown method
+//@ stderr: interface `Foo` has no method `b`
+interface Foo { function a(self): i64; }
+struct B {}
+extend B: Foo { function a(self): i64 { 1 } }
+function main() { var f: Foo = B {}; f.b(); }

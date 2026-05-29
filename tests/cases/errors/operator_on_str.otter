@@ -1,0 +1,4 @@
+//@ kind: compile-error
+//@ description: operator on str
+//@ stderr: operator `-` cannot be applied to `str`
+function main() { var s = "a" - "b"; }

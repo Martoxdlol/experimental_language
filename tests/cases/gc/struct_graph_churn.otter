@@ -1,0 +1,28 @@
+//@ kind: run
+//@ env: LANG_GC=stress
+//@ description: building and dropping a linked structure repeatedly under GC stress
+//@ stdout:
+//~ len=20
+import { println } from "std:io";
+struct Node { v: i64, next: Node | null }
+function build(n: i64): Node | null {
+  var head: Node | null = null;
+  var i = 0;
+  while i < n { head = Node { v: i, next: head }; i = i + 1; }
+  head
+}
+function len(head: Node | null): i64 {
+  var n = 0;
+  var cur = head;
+  while cur is Node {
+    n = n + 1;
+    cur = (cur as Node).next;
+  }
+  n
+}
+function main() {
+  var total = 0;
+  var k = 0;
+  while k < 30 { total = len(build(20)); k = k + 1; }
+  println("len=${total}");
+}

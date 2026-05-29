@@ -1,0 +1,4 @@
+//@ kind: compile-error
+//@ description: break value outside loop construct
+//@ stderr: only `loop` can `break` with a value
+function main() { while true { break 5; } }

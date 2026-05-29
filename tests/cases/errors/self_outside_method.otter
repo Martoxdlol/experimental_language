@@ -1,0 +1,5 @@
+//@ kind: compile-error
+//@ description: self outside method
+//@ stderr: `self` is only valid inside a method
+function f(): i64 { self.x }
+function main() {}

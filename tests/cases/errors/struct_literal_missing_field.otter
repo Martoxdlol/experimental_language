@@ -1,0 +1,5 @@
+//@ kind: compile-error
+//@ description: struct literal missing field
+//@ stderr: missing field `y` in `P`
+struct P { x: i64, y: i64 }
+function main() { var p = P { x: 1 }; }

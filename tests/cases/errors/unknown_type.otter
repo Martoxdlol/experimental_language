@@ -1,0 +1,5 @@
+//@ kind: compile-error
+//@ description: unknown type
+//@ stderr: cannot find type `Nope`
+function f(x: Nope): i64 { 0 }
+function main() {}

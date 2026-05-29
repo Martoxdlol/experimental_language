@@ -1,0 +1,17 @@
+//@ kind: run
+//@ env: LANG_GC=stress
+//@ description: heavy List allocation churn under aggressive GC (collect on every alloc)
+//@ stdout:
+//~ done 50
+import { List } from "core:collections";
+import { println } from "std:io";
+function main() {
+  var i = 0;
+  while i < 50 {
+    var xs: List<i64> = [];
+    var j = 0;
+    while j < 200 { xs.push(j * j); j = j + 1; }
+    i = i + 1;
+  }
+  println("done ${i}");
+}

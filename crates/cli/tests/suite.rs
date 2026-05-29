@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
 
-use framework::{Case, Kind};
+use framework::{Case, Kind, Status};
 
 /// The `tests/cases/` directory at the repository root.
 fn cases_root() -> PathBuf {
@@ -62,23 +62,31 @@ fn end_to_end_suite() {
         }
     }
 
-    // Run cases across a small thread pool (each shells out to an isolated
-    // `otter_fusion` process, so there is no shared global state to race).
+    // Cases marked `//@ serial` (OS-thread spawners) run alone afterwards to
+    // avoid the runtime's cross-process thread-contention fragility; the rest
+    // run across a small pool. Each case shells out to an isolated
+    // `otter_fusion` process, so non-serial cases share no in-process state.
+    let parallel_idx: Vec<usize> = (0..cases.len()).filter(|&i| !cases[i].serial).collect();
+    let serial_idx: Vec<usize> = (0..cases.len()).filter(|&i| cases[i].serial).collect();
+
     let workers = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(8);
     let (tx, rx) = mpsc::channel();
     let cases = std::sync::Arc::new(cases);
+    let pidx = std::sync::Arc::new(parallel_idx);
     let next = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     std::thread::scope(|scope| {
         for _ in 0..workers {
             let tx = tx.clone();
             let cases = cases.clone();
+            let pidx = pidx.clone();
             let next = next.clone();
             let otter = otter.clone();
             scope.spawn(move || loop {
-                let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                if i >= cases.len() {
+                let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if k >= pidx.len() {
                     break;
                 }
+                let i = pidx[k];
                 let outcome = framework::run_case(&otter, &cases[i]);
                 tx.send((i, outcome)).unwrap();
             });
@@ -90,13 +98,19 @@ fn end_to_end_suite() {
     for (i, o) in rx {
         outcomes[i] = Some(o);
     }
+    // Serial cases: one at a time, nothing else running.
+    for i in serial_idx {
+        outcomes[i] = Some(framework::run_case(&otter, &cases[i]));
+    }
     let outcomes: Vec<framework::Outcome> = outcomes.into_iter().map(|o| o.unwrap()).collect();
 
     // Bless: rewrite passing `run` cases' expected stdout to actual output.
     if bless {
         let mut blessed = 0;
         for (case, o) in cases.iter().zip(&outcomes) {
-            if case.kind == Kind::Run {
+            // Never overwrite a known-bug case: its `//~` documents the DESIRED
+            // (not-yet-achieved) output, which blessing would clobber.
+            if case.kind == Kind::Run && case.known_bug.is_none() {
                 if let Err(e) = framework::bless(case, &o.actual_stdout) {
                     eprintln!("bless failed for {}: {e}", case.name);
                 } else {
@@ -110,24 +124,46 @@ fn end_to_end_suite() {
 
     report(&cases, &outcomes);
 
-    let failed: Vec<&framework::Outcome> = outcomes.iter().filter(|o| !o.passed).collect();
+    // The suite fails on genuine failures (Fail) and on known-bugs that
+    // unexpectedly started passing (XPass) — both mean the catalog is stale.
+    let failed: Vec<&framework::Outcome> = outcomes.iter().filter(|o| !o.ok()).collect();
     if !failed.is_empty() {
         let mut msg = format!("\n{} of {} test case(s) FAILED:\n", failed.len(), outcomes.len());
         for o in &failed {
-            msg.push_str(&format!("\n=== {} ===\n{}\n", o.name, o.failure.as_deref().unwrap_or("")));
+            let tag = match o.status {
+                Status::XPass => "XPASS (known-bug now passes — remove marker)",
+                _ => "FAIL",
+            };
+            msg.push_str(&format!("\n=== {} [{tag}] ===\n{}\n", o.name, o.failure.as_deref().unwrap_or("")));
         }
         panic!("{msg}");
     }
 }
 
-/// Print a per-category pass/fail + timing report to stdout (visible under
-/// `--nocapture`).
+/// Print a per-category status + timing report to stdout (visible under
+/// `--nocapture`), including the catalog of known bugs (XFAIL).
 fn report(cases: &[Case], outcomes: &[framework::Outcome]) {
     let total = outcomes.len();
-    let passed = outcomes.iter().filter(|o| o.passed).count();
+    let count = |s: Status| outcomes.iter().filter(|o| o.status == s).count();
+    let passed = count(Status::Pass);
+    let failed = count(Status::Fail);
+    let xfail = count(Status::XFail);
+    let xpass = count(Status::XPass);
 
     println!("\n┌─ Otter Fusion end-to-end suite ─────────────────────────────");
-    println!("│ {total} cases  ·  {passed} passed  ·  {} failed", total - passed);
+    println!(
+        "│ {total} cases  ·  {passed} pass  ·  {failed} fail  ·  {xfail} known-bug (XFAIL)  ·  {xpass} XPASS"
+    );
+
+    // The known-bug catalog: the documented, still-present gaps in the language.
+    if xfail > 0 || xpass > 0 {
+        println!("├─ known bugs / unimplemented (spec says these should work) ──");
+        for o in outcomes.iter().filter(|o| matches!(o.status, Status::XFail | Status::XPass)) {
+            let mark = if o.status == Status::XPass { "✗ now-passing" } else { "•" };
+            let note = o.failure.as_deref().unwrap_or("").lines().next().unwrap_or("");
+            println!("│ {mark} {:<34} {note}", o.name);
+        }
+    }
     println!("├─ timing (pure execution, excludes compilation) ─────────────");
 
     // Group timings by top-level category for a readable summary.

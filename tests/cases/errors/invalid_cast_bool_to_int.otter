@@ -1,0 +1,4 @@
+//@ kind: compile-error
+//@ description: invalid cast bool to int
+//@ stderr: cannot cast `bool` to `i64`
+function main() { var b = true; var n = b as i64; }

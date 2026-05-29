@@ -1,0 +1,5 @@
+//@ kind: compile-error
+//@ description: missing return value
+//@ stderr: expected `i64`, found `null`
+function f(): i64 { }
+function main() { f(); }

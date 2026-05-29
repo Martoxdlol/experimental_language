@@ -1,0 +1,4 @@
+//@ kind: compile-error
+//@ description: closure param needs annotation
+//@ stderr: cannot infer the type of closure parameter
+function main() { var g = (x) => x + 1; g(1); }
