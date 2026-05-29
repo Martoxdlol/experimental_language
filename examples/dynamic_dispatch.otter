@@ -3,6 +3,9 @@
 // fat pointer of {vtable, data}. Method calls dispatch dynamically through the
 // vtable, so values of different concrete types share one static type.
 
+import { List } from "core:collections";
+import { println } from "std:io";
+
 interface Shape {
   function area(self): i64;
   function name(self): str;

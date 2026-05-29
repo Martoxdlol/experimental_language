@@ -3,6 +3,34 @@
 
 use std::process::Command;
 
+/// Toolchain imports prepended to single-file test programs (near-empty prelude,
+/// `docs/17` §17.8): the former magic builtins plus common interfaces/std types.
+/// `core:collections` is intentionally omitted so it never collides with tests
+/// that import `List`/`Map` explicitly; programs naming those import them.
+const CLI_PRELUDE: &str = "import { List, Map, Set, Entry } from \"core:collections\";\n\
+    import { print, println } from \"std:io\";\n\
+    import { panic, panic_with, exit, abort } from \"core:prelude\";\n\
+    import { Clone, ToStr, Eq, Ord, Hash, Iterator, Item, Done, Try, FromResidual, Drop, Future, Ready, Pending, Context } from \"core:prelude\";\n\
+    import { Shared, LockBusy, Sender, Receiver, ChannelClosed, MpmcSender, MpmcReceiver, channel, channel_bounded, channel_mpmc, channel_mpmc_bounded } from \"std:sync\";\n\
+    import { Thread, JoinHandle, Joined, Panicked } from \"std:thread\";\n\
+    import { AsyncIterator, TimedOut, yield_now, sleep, timeout } from \"std:async\";\n\
+    import { Foreign, CString, CStr } from \"core:ffi\";\n";
+
+/// Prepend [`CLI_PRELUDE`] to a program's source.
+fn pre(src: &str) -> String {
+    format!("{CLI_PRELUDE}{src}")
+}
+
+/// Prepend the prelude only to `.otter` files (project files such as
+/// `project.toml` are passed through unchanged).
+fn pre_file(rel: &str, src: &str) -> String {
+    if rel.ends_with(".otter") {
+        pre(src)
+    } else {
+        src.to_string()
+    }
+}
+
 /// Run `otter_fusion <cmd> <file>` with `src` written to a temp file; return
 /// (stdout, stderr, success).
 fn lang(cmd: &str, src: &str) -> (String, String, bool) {
@@ -14,7 +42,7 @@ fn lang(cmd: &str, src: &str) -> (String, String, bool) {
 fn lang_flag(cmd: &str, src: &str, flags: &[&str]) -> (String, String, bool) {
     let dir = std::env::temp_dir();
     let path = dir.join(format!("lang_test_{}.otter", nonce()));
-    std::fs::write(&path, src).unwrap();
+    std::fs::write(&path, pre(src)).unwrap();
     let mut command = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
     command.arg(cmd).arg(&path);
     for f in flags {
@@ -33,7 +61,7 @@ fn lang_flag(cmd: &str, src: &str, flags: &[&str]) -> (String, String, bool) {
 fn lang_env(cmd: &str, src: &str, env: &[(&str, &str)]) -> (String, String, bool) {
     let dir = std::env::temp_dir();
     let path = dir.join(format!("lang_test_{}.otter", nonce()));
-    std::fs::write(&path, src).unwrap();
+    std::fs::write(&path, pre(src)).unwrap();
     let mut command = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
     command.arg(cmd).arg(&path);
     for (k, v) in env {
@@ -55,7 +83,7 @@ fn lang_build_run(src: &str, env: &[(&str, &str)]) -> (String, String, bool) {
     let n = nonce();
     let path = dir.join(format!("lang_test_{n}.otter"));
     let exe = dir.join(format!("lang_test_bin_{n}"));
-    std::fs::write(&path, src).unwrap();
+    std::fs::write(&path, pre(src)).unwrap();
     let build = Command::new(env!("CARGO_BIN_EXE_otter_fusion"))
         .arg("build").arg(&path).arg("-o").arg(&exe)
         .output()
@@ -89,7 +117,7 @@ fn lang_run_project(entry: &str, files: &[(&str, &str)]) -> (String, String, boo
     for (rel, src) in files {
         let path = root.join(rel);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, src).unwrap();
+        std::fs::write(&path, pre_file(rel, src)).unwrap();
     }
     let out = Command::new(env!("CARGO_BIN_EXE_otter_fusion"))
         .arg("run")
@@ -150,12 +178,13 @@ fn write_tree(files: &[(&str, &str)]) -> std::path::PathBuf {
     for (rel, src) in files {
         let path = root.join(rel);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, src).unwrap();
+        std::fs::write(&path, pre_file(rel, src)).unwrap();
     }
     root
 }
 
-/// Run `otter_fusion emit <ir> <file>` with `src` in a temp file.
+/// Run `otter_fusion emit <ir> <file>` with `src` in a temp file. The program is
+/// used verbatim (IR dumps must reflect exactly the given source).
 fn emit_ir(ir: &str, src: &str) -> (String, String, bool) {
     let dir = std::env::temp_dir();
     let path = dir.join(format!("lang_test_{}.otter", nonce()));
@@ -178,7 +207,8 @@ fn emit_ir(ir: &str, src: &str) -> (String, String, bool) {
 fn emit_hir_is_typed_resolved_and_dispatched() {
     let (out, err, ok) = emit_ir(
         "hir",
-        "function add(x: i64, y: i64): i64 { x + y }\n\
+        "import { println } from \"std:io\";\n\
+         function add(x: i64, y: i64): i64 { x + y }\n\
          function main() { var z = add(2, 3); println(\"hi\"); }",
     );
     assert!(ok, "stderr: {err}");
@@ -1828,27 +1858,36 @@ fn file_import_escaping_package_needs_allowlist() {
 }
 
 #[test]
-fn file_import_allowlisted_escape_passes_the_gate() {
-    // With a matching `[file-imports] allow` entry, the escaping path is allowed
-    // through the gate (binding itself is a separate, not-yet-supported step).
-    // `allow = ["../shared"]` is relative to the package root; the `file:` path
-    // is relative to the importing file (`src/main.otter`), so it climbs twice.
-    let main = "import { rows } from \"file:../../shared/data\";\n\
-                 function main() {}";
-    let (_, err, _ok) = lang_run_project(
+fn file_import_binds_an_in_package_data_module() {
+    // `file:./data` loads a sibling `.otter` file (not in the `mod` tree) and
+    // binds its `pub` names (`docs/17` §17.4). In-package paths need no allowlist.
+    let main = "import { println } from \"std:io\";\n\
+                 import { rows } from \"file:./data\";\n\
+                 function main() { println(\"${rows()}\"); }";
+    let data = "pub function rows(): i64 { 7 }";
+    let (out, err, ok) = lang_run_project(
         "",
         &[
-            (
-                "project.toml",
-                "[package]\nname = \"app\"\nkind = \"binary\"\n[file-imports]\nallow = [\"../shared\"]\n",
-            ),
+            ("project.toml", "[package]\nname = \"app\"\nkind = \"binary\"\n"),
             ("src/main.otter", main),
+            ("src/data.otter", data),
         ],
     );
-    // The gate passed: the error is the binding-not-supported notice, not the
-    // allowlist rejection.
-    assert!(err.contains("the path is allowed"), "stderr: {err}");
-    assert!(!err.contains("not authorized"), "stderr: {err}");
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "7\n");
+}
+
+#[test]
+fn file_import_binds_in_loose_direct_mode() {
+    // In direct/`exec` mode `file:` is unrestricted; a loose script binds names
+    // from a sibling file (`docs/17` §17.13).
+    let root = write_tree(&[
+        ("script.otter", "import { val } from \"file:./helper\";\nfunction main() { var x = val(); }"),
+        ("helper.otter", "pub function val(): i64 { 5 }"),
+    ]);
+    let (_o, err, ok) = lang_in_dir(&root, &["exec", "script.otter"]);
+    assert!(ok, "stderr: {err}");
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[test]

@@ -4,6 +4,9 @@
 // (it is NOT a scope-exit hook; for deterministic release, call a method
 // explicitly).
 
+import { println } from "std:io";
+import { exit, Drop } from "core:prelude";
+
 struct Resource { id: i64 }
 
 extend Resource: Drop {

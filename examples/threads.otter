@@ -8,6 +8,11 @@
 // Captures are by value and (for now) must be immutable, so each thread works
 // from its own copy — the language's "no implicit sharing" rule (docs/20 §6).
 
+import { println } from "std:io";
+import { Future } from "core:prelude";
+import { JoinHandle, Joined, Panicked } from "std:thread";
+
+import { Thread } from "std:thread";
 function sum_to(n: i64): i64 {
   var acc: i64 = 0;
   var i: i64 = 0;

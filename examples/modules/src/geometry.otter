@@ -1,7 +1,7 @@
-// The `geometry` submodule. Its own `mod vec;` loads geometry/vec.lang.
+// The `geometry` submodule. Its own `mod vec;` loads geometry/vec.otter.
 mod vec;
 
-import { Vec2, length_sq } from "geometry/vec";
+import { Vec2, length_sq } from "self:geometry/vec";
 
 pub struct Rect { w: i64, h: i64 }
 

@@ -5,6 +5,10 @@
 // through their own `Clone` impl, so mutating a clone never affects the
 // original. Builtin `List`/`Map` of immutable elements clone their storage.
 
+import { List, Map } from "core:collections";
+import { println } from "std:io";
+import { Clone } from "core:prelude";
+
 @Derive(Clone)
 struct Point { x: i64, y: i64 }
 

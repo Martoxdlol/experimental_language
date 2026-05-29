@@ -4,6 +4,9 @@
 // stored in variables, passed to and returned from functions, kept in lists.
 
 // Takes a closure as a parameter.
+import { List } from "core:collections";
+import { println } from "std:io";
+
 function apply_twice(f: (i64) => i64, x: i64): i64 {
   f(f(x))
 }

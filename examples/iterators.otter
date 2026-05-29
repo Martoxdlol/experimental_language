@@ -2,6 +2,9 @@
 // `next(self): Item<T> | Done` method drives a `for` loop. `Item<T>` and `Done`
 // come from the prelude; `Item { value: v }` infers its type argument.
 
+import { println } from "std:io";
+import { Iterator, Item, Done } from "core:prelude";
+
 struct Range { current: i64, end: i64 }
 
 extend Range: Iterator<i64> {

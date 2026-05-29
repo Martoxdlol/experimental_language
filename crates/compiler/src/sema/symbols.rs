@@ -324,10 +324,23 @@ pub struct Program {
     /// prelude split (`docs/17` §17.8); until then this is the resolution
     /// target for every toolchain import.
     pub builtin_module: ModId,
+    /// The named toolchain modules: `["core","collections"]` → its module, etc.
+    /// Each is a curated view over `__builtins__` exposing exactly the names
+    /// that module publishes (`docs/17` §17.8). `core:`/`std:` imports resolve
+    /// against these.
+    pub builtin_modules: HashMap<Vec<String>, ModId>,
+    /// The prelude marker functions (`print`/`println`/`panic`/…) → the builtin
+    /// they dispatch to. A call whose callee resolves to one of these `DefId`s
+    /// lowers to the builtin intrinsic, so the names are ordinary importable
+    /// symbols (`docs/17` §17.8) rather than magic.
+    pub builtin_fns: HashMap<DefId, crate::sema::results::Builtin>,
     /// Resolved dependency packages: `pkg:<name>` → the root module of that
     /// dependency's collected subtree. `pkg:<name>` imports resolve against this
     /// module's public surface (`docs/17` §17.4).
     pub package_roots: HashMap<String, ModId>,
+    /// `file:` import targets: normalized target file → its collected module.
+    /// A `file:` import resolves into this module's public surface.
+    pub file_modules: HashMap<std::path::PathBuf, ModId>,
 }
 
 /// Compiler-provided prelude written in the language itself (`docs/18` §7–8).
@@ -461,6 +474,26 @@ interface AsyncIterator<T> {
   function next_async(self): Future<Item<T> | Done>;
 }
 struct TimedOut {}
+struct Set<T> {}
+struct MpmcSender<T> { chan: i64 }
+struct MpmcReceiver<T> { chan: i64 }
+struct Thread {}
+struct Foreign {}
+struct CString {}
+struct CStr {}
+function print(s: str) {}
+function println(s: str) {}
+function panic(msg: str) {}
+function panic_with<T>(value: T) {}
+function exit(code: i32) {}
+function abort() {}
+function channel() {}
+function channel_bounded() {}
+function channel_mpmc() {}
+function channel_mpmc_bounded() {}
+function yield_now() {}
+function sleep(ms: i64) {}
+function timeout() {}
 ";
 
 impl Default for Program {
@@ -513,7 +546,10 @@ impl Program {
             prelude_types: HashMap::new(),
             prelude_values: HashMap::new(),
             builtin_module: ModId::ROOT,
+            builtin_modules: HashMap::new(),
+            builtin_fns: HashMap::new(),
             package_roots: HashMap::new(),
+            file_modules: HashMap::new(),
         }
     }
 
@@ -542,18 +578,20 @@ impl Program {
         ctx: &ResolveContext,
     ) -> Program {
         let mut p = Program::new();
-        p.inject_builtins();
-        p.collect_prelude();
-        // The root now holds exactly the universally-visible names (builtins +
-        // prelude); snapshot them so every module can resolve them.
-        p.prelude_types = p.modules[ModId::ROOT.index()].types.clone();
-        p.prelude_values = p.modules[ModId::ROOT.index()].values.clone();
-        // A synthetic module exposing the toolchain surface for explicit
-        // `core:`/`std:` imports (not reachable through the user `mod` tree).
-        let builtins = p.new_module("__builtins".into(), ModId::ROOT, true);
-        p.modules[builtins.index()].types = p.prelude_types.clone();
-        p.modules[builtins.index()].values = p.prelude_values.clone();
+        // The prelude lives in its own `__builtins__` module — *not* `ROOT` — so
+        // its names do not pollute user scope (`docs/17` §17.8: every named
+        // symbol requires an import). Built-in *syntax* still resolves via the
+        // stored prelude `DefId`s, and the prelude's own `extend` blocks are
+        // scanned program-wide by method resolution.
+        let builtins = p.new_module("__builtins__".into(), ModId::ROOT, true);
         p.builtin_module = builtins;
+        p.inject_builtins(builtins);
+        p.collect_prelude(builtins);
+        p.build_builtin_views();
+        // Near-empty prelude (`docs/17` §17.8): built-in *syntax* resolves via
+        // the stored prelude `DefId`s, but no built-in *name* is universally
+        // visible — every named symbol (`List`, `Map`, `print`, `panic`, …) must
+        // be imported. The universal-visibility maps stay empty.
         p.collect_items(ModId::ROOT, &root.items, externals, &[]);
         // Collect each resolved dependency package as a standalone subtree (not
         // reachable through the user `mod` tree); `pkg:<name>` resolves into it.
@@ -567,22 +605,32 @@ impl Program {
                 p.package_roots.insert(name.clone(), pkg_mod);
             }
         }
+        // Collect each `file:` import target as a standalone module.
+        let mut files: Vec<(&std::path::PathBuf, &Vec<String>)> = ctx.file_targets.iter().collect();
+        files.sort_by(|a, b| a.1.cmp(b.1));
+        for (target, key) in files {
+            if let Some(entry) = externals.get(key) {
+                let m = p.new_module(format!("__file__{}", key.join("_")), ModId::ROOT, true);
+                p.modules[m.index()].path = key.clone();
+                p.collect_items(m, &entry.items, externals, key);
+                p.file_modules.insert(target.clone(), m);
+            }
+        }
         p.resolve_imports(ctx);
         p
     }
 
     /// Lex, parse, and collect [`PRELUDE_SRC`] into the root module. The prelude
     /// uses a dedicated `FileId` so its spans never collide with user source.
-    fn collect_prelude(&mut self) {
+    fn collect_prelude(&mut self, target: ModId) {
         let file = crate::span::FileId(u32::MAX);
         let (tokens, lex_errs) = crate::lexer::lex(PRELUDE_SRC, file);
         debug_assert!(lex_errs.is_empty(), "prelude lex errors: {lex_errs:?}");
         let (module, parse_errs) = crate::parser::parse(PRELUDE_SRC, &tokens);
         debug_assert!(parse_errs.is_empty(), "prelude parse errors: {parse_errs:?}");
         // The prelude has no file-backed submodules.
-        self.collect_items(ModId::ROOT, &module.items, &Externals::new(), &[]);
-        let root = ModId::ROOT.index();
-        let types = &self.modules[root].types;
+        self.collect_items(target, &module.items, &Externals::new(), &[]);
+        let types = &self.modules[target.index()].types;
         self.item_def = types.get("Item").copied().unwrap_or(DefId(0));
         self.done_def = types.get("Done").copied().unwrap_or(DefId(0));
         self.iterator_def = types.get("Iterator").copied().unwrap_or(DefId(0));
@@ -615,24 +663,101 @@ impl Program {
         self.list_iter_def = types.get("ListIter").copied().unwrap_or(DefId(0));
         self.str_chars_def = types.get("StrChars").copied().unwrap_or(DefId(0));
         self.str_bytes_def = types.get("StrBytes").copied().unwrap_or(DefId(0));
+        // Map the marker functions to their builtin intrinsics. A call resolving
+        // to one of these defs lowers to the builtin (`docs/14`, `docs/24`).
+        use crate::sema::results::Builtin;
+        let values = self.modules[target.index()].values.clone();
+        for (name, b) in [
+            ("print", Builtin::Print),
+            ("println", Builtin::Println),
+            ("panic", Builtin::Panic),
+            ("panic_with", Builtin::PanicWith),
+            ("exit", Builtin::Exit),
+            ("abort", Builtin::Abort),
+        ] {
+            if let Some(d) = values.get(name).copied() {
+                self.builtin_fns.insert(d, b);
+            }
+        }
+    }
+
+    /// The builtin a marker-function `DefId` dispatches to, if any.
+    pub fn builtin_of_def(&self, def: DefId) -> Option<crate::sema::results::Builtin> {
+        self.builtin_fns.get(&def).copied()
+    }
+
+    /// Whether `def` is a toolchain (prelude/`core:`/`std:`) definition — it
+    /// lives in `__builtins__`. Used to tell an *imported* builtin name apart
+    /// from a *user* shadow when recognizing built-in intrinsics.
+    pub fn is_builtin_def(&self, def: DefId) -> bool {
+        self.defs[def.index()].module == self.builtin_module
+    }
+
+    /// Build the curated `core:`/`std:` module views over `__builtins__`
+    /// (`docs/17` §17.8). Each view exposes exactly the names that module
+    /// publishes; internal iterator adapters (`ListIter`, `MapKeys`, …) are not
+    /// exposed. `print`/`println`/`panic`/etc. are added by [`Self::add_builtin_fns`].
+    fn build_builtin_views(&mut self) {
+        // (path, names) — each name is copied from `__builtins__` in whichever
+        // namespace(s) it occupies (a unit struct is both a type and a value).
+        const VIEWS: &[(&[&str], &[&str])] = &[
+            (
+                &["core", "prelude"],
+                &[
+                    "Iterator", "Item", "Done", "FromResidual", "Try", "Clone", "Drop", "Eq",
+                    "Ord", "ToStr", "Hash", "Future", "Ready", "Pending", "Context",
+                    "panic", "panic_with", "exit", "abort",
+                ],
+            ),
+            (&["core", "collections"], &["List", "Map", "Set", "Entry"]),
+            (&["core", "ffi"], &["Foreign", "CString", "CStr"]),
+            (&["std", "io"], &["print", "println"]),
+            (&["std", "thread"], &["Thread", "JoinHandle", "Joined", "Panicked"]),
+            (
+                &["std", "sync"],
+                &[
+                    "Sender", "Receiver", "ChannelClosed", "Shared", "LockBusy", "MpmcSender",
+                    "MpmcReceiver", "channel", "channel_bounded", "channel_mpmc",
+                    "channel_mpmc_bounded",
+                ],
+            ),
+            (&["std", "async"], &["AsyncIterator", "TimedOut", "yield_now", "sleep", "timeout"]),
+        ];
+        let b = self.builtin_module.index();
+        for (path, names) in VIEWS {
+            let path_vec: Vec<String> = path.iter().map(|s| s.to_string()).collect();
+            let leaf = path.last().copied().unwrap_or("");
+            let view = self.new_module(format!("__view_{}", path.join("_")), ModId::ROOT, true);
+            for name in *names {
+                if let Some(d) = self.modules[b].types.get(*name).copied() {
+                    self.modules[view.index()].types.insert(name.to_string(), d);
+                }
+                if let Some(d) = self.modules[b].values.get(*name).copied() {
+                    self.modules[view.index()].values.insert(name.to_string(), d);
+                }
+            }
+            self.modules[view.index()].path = path_vec.clone();
+            let _ = leaf;
+            self.builtin_modules.insert(path_vec, view);
+        }
     }
 
     /// Inject compiler-provided prelude types (currently `List<T>`). These have
     /// no AST item; their behavior is special-cased in the checker and code
     /// generator. Injected before user items so they get stable low ids.
-    fn inject_builtins(&mut self) {
+    fn inject_builtins(&mut self, target: ModId) {
         let span = Span::new(crate::span::FileId(0), crate::span::BytePos(0), crate::span::BytePos(0));
-        let list = self.add_def(DefKind::Struct, "List".into(), ModId::ROOT, None, true, span);
-        let t = self.add_def(DefKind::GenericParam, "T".into(), ModId::ROOT, Some(list), false, span);
+        let list = self.add_def(DefKind::Struct, "List".into(), target, None, true, span);
+        let t = self.add_def(DefKind::GenericParam, "T".into(), target, Some(list), false, span);
         self.defs[list.index()].generics = vec![t];
-        self.modules[ModId::ROOT.index()].types.insert("List".into(), list);
+        self.modules[target.index()].types.insert("List".into(), list);
         self.list_def = list;
 
-        let map = self.add_def(DefKind::Struct, "Map".into(), ModId::ROOT, None, true, span);
-        let k = self.add_def(DefKind::GenericParam, "K".into(), ModId::ROOT, Some(map), false, span);
-        let v = self.add_def(DefKind::GenericParam, "V".into(), ModId::ROOT, Some(map), false, span);
+        let map = self.add_def(DefKind::Struct, "Map".into(), target, None, true, span);
+        let k = self.add_def(DefKind::GenericParam, "K".into(), target, Some(map), false, span);
+        let v = self.add_def(DefKind::GenericParam, "V".into(), target, Some(map), false, span);
         self.defs[map.index()].generics = vec![k, v];
-        self.modules[ModId::ROOT.index()].types.insert("Map".into(), map);
+        self.modules[target.index()].types.insert("Map".into(), map);
         self.map_def = map;
     }
 
@@ -674,6 +799,19 @@ impl Program {
     pub fn resolve_pub_value_in(&self, module: ModId, name: &str) -> Option<DefId> {
         let def = *self.modules[module.index()].values.get(name)?;
         self.defs[def.index()].public.then_some(def)
+    }
+
+    /// The `extend` blocks visible from `module` for method resolution: the
+    /// module's own plus the prelude's (`__builtins__`), since the prelude's
+    /// `extend` impls — `List`/`Map`/`str` iterators, etc. — are program-wide
+    /// (`docs/17` §17.8, orphan rule). The builtins are not double-counted when
+    /// `module` *is* the builtins module.
+    pub fn visible_extends(&self, module: ModId) -> Vec<DefId> {
+        let mut out = self.modules[module.index()].extends.clone();
+        if module != self.builtin_module {
+            out.extend(self.modules[self.builtin_module.index()].extends.iter().copied());
+        }
+        out
     }
 
     /// The module an `import … as alias` brings into scope in `module`.
@@ -730,13 +868,23 @@ impl Program {
                 }
 
                 match parsed.scheme {
-                    // Toolchain modules. Resolved against the built-in surface
-                    // (the synthetic builtins module aggregates it); the
-                    // partition into named submodules lands with the prelude
-                    // split (`docs/17` §17.8).
+                    // Toolchain modules, resolved against the curated named view
+                    // for this exact path (`docs/17` §17.8).
                     Scheme::Core | Scheme::Std => {
-                        let target = self.builtin_module;
-                        self.bind_import(mid, target, imp, /* toolchain = */ true);
+                        let mut key = vec![parsed.scheme.keyword().to_string()];
+                        key.extend(parsed.segments.iter().cloned());
+                        match self.builtin_modules.get(&key).copied() {
+                            Some(target) => {
+                                self.bind_import(mid, target, imp, /* toolchain = */ true)
+                            }
+                            None => self.errors.push(SemaError::new(
+                                SemaErrorKind::Message(format!(
+                                    "no built-in module `{}`",
+                                    parsed.display_source()
+                                )),
+                                span,
+                            )),
+                        }
                     }
                     Scheme::SelfRoot => match self.resolve_self_root(&parsed.segments) {
                         Ok(target) => self.bind_import(mid, target, imp, false),
@@ -783,18 +931,20 @@ impl Program {
                         }
                     }
                     Scheme::File => {
-                        // Enforce the allowlist/escape gate (`docs/17` §17.4).
-                        // Binding names from a `file:` module is a follow-up;
-                        // the safety-critical gate is enforced here.
+                        // Enforce the allowlist/escape gate, then bind names from
+                        // the loaded target module (`docs/17` §17.4).
                         match self.check_file_import(&mod_path, &parsed, ctx) {
-                            Ok(()) => self.errors.push(SemaError::new(
-                                SemaErrorKind::Message(format!(
-                                    "`{}`: the path is allowed, but binding names from a \
-                                     `file:` module is not yet supported",
-                                    parsed.display_source()
+                            Ok(target) => match self.file_modules.get(&target).copied() {
+                                Some(m) => self.bind_import(mid, m, imp, false),
+                                None => self.errors.push(SemaError::new(
+                                    SemaErrorKind::Message(format!(
+                                        "`{}` could not be loaded (expected file `{}`)",
+                                        parsed.display_source(),
+                                        target.display()
+                                    )),
+                                    span,
                                 )),
-                                span,
-                            )),
+                            },
                             Err(msg) => {
                                 self.errors.push(SemaError::new(SemaErrorKind::Message(msg), span))
                             }
@@ -904,9 +1054,10 @@ impl Program {
         importing_mod_path: &[String],
         parsed: &crate::imports::ImportPath,
         ctx: &ResolveContext,
-    ) -> Result<(), String> {
+    ) -> Result<std::path::PathBuf, String> {
         use crate::sema::resolve_ctx::normalize;
-        // Resolve the target location relative to the importing file.
+        // Resolve the target location relative to the importing file. `.otter` is
+        // appended when no extension is given (must match the loader).
         let importing_file = ctx
             .file_of
             .get(importing_mod_path)
@@ -919,19 +1070,22 @@ impl Program {
         for seg in &parsed.segments {
             dir.push(seg);
         }
+        if dir.extension().is_none() {
+            dir.set_extension("otter");
+        }
         let target = normalize(&dir);
 
         // Direct mode (no source root): `file:` is unrestricted.
-        let Some(source_root) = &ctx.source_root else { return Ok(()) };
+        let Some(source_root) = &ctx.source_root else { return Ok(target) };
         let source_root = normalize(source_root);
         if target.starts_with(&source_root) {
-            return Ok(()); // inside the package — always allowed
+            return Ok(target); // inside the package — always allowed
         }
         // Escaping the package: must match an allowlist entry.
         let root = ctx.package_root.clone().unwrap_or_else(|| source_root.clone());
         for entry in &ctx.file_import_allow {
             if path_matches_allow(&root, entry, &target) {
-                return Ok(());
+                return Ok(target);
             }
         }
         Err(format!(

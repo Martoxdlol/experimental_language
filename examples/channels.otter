@@ -5,6 +5,13 @@
 // compose with the async runtime (docs/21). Endpoints are thread-safe
 // handles, so a `Sender` can be captured into a spawned worker.
 
+import { println } from "std:io";
+import { Future } from "core:prelude";
+import { JoinHandle, Joined, Panicked } from "std:thread";
+import { Sender, Receiver } from "std:sync";
+
+import { channel } from "std:sync";
+import { Thread } from "std:thread";
 function produce(tx: Sender<i64>, n: i64) {
   var i: i64 = 1;
   while i <= n {

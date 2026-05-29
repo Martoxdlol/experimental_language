@@ -33,6 +33,10 @@ pub struct ModuleTree {
     pub externals: Externals,
     /// Source file backing each module path (root = `[]`).
     pub file_of: HashMap<Vec<String>, PathBuf>,
+    /// `file:` import targets: normalized target file → the module-tree key under
+    /// which it was loaded (`["__file__", N]`). The compiler resolves a `file:`
+    /// import by recomputing the target path and looking it up here.
+    pub file_targets: HashMap<PathBuf, Vec<String>>,
     /// The source map holding every loaded file (entry first → `FileId(0)`).
     pub map: SourceMap,
     /// Errors gathered while loading (lex/parse/IO/reachability).
@@ -70,6 +74,7 @@ impl ModuleTree {
 pub fn load_project(entries: &[PathBuf], source_root: &Path) -> ModuleTree {
     let mut loader = Loader::new(/* allow_mod = */ true);
     loader.load_entries(entries);
+    loader.load_file_imports();
     loader.check_reachability(source_root);
     loader.finish()
 }
@@ -93,10 +98,11 @@ pub fn load_project_with_packages(
 ) -> ModuleTree {
     let mut loader = Loader::new(/* allow_mod = */ true);
     loader.load_entries(entries);
-    loader.check_reachability(source_root);
     for dep in packages {
         loader.load_package(&dep.name, &dep.entry);
     }
+    loader.load_file_imports();
+    loader.check_reachability(source_root);
     loader.finish()
 }
 
@@ -106,6 +112,7 @@ pub fn load_project_with_packages(
 pub fn load_loose(entry: &Path) -> ModuleTree {
     let mut loader = Loader::new(/* allow_mod = */ false);
     loader.load_entries(std::slice::from_ref(&entry.to_path_buf()));
+    loader.load_file_imports();
     loader.finish()
 }
 
@@ -113,6 +120,7 @@ struct Loader {
     map: SourceMap,
     externals: Externals,
     file_of: HashMap<Vec<String>, PathBuf>,
+    file_targets: HashMap<PathBuf, Vec<String>>,
     diagnostics: Vec<LoadDiag>,
     /// The parsed root (primary entry).
     root: Option<Module>,
@@ -128,10 +136,56 @@ impl Loader {
             map: SourceMap::new(),
             externals: Externals::new(),
             file_of: HashMap::new(),
+            file_targets: HashMap::new(),
             diagnostics: Vec::new(),
             root: None,
             reached: BTreeSet::new(),
             allow_mod,
+        }
+    }
+
+    /// Follow `file:` imports: load each referenced `.otter` file as a standalone
+    /// module keyed under `["__file__", N]` so the compiler can bind names from
+    /// it (`docs/17` §17.4). Allowlist/escape gating is the compiler's job; the
+    /// loader just makes the target available (best-effort).
+    fn load_file_imports(&mut self) {
+        use compiler::imports::{classify, Scheme};
+        // Collect (importing file, raw path) pairs without holding a borrow.
+        let mut work: Vec<(PathBuf, String)> = Vec::new();
+        let scan = |module: &Module, file: &Path, work: &mut Vec<(PathBuf, String)>| {
+            for item in &module.items {
+                if let ItemKind::Import(imp) = &item.kind {
+                    let raw = import_path_text(&imp.path);
+                    if matches!(classify(&raw), Ok(p) if p.scheme == Scheme::File) {
+                        work.push((file.to_path_buf(), raw));
+                    }
+                }
+            }
+        };
+        if let Some(root) = &self.root {
+            if let Some(f) = self.file_of.get(&Vec::new()).cloned() {
+                scan(root, &f, &mut work);
+            }
+        }
+        for (key, module) in &self.externals {
+            if let Some(f) = self.file_of.get(key).cloned() {
+                scan(module, &f, &mut work);
+            }
+        }
+        let mut next = 0usize;
+        for (importing_file, raw) in work {
+            let Ok(parsed) = classify(&raw) else { continue };
+            let target = file_import_target(&importing_file, &parsed);
+            if self.file_targets.contains_key(&target) {
+                continue;
+            }
+            let Some(module) = self.parse_file(&target) else { continue };
+            self.mark_reached(&target);
+            let key = vec!["__file__".to_string(), next.to_string()];
+            next += 1;
+            self.file_of.insert(key.clone(), target.clone());
+            self.externals.insert(key.clone(), module);
+            self.file_targets.insert(target, key);
         }
     }
 
@@ -266,10 +320,43 @@ impl Loader {
             root: self.root.expect("root set by load_entries"),
             externals: self.externals,
             file_of: self.file_of,
+            file_targets: self.file_targets,
             map: self.map,
             diagnostics: self.diagnostics,
         }
     }
+}
+
+/// The literal text of an import path string literal (only `Text` parts).
+fn import_path_text(lit: &compiler::ast::StringLit) -> String {
+    use compiler::ast::StringPart;
+    let mut s = String::new();
+    for part in &lit.parts {
+        if let StringPart::Text { text, .. } = part {
+            s.push_str(text);
+        }
+    }
+    s
+}
+
+/// Compute the normalized target file of a `file:` import relative to the
+/// importing file's directory (`.otter` appended when no extension is given).
+/// Must match the compiler's `file:` resolution.
+pub fn file_import_target(importing_file: &Path, parsed: &compiler::imports::ImportPath) -> PathBuf {
+    let mut dir =
+        importing_file.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+    for _ in 0..parsed.up {
+        if let Some(p) = dir.parent() {
+            dir = p.to_path_buf();
+        }
+    }
+    for seg in &parsed.segments {
+        dir.push(seg);
+    }
+    if dir.extension().is_none() {
+        dir.set_extension("otter");
+    }
+    compiler::sema::resolve_ctx::normalize(&dir)
 }
 
 /// Recursively collect every `.otter` file under `dir` (sorted for determinism).

@@ -6,6 +6,9 @@
 // pointers `*T`, address-of `&`, and dereference `*p`.
 
 // An extern struct is C-laid-out and header-less; it lives on the stack.
+import { println } from "std:io";
+
+import { Foreign, CString, CStr } from "core:ffi";
 extern struct Pair { a: i64, b: i64 }
 
 // A C function called across the ABI by its real symbol name. `memcpy` fills a

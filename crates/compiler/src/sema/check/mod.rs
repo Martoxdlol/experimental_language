@@ -364,7 +364,7 @@ impl<'a> Checker<'a> {
     /// to monomorphize interface-method calls on type parameters.
     pub(crate) fn collect_impls(&mut self) {
         let module = self.current_module();
-        let extends = self.prog.module(module).extends.clone();
+        let extends = self.prog.visible_extends(module);
         for ext in extends {
             let Some(ItemKind::Extend(e)) = self.prog.def(ext).item.clone() else { continue };
             let mut env = TypeEnv::new(self.prog.def(ext).module);

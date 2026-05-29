@@ -53,13 +53,52 @@ Lexer, parser, AST, spans, diagnostics. 205 tests.
       checks). 8 tests.
 - [x] **Cross-module name resolution + imports + visibility** (`docs/17`):
       name lookup is module-scoped via `Program::resolve_{type,value}_in(module,
-      name)` — own definitions, then `import`-bound names, then the universal
-      prelude; parent modules are *not* searched (names cross boundaries only via
-      `import`). `Program::resolve_imports` binds `import { a, b as c } from
-      "path"` (relative module paths; `pkg:` deferred) into per-module
-      `imported_{types,values}` maps, enforcing `pub` visibility. The checker
-      tracks `cur_module` per function. (Orphan-rule bookkeeping for `extend`
-      across modules: follow-up.)
+      name)` — own definitions, then `import`-bound names; parent modules are
+      *not* searched (names cross boundaries only via `import`). The checker
+      tracks `cur_module` per function.
+
+### Modules, imports & packages  ✅ DONE (`docs/17`, `docs/23` §7–§8)
+The full module/import/package system, end to end.
+- **Import scheme system** (`compiler::imports`): every path carries an explicit
+  scheme — `core:`/`std:`/`pkg:`/`self:` (root + `./`,`../` relative)/`file:`.
+  Prefix-less paths and reserved families (`url:`/`http:`/`https:`/`+blob`/
+  `pkg+https`) are pointed errors. `Program::resolve_imports` is scheme-aware:
+  `self:` root walks the `mod` tree, `self:` relative resolves against the
+  importing file's directory with the **package-escape rule**, `core:`/`std:`
+  resolve against curated named built-in views, `pkg:` binds a dependency's
+  public tree, `file:` binds names from a loaded target module after the
+  allowlist/escape gate.
+- **Run modes** (`docs/17` §17.13): `run`/`build`/`check` (project or direct),
+  `exec` (standalone). Direct mode does the reachability walk; `pkg:`/`self:`
+  are hard errors without project context. Unreferenced-source-file error.
+  Module-tree loader in `crates/pkg::loader` (sibling rule for entries,
+  child-dir below).
+- **Near-empty prelude** (`docs/17` §17.8): the prelude lives in a hidden
+  `__builtins__` module; only built-in *syntax* resolves (via stored `DefId`s).
+  Every named symbol — `List`/`Map`/`print`/`println`/`panic`/`Clone`/… —
+  requires an import from `core:prelude`/`core:collections`/`std:io`/`std:*`.
+  `print`/`println`/`panic`/`panic_with`/`exit`/`abort` are importable marker
+  functions dispatched by `DefId`. The concurrency/FFI intrinsics
+  (`channel`/`sleep`/`yield_now`/`timeout`/`Thread.spawn`/`Shared.new`/
+  `Foreign.*`/`CString`/`CStr`) also require their import — recognized only when
+  the name resolves to a built-in (`intr_fn`/`intr_ns`). Only `str` methods +
+  numeric namespaces stay free (per spec).
+- **Package manager** (`crates/pkg`): `project.toml` manifest, `project.lock`
+  lockfile (+ sha256 verify), semver resolution (unify compatible ranges),
+  content-addressed store, sparse-HTTP registry protocol (behind a `Registry`
+  trait: real `HttpRegistry` + `LocalRegistry` fixture), transitive resolver
+  (path + registry deps). `pkg:` binding compiles dependency libraries and
+  exposes their `pub` API. CLI: `add`/`remove`/`update`/`lock`(+`--check`)/
+  `tree`/`why`/`vendor`/`login`/`logout`/`search`/`publish`/`yank`/`audit`.
+  Deferred (advanced): git dependency *fetching* (sources recorded, not cloned),
+  feature-gated optional-dep resolution (`[features]` parsed; optional deps
+  skipped), multi-major coexistence (incompatible majors error), and live
+  registry network round-trips for publish/yank/search/audit (implemented; only
+  the offline-testable parts are exercised — no live server in tests).
+- **Tests**: `imports` 11, `pkg` 80+ (manifest/loader/lockfile/store/semver/
+  registry/resolve/commands/credentials/package), `cli` e2e (every scheme,
+  run modes, escape rule, file: gating, dep commands, `pkg:` run e2e). All
+  green; every example runs (JIT + native).
 
 ### Phase 2 — Type checking & inference  🚧 IN PROGRESS
 - [x] `sema/check.rs`: bidirectional checker over the imperative core —

@@ -4,8 +4,24 @@
     use compiler::sema::analyze;
     use compiler::span::FileId;
 
+    /// Toolchain imports prepended to every test program (near-empty prelude,
+    /// `docs/17` §17.8). Unused imports are harmless; local defs shadow imports.
+    const PRELUDE: &str = "import { List, Map, Set, Entry } from \"core:collections\";\n\
+        import { print, println } from \"std:io\";\n\
+        import { panic, panic_with, exit, abort } from \"core:prelude\";\n\
+        import { Clone, ToStr, Eq, Ord, Hash, Iterator, Item, Done, Try, FromResidual, Drop, Future, Ready, Pending, Context } from \"core:prelude\";\n\
+        import { Shared, LockBusy, Sender, Receiver, ChannelClosed, MpmcSender, MpmcReceiver, channel, channel_bounded, channel_mpmc, channel_mpmc_bounded } from \"std:sync\";\n\
+        import { Thread, JoinHandle, Joined, Panicked } from \"std:thread\";\n\
+        import { AsyncIterator, TimedOut, yield_now, sleep, timeout } from \"std:async\";\n\
+        import { Foreign, CString, CStr } from \"core:ffi\";\n";
+
+    fn with_prelude(src: &str) -> String {
+        format!("{PRELUDE}{src}")
+    }
+
     /// Analyze, JIT-compile, and call a zero-arg `i64` function by name.
     fn run(src: &str, func: &str) -> i64 {
+        let src = &with_prelude(src);
         let (tokens, le) = lex(src, FileId(0));
         assert!(le.is_empty(), "lex: {le:?}");
         let (module, pe) = parse(src, &tokens);
@@ -18,6 +34,7 @@
 
     /// Call a zero-arg function returning `str` and read back its UTF-8 bytes.
     fn run_str(src: &str, func: &str) -> String {
+        let src = &with_prelude(src);
         let (tokens, le) = lex(src, FileId(0));
         assert!(le.is_empty(), "lex: {le:?}");
         let (module, pe) = parse(src, &tokens);
@@ -40,6 +57,7 @@
         // A native build emits a DWARF line table into the object (`__debug_line`
         // on Mach-O, `.debug_line` on ELF) — real source-level debug info.
         let src = "function main(): i64 { var x = 1; x + 2 }";
+        let src = &with_prelude(src);
         let (tokens, _) = lex(src, FileId(0));
         let (module, _) = parse(src, &tokens);
         let analysis = analyze(&module);
@@ -63,6 +81,7 @@
         // `.debug_line`. A multi-expression program yields several mappings,
         // each pointing at a real offset inside the source.
         let src = "function f(a: i64, b: i64): i64 { var s = a + b; s * 2 }";
+        let src = &with_prelude(src);
         let (tokens, _) = lex(src, FileId(0));
         let (module, _) = parse(src, &tokens);
         let analysis = analyze(&module);
@@ -1669,6 +1688,7 @@ extend Cat: Sound { function code(self): i64 { 2 } }\n";
 
     /// Analyze, JIT-compile **via the HIR walk**, and call a zero-arg `i64` fn.
     fn run_hir(src: &str, func: &str) -> i64 {
+        let src = &with_prelude(src);
         let (tokens, le) = lex(src, FileId(0));
         assert!(le.is_empty(), "lex: {le:?}");
         let (module, pe) = parse(src, &tokens);
@@ -1773,6 +1793,7 @@ extend Cat: Sound { function code(self): i64 { 2 } }\n";
         let src = "function g(a: i64, b: i64): i64 { a * b - a }\n\
                    function f(): i64 { var t: i64 = 0; var k: i64 = 1; \
                      while k <= 6 { t = t + g(k, 2); k = k + 1; } t }";
+        let src = &with_prelude(src);
         let (tokens, _) = lex(src, FileId(0));
         let (module, _) = parse(src, &tokens);
         let analysis = analyze(&module);
@@ -1804,6 +1825,7 @@ extend Cat: Sound { function code(self): i64 { 2 } }\n";
                    function f(): i64 { var c = Counter { n: 0 }; c.n = c.n + 42; c.n }";
         assert_eq!(run_hir(src, "f"), 42);
         // Same program via the AST path must agree.
+        let src = &with_prelude(src);
         let (tokens, _) = lex(src, FileId(0));
         let (module, _) = parse(src, &tokens);
         let analysis = analyze(&module);
@@ -1813,6 +1835,7 @@ extend Cat: Sound { function code(self): i64 { 2 } }\n";
 
     /// Like `run_hir`, for a zero-arg `str`-returning function.
     fn run_str_hir(src: &str, func: &str) -> String {
+        let src = &with_prelude(src);
         let (tokens, le) = lex(src, FileId(0));
         assert!(le.is_empty(), "lex: {le:?}");
         let (module, pe) = parse(src, &tokens);
@@ -1856,6 +1879,7 @@ extend Cat: Sound { function code(self): i64 { 2 } }\n";
     #[test]
     fn hir_string_cast_agrees_with_ast() {
         let src = "function f(): str { (40 + 2) as str }";
+        let src = &with_prelude(src);
         let (tokens, _) = lex(src, FileId(0));
         let (module, _) = parse(src, &tokens);
         let analysis = analyze(&module);
@@ -1900,6 +1924,7 @@ extend Cat: Sound { function code(self): i64 { 2 } }\n";
         let src = "struct Acc { total: i64 }\n\
                    extend Acc { function add(self, n: i64): i64 { self.total = self.total + n; self.total } }\n\
                    function f(): i64 { var a = Acc { total: 0 }; a.add(40); a.add(2) }";
+        let src = &with_prelude(src);
         let (tokens, _) = lex(src, FileId(0));
         let (module, _) = parse(src, &tokens);
         let analysis = analyze(&module);
@@ -1951,6 +1976,7 @@ extend Cat: Sound { function code(self): i64 { 2 } }\n";
                      }\n\
                      total\n\
                    }";
+        let src = &with_prelude(src);
         let (tokens, _) = lex(src, FileId(0));
         let (module, _) = parse(src, &tokens);
         let analysis = analyze(&module);
@@ -1978,6 +2004,7 @@ extend Cat: Sound { function code(self): i64 { 2 } }\n";
             let p = bits as usize as *const runtime::LangStr;
             unsafe { String::from_utf8_lossy(runtime::str_bytes(p)).into_owned() }
         };
+        let src = &with_prelude(src);
         let (tokens, _) = lex(src, FileId(0));
         let (module, _) = parse(src, &tokens);
         let analysis = analyze(&module);
@@ -2014,6 +2041,7 @@ extend Cat: Sound { function code(self): i64 { 2 } }\n";
                      var mul = (x: i64): i64 => x * k;\n\
                      mul(4) + mul(10)\n\
                    }";
+        let src = &with_prelude(src);
         let (tokens, _) = lex(src, FileId(0));
         let (module, _) = parse(src, &tokens);
         let analysis = analyze(&module);
@@ -2050,6 +2078,7 @@ extend Cat: Sound { function code(self): i64 { 2 } }\n";
                      var evens = xs.filter((x: i64): bool => x % 2 == 0);\n\
                      evens.fold(0, (a: i64, x: i64): i64 => a + x)\n\
                    }";
+        let src = &with_prelude(src);
         let (tokens, _) = lex(src, FileId(0));
         let (module, _) = parse(src, &tokens);
         let analysis = analyze(&module);
@@ -2088,6 +2117,7 @@ extend Cat: Sound { function code(self): i64 { 2 } }\n";
     #[test]
     fn hir_numeric_intrinsic_agrees_with_ast() {
         let src = "function f(): i64 { u8.saturating_add(250u8, 100u8) as i64 }";
+        let src = &with_prelude(src);
         let (tokens, _) = lex(src, FileId(0));
         let (module, _) = parse(src, &tokens);
         let analysis = analyze(&module);
@@ -2134,6 +2164,7 @@ extend Cat: Sound { function code(self): i64 { 2 } }\n";
                      for g in xs { total = total + g.greet(); }\n\
                      total\n\
                    }";
+        let src = &with_prelude(src);
         let (tokens, _) = lex(src, FileId(0));
         let (module, _) = parse(src, &tokens);
         let analysis = analyze(&module);
@@ -2154,6 +2185,7 @@ extend Cat: Sound { function code(self): i64 { 2 } }\n";
                      match block_on(h.join()) { Joined j => j.value, Panicked p => -1 }\n\
                    }";
         // `block_on` may not be user-callable; fall back to a simpler shape if so.
+        let src = &with_prelude(src);
         let (tokens, _) = lex(src, FileId(0));
         let (module, pe) = parse(src, &tokens);
         if !pe.is_empty() { return; }
@@ -2173,6 +2205,7 @@ extend Cat: Sound { function code(self): i64 { 2 } }\n";
                      var got = s.lock((v: i64): i64 => v + 2);\n\
                      got\n\
                    }";
+        let src = &with_prelude(src);
         let (tokens, _) = lex(src, FileId(0));
         let (module, pe) = parse(src, &tokens);
         if !pe.is_empty() { return; }
@@ -2195,6 +2228,7 @@ extend Cat: Sound { function code(self): i64 { 2 } }\n";
                      tx.send(42);\n\
                      match rx.try_recv() { i64 v => v, _ => -1 }\n\
                    }";
+        let src = &with_prelude(src);
         let (tokens, _) = lex(src, FileId(0));
         let (module, pe) = parse(src, &tokens);
         assert!(pe.is_empty(), "parse: {pe:?}");
@@ -2214,6 +2248,7 @@ extend Cat: Sound { function code(self): i64 { 2 } }\n";
                      var s = Shared.new(40);\n\
                      s.lock((v: i64): i64 => v + 2)\n\
                    }";
+        let src = &with_prelude(src);
         let (tokens, _) = lex(src, FileId(0));
         let (module, pe) = parse(src, &tokens);
         assert!(pe.is_empty(), "parse: {pe:?}");
@@ -2232,6 +2267,7 @@ extend Cat: Sound { function code(self): i64 { 2 } }\n";
         let src = "struct Point { x: i64, y: i64 }\n\
                    extend Point: ToStr { function to_str(self): str { (self.x as str) + \",\" + (self.y as str) } }\n\
                    function f(): str { var p = Point { x: 3, y: 4 }; \"p=$p\" }";
+        let src = &with_prelude(src);
         let (tokens, _) = lex(src, FileId(0));
         let (module, pe) = parse(src, &tokens);
         assert!(pe.is_empty(), "parse: {pe:?}");
@@ -2257,6 +2293,7 @@ extend Cat: Sound { function code(self): i64 { 2 } }\n";
                      var b: i64 = a + 1;\n\
                      b\n\
                    }";
+        let src = &with_prelude(src);
         let (tokens, _) = lex(src, FileId(0));
         let (module, pe) = parse(src, &tokens);
         assert!(pe.is_empty(), "parse: {pe:?}");

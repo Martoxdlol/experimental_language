@@ -39,6 +39,10 @@ pub struct ResolveContext {
     /// `["__pkg__", "json"]`). The compiler collects those subtrees and resolves
     /// `pkg:<name>` against the package's public surface.
     pub packages: HashMap<String, Vec<String>>,
+    /// `file:` import targets: normalized target file → the `externals` key under
+    /// which the driver loaded it (`["__file__", N]`). The compiler collects each
+    /// as a standalone module and binds `file:` imports against it.
+    pub file_targets: HashMap<PathBuf, Vec<String>>,
 }
 
 impl ResolveContext {

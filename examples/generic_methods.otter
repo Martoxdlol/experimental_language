@@ -2,6 +2,9 @@
 // method body refers to the type's parameters; each call is monomorphized to
 // the receiver's concrete instantiation.
 
+import { println } from "std:io";
+import { Iterator, Item, Done } from "core:prelude";
+
 struct Pair<A, B> { first: A, second: B }
 
 extend<A, B> Pair<A, B> {

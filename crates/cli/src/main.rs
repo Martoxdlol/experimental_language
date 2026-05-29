@@ -325,6 +325,7 @@ fn prepare_project(proj: &ProjectContext) -> Prepared {
         file_import_allow: proj.manifest.file_import_allow.clone(),
         dependencies,
         packages: packages_map,
+        file_targets: tree.file_targets.clone(),
     };
     Prepared { root: tree.root, externals: tree.externals, ctx, map: tree.map, diags: tree.diagnostics }
 }
@@ -333,13 +334,14 @@ fn prepare_project(proj: &ProjectContext) -> Prepared {
 /// §17.13): `core:`/`std:`/`file:` work; `pkg:`/`self:` are hard errors.
 fn prepare_loose(file: &Path) -> Prepared {
     let tree = loader::load_loose(file);
-    Prepared {
-        root: tree.root,
-        externals: tree.externals,
-        ctx: ResolveContext::direct(),
-        map: tree.map,
-        diags: tree.diagnostics,
-    }
+    // Direct mode: no project context, but `file:` imports still resolve
+    // (unrestricted — no allowlist) so carry the loaded file targets.
+    let ctx = ResolveContext {
+        file_of: tree.file_of.clone(),
+        file_targets: tree.file_targets.clone(),
+        ..ResolveContext::direct()
+    };
+    Prepared { root: tree.root, externals: tree.externals, ctx, map: tree.map, diags: tree.diagnostics }
 }
 
 /// Render the loader's diagnostics; returns `true` if any were errors.

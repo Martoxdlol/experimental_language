@@ -3,7 +3,23 @@
     use crate::parser::parse;
     use crate::span::FileId;
 
+    /// A broad import of the toolchain surface, prepended to every test program
+    /// so the near-empty-prelude rule (`docs/17` §17.8) is satisfied without
+    /// hand-editing each inline program. Importing an unused name is harmless
+    /// (no unused-import lint); a program's own definition silently shadows an
+    /// import (`docs/17` §17.9).
+    const PRELUDE: &str = "import { List, Map, Set, Entry } from \"core:collections\";\n\
+        import { print, println } from \"std:io\";\n\
+        import { panic, panic_with, exit, abort } from \"core:prelude\";\n\
+        import { Clone, ToStr, Eq, Ord, Hash, Iterator, Item, Done, Try, FromResidual, Drop, Future, Ready, Pending, Context } from \"core:prelude\";\n\
+        import { Shared, LockBusy, Sender, Receiver, ChannelClosed, MpmcSender, MpmcReceiver, channel, channel_bounded, channel_mpmc, channel_mpmc_bounded } from \"std:sync\";\n\
+        import { Thread, JoinHandle, Joined, Panicked } from \"std:thread\";\n\
+        import { AsyncIterator, TimedOut, yield_now, sleep, timeout } from \"std:async\";\n\
+        import { Foreign, CString, CStr } from \"core:ffi\";\n";
+
     fn check(src: &str) -> Vec<SemaError> {
+        let src = &format!("{PRELUDE}{src}");
+        let src = src.as_str();
         let (tokens, le) = lex(src, FileId(0));
         assert!(le.is_empty(), "lex: {le:?}");
         let (module, pe) = parse(src, &tokens);

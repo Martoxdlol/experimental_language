@@ -2,6 +2,10 @@
 // implementing `Eq + Hash` (typically via `@Derive`) also work as keys
 // (docs/18 §6, docs/15 §7).
 
+import { Map, Entry } from "core:collections";
+import { println } from "std:io";
+import { Eq, Hash, Iterator } from "core:prelude";
+
 function main() {
   // Map literal: keys commit the parse on the first `key:`.
   var inventory: Map<str, i64> = { "apples": 3, "pears": 7 };

@@ -1391,15 +1391,16 @@ impl<'a> Checker<'a> {
         // A module-level value: function, var, or extern function/var.
         let module = self.current_module();
         if let Some(def) = self.prog.resolve_value_in(module, name) {
+            // A prelude marker function (`print`/`panic`/…, imported by name)
+            // lowers to its builtin intrinsic (`docs/17` §17.8).
+            if let Some(b) = self.prog.builtin_of_def(def) {
+                let t = self.builtin_ty(b);
+                self.record_res(span, ValueRes::Builtin(b), t);
+                return t;
+            }
             let res = self.value_res(def);
             let t = self.value_def_ty(def);
             self.record_res(span, res, t);
-            return t;
-        }
-        // A compiler builtin (temporary prelude; see `Builtin`).
-        if let Some(b) = Builtin::from_name(name) {
-            let t = self.builtin_ty(b);
-            self.record_res(span, ValueRes::Builtin(b), t);
             return t;
         }
         self.emit(span, SemaErrorKind::UnknownValue { name: name.to_string() });
@@ -1630,6 +1631,29 @@ impl<'a> Checker<'a> {
         Some(ty)
     }
 
+    /// Whether `name` is an *imported* toolchain free-function intrinsic
+    /// (`channel`/`sleep`/…): not shadowed by a local, and resolving to a
+    /// built-in (`__builtins__`) value def. A program must `import` the name for
+    /// the intrinsic to be recognized (`docs/17` §17.8).
+    fn intr_fn(&self, name: &str) -> bool {
+        self.lookup(name).is_none()
+            && self
+                .prog
+                .resolve_value_in(self.current_module(), name)
+                .is_some_and(|d| self.prog.is_builtin_def(d))
+    }
+
+    /// As [`Self::intr_fn`], for an imported toolchain *namespace* type
+    /// (`Thread`/`Shared`/`Foreign`/`CString`/`CStr`): resolves to a built-in
+    /// type def and is not shadowed by a local.
+    fn intr_ns(&self, name: &str) -> bool {
+        self.lookup(name).is_none()
+            && self
+                .prog
+                .resolve_type_in(self.current_module(), name)
+                .is_some_and(|d| self.prog.is_builtin_def(d))
+    }
+
     pub(crate) fn check_call(
         &mut self,
         callee: &Expr,
@@ -1643,31 +1667,37 @@ impl<'a> Checker<'a> {
         if let Some(ty) = self.try_builtin_ctor(callee, _generics, args, span) {
             return ty;
         }
+        // A prelude marker function (`print`/`println`/`panic`/`panic_with`/
+        // `exit`/`abort`, imported by name) lowers to its builtin intrinsic
+        // (`docs/17` §17.8). Handled here so it takes priority over the generic-
+        // function path (`panic_with<T>` is generic), unless shadowed by a local.
+        if let ExprKind::Ident(name) = &callee.kind {
+            if self.lookup(&name.name).is_none() {
+                if let Some(def) = self.prog.resolve_value_in(self.current_module(), &name.name) {
+                    if let Some(b) = self.prog.builtin_of_def(def) {
+                        let t = self.builtin_ty(b);
+                        self.record_res(callee.span, ValueRes::Builtin(b), t);
+                        return self.check_args_against(t, args, trailing, span);
+                    }
+                }
+            }
+        }
         // `channel<T>()` (`docs/20` §2): construct a message-passing channel.
         if let ExprKind::Ident(name) = &callee.kind {
-            if name.name == "channel"
-                && self.lookup("channel").is_none()
-                && self.prog.resolve_value_in(self.current_module(), "channel").is_none()
-            {
+            if name.name == "channel" && self.intr_fn("channel") {
                 return self.check_channel_new(_generics, args, span);
             }
         }
         // `yield_now()` (`docs/21`): a `Future<null>` that suspends once.
         if let ExprKind::Ident(name) = &callee.kind {
-            if name.name == "yield_now"
-                && self.lookup("yield_now").is_none()
-                && self.prog.resolve_value_in(self.current_module(), "yield_now").is_none()
-            {
+            if name.name == "yield_now" && self.intr_fn("yield_now") {
                 if !args.is_empty() {
                     self.emit(span, SemaErrorKind::ArgCount { expected: 0, found: args.len() });
                 }
                 return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.null]);
             }
             // `sleep(ms)` (`docs/21` §9): a `Future<null>` completing after a delay.
-            if name.name == "sleep"
-                && self.lookup("sleep").is_none()
-                && self.prog.resolve_value_in(self.current_module(), "sleep").is_none()
-            {
+            if name.name == "sleep" && self.intr_fn("sleep") {
                 if args.len() != 1 {
                     self.emit(span, SemaErrorKind::ArgCount { expected: 1, found: args.len() });
                 } else {
@@ -1679,10 +1709,7 @@ impl<'a> Checker<'a> {
             }
             // `timeout(fut, ms): Future<T | TimedOut>` (`docs/21` §9): race a
             // future against a deadline.
-            if name.name == "timeout"
-                && self.lookup("timeout").is_none()
-                && self.prog.resolve_value_in(self.current_module(), "timeout").is_none()
-            {
+            if name.name == "timeout" && self.intr_fn("timeout") {
                 if args.len() != 2 {
                     self.emit(span, SemaErrorKind::ArgCount { expected: 2, found: args.len() });
                     return self.tcx.error;
@@ -1709,10 +1736,7 @@ impl<'a> Checker<'a> {
         // Recognised before the static-method path (which would not find `new`).
         if let ExprKind::Field { receiver, name } = &callee.kind {
             if let ExprKind::Ident(recv) = &receiver.kind {
-                if recv.name == "Shared"
-                    && name.name == "new"
-                    && self.lookup(&recv.name).is_none()
-                {
+                if recv.name == "Shared" && name.name == "new" && self.intr_ns(&recv.name) {
                     return self.check_shared_new(args, span);
                 }
             }
@@ -1721,18 +1745,14 @@ impl<'a> Checker<'a> {
         // (`docs/19` §5): manual foreign-heap allocation.
         if let ExprKind::Field { receiver, name } = &callee.kind {
             if let ExprKind::Ident(recv) = &receiver.kind {
-                if recv.name == "Foreign" && self.lookup(&recv.name).is_none() {
+                if recv.name == "Foreign" && self.intr_ns(&recv.name) {
                     return self.check_foreign_builtin(&name.name, _generics, args, span);
                 }
                 // `CString.from_str(s)` / `CStr.to_str(p)` (`docs/19` §6).
-                if recv.name == "CString" && name.name == "from_str"
-                    && self.lookup(&recv.name).is_none()
-                {
+                if recv.name == "CString" && name.name == "from_str" && self.intr_ns(&recv.name) {
                     return self.check_cstring_from_str(args, span);
                 }
-                if recv.name == "CStr" && name.name == "to_str"
-                    && self.lookup(&recv.name).is_none()
-                {
+                if recv.name == "CStr" && name.name == "to_str" && self.intr_ns(&recv.name) {
                     return self.check_cstr_to_str(args, span);
                 }
             }
@@ -1768,11 +1788,7 @@ impl<'a> Checker<'a> {
         // before the method-call path.
         if let ExprKind::Field { receiver, name } = &callee.kind {
             if let ExprKind::Ident(m) = &receiver.kind {
-                if m.name == "Thread"
-                    && name.name == "spawn"
-                    && self.lookup(&m.name).is_none()
-                    && self.prog.resolve_value_in(self.current_module(), &m.name).is_none()
-                {
+                if m.name == "Thread" && name.name == "spawn" && self.intr_ns(&m.name) {
                     return self.check_thread_spawn(args, trailing, span);
                 }
             }

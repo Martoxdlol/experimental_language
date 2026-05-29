@@ -1,4 +1,6 @@
 // Structs and methods. Run: lang run examples/structs.lang
+import { println } from "std:io";
+
 struct Point { x: i64, y: i64 }
 struct Person { name: str, age: i64 }
 

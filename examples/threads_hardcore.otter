@@ -1,3 +1,8 @@
+import { List } from "core:collections";
+import { Future } from "core:prelude";
+import { JoinHandle } from "std:thread";
+
+import { Thread } from "std:thread";
 function hard_work(n: i64): i64 {
   var acc: i64 = 0;
   var i: i64 = 0;

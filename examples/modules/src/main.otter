@@ -1,0 +1,25 @@
+// Multi-file modules (docs/17): `mod` loads a sibling file; `import` brings its
+// public names into scope. Every import carries an explicit scheme (`self:` for
+// this package, `std:`/`core:` for the toolchain). Run with:
+//   otter_fusion run examples/modules
+//
+// File layout:
+//   project.toml               (manifest; entry = src/main.otter)
+//   src/main.otter             (this entry — the crate root)
+//   src/geometry.otter         (mod geometry;)
+//   src/geometry/vec.otter     (mod vec; inside geometry)
+
+import { println } from "std:io";
+
+mod geometry;
+
+import { Rect, area } from "self:geometry";
+import { Vec2, length_sq } from "self:geometry/vec";
+
+function main() {
+  var r: Rect = Rect { w: 6, h: 7 };
+  println("area = ${area(r)}");
+
+  var v: Vec2 = Vec2 { x: 3, y: 4 };
+  println("|v|^2 = ${length_sq(v)}");
+}

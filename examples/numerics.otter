@@ -2,6 +2,8 @@
 // explicit overflow-arithmetic families on primitive integer/float types,
 // called as `i32.MAX`, `i32.wrapping_add(a, b)`, `f64.is_nan(x)`, …
 
+import { println } from "std:io";
+
 function describe(r: i32 | null): str {
   match r { i32 v => v as str, null => "overflow" }
 }

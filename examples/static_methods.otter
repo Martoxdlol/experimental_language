@@ -3,6 +3,8 @@
 // `Type::method(args)`. There is no `static` keyword; absence of `self` is the
 // signal.
 
+import { println } from "std:io";
+
 struct Point { x: i64, y: i64 }
 
 extend Point {

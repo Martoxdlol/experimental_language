@@ -2,6 +2,8 @@
 // call that interface's methods. Calls are monomorphized — each instantiation
 // dispatches directly to the concrete `extend` impl, with zero indirection.
 
+import { println } from "std:io";
+
 interface Show {
   function show(self): str;
 }

@@ -1,4 +1,6 @@
 // Discriminated unions + match. Run: lang run examples/match.lang
+import { println } from "std:io";
+
 struct Circle { radius: f64 }
 struct Rect { w: f64, h: f64 }
 type Shape = Circle | Rect;

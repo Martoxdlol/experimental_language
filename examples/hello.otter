@@ -1,4 +1,6 @@
 // A working program with string interpolation. Run: lang run examples/hello.lang
+import { println } from "std:io";
+
 function fib(n: i64): i64 {
   if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
 }

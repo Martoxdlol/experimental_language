@@ -362,6 +362,7 @@ impl Compiled {
                 file_import_allow: Vec::new(),
                 dependencies: HashSet::new(),
                 packages: HashMap::new(),
+                file_targets: HashMap::new(),
             };
         }
 

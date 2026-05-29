@@ -464,6 +464,10 @@ mod tests {
     use crate::span::FileId;
 
     fn print(src: &str) -> String {
+        // Near-empty prelude (`docs/17` §17.8): import the names the test uses.
+        let src = &format!(
+            "import {{ println }} from \"std:io\";\nimport {{ List, Map }} from \"core:collections\";\n{src}"
+        );
         let (tokens, le) = lex(src, FileId(0));
         assert!(le.is_empty(), "lex: {le:?}");
         let (module, pe) = parse(src, &tokens);

@@ -2,6 +2,12 @@
 // `Shared.new(value)` wraps a value; `lock` runs a closure with exclusive
 // access; clones of the handle all lock the same cell. Not reentrant.
 
+import { println } from "std:io";
+import { Future } from "core:prelude";
+import { JoinHandle, Joined, Panicked } from "std:thread";
+import { Shared, LockBusy } from "std:sync";
+
+import { Thread } from "std:thread";
 struct Counter { value: i64 }
 
 function bump(s: Shared<Counter>, times: i64) {

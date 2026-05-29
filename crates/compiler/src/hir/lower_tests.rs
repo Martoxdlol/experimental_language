@@ -9,8 +9,20 @@ use crate::parser::parse;
 use crate::sema::{analyze, Analysis};
 use crate::span::{FileId, Span};
 
+/// Toolchain imports prepended to every test program (near-empty prelude,
+/// `docs/17` §17.8). Unused imports are harmless; local defs shadow imports.
+const PRELUDE: &str = "import { List, Map, Set, Entry } from \"core:collections\";\n\
+    import { print, println } from \"std:io\";\n\
+    import { panic, panic_with, exit, abort } from \"core:prelude\";\n\
+    import { Clone, ToStr, Eq, Ord, Hash, Iterator, Item, Done, Try, FromResidual, Drop, Future, Ready, Pending, Context } from \"core:prelude\";\n\
+    import { Shared, LockBusy, Sender, Receiver, ChannelClosed, MpmcSender, MpmcReceiver, channel, channel_bounded, channel_mpmc, channel_mpmc_bounded } from \"std:sync\";\n\
+    import { Thread, JoinHandle, Joined, Panicked } from \"std:thread\";\n\
+    import { AsyncIterator, TimedOut, yield_now, sleep, timeout } from \"std:async\";\n\
+    import { Foreign, CString, CStr } from \"core:ffi\";\n";
+
 /// Parse + run the full semantic pipeline, asserting a clean program.
 fn analyzed(src: &str) -> Analysis {
+    let src = &format!("{PRELUDE}{src}");
     let (tokens, le) = lex(src, FileId(0));
     assert!(le.is_empty(), "lex: {le:?}");
     let (module, pe) = parse(src, &tokens);

@@ -1,4 +1,8 @@
 // Generic List<T>. Run: lang run examples/lists.lang
+import { List } from "core:collections";
+import { println } from "std:io";
+import { Eq } from "core:prelude";
+
 function sum(xs: List<i64>): i64 {
   var i: i64 = 0;
   var total: i64 = 0;
