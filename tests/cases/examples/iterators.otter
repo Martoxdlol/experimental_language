@@ -1,0 +1,81 @@
+//@ kind: run
+//@ description: example program — iterators (self-contained, real imports)
+//@ stdout:
+//~ sum 1..6 = 15
+//~ bounded  = 6
+//~ dyn iter = 303
+//~ squares  = 1 4 9 16 25 
+//~ picked   = 012456
+
+// The Iterator protocol (docs/18 §7-8). Any type with a
+// `next(self): Item<T> | Done` method drives a `for` loop. `Item<T>` and `Done`
+// come from the prelude; `Item { value: v }` infers its type argument.
+
+import { println } from "std:io";
+import { Iterator, Item, Done } from "core:prelude";
+
+struct Range { current: i64, end: i64 }
+
+extend Range: Iterator<i64> {
+  function next(self): Item<i64> | Done {
+    if self.current >= self.end {
+      Done {}
+    } else {
+      var v = self.current;
+      self.current = self.current + 1;
+      Item { value: v }
+    }
+  }
+}
+
+// A second iterator: the squares of 1..=n.
+struct Squares { i: i64, n: i64 }
+
+extend Squares: Iterator<i64> {
+  function next(self): Item<i64> | Done {
+    if self.i > self.n {
+      Done {}
+    } else {
+      var sq = self.i * self.i;
+      self.i = self.i + 1;
+      Item { value: sq }
+    }
+  }
+}
+
+// A generic function that iterates any `Iterator<i64>` — including via a
+// bounded type parameter (monomorphized) and an interface object (dynamic).
+function sum_all<T: Iterator<i64>>(it: T): i64 {
+  var total = 0;
+  for x in it {
+    total = total + x;
+  }
+  total
+}
+
+function main() {
+  var total = 0;
+  for x in (Range { current: 1, end: 6 }) {
+    total = total + x;
+  }
+  println("sum 1..6 = ${total}");        // 15
+
+  println("bounded  = ${sum_all(Range { current: 1, end: 4 })}");  // 6
+  var dynit: Iterator<i64> = Range { current: 100, end: 103 };
+  println("dyn iter = ${sum_all(dynit)}");                         // dispatched via vtable: 303
+
+  var line = "";
+  for s in (Squares { i: 1, n: 5 }) {
+    line = line + "${s} ";
+  }
+  println("squares  = ${line}");          // 1 4 9 16 25
+
+  // break / continue work inside the protocol loop.
+  var picked = "";
+  for n in (Range { current: 0, end: 100 }) {
+    if n == 3 { continue; }
+    if n == 7 { break; }
+    picked = picked + "${n}";
+  }
+  println("picked   = ${picked}");        // 012456
+}

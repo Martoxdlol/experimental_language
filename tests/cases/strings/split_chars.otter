@@ -1,0 +1,13 @@
+//@ kind: run
+//@ description: str.split and char iteration
+//@ stdout:
+//~ 3
+//~ 5
+import { println } from "std:io";
+function main() {
+  var parts = "a,b,c".split(",");
+  println("${parts.size()}");
+  var n = 0;
+  for ch in "otter" { n = n + 1; }
+  println("${n}");
+}

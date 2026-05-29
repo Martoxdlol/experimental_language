@@ -1,0 +1,14 @@
+//@ kind: run
+//@ description: `as str` stringifies primitives
+//@ stdout:
+//~ 42
+//~ true
+//~ 3.5
+//~ z
+import { println } from "std:io";
+function main() {
+  println(42 as str);
+  println(true as str);
+  println(3.5 as str);
+  println('z' as str);
+}

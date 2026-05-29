@@ -1,0 +1,16 @@
+//@ kind: run
+//@ description: bitwise and/or/xor/not and shifts
+//@ stdout:
+//~ 8
+//~ 14
+//~ 6
+//~ 40
+//~ 2
+import { println } from "std:io";
+function main() {
+  println("${12 & 9}");
+  println("${12 | 2}");
+  println("${5 ^ 3}");
+  println("${5 << 3}");
+  println("${20 >> 3}");
+}

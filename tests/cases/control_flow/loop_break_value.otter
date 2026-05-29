@@ -1,0 +1,13 @@
+//@ kind: run
+//@ description: infinite loop with break carrying a value
+//@ stdout:
+//~ 16
+import { println } from "std:io";
+function main() {
+  var n = 1;
+  var result = loop {
+    if n > 10 { break n; }
+    n = n * 2;
+  };
+  println("${result}");
+}

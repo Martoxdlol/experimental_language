@@ -1,0 +1,23 @@
+//@ kind: run
+//@ description: operator overloading via Add and Eq
+//@ stdout:
+//~ 4
+//~ 6
+//~ true
+import { println } from "std:io";
+import { Eq } from "core:prelude";
+struct V2 { x: i64, y: i64 }
+extend V2: Add {
+  function add(self, other: V2): V2 { V2 { x: self.x + other.x, y: self.y + other.y } }
+}
+extend V2: Eq {
+  function eq(self, other: V2): bool { self.x == other.x && self.y == other.y }
+}
+function main() {
+  var a = V2 { x: 1, y: 2 };
+  var b = V2 { x: 3, y: 4 };
+  var c = a + b;
+  println("${c.x}");
+  println("${c.y}");
+  println("${a == V2 { x: 1, y: 2 }}");
+}

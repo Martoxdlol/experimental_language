@@ -1,0 +1,19 @@
+//@ kind: run
+//@ description: match with type-binding arms over a union
+//@ stdout:
+//~ int 42
+//~ string hi
+//~ nothing
+import { println } from "std:io";
+function describe(x: i64 | str | null): str {
+  match x {
+    i64 n => "int " + (n as str),
+    str s => "string " + s,
+    null  => "nothing",
+  }
+}
+function main() {
+  println(describe(42));
+  println(describe("hi"));
+  println(describe(null));
+}

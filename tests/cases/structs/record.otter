@@ -1,0 +1,15 @@
+//@ kind: run
+//@ description: record struct construction, field access and mutation
+//@ stdout:
+//~ 3
+//~ 4
+//~ 30
+import { println } from "std:io";
+function main() {
+  var p = Point { x: 3, y: 4 };
+  println("${p.x}");
+  println("${p.y}");
+  p.x = 30;
+  println("${p.x}");
+}
+struct Point { x: i64, y: i64 }

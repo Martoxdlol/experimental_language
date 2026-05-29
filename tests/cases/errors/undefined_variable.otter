@@ -1,0 +1,7 @@
+//@ kind: compile-error
+//@ description: referencing an unbound name is a compile error
+//@ stderr: cannot find value `x` in scope
+import { println } from "std:io";
+function main() {
+  println("${x}");
+}

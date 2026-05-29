@@ -1,0 +1,12 @@
+//@ kind: run
+//@ description: generic struct with two type parameters
+//@ stdout:
+//~ 7
+//~ seven
+import { println } from "std:io";
+struct Pair<A, B> { first: A, second: B }
+function main() {
+  var p = Pair<i64, str> { first: 7, second: "seven" };
+  println("${p.first}");
+  println(p.second);
+}

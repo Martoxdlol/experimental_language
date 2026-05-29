@@ -1,0 +1,11 @@
+//@ kind: panic
+//@ description: panic(msg) aborts with the message after prior output
+//@ stderr: boom
+//@ stdout:
+//~ before
+import { println } from "std:io";
+import { panic } from "core:prelude";
+function main() {
+  println("before");
+  panic("boom");
+}

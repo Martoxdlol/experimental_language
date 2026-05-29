@@ -1,0 +1,51 @@
+//@ kind: run
+//@ description: example program — generic_bounds (self-contained, real imports)
+//@ stdout:
+//~ the dog says woof
+//~ the cat says meow
+//~ the bot says unit-7
+//~ scaled = 1000
+
+// Generic bounds (docs/11 §1): a type parameter constrained by an interface can
+// call that interface's methods. Calls are monomorphized — each instantiation
+// dispatches directly to the concrete `extend` impl, with zero indirection.
+
+import { println } from "std:io";
+
+interface Show {
+  function show(self): str;
+}
+
+struct Dog {}
+struct Cat {}
+struct Robot { id: i64 }
+
+extend Dog: Show   { function show(self): str { "woof" } }
+extend Cat: Show   { function show(self): str { "meow" } }
+extend Robot: Show { function show(self): str { "unit-${self.id}" } }
+
+// `T: Show` lets us call `.show()` on any value of type T.
+function announce<T: Show>(label: str, x: T): str {
+  label + " says " + x.show()
+}
+
+// Multiple bounds and method arguments work too.
+interface Scale {
+  function scale(self, factor: i64): i64;
+}
+
+struct Money { cents: i64 }
+extend Money: Scale {
+  function scale(self, factor: i64): i64 { self.cents * factor }
+}
+
+function total<T: Scale>(x: T, factor: i64): i64 {
+  x.scale(factor)
+}
+
+function main() {
+  println(announce("the dog", Dog {}));
+  println(announce("the cat", Cat {}));
+  println(announce("the bot", Robot { id: 7 }));
+  println("scaled = ${total(Money { cents: 250 }, 4)}");
+}

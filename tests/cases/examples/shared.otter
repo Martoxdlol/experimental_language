@@ -1,0 +1,52 @@
+//@ kind: run
+//@ description: example program — shared (self-contained, real imports)
+//@ stdout:
+//~ counter after 2x5000 increments = 10000
+//~ snapshot = 10000
+
+// Shared<T> (docs/20 §4): an explicit mutex for genuinely shared mutable state.
+// `Shared.new(value)` wraps a value; `lock` runs a closure with exclusive
+// access; clones of the handle all lock the same cell. Not reentrant.
+
+import { println } from "std:io";
+import { Future } from "core:prelude";
+import { JoinHandle, Joined, Panicked } from "std:thread";
+import { Shared, LockBusy } from "std:sync";
+
+import { Thread } from "std:thread";
+struct Counter { value: i64 }
+
+function bump(s: Shared<Counter>, times: i64) {
+  var i: i64 = 0;
+  while i < times {
+    // Exclusive access inside the body; the struct is mutated in place.
+    s.lock((c) => { c.value = c.value + 1; 0 });
+    i = i + 1;
+  }
+}
+
+// An async `main` so we can `await` each worker's join future without
+// parking the OS thread (docs/21).
+function main(): Future<null> async {
+  var state: Shared<Counter> = Shared.new(Counter { value: 0 });
+
+  // `clone` clones the *handle* — both workers lock the same counter.
+  var a: Shared<Counter> = state.clone();
+  var b: Shared<Counter> = state.clone();
+  var h1: JoinHandle<i64> = Thread.spawn(() => { bump(a, 5000); 0 });
+  var h2: JoinHandle<i64> = Thread.spawn(() => { bump(b, 5000); 0 });
+  // `join()` is async (docs/20 §1 / docs/21); `await` suspends the joiner
+  // task rather than parking the calling OS thread.
+  var r1: Joined<i64> | Panicked = await h1.join();
+  var r2: Joined<i64> | Panicked = await h2.join();
+
+  // No lost updates: the mutex serialized every increment.
+  var total: i64 = state.lock((c) => c.value);
+  println("counter after 2x5000 increments = " + (total as str));
+
+  // `try_lock` returns `R | LockBusy` without blocking.
+  match state.try_lock((c) => c.value) {
+    i64 n => println("snapshot = " + (n as str)),
+    LockBusy busy => println("was busy"),
+  }
+}

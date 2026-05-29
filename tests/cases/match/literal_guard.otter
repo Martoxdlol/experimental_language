@@ -1,0 +1,19 @@
+//@ kind: run
+//@ description: match literal patterns and guards
+//@ stdout:
+//~ one
+//~ small
+//~ big
+import { println } from "std:io";
+function name(n: i64): str {
+  match n {
+    1 => "one",
+    n if n < 10 => "small",
+    _ => "big",
+  }
+}
+function main() {
+  println(name(1));
+  println(name(5));
+  println(name(100));
+}

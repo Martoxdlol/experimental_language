@@ -1,0 +1,16 @@
+//@ kind: run
+//@ description: empty list/map size and is_empty, then growth
+//@ stdout:
+//~ 0 true
+//~ 1 false
+//~ true
+import { List, Map } from "core:collections";
+import { println } from "std:io";
+function main() {
+  var xs: List<i64> = [];
+  println("${xs.size()} ${xs.is_empty()}");
+  xs.push(1);
+  println("${xs.size()} ${xs.is_empty()}");
+  var m: Map<str, i64> = Map<str, i64>();
+  println("${m.is_empty()}");
+}

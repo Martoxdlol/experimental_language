@@ -1,0 +1,15 @@
+//@ kind: run
+//@ description: variable shadowing and reassignment
+//@ stdout:
+//~ 1
+//~ 2
+//~ hello
+import { println } from "std:io";
+function main() {
+  var x = 1;
+  println("${x}");
+  x = 2;
+  println("${x}");
+  var x = "hello";
+  println(x);
+}

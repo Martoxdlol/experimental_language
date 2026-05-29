@@ -1,0 +1,18 @@
+//@ kind: run
+//@ description: numeric and char casts (truncation, widening, float->int)
+//@ stdout:
+//~ 44
+//~ 0
+//~ 3
+//~ 7
+//~ A
+//~ 65
+import { println } from "std:io";
+function main() {
+  println("${300 as i8}");
+  println("${256 as u8}");
+  println("${3.9 as i64}");
+  println("${7 as f64}");
+  println("${65 as char}");
+  println("${'A' as i64}");
+}

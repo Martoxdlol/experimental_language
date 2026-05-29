@@ -1,0 +1,10 @@
+//@ kind: run
+//@ description: a generic struct nested inside another generic struct
+//@ stdout:
+//~ 7
+import { println } from "std:io";
+struct Box<T> { v: T }
+function main() {
+  var b: Box<Box<i64>> = Box<Box<i64>> { v: Box<i64> { v: 7 } };
+  println("${b.v.v}");
+}

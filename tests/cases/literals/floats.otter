@@ -1,0 +1,14 @@
+//@ kind: run
+//@ description: floating-point literals and formatting
+//@ stdout:
+//~ 3.14
+//~ 0.5
+//~ 100
+//~ -2.5
+import { println } from "std:io";
+function main() {
+  println("${3.14}");
+  println("${0.5}");
+  println("${1e2}");
+  println("${-2.5}");
+}

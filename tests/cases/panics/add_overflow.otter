@@ -1,0 +1,12 @@
+//@ kind: panic
+//@ description: integer addition overflow panics in debug profile
+//@ stderr: attempt to add with overflow
+//@ stdout:
+//~ start
+import { println } from "std:io";
+function main() {
+  println("start");
+  var x = 9223372036854775807;
+  var y = x + 1;
+  println("${y}");
+}

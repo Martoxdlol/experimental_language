@@ -1,0 +1,12 @@
+//@ kind: run
+//@ description: str.get past the end returns null (no panic)
+//@ stdout:
+//~ out of range
+//~ a
+import { println } from "std:io";
+function main() {
+  var c = "abc".get(10);
+  if c is null { println("out of range"); }
+  var d = "abc".get(0);
+  if d is char { println("${d as char}"); }
+}

@@ -1,0 +1,21 @@
+//@ kind: run
+//@ description: Map set/get/contains/remove/size and indexing
+//@ stdout:
+//~ 3
+//~ 3
+//~ true
+//~ 2
+//~ 42
+import { Map } from "core:collections";
+import { println } from "std:io";
+function main() {
+  var m: Map<str, i64> = { "a": 1, "b": 2 };
+  m.set("c", 3);
+  println("${m.size()}");
+  match m.get("c") { i64 n => println("${n}"), null => println("none") };
+  println("${m.contains("a")}");
+  m.remove("a");
+  println("${m.size()}");
+  m["d"] = 42;
+  println("${m["d"]}");
+}

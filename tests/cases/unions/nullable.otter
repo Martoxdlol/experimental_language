@@ -1,0 +1,16 @@
+//@ kind: run
+//@ description: T | null option-like values
+//@ stdout:
+//~ has value
+//~ 7
+//~ empty
+import { println } from "std:io";
+function main() {
+  var x: i64 | null = 7;
+  if x is i64 {
+    println("has value");
+    println("${x as i64}");
+  }
+  var y: i64 | null = null;
+  if y is null { println("empty"); }
+}

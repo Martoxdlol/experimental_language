@@ -1,0 +1,12 @@
+//@ kind: run
+//@ description: chained boolean operators with precedence
+//@ stdout:
+//~ true
+//~ true
+//~ true
+import { println } from "std:io";
+function main() {
+  println("${true && false || true}");
+  println("${false || false || true}");
+  println("${!(1 > 2) && (3 >= 3)}");
+}

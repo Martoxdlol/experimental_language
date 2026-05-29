@@ -1,0 +1,19 @@
+//@ kind: run
+//@ description: match destructuring struct variant fields
+//@ stdout:
+//~ 12.56636
+//~ 12
+import { println } from "std:io";
+struct Circle { radius: f64 }
+struct Rect { w: f64, h: f64 }
+type Shape = Circle | Rect;
+function area(s: Shape): f64 {
+  match s {
+    Circle { radius } => 3.14159 * radius * radius,
+    Rect { w, h } => w * h,
+  }
+}
+function main() {
+  println("${area(Circle { radius: 2.0 })}");
+  println("${area(Rect { w: 3.0, h: 4.0 })}");
+}

@@ -1456,6 +1456,24 @@ The tracing GC is functionally complete for single-threaded programs.
       signature sliced from source (a function shows its header up to the body;
       a struct/interface/alias/var shows the whole declaration), private items
       omitted, attributes (`@Derive`) kept. Printed to stdout. 1 CLI test.
+- [x] **`otter_fusion run --time` / `exec --time`** — print the program's pure
+      execution time (the body of `main` and anything it drives) to stderr,
+      *excluding* lexing/parsing/type-checking/JIT compilation. The driver times
+      only `Jit::run_main()`; the line is stable and machine-parseable:
+      `execution time: 135.541µs (135541 ns)` (adaptive human unit + exact ns).
+- [x] **End-to-end test suite + framework** (`tests/cases/`, runner in
+      `crates/cli/tests/{framework,suite}.rs`). Every case is a self-contained
+      `.otter` program with its own `import`s, carrying its expectations inline as
+      `//@` directives (`kind: run|compile-error|panic`, `exit`, `stderr`,
+      `release`) and `//~` exact-stdout lines. The runner discovers the corpus,
+      runs each via the real `otter_fusion` binary (with `--time` for run/panic
+      cases), checks stdout/exit/stderr, and prints a per-category timing report
+      (sum/avg + slowest cases). `OTTER_TEST_BLESS=1` regenerates `//~` blocks for
+      passing `run` cases. 115 cases across 22 categories: core language, data
+      types, generics/interfaces/closures/iterators, casts/derives/error-handling,
+      release-profile wrapping, edge cases, runtime panics, compile errors, and
+      every program in `examples/` (concurrency/async/FFI/drop/dispatch). See
+      `tests/README.md`. Runs under `cargo test -p cli --test suite`.
 - [ ] Cross-file LSP hover/references, manifest dependencies (`pkg:`),
       sysroot/stdlib, `fmt` (needs comment-preserving lexing — ordinary comments
       are not tokens), `lint`/`fix`/`test`/`bench`/`repl`, the rest of the

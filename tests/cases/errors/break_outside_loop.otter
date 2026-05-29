@@ -1,0 +1,6 @@
+//@ kind: compile-error
+//@ description: `break` is only valid inside a loop
+//@ stderr: `break` outside of a loop
+function main() {
+  break;
+}

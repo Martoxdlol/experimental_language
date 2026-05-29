@@ -1,0 +1,10 @@
+//@ kind: run
+//@ release
+//@ description: under --release, integer overflow wraps (two's complement)
+//@ stdout:
+//~ -9223372036854775808
+import { println } from "std:io";
+function main() {
+  var x = 9223372036854775807;
+  println("${x + 1}");
+}

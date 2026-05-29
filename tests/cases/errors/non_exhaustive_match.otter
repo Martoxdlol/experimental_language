@@ -1,0 +1,12 @@
+//@ kind: compile-error
+//@ description: a match must cover every variant of a union
+//@ stderr: non-exhaustive match
+import { println } from "std:io";
+function f(x: i64 | str): i64 {
+  match x {
+    i64 n => n,
+  }
+}
+function main() {
+  println("${f(1)}");
+}

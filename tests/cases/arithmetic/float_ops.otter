@@ -1,0 +1,12 @@
+//@ kind: run
+//@ description: floating-point arithmetic
+//@ stdout:
+//~ 6.5
+//~ 2
+//~ 7.5
+import { println } from "std:io";
+function main() {
+  println("${2.0 + 4.5}");
+  println("${5.0 / 2.5}");
+  println("${1.5 * 5.0}");
+}

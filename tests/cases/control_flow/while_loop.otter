@@ -1,0 +1,14 @@
+//@ kind: run
+//@ description: while loop accumulation
+//@ stdout:
+//~ 55
+import { println } from "std:io";
+function main() {
+  var i = 1;
+  var sum = 0;
+  while i <= 10 {
+    sum = sum + i;
+    i = i + 1;
+  }
+  println("${sum}");
+}

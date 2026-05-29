@@ -1,0 +1,9 @@
+//@ kind: panic
+//@ description: indexing a Map with an absent key panics
+//@ stderr: map key not found
+import { Map } from "core:collections";
+import { println } from "std:io";
+function main() {
+  var m: Map<str, i64> = { "a": 1 };
+  println("${m["z"]}");
+}

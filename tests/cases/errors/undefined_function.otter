@@ -1,0 +1,6 @@
+//@ kind: compile-error
+//@ description: calling an undeclared function is a compile error
+//@ stderr: cannot find value `foo` in scope
+function main() {
+  foo();
+}

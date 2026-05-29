@@ -1,0 +1,18 @@
+//@ kind: run
+//@ description: integer literals — decimal, hex, octal, binary, underscores
+//@ stdout:
+//~ 255
+//~ 255
+//~ 255
+//~ 1000000
+//~ 0
+//~ -42
+import { println } from "std:io";
+function main() {
+  println("${0xFF}");
+  println("${0o377}");
+  println("${0b1111_1111}");
+  println("${1_000_000}");
+  println("${0}");
+  println("${-42}");
+}

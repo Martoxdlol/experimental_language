@@ -1,0 +1,12 @@
+//@ kind: run
+//@ description: if used as an expression yielding a value
+//@ stdout:
+//~ 100
+//~ 1
+import { println } from "std:io";
+function main() {
+  var max = if 3 > 2 { 100 } else { 200 };
+  println("${max}");
+  var min = if 3 < 2 { 100 } else { 1 };
+  println("${min}");
+}

@@ -1,0 +1,53 @@
+//@ kind: run
+//@ description: example program — generic_methods (self-contained, real imports)
+//@ stdout:
+//~ first  = 10
+//~ second = ten
+//~ swapped = 10 ten
+//~ repeat = ok ok ok 
+
+// Generic `extend` blocks (docs/11): methods on a generic concrete type. The
+// method body refers to the type's parameters; each call is monomorphized to
+// the receiver's concrete instantiation.
+
+import { println } from "std:io";
+import { Iterator, Item, Done } from "core:prelude";
+
+struct Pair<A, B> { first: A, second: B }
+
+extend<A, B> Pair<A, B> {
+  function fst(self): A { self.first }
+  function snd(self): B { self.second }
+  function swap(self): Pair<B, A> {
+    Pair { first: self.second, second: self.first }
+  }
+}
+
+// A generic iterator: the same value, a fixed number of times.
+struct Repeat<T> { value: T, times: i64 }
+
+extend<T> Repeat<T>: Iterator<T> {
+  function next(self): Item<T> | Done {
+    if self.times <= 0 {
+      Done {}
+    } else {
+      self.times = self.times - 1;
+      Item { value: self.value }
+    }
+  }
+}
+
+function main() {
+  var p = Pair { first: 10, second: "ten" };
+  println("first  = ${p.fst()}");
+  println("second = ${p.snd()}");
+
+  var s = p.swap();                 // Pair<str, i64>
+  println("swapped = ${s.snd()} ${s.fst()}");
+
+  var out = "";
+  for word in (Repeat { value: "ok ", times: 3 }) {
+    out = out + word;
+  }
+  println("repeat = ${out}");
+}

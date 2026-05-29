@@ -1,0 +1,18 @@
+//@ kind: run
+//@ description: mutually recursive is_even/is_odd
+//@ stdout:
+//~ true
+//~ true
+//~ false
+import { println } from "std:io";
+function is_even(n: i64): bool {
+  if n == 0 { true } else { is_odd(n - 1) }
+}
+function is_odd(n: i64): bool {
+  if n == 0 { false } else { is_even(n - 1) }
+}
+function main() {
+  println("${is_even(10)}");
+  println("${is_odd(7)}");
+  println("${is_even(3)}");
+}

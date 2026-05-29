@@ -1,0 +1,14 @@
+//@ kind: run
+//@ description: operator precedence and grouping
+//@ stdout:
+//~ 7
+//~ 9
+//~ 1
+//~ 14
+import { println } from "std:io";
+function main() {
+  println("${1 + 2 * 3}");
+  println("${(1 + 2) * 3}");
+  println("${7 % 3}");
+  println("${2 * 3 + 4 * 2}");
+}

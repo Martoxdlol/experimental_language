@@ -1,0 +1,16 @@
+//@ kind: run
+//@ description: block scope shadows then restores outer binding
+//@ stdout:
+//~ 10
+//~ 20
+//~ 10
+import { println } from "std:io";
+function main() {
+  var x = 10;
+  println("${x}");
+  if true {
+    var x = 20;
+    println("${x}");
+  }
+  println("${x}");
+}

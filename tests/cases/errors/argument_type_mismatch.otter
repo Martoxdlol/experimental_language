@@ -1,0 +1,8 @@
+//@ kind: compile-error
+//@ description: passing an argument of the wrong type
+//@ stderr: expected `i64`, found `str`
+import { println } from "std:io";
+function f(n: i64): i64 { n }
+function main() {
+  println("${f("hi")}");
+}

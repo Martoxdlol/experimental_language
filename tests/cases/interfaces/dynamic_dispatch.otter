@@ -1,0 +1,18 @@
+//@ kind: run
+//@ description: interface objects dispatched dynamically via vtable
+//@ stdout:
+//~ woof
+//~ meow
+import { println } from "std:io";
+interface Animal { function speak(self): str; }
+struct Dog {}
+struct Cat {}
+extend Dog: Animal { function speak(self): str { "woof" } }
+extend Cat: Animal { function speak(self): str { "meow" } }
+function announce(a: Animal): str { a.speak() }
+function main() {
+  var d: Animal = Dog {};
+  var c: Animal = Cat {};
+  println(announce(d));
+  println(announce(c));
+}

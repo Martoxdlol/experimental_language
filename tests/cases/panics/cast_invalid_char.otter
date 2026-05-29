@@ -1,0 +1,9 @@
+//@ kind: panic
+//@ description: casting an out-of-range integer to char panics
+//@ stderr: cast to char is out of the Unicode range
+import { println } from "std:io";
+function main() {
+  var n = 2000000;
+  var c = n as char;
+  println("${c}");
+}

@@ -1,0 +1,15 @@
+//@ kind: run
+//@ description: string concatenation and interpolation
+//@ stdout:
+//~ hello, world
+//~ 1 + 2 = 3
+//~ x=7 y=8
+import { println } from "std:io";
+function main() {
+  var who = "world";
+  println("hello, " + who);
+  println("1 + 2 = ${1 + 2}");
+  var x = 7;
+  var y = 8;
+  println("x=$x y=$y");
+}

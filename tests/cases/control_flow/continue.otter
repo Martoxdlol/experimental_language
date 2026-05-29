@@ -1,0 +1,15 @@
+//@ kind: run
+//@ description: continue skips iterations
+//@ stdout:
+//~ 25
+import { println } from "std:io";
+function main() {
+  var i = 0;
+  var sum = 0;
+  while i < 10 {
+    i = i + 1;
+    if i % 2 == 0 { continue; }
+    sum = sum + i;
+  }
+  println("${sum}");
+}

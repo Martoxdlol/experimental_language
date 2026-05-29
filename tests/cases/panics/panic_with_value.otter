@@ -1,0 +1,7 @@
+//@ kind: panic
+//@ description: panic_with(value) aborts
+//@ stderr: explicit panic
+import { panic_with } from "core:prelude";
+function main() {
+  panic_with(42);
+}

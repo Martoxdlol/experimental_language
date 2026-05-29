@@ -1,0 +1,11 @@
+//@ kind: panic
+//@ exit: 3
+//@ description: exit(n) terminates with the given code after output
+//@ stdout:
+//~ bye
+import { println } from "std:io";
+import { exit } from "core:prelude";
+function main() {
+  println("bye");
+  exit(3);
+}

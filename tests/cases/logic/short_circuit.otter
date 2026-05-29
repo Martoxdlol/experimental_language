@@ -1,0 +1,14 @@
+//@ kind: run
+//@ description: && and || short-circuit evaluation
+//@ stdout:
+//~ false
+//~ true
+//~ true
+//~ false
+import { println } from "std:io";
+function main() {
+  println("${true && false}");
+  println("${true || false}");
+  println("${false || true}");
+  println("${!true}");
+}

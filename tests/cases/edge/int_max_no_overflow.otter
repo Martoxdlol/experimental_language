@@ -1,0 +1,12 @@
+//@ kind: run
+//@ description: arithmetic right at i64 boundaries that does not overflow
+//@ stdout:
+//~ 9223372036854775806
+//~ -9223372036854775807
+import { println } from "std:io";
+function main() {
+  var max = 9223372036854775807;
+  println("${max - 1}");
+  var min = 0 - max - 1;
+  println("${min + 1}");
+}

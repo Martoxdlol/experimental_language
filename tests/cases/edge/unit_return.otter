@@ -1,0 +1,13 @@
+//@ kind: run
+//@ description: a function with no declared return type yields unit
+//@ stdout:
+//~ hi ada
+//~ hi bob
+import { println } from "std:io";
+function greet(name: str) {
+  println("hi " + name);
+}
+function main() {
+  greet("ada");
+  greet("bob");
+}

@@ -1,0 +1,18 @@
+//@ kind: run
+//@ description: @Derive(Eq) gives field-by-field == and != 
+//@ stdout:
+//~ true
+//~ false
+//~ true
+import { println } from "std:io";
+import { Eq } from "core:prelude";
+@Derive(Eq)
+struct Point { x: i64, y: i64 }
+function main() {
+  var a = Point { x: 1, y: 2 };
+  var b = Point { x: 1, y: 2 };
+  var c = Point { x: 9, y: 2 };
+  println("${a == b}");
+  println("${a == c}");
+  println("${a != c}");
+}

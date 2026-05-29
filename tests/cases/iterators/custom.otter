@@ -1,0 +1,26 @@
+//@ kind: run
+//@ description: a custom Iterator drives a for loop, with break/continue
+//@ stdout:
+//~ 15
+//~ 012456
+import { println } from "std:io";
+import { Iterator, Item, Done } from "core:prelude";
+struct Range { cur: i64, end: i64 }
+extend Range: Iterator<i64> {
+  function next(self): Item<i64> | Done {
+    if self.cur >= self.end { Done {} }
+    else { var v = self.cur; self.cur = self.cur + 1; Item { value: v } }
+  }
+}
+function main() {
+  var total = 0;
+  for x in (Range { cur: 1, end: 6 }) { total = total + x; }
+  println("${total}");
+  var picked = "";
+  for n in (Range { cur: 0, end: 100 }) {
+    if n == 3 { continue; }
+    if n == 7 { break; }
+    picked = picked + "${n}";
+  }
+  println("${picked}");
+}

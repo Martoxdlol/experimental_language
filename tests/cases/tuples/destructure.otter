@@ -1,0 +1,11 @@
+//@ kind: run
+//@ description: tuple destructuring binding
+//@ stdout:
+//~ 10
+//~ 20
+import { println } from "std:io";
+function main() {
+  var (a, b) = (10, 20);
+  println("${a}");
+  println("${b}");
+}

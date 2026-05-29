@@ -1,0 +1,16 @@
+//@ kind: run
+//@ description: integer add/sub/mul/div/rem and left-associativity
+//@ stdout:
+//~ 5
+//~ 5
+//~ 3
+//~ 2
+//~ -8
+import { println } from "std:io";
+function main() {
+  println("${10 - 3 - 2}");
+  println("${7 / 2 + 2}");
+  println("${15 / 5}");
+  println("${17 % 5}");
+  println("${0 - 8}");
+}

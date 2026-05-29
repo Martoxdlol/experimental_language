@@ -1,0 +1,11 @@
+//@ kind: run
+//@ description: nested struct field access
+//@ stdout:
+//~ 5
+import { println } from "std:io";
+struct Inner { v: i64 }
+struct Outer { inner: Inner }
+function main() {
+  var o = Outer { inner: Inner { v: 5 } };
+  println("${o.inner.v}");
+}

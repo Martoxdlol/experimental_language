@@ -1,0 +1,14 @@
+//@ kind: run
+//@ description: boolean and character literals
+//@ stdout:
+//~ true
+//~ false
+//~ A
+//~ z
+import { println } from "std:io";
+function main() {
+  println("${true}");
+  println("${false}");
+  println("${'A'}");
+  println("${'z'}");
+}

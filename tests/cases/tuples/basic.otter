@@ -1,0 +1,13 @@
+//@ kind: run
+//@ description: anonymous tuple construction and indexing
+//@ stdout:
+//~ 1
+//~ hi
+//~ true
+import { println } from "std:io";
+function main() {
+  var t = (1, "hi", true);
+  println("${t.0}");
+  println(t.1);
+  println("${t.2}");
+}

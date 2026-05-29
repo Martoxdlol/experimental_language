@@ -1,0 +1,7 @@
+//@ kind: compile-error
+//@ description: calling a non-function value is an error
+//@ stderr: is not callable
+function main() {
+  var x = 5;
+  x();
+}

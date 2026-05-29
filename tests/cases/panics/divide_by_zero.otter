@@ -1,0 +1,8 @@
+//@ kind: panic
+//@ description: integer division by zero panics in both profiles
+//@ stderr: divide by zero
+import { println } from "std:io";
+function main() {
+  var z = 0;
+  println("${10 / z}");
+}

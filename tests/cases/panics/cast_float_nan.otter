@@ -1,0 +1,9 @@
+//@ kind: panic
+//@ description: casting NaN to an integer panics
+//@ stderr: cast from float to integer is out of range or NaN
+import { println } from "std:io";
+function main() {
+  var z = 0.0;
+  var n = (z / z) as i64;
+  println("${n}");
+}

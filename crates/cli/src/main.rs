@@ -53,6 +53,11 @@ enum Command {
         /// panicking (`docs/14` §5).
         #[arg(long)]
         release: bool,
+        /// Print the program's wall-clock execution time (the body of `main`
+        /// only — *excluding* lexing, parsing, type-checking and JIT
+        /// compilation) to stderr after it finishes.
+        #[arg(long)]
+        time: bool,
     },
     /// Run a single `.otter` file as a standalone script, ignoring any
     /// surrounding project — always "no project context" (`docs/17` §17.13).
@@ -63,6 +68,10 @@ enum Command {
         /// Use the release profile (`docs/14` §5).
         #[arg(long)]
         release: bool,
+        /// Print the program's execution time (excluding compilation) to
+        /// stderr after it finishes.
+        #[arg(long)]
+        time: bool,
     },
     /// Check, compile to a native object, and link a standalone executable.
     Build {
@@ -185,19 +194,19 @@ enum Stage {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
-        Command::Check { file } => drive(&Input::Auto(file), Stage::Check, false),
+        Command::Check { file } => drive(&Input::Auto(file), Stage::Check, false, false),
         Command::Build { file, output, release } => {
-            drive(&Input::Auto(file), Stage::Build { output }, release)
+            drive(&Input::Auto(file), Stage::Build { output }, release, false)
         }
-        Command::Run { file, release } => {
+        Command::Run { file, release, time } => {
             let input = match file {
                 Some(f) => Input::Auto(f),
                 // `otter_fusion run` with no path: the project in the cwd.
                 None => Input::Auto(PathBuf::from(".")),
             };
-            drive(&input, Stage::Run, release)
+            drive(&input, Stage::Run, release, time)
         }
-        Command::Exec { file, release } => drive(&Input::Exec(file), Stage::Run, release),
+        Command::Exec { file, release, time } => drive(&Input::Exec(file), Stage::Run, release, time),
         Command::Emit { ir, file } => emit(&Input::Auto(file), ir),
         Command::Doc { file } => gen_doc(&Input::Auto(file)),
         Command::Add { name, version, path, git } => deps::add(&name, version, path, git),
@@ -503,7 +512,7 @@ fn emit(input: &Input, ir: EmitIr) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn drive(input: &Input, stage: Stage, release: bool) -> ExitCode {
+fn drive(input: &Input, stage: Stage, release: bool, time: bool) -> ExitCode {
     let prepared = match prepare(input) {
         Ok(p) => p,
         Err(msg) => {
@@ -569,12 +578,38 @@ fn drive(input: &Input, stage: Stage, release: bool) -> ExitCode {
     // for the latter, the constructed root future is driven by the runtime
     // executor internally — the user never names `block_on`.
     backend::set_gc_enabled(true);
-    if unsafe { jit.run_main() } {
+    let start = std::time::Instant::now();
+    let ran = unsafe { jit.run_main() };
+    let elapsed = start.elapsed();
+    if time {
+        // Reported on stderr so it never pollutes the program's own stdout.
+        // This measures only the execution of `main` (and anything it drives) —
+        // lexing, parsing, type-checking and JIT compilation all happened above.
+        report_time(elapsed);
+    }
+    if ran {
         ExitCode::SUCCESS
     } else {
         eprintln!("error: no `main` function to run");
         ExitCode::FAILURE
     }
+}
+
+/// Print a program's execution time to stderr in a stable, human-readable and
+/// machine-parseable form: an adaptive unit for humans plus an exact nanosecond
+/// count in parentheses for tooling (the test suite parses the `ns` value).
+fn report_time(d: std::time::Duration) {
+    let ns = d.as_nanos();
+    let human = if ns >= 1_000_000_000 {
+        format!("{:.3}s", d.as_secs_f64())
+    } else if ns >= 1_000_000 {
+        format!("{:.3}ms", ns as f64 / 1_000_000.0)
+    } else if ns >= 1_000 {
+        format!("{:.3}µs", ns as f64 / 1_000.0)
+    } else {
+        format!("{ns}ns")
+    };
+    eprintln!("execution time: {human} ({ns} ns)");
 }
 
 /// Compile `analysis` to a native object and link it against the runtime

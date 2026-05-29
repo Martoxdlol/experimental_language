@@ -1,0 +1,12 @@
+//@ kind: run
+//@ description: string escape sequences
+//@ stdout:
+//~ tab	here
+//~ quote " done
+//~ back \ slash
+import { println } from "std:io";
+function main() {
+  println("tab\there");
+  println("quote \" done");
+  println("back \\ slash");
+}

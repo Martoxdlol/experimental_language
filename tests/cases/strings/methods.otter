@@ -1,0 +1,21 @@
+//@ kind: run
+//@ description: core str methods
+//@ stdout:
+//~ 5
+//~ true
+//~ true
+//~ true
+//~ ELLO
+//~ hello
+//~ trimmed
+import { println } from "std:io";
+function main() {
+  var s = "hello";
+  println("${s.size()}");
+  println("${s.contains("ell")}");
+  println("${s.starts_with("he")}");
+  println("${s.ends_with("lo")}");
+  println("${"hello".substring(1, 5).to_upper()}");
+  println("${"HELLO".to_lower()}");
+  println("${"  trimmed  ".trim()}");
+}

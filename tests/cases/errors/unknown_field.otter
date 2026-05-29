@@ -1,0 +1,9 @@
+//@ kind: compile-error
+//@ description: accessing a field that does not exist on a struct
+//@ stderr: no field `y` on type `P`
+import { println } from "std:io";
+struct P { x: i64 }
+function main() {
+  var p = P { x: 1 };
+  println("${p.y}");
+}

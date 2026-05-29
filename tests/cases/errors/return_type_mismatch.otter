@@ -1,0 +1,8 @@
+//@ kind: compile-error
+//@ description: a function body's type must match its declared return type
+//@ stderr: expected `i64`, found `str`
+import { println } from "std:io";
+function f(): i64 { "hi" }
+function main() {
+  println("${f()}");
+}

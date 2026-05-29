@@ -1,0 +1,9 @@
+//@ kind: panic
+//@ description: casting an out-of-range float to an integer panics
+//@ stderr: cast from float to integer is out of range or NaN
+import { println } from "std:io";
+function main() {
+  var f = 1e30;
+  var n = f as i32;
+  println("${n}");
+}

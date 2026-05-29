@@ -1,0 +1,11 @@
+//@ kind: run
+//@ release
+//@ description: under --release, multiplication overflow wraps silently
+//@ stdout:
+//~ done
+import { println } from "std:io";
+function main() {
+  var x = 9223372036854775807;
+  var y = x * 4;
+  println("done");
+}

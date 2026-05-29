@@ -1,0 +1,15 @@
+//@ kind: run
+//@ description: for loop over a list and each with implicit it
+//@ stdout:
+//~ 6
+//~ 6
+import { println } from "std:io";
+function main() {
+  var xs = [1, 2, 3];
+  var sum = 0;
+  for x in xs { sum = sum + x; }
+  println("${sum}");
+  var total = 0;
+  xs.each { total = total + it; };
+  println("${total}");
+}

@@ -1,0 +1,18 @@
+//@ kind: run
+//@ description: methods via extend, self by reference, method chaining
+//@ stdout:
+//~ 7
+//~ 5
+import { println } from "std:io";
+struct Point { x: i64, y: i64 }
+extend Point {
+  function sum(self): i64 { self.x + self.y }
+  function shifted(self, dx: i64, dy: i64): Point {
+    Point { x: self.x + dx, y: self.y + dy }
+  }
+}
+function main() {
+  var p = Point { x: 3, y: 4 };
+  println("${p.sum()}");
+  println("${p.shifted(1, -3).sum()}");
+}

@@ -1,0 +1,14 @@
+//@ kind: run
+//@ description: division and remainder with negative operands
+//@ stdout:
+//~ -3
+//~ -1
+//~ -3
+//~ 1
+import { println } from "std:io";
+function main() {
+  println("${-7 / 2}");
+  println("${-7 % 2}");
+  println("${7 / -2}");
+  println("${7 % -2}");
+}

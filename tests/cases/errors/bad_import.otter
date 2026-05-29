@@ -1,0 +1,5 @@
+//@ kind: compile-error
+//@ description: importing a name the module does not export
+//@ stderr: no `Nonexistent` in the imported module
+import { Nonexistent } from "core:prelude";
+function main() {}

@@ -1,0 +1,23 @@
+//@ kind: run
+//@ description: the ? operator propagates an error variant from a union
+//@ stdout:
+//~ 15 -1
+import { println } from "std:io";
+import { FromResidual } from "core:prelude";
+function main() {
+  println("${code(false)} ${code(true)}");
+}
+struct Config { ok: i64 }
+struct AppError { code: i64 }
+struct IoError {}
+extend AppError: FromResidual<IoError> {
+  function from_residual(r: IoError): AppError { AppError { code: 1 } }
+}
+function load(fail: bool): i64 | IoError { if fail { IoError {} } else { 10 } }
+function run(fail: bool): Config | AppError {
+  var x: i64 = load(fail)?;
+  Config { ok: x + 5 }
+}
+function code(fail: bool): i64 {
+  match run(fail) { Config c => c.ok, AppError e => 0 - e.code }
+}

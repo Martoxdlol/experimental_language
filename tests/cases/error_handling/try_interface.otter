@@ -1,0 +1,29 @@
+//@ kind: run
+//@ description: a wrapper opts into ? by implementing Try<Output, Residual>
+//@ stdout:
+//~ ok=106
+//~ err=neg
+import { println } from "std:io";
+import { Try, FromResidual } from "core:prelude";
+struct Either<T> { ok: T, err: str, has_err: bool }
+extend<T> Either<T>: Try<T, str> {
+  function branch(self): T | str {
+    if self.has_err { self.err } else { self.ok }
+  }
+}
+struct AppError { msg: str }
+extend AppError: FromResidual<str> {
+  function from_residual(r: str): AppError { AppError { msg: r } }
+}
+function find(n: i64): Either<i64> {
+  if n < 0 { Either { ok: 0, err: "neg", has_err: true } }
+  else { Either { ok: n + 100, err: "", has_err: false } }
+}
+function process(n: i64): i64 | AppError {
+  var x = find(n)?;
+  x + 1
+}
+function main() {
+  match process(5) { i64 n => println("ok=${n}"), AppError e => println("err=${e.msg}") }
+  match process(0 - 1) { i64 n => println("ok=${n}"), AppError e => println("err=${e.msg}") }
+}

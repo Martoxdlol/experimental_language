@@ -1,0 +1,23 @@
+//@ kind: run
+//@ description: example program — generics (self-contained, real imports)
+//@ stdout:
+//~ id(42)      = 42
+//~ id("hi")    = hi
+//~ max picks b = 99
+//~ pair = 7 / seven
+
+// Generic functions and structs (monomorphized). Run: lang run examples/generics.lang
+import { println } from "std:io";
+
+function id<T>(x: T): T { x }
+function max<T>(a: T, b: T, a_bigger: bool): T { if a_bigger { a } else { b } }
+
+struct Pair<A, B> { first: A, second: B }
+
+function main() {
+  println("id(42)      = ${id(42)}");
+  println("id(\"hi\")    = " + id("hi"));
+  println("max picks b = ${max(1, 99, false)}");
+  var p = Pair<i64, str> { first: 7, second: "seven" };
+  println("pair = ${p.first} / " + p.second);
+}

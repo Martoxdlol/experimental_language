@@ -1,0 +1,68 @@
+//@ kind: run
+//@ description: example program — threads (self-contained, real imports)
+//@ stdout:
+//~ worker a (sum 0..1000) = 499500
+//~ worker b (sum 0..2000) = 1999000
+//~ worker c (sum 0..3000) = 4498500
+//~ total = 6997000
+
+// Threads (docs/20 §1): isolated OS threads via `Thread.spawn`. A spawned
+// closure runs on a fresh thread; `join()` is **async and non-blocking** — it
+// returns a `Future<Joined<R> | Panicked>` (docs/21). Awaiting it inside an
+// async function (here, an async `main`) lets the task suspend without
+// parking the calling OS thread, so the joiner can interleave other async
+// work while the worker runs.
+//
+// Captures are by value and (for now) must be immutable, so each thread works
+// from its own copy — the language's "no implicit sharing" rule (docs/20 §6).
+
+import { println } from "std:io";
+import { Future } from "core:prelude";
+import { JoinHandle, Joined, Panicked } from "std:thread";
+
+import { Thread } from "std:thread";
+function sum_to(n: i64): i64 {
+  var acc: i64 = 0;
+  var i: i64 = 0;
+  while i < n {
+    acc = acc + i;
+    i = i + 1;
+  }
+  acc
+}
+
+function result_of(r: Joined<i64> | Panicked): i64 {
+  match r {
+    Joined<i64> j => j.value,
+    Panicked p => 0 - 1,
+  }
+}
+
+// Await every worker in turn. `await h.join()` suspends this task until the
+// worker finishes, then resumes with the `Joined<i64> | Panicked` result.
+function gather(a: JoinHandle<i64>, b: JoinHandle<i64>, c: JoinHandle<i64>): Future<i64> async {
+  var ra: Joined<i64> | Panicked = await a.join();
+  var rb: Joined<i64> | Panicked = await b.join();
+  var rc: Joined<i64> | Panicked = await c.join();
+  var va: i64 = result_of(ra);
+  var vb: i64 = result_of(rb);
+  var vc: i64 = result_of(rc);
+  println("worker a (sum 0..1000) = " + (va as str));
+  println("worker b (sum 0..2000) = " + (vb as str));
+  println("worker c (sum 0..3000) = " + (vc as str));
+  va + vb + vc
+}
+
+// An async `main`: the runtime drives the root future automatically — no
+// `block_on` in user code.
+function main(): Future<null> async {
+  // Spawn three workers; each computes independently on its own thread.
+  var a: JoinHandle<i64> = Thread.spawn(() => sum_to(1000));
+  var b: JoinHandle<i64> = Thread.spawn(() => sum_to(2000));
+  var c: JoinHandle<i64> = Thread.spawn(() => sum_to(3000));
+
+  // Drive the async gatherer with a single `await`; the main task suspends
+  // (rather than parking the OS thread) between worker completions.
+  var total: i64 = await gather(a, b, c);
+  println("total = " + (total as str));
+}

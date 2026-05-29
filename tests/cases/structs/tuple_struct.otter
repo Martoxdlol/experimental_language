@@ -1,0 +1,12 @@
+//@ kind: run
+//@ description: tuple struct construction and index access
+//@ stdout:
+//~ 3
+//~ 4
+import { println } from "std:io";
+struct Pair(i64, i64)
+function main() {
+  var p = Pair(3, 4);
+  println("${p.0}");
+  println("${p.1}");
+}

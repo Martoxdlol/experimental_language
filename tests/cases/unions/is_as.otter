@@ -1,0 +1,17 @@
+//@ kind: run
+//@ description: union is/as narrowing
+//@ stdout:
+//~ is int
+//~ 42
+//~ is str
+import { println } from "std:io";
+function describe(x: i64 | str): str {
+  if x is i64 { "is int" } else { "is str" }
+}
+function main() {
+  var a: i64 | str = 42;
+  println(describe(a));
+  if a is i64 { println("${a as i64}"); }
+  var b: i64 | str = "hello";
+  println(describe(b));
+}

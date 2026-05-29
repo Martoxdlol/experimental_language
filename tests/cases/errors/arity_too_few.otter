@@ -1,0 +1,8 @@
+//@ kind: compile-error
+//@ description: calling a function with too few arguments
+//@ stderr: expected 2 argument(s), found 1
+import { println } from "std:io";
+function add(a: i64, b: i64): i64 { a + b }
+function main() {
+  println("${add(1)}");
+}
