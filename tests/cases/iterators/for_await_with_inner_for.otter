@@ -1,0 +1,21 @@
+//@ kind: run
+//@ description: a sync `for` nested inside a `for await` — the outer await suspends mid-stream while the inner loop's state must also be preserved (combined driver coverage)
+//@ stdout:
+//~ 15
+import { List } from "core:collections";
+import { println } from "std:io";
+import { Future } from "core:prelude";
+import { yield_now } from "std:async";
+function f(xss: List<List<i64>>): Future<i64> async {
+  var total = 0;
+  for xs in xss {
+    await yield_now();
+    for x in xs {
+      total = total + x;
+    }
+  }
+  total
+}
+function main(): Future<null> async {
+  println("${await f([[1, 2], [3, 4], [5]])}");
+}
