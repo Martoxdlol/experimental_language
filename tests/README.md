@@ -108,10 +108,13 @@ gap has been resolved and its case promoted into the matching category:
   (`concurrency/spawn_capture_is_snapshot`) — a captured local is copied at the
   spawn site, so mutating it afterwards is not observed by the worker.
 
-Separately (not a test, load-dependent): under heavy CPU contention many
-simultaneous OS threads can abort the runtime — this is the deferred
-*concurrent-GC root-scanning hardening* (see `ROADMAP.md` GC §; reclamation is
-gated to a single mutator today). Thread-spawning cases therefore run `serial`.
+Note: the previously-observed intermittent abort in thread-spawning programs
+was **fixed** — it was not GC or contention but an async-state-machine bug
+(a sync `for` loop with an `await` in its body lost its iteration state across
+the suspend; see `iterators/for_await_in_body_*`). GC reclamation is still
+gated to a single mutator (a separate, deliberate memory-safety measure; see
+`ROADMAP.md` GC §). Thread-spawning cases run `serial` to keep cross-process
+CPU contention low.
 
 ## Add a case
 

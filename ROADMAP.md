@@ -1151,6 +1151,9 @@ The tracing GC is functionally complete for single-threaded programs.
       **GC reclamation is currently gated to single-mutator** (collection is
       skipped while >1 thread is live, resuming after join) — memory-safe, with
       precise concurrent root-scanning hardening deferred (`ROADMAP.md` GC §).
+      (The intermittent threaded *crash* once attributed to contention was a
+      separate async-state-machine bug — a sync `for`+`await` loop losing its
+      iteration state across a suspend — now fixed; see the async section.)
       TODO: channels (`docs/20` §2), `Shared<T>` (§4), worker-panic isolation
       (currently a worker panic aborts the process), deep-clone of captures,
       concurrent reclamation.
@@ -1266,6 +1269,22 @@ The tracing GC is functionally complete for single-threaded programs.
       `examples/async.otter`.
       TODO async: `await` in a short-circuit operand / loop condition (the
       genuinely-conditional cases — would change evaluation order/frequency).
+- [x] **Sync `for` loop with an `await` in its body** (`docs/21`): a `for` loop
+      that is not itself `for await` but whose body suspends now preserves its
+      iteration state across the suspend. The loop's codegen-internal iterable
+      pointer(s) + index counter live in Cranelift SSA, which does **not** survive
+      a `poll` return — so `async_state_layout` reserves per-loop state-struct
+      slots (`(primary, secondary, index)`, keyed by `iter.span` via
+      `h_scan_for_state`; the iterable slots are GC-traced) and all four sync
+      `for` drivers (`ListFast`/`Iterator`/`Map`/`StrChars`) read/write their
+      iteration state through those slots when inside an async body. **This was
+      the actual root cause of the long-suspected "threaded runtime instability"**
+      — a threaded `gather` (`for h in handles { await h.join() }`) hit it
+      whenever a join future was `Pending`. Threaded async-join programs that
+      crashed 2–90% of the time are now deterministic (`many_threads`/
+      `thread_storm`/1600-spawn stress: 0 crashes across many runs). 3 new
+      deterministic regression tests (`iterators/for_await_in_body_{list,map}`,
+      `for_await_nested`); JIT + native + GC-stress parity.
 - [~] FFI (`docs/19`): **extern functions + extern structs + raw pointers work.**
       *Extern functions* over the C ABI: primitives and raw pointers (`*T`),
       called by their real symbol name (JIT resolves via `dlsym`, native via the
@@ -1504,11 +1523,11 @@ The tracing GC is functionally complete for single-threaded programs.
     function as a first-class value (works, via a closure-ABI thunk),
     `Thread.spawn` of a float-returning fn (works for `f64`/`f32`), and spawn
     capture-by-value snapshots (`docs/20` §6 — the prior "mutable loop variable"
-    XFAIL's spec-correct behavior). Observed (load-dependent, not a test): the
-    threaded runtime can abort under heavy contention — the deferred
-    concurrent-GC root-scanning hardening (reclamation is single-mutator-gated
-    today) — so thread-spawning cases run `serial`. See `tests/README.md`. Runs
-    under `cargo test -p cli --test suite`.
+    XFAIL's spec-correct behavior). The intermittent threaded crash once blamed
+    on contention turned out to be the sync-`for`+`await` state bug (now fixed,
+    see the async section); thread-spawning cases still run `serial` to keep
+    cross-process CPU contention low. See `tests/README.md`. Runs under
+    `cargo test -p cli --test suite`.
 - [ ] Cross-file LSP hover/references, manifest dependencies (`pkg:`),
       sysroot/stdlib, `fmt` (needs comment-preserving lexing — ordinary comments
       are not tokens), `lint`/`fix`/`test`/`bench`/`repl`, the rest of the
