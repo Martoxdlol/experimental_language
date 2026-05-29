@@ -16,11 +16,11 @@ function hard_work(n: i64): i64 {
 function main(): Future<null> async {
   var handles: List<JoinHandle<i64>> = [];
 
-  var count = 8;
+  var count = 1;
 
   var i: i64 = 0;
   while i < count {
-    var handle: JoinHandle<i64> = Thread.spawn(() => hard_work(1000000));
+    var handle: JoinHandle<i64> = Thread.spawn(() => hard_work(100000000));
     handles.push(handle);
     i = i + 1;
   }

@@ -608,16 +608,14 @@ fn wait_for_resume() {
     }
 }
 
-/// Cooperative safepoint poll emitted by generated code at loop back-edges. When
-/// a collection is pending, record this frame and park until it completes.
-#[unsafe(no_mangle)]
-pub extern "C" fn lang_gc_safepoint() {
-    if !STOP.load(Ordering::Acquire) {
-        return;
-    }
-    let fp = current_fp();
-    // Scan our own roots now, from this consistent frame chain, and publish them
-    // for the collector to union (it must not walk our frames itself).
+/// Park the calling thread for an in-progress collection: scan its own roots
+/// from `fp`'s frame chain (matching only safepoint-keyed frames — intervening
+/// runtime frames are skipped), publish them for the collector to union, mark
+/// the thread parked, and wait until the world resumes. `fp` must be a frame
+/// pointer whose chain climbs through a generated function with a registered
+/// safepoint (a loop back-edge, or the generated caller of `lang_alloc`).
+#[inline(never)]
+fn park_self(fp: usize) {
     let roots = unsafe { scan_stack_roots_from(fp) };
     ME.with(|h| {
         h.0.fp.store(fp, Ordering::SeqCst);
@@ -626,6 +624,52 @@ pub extern "C" fn lang_gc_safepoint() {
         wait_for_resume();
         h.0.state.store(M_RUNNING, Ordering::SeqCst);
     });
+}
+
+/// Attempt a stop-the-world collection from the *current* (clean, generated)
+/// frame: grab the collector turn, re-check the threshold, stop the world, scan
+/// every thread's precise roots, mark-sweep, resume, and run finalizers. A
+/// no-op if another thread already holds the turn (it is collecting) or the
+/// threshold is no longer met. Caller must be at a point whose frame chain
+/// reaches a registered safepoint (a generated loop back-edge, or the generated
+/// caller of `lang_alloc`) so the collector's own roots are scannable.
+fn run_collection() {
+    let _turn = match GC_TURN.try_lock() {
+        Ok(turn) => turn,
+        Err(_) => {
+            // Another collector is active; cooperate by parking if it has begun
+            // stopping the world, else just return.
+            if STOP.load(Ordering::Acquire) {
+                park_self(current_fp());
+            }
+            return;
+        }
+    };
+    let still_over = {
+        let heap = HEAP.lock().unwrap();
+        heap.bytes_since_gc >= gc_threshold()
+    };
+    if !still_over {
+        return;
+    }
+    let roots = stop_the_world();
+    unsafe { collect(&roots) };
+    resume_the_world();
+    // Run finalizers with the world resumed (so `drop` bodies are ordinary code)
+    // but still under the GC turn (so no nested collection runs).
+    run_finalizers();
+}
+
+/// Cooperative safepoint poll emitted by generated code at loop back-edges. When
+/// a collection is pending, record this (clean, generated) frame and park until
+/// it completes. (Collection is *initiated* from `maybe_collect`; this is purely
+/// the cooperation point so a stopping collector can scan this thread's roots.)
+#[unsafe(no_mangle)]
+pub extern "C" fn lang_gc_safepoint() {
+    if !STOP.load(Ordering::Acquire) {
+        return;
+    }
+    park_self(current_fp());
 }
 
 /// Mark the current thread as entering a blocking runtime call (channel recv,
@@ -725,49 +769,42 @@ pub fn resume() {
 fn maybe_collect() {
     // Ensure this thread is registered as a mutator (idempotent).
     ME.with(|_| {});
-    if !gc_enabled() || PAUSE_DEPTH.load(Ordering::SeqCst) != 0 {
+    if !gc_enabled() {
         return;
     }
-    // Concurrent *reclamation* is staged: while more than one mutator thread is
-    // live we do not collect (the stop-the-world machinery below is exercised by
-    // tests and stays ready, but precise multi-thread root scanning is not yet
-    // hardened — `docs/20`/`ROADMAP.md`). Collection resumes once spawned threads
-    // have joined and this is again the sole mutator. This is memory-safe: a live
-    // object is never reclaimed, only garbage retention grows during concurrency.
+    // A `pause`d thread holds unrooted intermediates (e.g. a half-built `Map`),
+    // so it must neither collect nor be collected through. It does not park here;
+    // its `pause` sections are bounded and followed by a generated safepoint,
+    // where it parks if a collection is then pending — so a waiting collector
+    // makes progress as soon as the pause ends. Until then it allocates freely.
+    if PAUSE_DEPTH.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    // Concurrent *reclamation* remains gated: while more than one mutator is live
+    // we do not collect (garbage retention grows, reclaimed once the spawned
+    // threads join). This is memory-safe — a live object is never freed. Enabling
+    // collection under concurrency was attempted (the stop-the-world machinery,
+    // exercised by `stop_the_world_coordinates_mutator_threads`, is correct for
+    // light workloads and all the concurrency e2e cases pass under it), but a
+    // use-after-free surfaces under *heavy* concurrent allocation (a live object
+    // reachable only through a not-yet-published cross-thread root is swept). The
+    // precise root-scanning hardening that closes this — or the move to MMTk — is
+    // the production path (`docs/16`/`docs/20`/`ROADMAP.md`).
     if MUTATORS.lock().unwrap().len() > 1 {
+        return;
+    }
+    if STOP.load(Ordering::Acquire) {
+        // A collection by the (sole) prior collector is wrapping up; cooperate.
+        park_self(current_fp());
         return;
     }
     let over = {
         let heap = HEAP.lock().unwrap();
         heap.bytes_since_gc >= gc_threshold()
     };
-    if !over {
-        return;
+    if over {
+        run_collection();
     }
-    // Only one collector at a time. If another thread is already collecting, do
-    // *not* park here — that would stop this thread mid-allocation, deep inside
-    // runtime frames a collector cannot reliably scan. Instead return and let
-    // this thread finish the allocation and park at its next *generated*
-    // safepoint (a clean, single-frame scan). The active collector waits for
-    // exactly that.
-    let _turn = match GC_TURN.try_lock() {
-        Ok(turn) => turn,
-        Err(_) => return,
-    };
-    // Another collector may have just run; re-check under the turn lock.
-    let still_over = {
-        let heap = HEAP.lock().unwrap();
-        heap.bytes_since_gc >= gc_threshold()
-    };
-    if !still_over {
-        return;
-    }
-    let roots = stop_the_world();
-    unsafe { collect(&roots) };
-    resume_the_world();
-    // Run finalizers with the world resumed (so `drop` bodies are ordinary
-    // code) but still under the GC turn (so no nested collection runs).
-    run_finalizers();
 }
 
 /// Free every registered object (used at process teardown in tests; the real

@@ -727,8 +727,29 @@ The tracing GC is functionally complete for single-threaded programs.
       scope-exit hook). JIT + native parity; `examples/drop.otter`; 1 CLI test;
       564 tests. TODO: generic `Drop` types; channel-close-on-sender-drop +
       `Receiver: Iterator`; `Shared` lock release on a panicking body.
+- [~] **Concurrent reclamation — attempted, gated (memory-safe).** Collection is
+      still skipped while >1 mutator is live (`maybe_collect`): garbage is retained
+      during concurrency and reclaimed after threads join — never freeing a live
+      object. Enabling collection under concurrency was attempted end-to-end (the
+      stop-the-world machinery — cooperative safepoints, park/native states,
+      per-thread published roots unioned by the collector — is correct for the
+      `stop_the_world_coordinates_mutator_threads` unit test and **every
+      concurrency e2e case under `OTTER_FUSION_GC=stress`**: threads, channels,
+      `Shared`, the 100-thread storm, spawn snapshots). But a **use-after-free
+      surfaces under *heavy* concurrent allocation** (e.g. each worker building
+      many strings/lists in a loop): a managed object reachable only through a
+      cross-thread root that is not in the union of published roots gets swept,
+      crashing later (control-flow corruption / a `memmove` from freed bytes).
+      The single-threaded path is unaffected (one stack, scanned at the exact
+      alloc point — verified clean under the same heavy load). Initiating
+      collection only from clean generated safepoints did **not** close it, so the
+      gap is in the published-root union itself and needs the precise
+      root-scanning hardening below (or the MMTk move). Reverted to the safe gate
+      rather than ship corruption; refactored the trigger into `run_collection` +
+      `park_self` helpers and pinned the findings here.
 **Per-thread TLABs** and MMTk/Immix remain the eventual production plan (the
-`gc` interface stays the same).
+`gc` interface stays the same). Closing the concurrent-reclamation root-scan gap
+(or swapping in MMTk) is the next GC milestone.
 - [x] **Methods via `extend`** (inherent): `self` (by-pointer for structs, so
       mutation is visible to the caller), method args, methods calling methods,
       methods returning `Self`-typed values, same method name on different types
