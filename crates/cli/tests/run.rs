@@ -111,6 +111,50 @@ fn nonce() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64 ^ (n << 32)
 }
 
+/// Run `otter_fusion <args...>` with the working directory set to `dir`.
+fn lang_in_dir(dir: &std::path::Path, args: &[&str]) -> (String, String, bool) {
+    let out = Command::new(env!("CARGO_BIN_EXE_otter_fusion"))
+        .current_dir(dir)
+        .args(args)
+        .output()
+        .expect("run lang");
+    (
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+        out.status.success(),
+    )
+}
+
+/// Run `otter_fusion <args...>` in `dir` with extra environment variables.
+fn lang_in_dir_env(
+    dir: &std::path::Path,
+    args: &[&str],
+    env: &[(&str, &str)],
+) -> (String, String, bool) {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    command.current_dir(dir).args(args);
+    for (k, v) in env {
+        command.env(k, v);
+    }
+    let out = command.output().expect("run lang");
+    (
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+        out.status.success(),
+    )
+}
+
+/// Materialize files (relative path → contents) under a fresh temp dir, returning it.
+fn write_tree(files: &[(&str, &str)]) -> std::path::PathBuf {
+    let root = std::env::temp_dir().join(format!("lang_deps_{}", nonce()));
+    for (rel, src) in files {
+        let path = root.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, src).unwrap();
+    }
+    root
+}
+
 /// Run `otter_fusion emit <ir> <file>` with `src` in a temp file.
 fn emit_ir(ir: &str, src: &str) -> (String, String, bool) {
     let dir = std::env::temp_dir();
@@ -1548,10 +1592,10 @@ fn list_deep_clone_native_build_and_gc_stress() {
 
 #[test]
 fn multi_file_named_imports() {
-    // `mod util;` loads `app/util.otter`; named imports bring its public function
-    // and struct into the entry module's scope (`docs/17`).
-    let entry = "mod util;\n\
-                 import { add, Point } from \"util\";\n\
+    // In the entry, `mod util;` loads the sibling `src/util.otter` (`docs/17`
+    // §17.2); `self:util` named imports bring its public items into scope.
+    let main = "mod util;\n\
+                 import { add, Point } from \"self:util\";\n\
                  function main() {\n\
                    println(\"sum=${add(40, 2)}\");\n\
                    var p: Point = Point { x: 3, y: 4 };\n\
@@ -1559,8 +1603,14 @@ fn multi_file_named_imports() {
                  }";
     let util = "pub function add(a: i64, b: i64): i64 { a + b }\n\
                 pub struct Point { x: i64, y: i64 }";
-    let (out, err, ok) =
-        lang_run_project("app.otter", &[("app.otter", entry), ("app/util.otter", util)]);
+    let (out, err, ok) = lang_run_project(
+        "",
+        &[
+            ("project.toml", "[package]\nname = \"app\"\nkind = \"binary\"\n"),
+            ("src/main.otter", main),
+            ("src/util.otter", util),
+        ],
+    );
     assert!(ok, "stderr: {err}");
     assert_eq!(out, "sum=42\npt=(3,4)\n");
 }
@@ -1568,12 +1618,18 @@ fn multi_file_named_imports() {
 #[test]
 fn multi_file_rejects_private_import() {
     // A non-`pub` item cannot be imported across modules (`docs/17` §3).
-    let entry = "mod util;\n\
-                 import { secret } from \"util\";\n\
+    let main = "mod util;\n\
+                 import { secret } from \"self:util\";\n\
                  function main() { println(secret() as str); }";
     let util = "function secret(): i64 { 99 }";
-    let (_, err, ok) =
-        lang_run_project("app.otter", &[("app.otter", entry), ("app/util.otter", util)]);
+    let (_, err, ok) = lang_run_project(
+        "",
+        &[
+            ("project.toml", "[package]\nname = \"app\"\nkind = \"binary\"\n"),
+            ("src/main.otter", main),
+            ("src/util.otter", util),
+        ],
+    );
     assert!(!ok);
     assert!(err.contains("`secret` is private"), "stderr: {err}");
 }
@@ -1582,27 +1638,39 @@ fn multi_file_rejects_private_import() {
 fn multi_file_strict_module_scoping() {
     // Names do not cross module boundaries without `import`: a submodule cannot
     // see a crate-root function it never imported (`docs/17` §3).
-    let entry = "mod util;\n\
+    let main = "mod util;\n\
                  pub function root_only(): i64 { 7 }\n\
                  function main() { println(\"${root_only()}\"); }";
     let util = "pub function uses_root(): i64 { root_only() }";
-    let (_, err, ok) =
-        lang_run_project("app.otter", &[("app.otter", entry), ("app/util.otter", util)]);
+    let (_, err, ok) = lang_run_project(
+        "",
+        &[
+            ("project.toml", "[package]\nname = \"app\"\nkind = \"binary\"\n"),
+            ("src/main.otter", main),
+            ("src/util.otter", util),
+        ],
+    );
     assert!(!ok);
     assert!(err.contains("cannot find value `root_only`"), "stderr: {err}");
 }
 
 #[test]
 fn import_as_namespace_calls() {
-    // `import "mathx" as M` binds a namespace; `M.foo(..)` calls the module's
-    // public functions (`docs/17` §3).
-    let entry = "mod mathx;\n\
-                 import \"mathx\" as M;\n\
+    // `import "self:mathx" as M` binds a namespace; `M.foo(..)` calls the
+    // module's public functions (`docs/17` §3).
+    let main = "mod mathx;\n\
+                 import \"self:mathx\" as M;\n\
                  function main() { println(\"${M.add(40, 2)} ${M.square(7)}\"); }";
     let mathx = "pub function add(a: i64, b: i64): i64 { a + b }\n\
                  pub function square(n: i64): i64 { n * n }";
-    let (out, err, ok) =
-        lang_run_project("app.otter", &[("app.otter", entry), ("app/mathx.otter", mathx)]);
+    let (out, err, ok) = lang_run_project(
+        "",
+        &[
+            ("project.toml", "[package]\nname = \"app\"\nkind = \"binary\"\n"),
+            ("src/main.otter", main),
+            ("src/mathx.otter", mathx),
+        ],
+    );
     assert!(ok, "stderr: {err}");
     assert_eq!(out, "42 49\n");
 }
@@ -1610,12 +1678,18 @@ fn import_as_namespace_calls() {
 #[test]
 fn import_as_namespace_rejects_private() {
     // Namespaced access reaches only the module's public definitions.
-    let entry = "mod mathx;\n\
-                 import \"mathx\" as M;\n\
+    let main = "mod mathx;\n\
+                 import \"self:mathx\" as M;\n\
                  function main() { println(\"${M.hidden()}\"); }";
     let mathx = "function hidden(): i64 { 0 }";
-    let (_, err, ok) =
-        lang_run_project("app.otter", &[("app.otter", entry), ("app/mathx.otter", mathx)]);
+    let (_, err, ok) = lang_run_project(
+        "",
+        &[
+            ("project.toml", "[package]\nname = \"app\"\nkind = \"binary\"\n"),
+            ("src/main.otter", main),
+            ("src/mathx.otter", mathx),
+        ],
+    );
     assert!(!ok);
     assert!(err.contains("no public value `hidden`"), "stderr: {err}");
 }
@@ -1623,20 +1697,167 @@ fn import_as_namespace_rejects_private() {
 #[test]
 fn multi_file_nested_submodule() {
     // A submodule may itself declare a file-backed submodule, loaded from a
-    // directory named for its parent file's stem (`app/util/` for `util.otter`).
-    let entry = "mod util;\n\
-                 import { triple } from \"util\";\n\
+    // directory named for its parent file's stem (`src/util/` for `util.otter`).
+    let main = "mod util;\n\
+                 import { triple } from \"self:util\";\n\
                  function main() { println(\"${triple(5)}\"); }";
     let util = "mod math;\n\
-                import { times } from \"util/math\";\n\
+                import { times } from \"self:util/math\";\n\
                 pub function triple(n: i64): i64 { times(n, 3) }";
     let math = "pub function times(a: i64, b: i64): i64 { a * b }";
     let (out, err, ok) = lang_run_project(
-        "app.otter",
-        &[("app.otter", entry), ("app/util.otter", util), ("app/util/math.otter", math)],
+        "",
+        &[
+            ("project.toml", "[package]\nname = \"app\"\nkind = \"binary\"\n"),
+            ("src/main.otter", main),
+            ("src/util.otter", util),
+            ("src/util/math.otter", math),
+        ],
     );
     assert!(ok, "stderr: {err}");
     assert_eq!(out, "15\n");
+}
+
+#[test]
+fn self_relative_import_resolves_sibling() {
+    // `self:./b` resolves relative to the importing file's directory — `a` and
+    // `b` are siblings under `src/` (`docs/17` §17.4).
+    let main = "mod a;\n\
+                 mod b;\n\
+                 import { lib_fn } from \"self:a\";\n\
+                 function main() { println(\"${lib_fn()}\"); }";
+    let a = "import { core } from \"self:./b\";\n\
+             pub function lib_fn(): i64 { core() + 1 }";
+    let b = "pub function core(): i64 { 41 }";
+    let (out, err, ok) = lang_run_project(
+        "",
+        &[
+            ("project.toml", "[package]\nname = \"app\"\nkind = \"binary\"\n"),
+            ("src/main.otter", main),
+            ("src/a.otter", a),
+            ("src/b.otter", b),
+        ],
+    );
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn self_relative_parent_escape_is_rejected() {
+    // A `self:../…` chain that climbs above the source root is a hard error
+    // (`docs/17` §17.4).
+    let main = "import { x } from \"self:../../outside\";\n\
+                 function main() {}";
+    let (_, err, ok) = lang_run_project(
+        "",
+        &[
+            ("project.toml", "[package]\nname = \"app\"\nkind = \"binary\"\n"),
+            ("src/main.otter", main),
+        ],
+    );
+    assert!(!ok);
+    assert!(err.contains("escapes package"), "stderr: {err}");
+}
+
+#[test]
+fn prefixless_import_is_rejected() {
+    // Every import path needs an explicit scheme (`docs/17` §17.4).
+    let main = "mod util;\n\
+                 import { f } from \"util\";\n\
+                 function main() {}";
+    let util = "pub function f(): i64 { 1 }";
+    let (_, err, ok) = lang_run_project(
+        "",
+        &[
+            ("project.toml", "[package]\nname = \"app\"\nkind = \"binary\"\n"),
+            ("src/main.otter", main),
+            ("src/util.otter", util),
+        ],
+    );
+    assert!(!ok);
+    assert!(err.contains("no scheme prefix"), "stderr: {err}");
+}
+
+#[test]
+fn self_import_without_project_is_hard_error() {
+    // `self:` needs project context; a loose file run by `exec` has none.
+    let src = "import { f } from \"self:util\";\nfunction main() {}";
+    let (_, err, ok) = lang("exec", src);
+    assert!(!ok);
+    assert!(err.contains("requires a project"), "stderr: {err}");
+}
+
+#[test]
+fn core_import_works_without_a_project() {
+    // `core:` is a toolchain module, available even in direct/loose mode
+    // (`docs/17` §17.13). Importing `List` by name resolves and runs.
+    let src = "import { List } from \"core:collections\";\n\
+               function main() {\n\
+                 var xs: List<i64> = [1, 2, 3];\n\
+                 println(\"${xs.size()}\");\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "3\n");
+}
+
+#[test]
+fn pkg_import_without_project_is_hard_error() {
+    // `pkg:` needs a project manifest to resolve against (`docs/17` §17.13).
+    let src = "import { Foo } from \"pkg:somelib\";\nfunction main() {}";
+    let (_, err, ok) = lang("exec", src);
+    assert!(!ok);
+    assert!(err.contains("requires a project manifest"), "stderr: {err}");
+}
+
+#[test]
+fn file_import_escaping_package_needs_allowlist() {
+    // An escaping `file:` path with no `[file-imports] allow` entry is rejected
+    // (`docs/17` §17.4).
+    let main = "import { rows } from \"file:../../secret/data\";\n\
+                 function main() {}";
+    let (_, err, ok) = lang_run_project(
+        "",
+        &[
+            ("project.toml", "[package]\nname = \"app\"\nkind = \"binary\"\n"),
+            ("src/main.otter", main),
+        ],
+    );
+    assert!(!ok);
+    assert!(err.contains("not authorized by `[file-imports] allow`"), "stderr: {err}");
+}
+
+#[test]
+fn file_import_allowlisted_escape_passes_the_gate() {
+    // With a matching `[file-imports] allow` entry, the escaping path is allowed
+    // through the gate (binding itself is a separate, not-yet-supported step).
+    // `allow = ["../shared"]` is relative to the package root; the `file:` path
+    // is relative to the importing file (`src/main.otter`), so it climbs twice.
+    let main = "import { rows } from \"file:../../shared/data\";\n\
+                 function main() {}";
+    let (_, err, _ok) = lang_run_project(
+        "",
+        &[
+            (
+                "project.toml",
+                "[package]\nname = \"app\"\nkind = \"binary\"\n[file-imports]\nallow = [\"../shared\"]\n",
+            ),
+            ("src/main.otter", main),
+        ],
+    );
+    // The gate passed: the error is the binding-not-supported notice, not the
+    // allowlist rejection.
+    assert!(err.contains("the path is allowed"), "stderr: {err}");
+    assert!(!err.contains("not authorized"), "stderr: {err}");
+}
+
+#[test]
+fn reserved_url_scheme_is_rejected() {
+    // The URL scheme family is reserved, not implemented (`docs/17` §17.14).
+    let src = "import { Foo } from \"https://example.com/x\";\nfunction main() {}";
+    let (_, err, ok) = lang("exec", src);
+    assert!(!ok);
+    assert!(err.contains("reserved"), "stderr: {err}");
 }
 
 #[test]
@@ -2239,14 +2460,14 @@ fn project_manifest_resolves_entry() {
 
 #[test]
 fn project_manifest_default_entry_and_submodule() {
-    // No explicit `entry` → defaults to `src/main.otter`; a `mod` submodule loads
-    // relative to the entry (existing module convention).
+    // No explicit `entry` → defaults to `src/main.otter`; the entry's `mod util;`
+    // loads the sibling `src/util.otter` (`docs/17` §17.2).
     let (out, err, ok) = lang_run_project(
         "",
         &[
-            ("project.toml", "name = \"app\"\nkind = \"binary\"\n"),
-            ("src/main.otter", "mod util;\nimport { double } from \"util\";\nfunction main() { println(\"${double(21)}\"); }"),
-            ("src/main/util.otter", "pub function double(x: i64): i64 { x * 2 }"),
+            ("project.toml", "[package]\nname = \"app\"\nkind = \"binary\"\n"),
+            ("src/main.otter", "mod util;\nimport { double } from \"self:util\";\nfunction main() { println(\"${double(21)}\"); }"),
+            ("src/util.otter", "pub function double(x: i64): i64 { x * 2 }"),
         ],
     );
     assert!(ok, "stderr: {err}");
@@ -2255,12 +2476,13 @@ fn project_manifest_default_entry_and_submodule() {
 
 #[test]
 fn project_manifest_missing_entry_errors() {
+    // A manifest whose entry file does not exist is a hard error.
     let (_out, err, ok) = lang_run_project(
         "",
-        &[("project.toml", "kind = \"binary\"\n")],
+        &[("project.toml", "[package]\nname = \"app\"\nkind = \"binary\"\n")],
     );
     assert!(!ok);
-    assert!(err.contains("does not exist"), "got: {err}");
+    assert!(err.contains("cannot read") || err.contains("main.otter"), "got: {err}");
 }
 
 #[test]
@@ -3834,4 +4056,232 @@ fn check_rejects_forgotten_future() {
     let (_, err, ok) = lang("check", src);
     assert!(!ok);
     assert!(err.contains("never used"), "stderr: {err}");
+}
+
+// --- Dependency / lockfile commands (docs/23 §3, §7) ------------------------
+
+#[test]
+fn dep_add_and_remove_edit_the_manifest() {
+    let root = write_tree(&[("project.toml", "[package]\nname = \"app\"\nkind = \"binary\"\n")]);
+    let (_o, e, ok) = lang_in_dir(&root, &["add", "leftpad", "1.2"]);
+    assert!(ok, "stderr: {e}");
+    let manifest = std::fs::read_to_string(root.join("project.toml")).unwrap();
+    assert!(manifest.contains("leftpad = \"1.2\""), "manifest: {manifest}");
+
+    let (_o, e, ok) = lang_in_dir(&root, &["remove", "leftpad"]);
+    assert!(ok, "stderr: {e}");
+    let manifest = std::fs::read_to_string(root.join("project.toml")).unwrap();
+    assert!(!manifest.contains("leftpad"), "manifest: {manifest}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn dep_add_path_form() {
+    let root = write_tree(&[("project.toml", "[package]\nname = \"app\"\nkind = \"binary\"\n")]);
+    let (_o, e, ok) = lang_in_dir(&root, &["add", "mylib", "--path", "../mylib"]);
+    assert!(ok, "stderr: {e}");
+    let manifest = std::fs::read_to_string(root.join("project.toml")).unwrap();
+    assert!(manifest.contains("mylib = { path = \"../mylib\" }"), "manifest: {manifest}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn dep_lock_tree_and_why_with_a_path_dep() {
+    // app depends on a sibling path library; lock + tree + why work offline.
+    let root = write_tree(&[
+        (
+            "app/project.toml",
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nkind = \"binary\"\n\
+             [dependencies]\nmylib = { path = \"../mylib\" }\n",
+        ),
+        ("app/src/main.otter", "function main() {}"),
+        (
+            "mylib/project.toml",
+            "[package]\nname = \"mylib\"\nversion = \"0.4.2\"\nkind = \"library\"\n",
+        ),
+        ("mylib/src/lib.otter", "pub function f(): i64 { 1 }"),
+    ]);
+    let app = root.join("app");
+
+    let (_o, e, ok) = lang_in_dir(&app, &["lock"]);
+    assert!(ok, "stderr: {e}");
+    let lock = std::fs::read_to_string(app.join("project.lock")).unwrap();
+    assert!(lock.contains("name     = \"mylib\""), "lock: {lock}");
+    assert!(lock.contains("source   = \"path+../mylib\""), "lock: {lock}");
+
+    let (out, e, ok) = lang_in_dir(&app, &["tree"]);
+    assert!(ok, "stderr: {e}");
+    assert!(out.starts_with("app\n"), "tree: {out}");
+    assert!(out.contains("mylib v0.4.2"), "tree: {out}");
+
+    let (out, e, ok) = lang_in_dir(&app, &["why", "mylib"]);
+    assert!(ok, "stderr: {e}");
+    assert!(out.contains("app → mylib"), "why: {out}");
+
+    // `lock --check` now succeeds (the lockfile is up to date).
+    let (_o, _e, ok) = lang_in_dir(&app, &["lock", "--check"]);
+    assert!(ok);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn dep_lock_check_detects_drift() {
+    let root = write_tree(&[
+        (
+            "app/project.toml",
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nkind = \"binary\"\n\
+             [dependencies]\nmylib = { path = \"../mylib\" }\n",
+        ),
+        ("app/src/main.otter", "function main() {}"),
+        ("mylib/project.toml", "[package]\nname = \"mylib\"\nversion = \"0.4.2\"\nkind = \"library\"\n"),
+        ("mylib/src/lib.otter", "pub function f(): i64 { 1 }"),
+    ]);
+    let app = root.join("app");
+    // No lockfile yet → `lock --check` must fail (it would write one).
+    let (_o, e, ok) = lang_in_dir(&app, &["lock", "--check"]);
+    assert!(!ok);
+    assert!(e.contains("out of date"), "stderr: {e}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn pkg_import_from_a_path_dependency_runs_end_to_end() {
+    // `app` depends on the sibling library `greeter`; `pkg:greeter` binds its
+    // public `greet` and the program runs (`docs/17` §17.4).
+    let root = write_tree(&[
+        (
+            "app/project.toml",
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nkind = \"binary\"\n\
+             [dependencies]\ngreeter = { path = \"../greeter\" }\n",
+        ),
+        (
+            "app/src/main.otter",
+            "import { greet } from \"pkg:greeter\";\n\
+             function main() { println(\"${greet()}\"); }",
+        ),
+        (
+            "greeter/project.toml",
+            "[package]\nname = \"greeter\"\nversion = \"0.1.0\"\nkind = \"library\"\n",
+        ),
+        ("greeter/src/lib.otter", "pub function greet(): i64 { 42 }\nfunction hidden(): i64 { 0 }"),
+    ]);
+    let (out, err, ok) = lang_in_dir(&root.join("app"), &["run"]);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "42\n");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn pkg_import_of_a_private_item_is_rejected_e2e() {
+    let root = write_tree(&[
+        (
+            "app/project.toml",
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nkind = \"binary\"\n\
+             [dependencies]\ngreeter = { path = \"../greeter\" }\n",
+        ),
+        (
+            "app/src/main.otter",
+            "import { hidden } from \"pkg:greeter\";\nfunction main() {}",
+        ),
+        (
+            "greeter/project.toml",
+            "[package]\nname = \"greeter\"\nversion = \"0.1.0\"\nkind = \"library\"\n",
+        ),
+        ("greeter/src/lib.otter", "pub function greet(): i64 { 1 }\nfunction hidden(): i64 { 0 }"),
+    ]);
+    let (_o, err, ok) = lang_in_dir(&root.join("app"), &["run"]);
+    assert!(!ok);
+    assert!(err.contains("`hidden` is private"), "stderr: {err}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn pkg_import_subpath_through_pub_mod_runs() {
+    // `pkg:greeter/text` reaches a `pub mod` submodule of the dependency.
+    let root = write_tree(&[
+        (
+            "app/project.toml",
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nkind = \"binary\"\n\
+             [dependencies]\ngreeter = { path = \"../greeter\" }\n",
+        ),
+        (
+            "app/src/main.otter",
+            "import { shout } from \"pkg:greeter/text\";\n\
+             function main() { println(\"${shout()}\"); }",
+        ),
+        (
+            "greeter/project.toml",
+            "[package]\nname = \"greeter\"\nversion = \"0.1.0\"\nkind = \"library\"\n",
+        ),
+        ("greeter/src/lib.otter", "pub mod text;\n"),
+        ("greeter/src/text.otter", "pub function shout(): i64 { 99 }"),
+    ]);
+    let (out, err, ok) = lang_in_dir(&root.join("app"), &["run"]);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "99\n");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn login_and_logout_manage_credentials() {
+    let home = write_tree(&[]);
+    let proj = write_tree(&[("project.toml", "[package]\nname = \"app\"\nkind = \"binary\"\n")]);
+    let home_s = home.to_str().unwrap();
+    let (_o, e, ok) =
+        lang_in_dir_env(&proj, &["login", "--token", "secret-abc", "--registry", "public"], &[("OTTER_FUSION_HOME", home_s)]);
+    assert!(ok, "stderr: {e}");
+    let creds = std::fs::read_to_string(home.join("credentials.toml")).unwrap();
+    assert!(creds.contains("[registries.public]"), "creds: {creds}");
+    assert!(creds.contains("token = \"secret-abc\""), "creds: {creds}");
+
+    let (_o, e, ok) = lang_in_dir_env(&proj, &["logout", "--registry", "public"], &[("OTTER_FUSION_HOME", home_s)]);
+    assert!(ok, "stderr: {e}");
+    let creds = std::fs::read_to_string(home.join("credentials.toml")).unwrap();
+    assert!(!creds.contains("secret-abc"), "creds: {creds}");
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(&proj);
+}
+
+#[test]
+fn vendor_copies_a_path_dependency() {
+    let root = write_tree(&[
+        (
+            "app/project.toml",
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nkind = \"binary\"\n\
+             [dependencies]\nmylib = { path = \"../mylib\" }\n",
+        ),
+        ("app/src/main.otter", "function main() {}"),
+        ("mylib/project.toml", "[package]\nname = \"mylib\"\nversion = \"0.1.0\"\nkind = \"library\"\n"),
+        ("mylib/src/lib.otter", "pub function f(): i64 { 1 }"),
+    ]);
+    let (out, e, ok) = lang_in_dir(&root.join("app"), &["vendor"]);
+    assert!(ok, "stderr: {e}");
+    assert!(out.contains("vendored 1 package"), "out: {out}");
+    assert!(root.join("app/vendor/mylib/src/lib.otter").exists());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn publish_dry_run_packages_a_library() {
+    let root = write_tree(&[
+        ("project.toml", "[package]\nname = \"mylib\"\nversion = \"2.1.0\"\nkind = \"library\"\n"),
+        ("src/lib.otter", "pub function f(): i64 { 1 }"),
+    ]);
+    let (out, e, ok) = lang_in_dir(&root, &["publish", "--dry-run"]);
+    assert!(ok, "stderr: {e}");
+    assert!(out.contains("packaged mylib v2.1.0"), "out: {out}");
+    assert!(out.contains("sha256:"), "out: {out}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn publish_rejects_a_binary_package() {
+    let root = write_tree(&[
+        ("project.toml", "[package]\nname = \"app\"\nversion = \"0.1.0\"\nkind = \"binary\"\n"),
+        ("src/main.otter", "function main() {}"),
+    ]);
+    let (_o, e, ok) = lang_in_dir(&root, &["publish", "--dry-run"]);
+    assert!(!ok);
+    assert!(e.contains("only library packages can be published"), "stderr: {e}");
+    let _ = std::fs::remove_dir_all(&root);
 }

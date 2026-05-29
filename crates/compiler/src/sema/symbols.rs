@@ -15,9 +15,42 @@
 
 use crate::ast::*;
 use crate::ids::{DefId, ModId};
+use crate::imports::Scheme;
 use crate::sema::diag::{SemaError, SemaErrorKind};
+use crate::sema::resolve_ctx::ResolveContext;
 use crate::span::Span;
 use std::collections::HashMap;
+
+/// The diagnostic for a scheme used without project context (`docs/17` §17.13).
+fn no_project_message(scheme: Scheme) -> String {
+    match scheme {
+        Scheme::Pkg => "`pkg:` import requires a project manifest (global package resolution \
+                        is not yet available)"
+            .to_string(),
+        // Both `self:` forms.
+        _ => "`self:` import requires a project: run inside a package, or add a project.toml"
+            .to_string(),
+    }
+}
+
+/// The diagnostic for a `self:` relative path that climbs above the package
+/// (source) root (`docs/17` §17.4).
+fn escape_message(parsed: &crate::imports::ImportPath, ctx: &ResolveContext) -> String {
+    let pkg = ctx.package_name.as_deref().unwrap_or("this package");
+    format!("`{}` escapes package `{pkg}`", parsed.display_source())
+}
+
+/// Whether `target` is authorized by one `[file-imports] allow` entry, resolved
+/// relative to the package `root`. A glob entry (`assets/**`, `gen/*`) authorizes
+/// everything under its non-glob prefix; a plain entry authorizes its subtree.
+fn path_matches_allow(root: &std::path::Path, entry: &str, target: &std::path::Path) -> bool {
+    use crate::sema::resolve_ctx::normalize;
+    // Take the literal prefix up to the first glob component.
+    let prefix: std::path::PathBuf =
+        entry.split('/').take_while(|seg| !seg.contains('*')).collect();
+    let allowed = normalize(&root.join(prefix));
+    target.starts_with(&allowed)
+}
 
 /// Parsed bodies of file-backed submodules, keyed by their module path relative
 /// to the crate root (e.g. `["util", "helpers"]`). The driver builds this by
@@ -142,6 +175,10 @@ pub struct ModuleInfo {
     pub name: String,
     pub parent: Option<ModId>,
     pub public: bool,
+    /// This module's path from the crate root (root = `[]`, a child `util` =
+    /// `["util"]`). Used to resolve relative `self:` imports against the
+    /// importing module's position and to invert file paths.
+    pub path: Vec<String>,
     /// `true` for a file-backed `mod foo` whose body has not been loaded yet
     /// (filled by the driver in multi-file builds).
     pub external_unloaded: bool,
@@ -172,6 +209,7 @@ impl ModuleInfo {
             name,
             parent,
             public,
+            path: Vec::new(),
             external_unloaded: false,
             children: HashMap::new(),
             types: HashMap::new(),
@@ -280,6 +318,16 @@ pub struct Program {
     /// prelude is collected. Type and value namespaces.
     pub prelude_types: HashMap<String, DefId>,
     pub prelude_values: HashMap<String, DefId>,
+    /// A synthetic module aggregating the toolchain (`core:`/`std:`) surface,
+    /// against which explicit `core:`/`std:` imports resolve. The partition
+    /// into named submodules (`core:collections`, `std:io`, …) lands with the
+    /// prelude split (`docs/17` §17.8); until then this is the resolution
+    /// target for every toolchain import.
+    pub builtin_module: ModId,
+    /// Resolved dependency packages: `pkg:<name>` → the root module of that
+    /// dependency's collected subtree. `pkg:<name>` imports resolve against this
+    /// module's public surface (`docs/17` §17.4).
+    pub package_roots: HashMap<String, ModId>,
 }
 
 /// Compiler-provided prelude written in the language itself (`docs/18` §7–8).
@@ -464,6 +512,8 @@ impl Program {
             str_bytes_def: DefId(0),
             prelude_types: HashMap::new(),
             prelude_values: HashMap::new(),
+            builtin_module: ModId::ROOT,
+            package_roots: HashMap::new(),
         }
     }
 
@@ -480,6 +530,17 @@ impl Program {
     /// `mod foo` whose body is present in `externals` is descended into; one
     /// that is absent stays `external_unloaded` (single-file builds pass none).
     pub fn collect_multi(root: &Module, externals: &Externals) -> Program {
+        Self::collect_multi_ctx(root, externals, &ResolveContext::direct())
+    }
+
+    /// As [`Self::collect_multi`], with an explicit [`ResolveContext`] (run mode
+    /// + project) governing which import schemes are available and how `self:`
+    /// relative paths resolve (`docs/17` §17.13).
+    pub fn collect_multi_ctx(
+        root: &Module,
+        externals: &Externals,
+        ctx: &ResolveContext,
+    ) -> Program {
         let mut p = Program::new();
         p.inject_builtins();
         p.collect_prelude();
@@ -487,8 +548,26 @@ impl Program {
         // prelude); snapshot them so every module can resolve them.
         p.prelude_types = p.modules[ModId::ROOT.index()].types.clone();
         p.prelude_values = p.modules[ModId::ROOT.index()].values.clone();
+        // A synthetic module exposing the toolchain surface for explicit
+        // `core:`/`std:` imports (not reachable through the user `mod` tree).
+        let builtins = p.new_module("__builtins".into(), ModId::ROOT, true);
+        p.modules[builtins.index()].types = p.prelude_types.clone();
+        p.modules[builtins.index()].values = p.prelude_values.clone();
+        p.builtin_module = builtins;
         p.collect_items(ModId::ROOT, &root.items, externals, &[]);
-        p.resolve_imports();
+        // Collect each resolved dependency package as a standalone subtree (not
+        // reachable through the user `mod` tree); `pkg:<name>` resolves into it.
+        let mut pkgs: Vec<(&String, &Vec<String>)> = ctx.packages.iter().collect();
+        pkgs.sort_by(|a, b| a.0.cmp(b.0));
+        for (name, key) in pkgs {
+            if let Some(entry) = externals.get(key) {
+                let pkg_mod = p.new_module(format!("__pkg__{name}"), ModId::ROOT, true);
+                p.modules[pkg_mod.index()].path = key.clone();
+                p.collect_items(pkg_mod, &entry.items, externals, key);
+                p.package_roots.insert(name.clone(), pkg_mod);
+            }
+        }
+        p.resolve_imports(ctx);
         p
     }
 
@@ -612,53 +691,280 @@ impl Program {
         Some(cur)
     }
 
-    /// Resolve every module's `import` declarations into `imported_types` /
-    /// `imported_values` name maps, enforcing visibility (`docs/17` §3).
-    fn resolve_imports(&mut self) {
+    /// Resolve every module's `import` declarations (`docs/17` §17.3–§17.4,
+    /// §17.13). Each path carries an explicit scheme; resolution and the schemes
+    /// *available* depend on the [`ResolveContext`] (run mode + project).
+    fn resolve_imports(&mut self, ctx: &ResolveContext) {
+        let file_to_module = ctx.file_to_module();
         for mid in 0..self.modules.len() {
             let imports = self.modules[mid].imports.clone();
+            let mod_path = self.modules[mid].path.clone();
             for imp in &imports {
                 let raw = import_path_string(&imp.path);
-                // `pkg:` cross-package paths are not supported yet; only paths
-                // relative to the crate root (`a/b/c`) resolve.
-                if raw.starts_with("pkg:") {
+                let span = imp.path.span;
+                let parsed = match crate::imports::classify(&raw) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        self.errors.push(SemaError::new(SemaErrorKind::Message(e.to_string()), span));
+                        continue;
+                    }
+                };
+                // Project-context gating (`docs/17` §17.13).
+                if parsed.scheme.requires_project_context() && !ctx.project {
                     self.errors.push(SemaError::new(
-                        SemaErrorKind::Message(format!(
-                            "cross-package import `{raw}` is not supported yet"
-                        )),
-                        imp.path.span,
+                        SemaErrorKind::Message(no_project_message(parsed.scheme)),
+                        span,
                     ));
                     continue;
                 }
-                let segments: Vec<String> =
-                    raw.split('/').filter(|s| !s.is_empty()).map(str::to_string).collect();
-                let Some(target) = self.module_by_path(&segments) else {
+                // `no-std`: `std:` is unavailable.
+                if parsed.scheme == Scheme::Std && ctx.no_std {
                     self.errors.push(SemaError::new(
-                        SemaErrorKind::Message(format!("cannot find module `{raw}`")),
-                        imp.path.span,
+                        SemaErrorKind::Message(format!(
+                            "`{}` import: this package is `no-std`, so `std:` is unavailable",
+                            parsed.display_source()
+                        )),
+                        span,
                     ));
                     continue;
-                };
-                match &imp.kind {
-                    ImportKind::Named(names) => {
-                        for n in names {
-                            self.resolve_named_import(mid, target, n);
+                }
+
+                match parsed.scheme {
+                    // Toolchain modules. Resolved against the built-in surface
+                    // (the synthetic builtins module aggregates it); the
+                    // partition into named submodules lands with the prelude
+                    // split (`docs/17` §17.8).
+                    Scheme::Core | Scheme::Std => {
+                        let target = self.builtin_module;
+                        self.bind_import(mid, target, imp, /* toolchain = */ true);
+                    }
+                    Scheme::SelfRoot => match self.resolve_self_root(&parsed.segments) {
+                        Ok(target) => self.bind_import(mid, target, imp, false),
+                        Err(msg) => self.errors.push(SemaError::new(SemaErrorKind::Message(msg), span)),
+                    },
+                    Scheme::SelfRel => {
+                        match self.resolve_self_rel(&mod_path, &parsed, ctx, &file_to_module) {
+                            Ok(target) => self.bind_import(mid, target, imp, false),
+                            Err(msg) => {
+                                self.errors.push(SemaError::new(SemaErrorKind::Message(msg), span))
+                            }
                         }
                     }
-                    // `import "path" as M` — bind the alias to the module so
-                    // `M.foo` resolves against its public definitions.
-                    ImportKind::Namespace(alias) => {
-                        self.modules[mid].namespace_imports.insert(alias.name.clone(), target);
+                    Scheme::Pkg => {
+                        let name = parsed.package_name().unwrap_or("").to_string();
+                        if !ctx.dependencies.contains(&name) {
+                            self.errors.push(SemaError::new(
+                                SemaErrorKind::Message(format!(
+                                    "no dependency named `{name}` in the manifest \
+                                     (add it under `[dependencies]`)"
+                                )),
+                                span,
+                            ));
+                            continue;
+                        }
+                        // Resolve `pkg:<name>[/<sub>…]` into the collected
+                        // dependency subtree, honoring `pub`/`pub mod` visibility.
+                        let Some(&pkg_root) = self.package_roots.get(&name) else {
+                            self.errors.push(SemaError::new(
+                                SemaErrorKind::Message(format!(
+                                    "dependency `{name}` is declared but could not be loaded \
+                                     (run `otter_fusion lock` to resolve it)"
+                                )),
+                                span,
+                            ));
+                            continue;
+                        };
+                        match self.resolve_pkg_subpath(pkg_root, parsed.package_subpath(), &name) {
+                            Ok(target) => self.bind_import(mid, target, imp, false),
+                            Err(msg) => self.errors.push(SemaError::new(
+                                SemaErrorKind::Message(msg),
+                                span,
+                            )),
+                        }
                     }
-                    // Ambient (extension-only) imports land later.
-                    ImportKind::Ambient => {}
+                    Scheme::File => {
+                        // Enforce the allowlist/escape gate (`docs/17` §17.4).
+                        // Binding names from a `file:` module is a follow-up;
+                        // the safety-critical gate is enforced here.
+                        match self.check_file_import(&mod_path, &parsed, ctx) {
+                            Ok(()) => self.errors.push(SemaError::new(
+                                SemaErrorKind::Message(format!(
+                                    "`{}`: the path is allowed, but binding names from a \
+                                     `file:` module is not yet supported",
+                                    parsed.display_source()
+                                )),
+                                span,
+                            )),
+                            Err(msg) => {
+                                self.errors.push(SemaError::new(SemaErrorKind::Message(msg), span))
+                            }
+                        }
+                    }
                 }
             }
         }
     }
 
-    /// Bind one `import { name as alias }` entry from `target` into module `mid`.
-    fn resolve_named_import(&mut self, mid: usize, target: ModId, n: &ImportName) {
+    /// Resolve a `self:` root path to a module in this package's tree.
+    fn resolve_self_root(&self, segments: &[String]) -> Result<ModId, String> {
+        let target = self
+            .module_by_path(segments)
+            .ok_or_else(|| format!("cannot find module `self:{}`", segments.join("/")))?;
+        if self.modules[target.index()].external_unloaded {
+            return Err(format!("module `self:{}` was not loaded", segments.join("/")));
+        }
+        Ok(target)
+    }
+
+    /// Resolve `pkg:<name>/<sub>…` into a dependency's subtree, walking `pub mod`
+    /// children. A consumer reaches a submodule only when every `mod` on the
+    /// path is `pub mod` (`docs/17` §17.5).
+    fn resolve_pkg_subpath(
+        &self,
+        pkg_root: ModId,
+        subpath: &[String],
+        name: &str,
+    ) -> Result<ModId, String> {
+        let mut cur = pkg_root;
+        for seg in subpath {
+            let child = self.modules[cur.index()].children.get(seg).copied().ok_or_else(|| {
+                format!("`pkg:{name}/{}` is not a module in `{name}`", subpath.join("/"))
+            })?;
+            if !self.modules[child.index()].public {
+                return Err(format!(
+                    "`pkg:{name}/{}` is not publicly exported (its module is not `pub mod`)",
+                    subpath.join("/")
+                ));
+            }
+            cur = child;
+        }
+        Ok(cur)
+    }
+
+    /// Resolve a relative `self:` path (`self:./`, `self:../`) against the
+    /// importing module's *file location*, enforcing the package-escape rule
+    /// (`docs/17` §17.4). The resolved file must be a declared module.
+    fn resolve_self_rel(
+        &self,
+        importing_mod_path: &[String],
+        parsed: &crate::imports::ImportPath,
+        ctx: &ResolveContext,
+        file_to_module: &std::collections::HashMap<std::path::PathBuf, Vec<String>>,
+    ) -> Result<ModId, String> {
+        use crate::sema::resolve_ctx::normalize;
+        let importing_file = ctx
+            .file_of
+            .get(importing_mod_path)
+            .ok_or_else(|| "relative `self:` import has no source location".to_string())?;
+        let mut dir =
+            importing_file.parent().unwrap_or_else(|| std::path::Path::new(".")).to_path_buf();
+        for _ in 0..parsed.up {
+            dir = dir.parent().map(|p| p.to_path_buf()).ok_or_else(|| {
+                escape_message(parsed, ctx)
+            })?;
+        }
+        // The resolved file = dir / segments... + `.otter`.
+        let mut target_file = dir;
+        for (i, seg) in parsed.segments.iter().enumerate() {
+            if i + 1 == parsed.segments.len() {
+                target_file.push(format!("{seg}.otter"));
+            } else {
+                target_file.push(seg);
+            }
+        }
+        let target_file = normalize(&target_file);
+        // Escape rule: the target must stay within the source root.
+        if let Some(root) = &ctx.source_root {
+            let root = normalize(root);
+            if !target_file.starts_with(&root) {
+                return Err(escape_message(parsed, ctx));
+            }
+        }
+        match file_to_module.get(&target_file) {
+            Some(mp) => self.resolve_self_root(mp).or_else(|_| {
+                // `mp == []` is the root entry, which `module_by_path` returns
+                // directly.
+                self.module_by_path(mp).ok_or_else(|| {
+                    format!("`{}` does not resolve to a declared module", parsed.display_source())
+                })
+            }),
+            None => Err(format!(
+                "`{}` does not resolve to a declared module (it is not in the `mod` tree)",
+                parsed.display_source()
+            )),
+        }
+    }
+
+    /// Enforce the `file:` allowlist/escape gate (`docs/17` §17.4). A `file:`
+    /// path that resolves *outside* the source root must match a `[file-imports]
+    /// allow` entry (project mode); inside the source root, or in direct mode
+    /// (no source root), it is unrestricted.
+    fn check_file_import(
+        &self,
+        importing_mod_path: &[String],
+        parsed: &crate::imports::ImportPath,
+        ctx: &ResolveContext,
+    ) -> Result<(), String> {
+        use crate::sema::resolve_ctx::normalize;
+        // Resolve the target location relative to the importing file.
+        let importing_file = ctx
+            .file_of
+            .get(importing_mod_path)
+            .ok_or_else(|| "`file:` import has no source location".to_string())?;
+        let mut dir =
+            importing_file.parent().unwrap_or_else(|| std::path::Path::new(".")).to_path_buf();
+        for _ in 0..parsed.up {
+            dir = dir.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| dir.clone());
+        }
+        for seg in &parsed.segments {
+            dir.push(seg);
+        }
+        let target = normalize(&dir);
+
+        // Direct mode (no source root): `file:` is unrestricted.
+        let Some(source_root) = &ctx.source_root else { return Ok(()) };
+        let source_root = normalize(source_root);
+        if target.starts_with(&source_root) {
+            return Ok(()); // inside the package — always allowed
+        }
+        // Escaping the package: must match an allowlist entry.
+        let root = ctx.package_root.clone().unwrap_or_else(|| source_root.clone());
+        for entry in &ctx.file_import_allow {
+            if path_matches_allow(&root, entry, &target) {
+                return Ok(());
+            }
+        }
+        Err(format!(
+            "`{}` resolves outside the package and is not authorized by `[file-imports] allow`",
+            parsed.display_source()
+        ))
+    }
+
+    /// Bind an import's names/namespace into module `mid` from `target`. When
+    /// `toolchain` is set the visibility gate is skipped (toolchain modules
+    /// export their documented surface; the prelude items are not user-`pub`).
+    fn bind_import(&mut self, mid: usize, target: ModId, imp: &ImportItem, toolchain: bool) {
+        match &imp.kind {
+            ImportKind::Named(names) => {
+                for n in names {
+                    self.resolve_named_import(mid, target, n, toolchain);
+                }
+            }
+            // `import "path" as M` — bind the alias to the module so `M.foo`
+            // resolves against its public definitions.
+            ImportKind::Namespace(alias) => {
+                self.modules[mid].namespace_imports.insert(alias.name.clone(), target);
+            }
+            // Ambient (extension-only) imports: extensions are module-bound and
+            // already active program-wide; no names are bound.
+            ImportKind::Ambient => {}
+        }
+    }
+
+    /// Bind one `import { name as alias }` entry from `target` into module
+    /// `mid`. `toolchain` skips the `pub` gate for built-in (`core:`/`std:`)
+    /// modules, whose exported surface is not marked user-`pub`.
+    fn resolve_named_import(&mut self, mid: usize, target: ModId, n: &ImportName, toolchain: bool) {
         let src = n.name.name.clone();
         let bind = n.alias.as_ref().unwrap_or(&n.name).name.clone();
         let tmod = &self.modules[target.index()];
@@ -671,14 +977,17 @@ impl Program {
             ));
             return;
         }
-        // Both namespaces an item occupies (e.g. a unit struct) must be public.
-        for d in [as_type, as_value].into_iter().flatten() {
-            if !self.defs[d.index()].public {
-                self.errors.push(SemaError::new(
-                    SemaErrorKind::Message(format!("`{src}` is private")),
-                    n.span,
-                ));
-                return;
+        // Both namespaces an item occupies (e.g. a unit struct) must be public —
+        // except for toolchain modules, whose surface is not user-`pub`.
+        if !toolchain {
+            for d in [as_type, as_value].into_iter().flatten() {
+                if !self.defs[d.index()].public {
+                    self.errors.push(SemaError::new(
+                        SemaErrorKind::Message(format!("`{src}` is private")),
+                        n.span,
+                    ));
+                    return;
+                }
             }
         }
         if let Some(d) = as_type {
@@ -849,6 +1158,7 @@ impl Program {
                 self.defs[def.index()].item = Some(item.kind.clone());
                 let mut child_path = path.to_vec();
                 child_path.push(m.name.name.clone());
+                self.modules[child.index()].path = child_path.clone();
                 match &m.kind {
                     ModuleKind::Inline { items, .. } => {
                         self.collect_items(child, items, externals, &child_path)
@@ -1199,5 +1509,54 @@ mod tests {
         let red = lookup_type(&p, ModId::ROOT, "Red").unwrap();
         assert_eq!(lookup_value(&p, ModId::ROOT, "Red"), Some(red));
         assert!(lookup_type(&p, ModId::ROOT, "Color").is_some());
+    }
+
+    /// Parse `src` as a module (no submodules).
+    fn parse_module(src: &str) -> Module {
+        let (tokens, _) = lex(src, FileId(0));
+        let (module, errs) = parse(src, &tokens);
+        assert!(errs.is_empty(), "parse errors: {errs:?}");
+        module
+    }
+
+    /// A project context with one resolved dependency package.
+    fn pkg_ctx(dep: &str) -> ResolveContext {
+        let mut packages = HashMap::new();
+        packages.insert(dep.to_string(), vec!["__pkg__".to_string(), dep.to_string()]);
+        let mut dependencies = std::collections::HashSet::new();
+        dependencies.insert(dep.to_string());
+        ResolveContext { project: true, dependencies, packages, ..Default::default() }
+    }
+
+    #[test]
+    fn pkg_import_binds_public_dependency_items() {
+        let root = parse_module("import { greet } from \"pkg:greeter\";\nfunction main() {}");
+        let dep = parse_module("pub function greet(): i64 { 42 }\nfunction hidden() {}");
+        let mut externals = Externals::new();
+        externals.insert(vec!["__pkg__".into(), "greeter".into()], dep);
+        let p = Program::collect_multi_ctx(&root, &externals, &pkg_ctx("greeter"));
+        assert!(p.errors.is_empty(), "{:?}", p.errors);
+        // `greet` is imported into the root module's value scope.
+        assert!(p.module(ModId::ROOT).imported_values.contains_key("greet"));
+        // The dependency package was collected and registered.
+        assert!(p.package_roots.contains_key("greeter"));
+    }
+
+    #[test]
+    fn pkg_import_of_a_private_dependency_item_is_rejected() {
+        let root = parse_module("import { hidden } from \"pkg:greeter\";\nfunction main() {}");
+        let dep = parse_module("pub function greet(): i64 { 1 }\nfunction hidden(): i64 { 2 }");
+        let mut externals = Externals::new();
+        externals.insert(vec!["__pkg__".into(), "greeter".into()], dep);
+        let p = Program::collect_multi_ctx(&root, &externals, &pkg_ctx("greeter"));
+        assert!(p.errors.iter().any(|e| e.kind.to_string().contains("private")), "{:?}", p.errors);
+    }
+
+    #[test]
+    fn pkg_import_of_undeclared_dependency_is_rejected() {
+        let root = parse_module("import { x } from \"pkg:unknown\";\nfunction main() {}");
+        let ctx = ResolveContext { project: true, ..Default::default() };
+        let p = Program::collect_multi_ctx(&root, &Externals::new(), &ctx);
+        assert!(p.errors.iter().any(|e| e.kind.to_string().contains("no dependency named")), "{:?}", p.errors);
     }
 }

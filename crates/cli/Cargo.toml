@@ -11,5 +11,6 @@ path = "src/main.rs"
 
 [dependencies]
 compiler.workspace = true
+pkg.workspace = true
 backend = { path = "../backend" }
 clap = { version = "4", features = ["derive"] }

@@ -14,14 +14,15 @@ use compiler::ids::{DefId, LocalId};
 use compiler::lexer::lex;
 use compiler::parser::parse;
 use compiler::ast::ModuleKind;
+use compiler::sema::resolve_ctx::normalize;
 use compiler::sema::symbols::{Def, DefKind, Externals, Program};
-use compiler::sema::{analyze, analyze_multi, Analysis, Builtin, ValueRes};
+use compiler::sema::{analyze_multi_ctx, Analysis, Builtin, ResolveContext, ValueRes};
 use compiler::span::{FileId, SourceMap, Span};
 use compiler::token::{Token, TokenKind};
 use compiler::ty::Ty;
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use tower_lsp::lsp_types::{Position, Range};
 
@@ -270,6 +271,7 @@ fn load_subs(
     module: &Module,
     mod_path: &mut Vec<String>,
     externals: &mut Externals,
+    file_of: &mut HashMap<Vec<String>, PathBuf>,
     read: &dyn Fn(&Path) -> Option<String>,
 ) {
     for item in &module.items {
@@ -283,8 +285,10 @@ fn load_subs(
         let (tokens, _lex_errors) = lex(&src, file);
         let (child_module, _parse_errors) = parse(&src, &tokens);
         mod_path.push(m.name.name.clone());
+        file_of.insert(mod_path.clone(), normalize(&child_path));
+        // A child's own submodules live under `<dir>/<name>/` (`docs/17` §17.2).
         let child_dir = dir.join(&m.name.name);
-        load_subs(map, &child_dir, &child_module, mod_path, externals, read);
+        load_subs(map, &child_dir, &child_module, mod_path, externals, file_of, read);
         externals.insert(mod_path.clone(), child_module);
         mod_path.pop();
     }
@@ -337,21 +341,31 @@ impl Compiled {
         let (tokens, lex_errors) = lex(&text, file);
         let (module, parse_errors) = parse(&text, &tokens);
 
-        // Load file-backed submodules into `externals` so the open document
-        // type-checks against them (a `mod foo` in `<stem>.otter` lives at
-        // `<stem>/foo.otter`).
+        // Load file-backed submodules so the open document type-checks against
+        // them. The document is a top-level entry, so its `mod foo` declarations
+        // resolve to *siblings* `<base_dir>/foo.otter` (`docs/17` §17.2).
         let mut externals = Externals::new();
+        let mut file_of: HashMap<Vec<String>, PathBuf> = HashMap::new();
+        let mut ctx = ResolveContext::direct();
         if let Some((base_dir, stem)) = project {
-            let dir = base_dir.join(stem);
+            // The entry's own file, keyed at the root path `[]`.
+            file_of.insert(Vec::new(), normalize(&base_dir.join(format!("{stem}.otter"))));
             let mut mod_path = Vec::new();
-            load_subs(&mut map, &dir, &module, &mut mod_path, &mut externals, read);
+            load_subs(&mut map, &base_dir, &module, &mut mod_path, &mut externals, &mut file_of, read);
+            ctx = ResolveContext {
+                project: true,
+                package_name: None,
+                no_std: false,
+                source_root: Some(normalize(&base_dir)),
+                package_root: base_dir.parent().map(normalize),
+                file_of,
+                file_import_allow: Vec::new(),
+                dependencies: HashSet::new(),
+                packages: HashMap::new(),
+            };
         }
 
-        let analysis = if externals.is_empty() {
-            analyze(&module)
-        } else {
-            analyze_multi(&module, &externals)
-        };
+        let analysis = analyze_multi_ctx(&module, &externals, &ctx);
         let index = HirIndex::build(&analysis.hir);
 
         let mut diagnostics = Vec::new();
@@ -1063,11 +1077,11 @@ function main() {
         // the import resolves and the program has no diagnostics; without it the
         // checker would report "cannot find module `util`".
         let main = "mod util;\n\
-                    import { double } from \"util\";\n\
+                    import { double } from \"self:util\";\n\
                     function main() { var x = double(21); }";
         let util = "pub function double(x: i64): i64 { x * 2 }";
         let read = |p: &Path| -> Option<String> {
-            if p.ends_with("main/util.otter") {
+            if p.ends_with("util.otter") {
                 Some(util.to_string())
             } else {
                 None
@@ -1087,7 +1101,7 @@ function main() {
         // A `mod` whose file cannot be read leaves the import unresolved (a
         // diagnostic against the open doc) but must not crash the server.
         let main = "mod util;\n\
-                    import { double } from \"util\";\n\
+                    import { double } from \"self:util\";\n\
                     function main() { var x = double(21); }";
         let read = |_: &Path| -> Option<String> { None };
         let c = Compiled::new_multi(
@@ -1117,11 +1131,11 @@ function main() {
         // Goto-definition on a call to an imported function resolves into the
         // submodule's file (a non-`DOC_FILE` span the server maps to that file).
         let main = "mod util;\n\
-                    import { double } from \"util\";\n\
+                    import { double } from \"self:util\";\n\
                     function main() { var x = double(21); }";
         let util = "pub function double(x: i64): i64 { x * 2 }";
         let read = |p: &Path| -> Option<String> {
-            if p.ends_with("main/util.otter") { Some(util.to_string()) } else { None }
+            if p.ends_with("util.otter") { Some(util.to_string()) } else { None }
         };
         let c = Compiled::new_multi(
             main.into(),
@@ -1136,7 +1150,7 @@ function main() {
         assert_ne!(def.file, DOC_FILE);
         assert!((def.file.0 as usize) < c.map.file_count());
         let sf = c.map.file(def.file);
-        assert!(sf.name.ends_with("main/util.otter"), "got: {}", sf.name);
+        assert!(sf.name.ends_with("util.otter"), "got: {}", sf.name);
         assert_eq!(&sf.src[def.lo.to_usize()..def.hi.to_usize()], "double");
     }
 

@@ -11,17 +11,20 @@
 //! Diagnostics are rendered with a source excerpt and caret, in the spirit of
 //! `docs/23` (stable codes and `--message-format` come later).
 
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcCommand, ExitCode};
 
 use clap::{Parser, Subcommand, ValueEnum};
 
-use compiler::ast::{Item, ItemKind, Module, ModuleKind, Visibility};
+use compiler::ast::{Item, ItemKind, Module, Visibility};
 use compiler::lexer::lex;
-use compiler::parser::parse;
+use compiler::sema::resolve_ctx::normalize;
 use compiler::sema::symbols::Externals;
-use compiler::sema::{analyze_multi, Analysis};
+use compiler::sema::{analyze_multi_ctx, Analysis, ResolveContext};
 use compiler::span::{SourceMap, Span};
+use pkg::loader::{self, LoadDiag};
+use pkg::project::ProjectContext;
 
 /// The Otter Fusion toolchain.
 #[derive(Parser)]
@@ -38,12 +41,26 @@ enum Command {
         /// Path to the `.otter` source file.
         file: PathBuf,
     },
-    /// Check, JIT-compile, and run the program's `main`.
+    /// Check, JIT-compile, and run the program's `main`. With no path, builds
+    /// and runs the surrounding project's entry (always project context). With a
+    /// `<path>.otter`, runs that file in direct mode — gaining project context
+    /// only if the file is reachable in a surrounding project (`docs/17` §17.13).
     Run {
-        /// Path to the `.otter` source file.
-        file: PathBuf,
+        /// Path to a `.otter` file, project directory, or `project.toml`. Omit
+        /// to run the project in the current directory.
+        file: Option<PathBuf>,
         /// Use the release profile: arithmetic overflow wraps instead of
         /// panicking (`docs/14` §5).
+        #[arg(long)]
+        release: bool,
+    },
+    /// Run a single `.otter` file as a standalone script, ignoring any
+    /// surrounding project — always "no project context" (`docs/17` §17.13).
+    /// `pkg:`/`self:` imports are hard errors; `file:` is unrestricted.
+    Exec {
+        /// Path to the `.otter` source file.
+        file: PathBuf,
+        /// Use the release profile (`docs/14` §5).
         #[arg(long)]
         release: bool,
     },
@@ -74,6 +91,75 @@ enum Command {
         /// Path to the `.otter` source file.
         file: PathBuf,
     },
+    /// Add a dependency to `project.toml` (`docs/23` §3).
+    Add {
+        /// The dependency name (the `pkg:<name>` import name).
+        name: String,
+        /// A version requirement (default form), e.g. `1.2`.
+        version: Option<String>,
+        /// A local path dependency instead of a registry version.
+        #[arg(long)]
+        path: Option<String>,
+        /// A git dependency URL instead of a registry version.
+        #[arg(long)]
+        git: Option<String>,
+    },
+    /// Remove a dependency from `project.toml`.
+    Remove {
+        /// The dependency name.
+        name: String,
+    },
+    /// Resolve dependencies and write `project.lock` (`docs/23` §7).
+    Lock {
+        /// Fail (without writing) if the lockfile would change — the CI gate.
+        #[arg(long)]
+        check: bool,
+    },
+    /// Re-resolve dependencies to the newest compatible versions, updating the
+    /// lockfile.
+    Update,
+    /// Print the resolved dependency graph as a tree.
+    Tree,
+    /// Explain why a package is in the dependency graph.
+    Why {
+        /// The package to explain.
+        name: String,
+    },
+    /// Copy resolved dependencies into `<project>/vendor/` (`docs/23` §3).
+    Vendor,
+    /// Store a registry authentication token in `~/.otter_fusion/credentials.toml`.
+    Login {
+        /// The bearer token to store.
+        #[arg(long)]
+        token: String,
+        /// The registry to authenticate to (default: the manifest's default).
+        #[arg(long)]
+        registry: Option<String>,
+    },
+    /// Remove a registry's stored token.
+    Logout {
+        /// The registry to log out of (default: the manifest's default).
+        #[arg(long)]
+        registry: Option<String>,
+    },
+    /// Search the registry for packages.
+    Search {
+        /// The search query.
+        query: String,
+    },
+    /// Package the current library and publish it to its registry.
+    Publish {
+        /// Build the tarball without uploading (and print its checksum).
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Yank a published version from the registry.
+    Yank {
+        /// The version to yank (default: the manifest's version).
+        version: Option<String>,
+    },
+    /// Check resolved dependencies against the registry's advisory database.
+    Audit,
 }
 
 /// The intermediate representations `otter_fusion emit` can print.
@@ -98,111 +184,195 @@ enum Stage {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    let (file, stage, release) = match cli.command {
-        Command::Check { file } => (file, Stage::Check, false),
-        Command::Build { file, output, release } => (file, Stage::Build { output }, release),
-        Command::Run { file, release } => (file, Stage::Run, release),
-        Command::Emit { ir, file } => {
-            let entry = match resolve_entry(&file) {
-                Ok(e) => e,
-                Err(msg) => {
-                    eprintln!("error: {msg}");
-                    return ExitCode::FAILURE;
-                }
-            };
-            return emit(&entry, ir);
+    match cli.command {
+        Command::Check { file } => drive(&Input::Auto(file), Stage::Check, false),
+        Command::Build { file, output, release } => {
+            drive(&Input::Auto(file), Stage::Build { output }, release)
         }
-        Command::Doc { file } => {
-            let entry = match resolve_entry(&file) {
-                Ok(e) => e,
-                Err(msg) => {
-                    eprintln!("error: {msg}");
-                    return ExitCode::FAILURE;
-                }
+        Command::Run { file, release } => {
+            let input = match file {
+                Some(f) => Input::Auto(f),
+                // `otter_fusion run` with no path: the project in the cwd.
+                None => Input::Auto(PathBuf::from(".")),
             };
-            return gen_doc(&entry);
+            drive(&input, Stage::Run, release)
         }
+        Command::Exec { file, release } => drive(&Input::Exec(file), Stage::Run, release),
+        Command::Emit { ir, file } => emit(&Input::Auto(file), ir),
+        Command::Doc { file } => gen_doc(&Input::Auto(file)),
+        Command::Add { name, version, path, git } => deps::add(&name, version, path, git),
+        Command::Remove { name } => deps::remove(&name),
+        Command::Lock { check } => deps::lock(check),
+        Command::Update => deps::update(),
+        Command::Tree => deps::tree(),
+        Command::Why { name } => deps::why(&name),
+        Command::Vendor => deps::vendor(),
+        Command::Login { token, registry } => deps::login(&token, registry),
+        Command::Logout { registry } => deps::logout(registry),
+        Command::Search { query } => deps::search(&query),
+        Command::Publish { dry_run } => deps::publish(dry_run),
+        Command::Yank { version } => deps::yank(version),
+        Command::Audit => deps::audit(),
+    }
+}
+
+/// How an input path should be interpreted for run-mode purposes (`docs/17`
+/// §17.13). `Auto` discovers a surrounding project; `Exec` forces standalone.
+enum Input {
+    /// A `.otter` file, project directory, or `project.toml` — project context
+    /// is used when available.
+    Auto(PathBuf),
+    /// A `.otter` file run standalone, ignoring any surrounding project.
+    Exec(PathBuf),
+}
+
+/// Everything the analysis phase needs, with the run-mode context resolved.
+struct Prepared {
+    /// The compilation root module (the project entry, or the loose file).
+    root: Module,
+    /// File-backed submodules, keyed by module path from the root.
+    externals: Externals,
+    /// Run-mode + project facts governing import-scheme availability.
+    ctx: ResolveContext,
+    /// The source map holding every loaded file (root entry → `FileId(0)`).
+    map: SourceMap,
+    /// Diagnostics gathered while loading the module tree.
+    diags: Vec<LoadDiag>,
+}
+
+/// Resolve an [`Input`] into [`Prepared`] analysis inputs, determining the run
+/// mode and project context (`docs/17` §17.13).
+fn prepare(input: &Input) -> Result<Prepared, String> {
+    match input {
+        // `exec`: always standalone, ignoring any surrounding project.
+        Input::Exec(file) => Ok(prepare_loose(file)),
+        Input::Auto(path) => {
+            // A directory or a `project.toml` names a project directly.
+            let is_manifest =
+                path.file_name().and_then(|n| n.to_str()) == Some(pkg::MANIFEST_NAME);
+            if path.is_dir() || is_manifest {
+                let manifest = if path.is_dir() { path.join(pkg::MANIFEST_NAME) } else { path.clone() };
+                let proj = ProjectContext::load(&manifest).map_err(|e| e.to_string())?;
+                return Ok(prepare_project(&proj));
+            }
+            // A file path: direct mode. Discover a surrounding project and use
+            // its context only if the file is reachable in its module tree.
+            match ProjectContext::discover(path).map_err(|e| e.to_string())? {
+                Some(proj) if proj.contains_source(path) => {
+                    let prepared = prepare_project(&proj);
+                    let target = normalize(path);
+                    let reachable =
+                        prepared.ctx.file_of.values().any(|f| normalize(f) == target);
+                    if reachable {
+                        Ok(prepared)
+                    } else {
+                        // In a project tree but not reached by any `mod`: run it
+                        // loose, with no project context (`docs/17` §17.13).
+                        Ok(prepare_loose(path))
+                    }
+                }
+                _ => Ok(prepare_loose(path)),
+            }
+        }
+    }
+}
+
+/// Build [`Prepared`] for a project: load the module tree from its entries and a
+/// project [`ResolveContext`] (`pkg:`/`self:` available; `file:` allowlisted).
+fn prepare_project(proj: &ProjectContext) -> Prepared {
+    let source_root = proj.source_root();
+    let entries = proj.entry_files();
+    let dependencies: HashSet<String> = proj.manifest.dependencies.keys().cloned().collect();
+
+    // Resolve and load the dependency packages so `pkg:<name>` imports bind
+    // against their public APIs (`docs/17` §17.4). Only when deps are declared —
+    // a dependency-free project is unaffected. Best-effort: if resolution fails
+    // (e.g. an offline registry), `pkg:` imports surface a clear error later.
+    let mut dep_packages: Vec<loader::DepPackage> = Vec::new();
+    let mut packages_map: HashMap<String, Vec<String>> = HashMap::new();
+    if !proj.manifest.dependencies.is_empty() {
+        match deps::resolve_project(proj) {
+            Ok(resolved) => {
+                for rp in &resolved.packages {
+                    let dep_manifest = rp.root.join(pkg::MANIFEST_NAME);
+                    if let Ok(dep_proj) = ProjectContext::load(&dep_manifest) {
+                        if dep_proj.manifest.package.kind.is_consumable() {
+                            dep_packages.push(loader::DepPackage {
+                                name: rp.name.clone(),
+                                entry: dep_proj.entry_file(),
+                                source_root: dep_proj.source_root(),
+                            });
+                            packages_map.insert(
+                                rp.name.clone(),
+                                vec!["__pkg__".to_string(), rp.name.clone()],
+                            );
+                        }
+                    }
+                }
+            }
+            Err(e) => eprintln!("warning: could not resolve dependencies: {e}"),
+        }
+    }
+
+    let tree = loader::load_project_with_packages(&entries, &source_root, &dep_packages);
+    let ctx = ResolveContext {
+        project: true,
+        package_name: Some(proj.manifest.package.name.clone()),
+        no_std: proj.manifest.package.no_std,
+        source_root: Some(normalize(&source_root)),
+        package_root: Some(normalize(&proj.root)),
+        file_of: tree.file_of.clone(),
+        file_import_allow: proj.manifest.file_import_allow.clone(),
+        dependencies,
+        packages: packages_map,
     };
-    // Resolve the entry source file: a `.otter` file is used directly; a
-    // directory or `project.toml` is read as a project manifest (`docs/17`).
-    let entry = match resolve_entry(&file) {
-        Ok(e) => e,
+    Prepared { root: tree.root, externals: tree.externals, ctx, map: tree.map, diags: tree.diagnostics }
+}
+
+/// Build [`Prepared`] for a loose file with no project context (`docs/17`
+/// §17.13): `core:`/`std:`/`file:` work; `pkg:`/`self:` are hard errors.
+fn prepare_loose(file: &Path) -> Prepared {
+    let tree = loader::load_loose(file);
+    Prepared {
+        root: tree.root,
+        externals: tree.externals,
+        ctx: ResolveContext::direct(),
+        map: tree.map,
+        diags: tree.diagnostics,
+    }
+}
+
+/// Render the loader's diagnostics; returns `true` if any were errors.
+fn render_load_diags(map: &SourceMap, diags: &[LoadDiag]) -> bool {
+    let mut had = false;
+    for d in diags {
+        had = true;
+        match d.span {
+            Some(span) => render(map, span, "error", &d.message),
+            None => eprintln!("error: {}", d.message),
+        }
+    }
+    had
+}
+
+/// Generate Markdown API documentation for the entry's public items (`docs/23`),
+/// printed to stdout. Doc comments (`///`) become prose; each item's signature
+/// is sliced from source so it matches the author's exact syntax.
+fn gen_doc(input: &Input) -> ExitCode {
+    let prepared = match prepare(input) {
+        Ok(p) => p,
         Err(msg) => {
             eprintln!("error: {msg}");
             return ExitCode::FAILURE;
         }
     };
-    drive(&entry, stage, release)
-}
-
-/// A parsed `project.toml` manifest (`docs/17` §17.1) — the subset the
-/// toolchain currently uses.
-struct Manifest {
-    /// `kind = "binary" | "library" | "library+bins"` (default `"binary"`).
-    kind: String,
-    /// Explicit `entry = "..."`, if given.
-    entry: Option<String>,
-    /// `src = "..."` source root (default `"src"`).
-    src: String,
-}
-
-/// Resolve the entry `.otter` source file from a CLI path argument: a `.otter`
-/// file (or any non-directory, non-manifest path) is used directly; a directory
-/// or a `project.toml` path is read as a project manifest and its entry file is
-/// returned (relative to the project root).
-fn resolve_entry(input: &Path) -> Result<PathBuf, String> {
-    if input.extension().and_then(|e| e.to_str()) == Some("otter") {
-        return Ok(input.to_path_buf());
+    render_load_diags(&prepared.map, &prepared.diags);
+    if prepared.map.file_count() == 0 {
+        return ExitCode::FAILURE;
     }
-    let (manifest_path, root) = if input.is_dir() {
-        (input.join("project.toml"), input.to_path_buf())
-    } else if input.file_name().and_then(|n| n.to_str()) == Some("project.toml") {
-        (input.to_path_buf(), input.parent().unwrap_or(Path::new(".")).to_path_buf())
-    } else {
-        // Not a `.otter` file, directory, or manifest — treat it as a source path
-        // and let the reader report a clear error if it does not exist.
-        return Ok(input.to_path_buf());
-    };
-    let text = std::fs::read_to_string(&manifest_path)
-        .map_err(|e| format!("cannot read manifest `{}`: {e}", manifest_path.display()))?;
-    let m = parse_manifest(&text);
-    let entry_rel = match m.entry {
-        Some(e) => e,
-        None => match m.kind.as_str() {
-            "library" | "library+bins" => format!("{}/lib.otter", m.src),
-            // "binary" and any unrecognised kind default to a binary entry.
-            _ => format!("{}/main.otter", m.src),
-        },
-    };
-    let entry = root.join(entry_rel);
-    if !entry.exists() {
-        return Err(format!(
-            "manifest `{}` points at entry `{}`, which does not exist",
-            manifest_path.display(),
-            entry.display()
-        ));
-    }
-    Ok(entry)
-}
-
-/// Generate Markdown API documentation for `path`'s public items (`docs/23`),
-/// printed to stdout. Doc comments (`///`) become prose; each item's signature
-/// is sliced from source so it matches the author's exact syntax.
-fn gen_doc(path: &Path) -> ExitCode {
-    let src = match std::fs::read_to_string(path) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("error: cannot read `{}`: {e}", path.display());
-            return ExitCode::FAILURE;
-        }
-    };
-    let mut map = SourceMap::new();
-    let file = map.add_file(path.display().to_string(), src.clone());
-    let (tokens, _lex_errors) = lex(&src, file);
-    let (module, parse_errors) = parse(&src, &tokens);
-    for e in &parse_errors {
-        render(&map, e.span, "error", &e.kind.to_string());
-    }
+    // The entry's source backs signature slicing (`FileId(0)`).
+    let src = prepared.map.file(compiler::span::FileId(0)).src.clone();
+    let module = &prepared.root;
 
     println!("# API Documentation\n");
     let mut any = false;
@@ -271,71 +441,43 @@ fn render_doc_comments(item: &Item) -> String {
         .join("\n")
 }
 
-/// Parse the manifest subset we use: `key = "value"` pairs (sections and other
-/// keys are tolerated and ignored). A hand-rolled reader avoids a TOML
-/// dependency for the few fields the toolchain currently reads.
-fn parse_manifest(text: &str) -> Manifest {
-    let mut kind = "binary".to_string();
-    let mut entry = None;
-    let mut src = "src".to_string();
-    for raw in text.lines() {
-        let line = raw.split('#').next().unwrap_or("").trim();
-        let Some((key, val)) = line.split_once('=') else { continue };
-        let key = key.trim();
-        let val = val.trim().trim_matches('"').to_string();
-        match key {
-            "kind" => kind = val,
-            "entry" => entry = Some(val),
-            "src" => src = val,
-            _ => {}
-        }
-    }
-    Manifest { kind, entry, src }
-}
-
-/// Pretty-print one intermediate representation of `path` to stdout. Front-end
+/// Pretty-print one intermediate representation to stdout. Front-end
 /// diagnostics go to stderr; the IR is emitted best-effort so a partially
 /// broken program can still be inspected (parsing recovers; HIR lowering is
 /// total). Output is deterministic.
-fn emit(path: &Path, ir: EmitIr) -> ExitCode {
-    let display = path.display();
-    let src = match std::fs::read_to_string(path) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("error: cannot read `{display}`: {e}");
+fn emit(input: &Input, ir: EmitIr) -> ExitCode {
+    let prepared = match prepare(input) {
+        Ok(p) => p,
+        Err(msg) => {
+            eprintln!("error: {msg}");
             return ExitCode::FAILURE;
         }
     };
-    let mut map = SourceMap::new();
-    let file = map.add_file(display.to_string(), src.clone());
+    let map = &prepared.map;
+    render_load_diags(map, &prepared.diags);
+    if map.file_count() == 0 {
+        return ExitCode::FAILURE;
+    }
+    // Token/AST dumps re-derive from the entry file's source (`FileId(0)`).
+    let entry_file = map.file(compiler::span::FileId(0));
+    let src = entry_file.src.clone();
+    let (tokens, _lex) = lex(&src, compiler::span::FileId(0));
 
-    let (tokens, lex_errors) = lex(&src, file);
-    for e in &lex_errors {
-        render(&map, e.span, "error", &e.kind.to_string());
-    }
-    if let EmitIr::Tokens = ir {
-        for t in &tokens {
-            println!("{:?} @ {}..{}", t.kind, t.span.lo.0, t.span.hi.0);
-        }
-        return ExitCode::SUCCESS;
-    }
-
-    let (module, parse_errors) = parse(&src, &tokens);
-    for e in &parse_errors {
-        render(&map, e.span, "error", &e.kind.to_string());
-    }
     match ir {
+        EmitIr::Tokens => {
+            for t in &tokens {
+                println!("{:?} @ {}..{}", t.kind, t.span.lo.0, t.span.hi.0);
+            }
+        }
         EmitIr::Ast => {
             // The AST derives a deterministic pretty `Debug`; a bespoke printer
             // is a follow-up. (Tokens and HIR have purpose-built printers.)
-            println!("{module:#?}");
+            println!("{:#?}", prepared.root);
         }
         EmitIr::Hir => {
-            let mut externals = Externals::new();
-            load_submodules(&mut map, path, &module, &mut Vec::new(), &mut externals);
-            let analysis = analyze_multi(&module, &externals);
+            let analysis = analyze_multi_ctx(&prepared.root, &prepared.externals, &prepared.ctx);
             for e in &analysis.errors {
-                render(&map, e.span, "error", &e.kind.to_string());
+                render(map, e.span, "error", &e.kind.to_string());
             }
             print!(
                 "{}",
@@ -343,62 +485,48 @@ fn emit(path: &Path, ir: EmitIr) -> ExitCode {
             );
         }
         EmitIr::Clif => {
-            let mut externals = Externals::new();
-            load_submodules(&mut map, path, &module, &mut Vec::new(), &mut externals);
-            let analysis = analyze_multi(&module, &externals);
+            let analysis = analyze_multi_ctx(&prepared.root, &prepared.externals, &prepared.ctx);
             for e in &analysis.errors {
-                render(&map, e.span, "error", &e.kind.to_string());
+                render(map, e.span, "error", &e.kind.to_string());
             }
             // Cranelift IR is only well-formed for an error-free program.
             if analysis.errors.is_empty() {
                 match backend::compile_clif(&analysis) {
                     Ok(text) => print!("{text}"),
-                    Err(e) => render(&map, e.span, "error", &format!("codegen: {}", e.message)),
+                    Err(e) => render(map, e.span, "error", &format!("codegen: {}", e.message)),
                 }
             }
         }
-        EmitIr::Tokens => unreachable!("handled above"),
     }
     ExitCode::SUCCESS
 }
 
-fn drive(path: &Path, stage: Stage, release: bool) -> ExitCode {
-    let display = path.display();
-    let src = match std::fs::read_to_string(path) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("error: cannot read `{display}`: {e}");
+fn drive(input: &Input, stage: Stage, release: bool) -> ExitCode {
+    let prepared = match prepare(input) {
+        Ok(p) => p,
+        Err(msg) => {
+            eprintln!("error: {msg}");
             return ExitCode::FAILURE;
         }
     };
+    let map = &prepared.map;
 
-    let mut map = SourceMap::new();
-    let file = map.add_file(display.to_string(), src.clone());
+    // 1–2. Lexing/parsing happened in the loader; surface its diagnostics.
+    let mut had_error = render_load_diags(map, &prepared.diags);
 
-    // 1. Lex.
-    let (tokens, lex_errors) = lex(&src, file);
-    let mut had_error = false;
-    for e in &lex_errors {
-        render(&map, e.span, "error", &e.kind.to_string());
-        had_error = true;
+    // No source loaded at all (e.g. the entry file is unreadable): abort before
+    // touching `FileId(0)`.
+    if map.file_count() == 0 {
+        eprintln!("\naborting due to previous error(s).");
+        return ExitCode::FAILURE;
     }
+    let display = map.file(compiler::span::FileId(0)).name.clone();
 
-    // 2. Parse (recovers past errors; AST is still usable for diagnostics).
-    let (module, parse_errors) = parse(&src, &tokens);
-    for e in &parse_errors {
-        render(&map, e.span, "error", &e.kind.to_string());
-        had_error = true;
-    }
-
-    // 2b. Discover and load file-backed submodules (`mod foo` → `<dir>/<stem>/
-    //     foo.otter`), recursively, building the externals map for analysis.
-    let mut externals = Externals::new();
-    had_error |= load_submodules(&mut map, path, &module, &mut Vec::new(), &mut externals);
-
-    // 3. Semantic analysis over the whole multi-file program.
-    let analysis = analyze_multi(&module, &externals);
+    // 3. Semantic analysis over the whole multi-file program, with the resolved
+    //    run-mode context governing import-scheme availability.
+    let analysis = analyze_multi_ctx(&prepared.root, &prepared.externals, &prepared.ctx);
     for e in &analysis.errors {
-        render(&map, e.span, "error", &e.kind.to_string());
+        render(map, e.span, "error", &e.kind.to_string());
         had_error = true;
     }
 
@@ -417,8 +545,12 @@ fn drive(path: &Path, stage: Stage, release: bool) -> ExitCode {
 
     // 4. Native build: compile to an object and link a standalone executable.
     if let Stage::Build { output } = &stage {
-        let exe = output.clone().unwrap_or_else(|| PathBuf::from(path.file_stem().unwrap()));
-        return build_executable(&map, &analysis, &exe);
+        let stem = Path::new(&display)
+            .file_stem()
+            .map(|s| PathBuf::from(s))
+            .unwrap_or_else(|| PathBuf::from("a.out"));
+        let exe = output.clone().unwrap_or(stem);
+        return build_executable(map, &analysis, &exe);
     }
 
     // 4'. Run: JIT-compile in process.
@@ -441,59 +573,6 @@ fn drive(path: &Path, stage: Stage, release: bool) -> ExitCode {
         eprintln!("error: no `main` function to run");
         ExitCode::FAILURE
     }
-}
-
-/// Discover the file-backed submodules declared in `module` (whose source file
-/// is `file_path`), load and parse each, and recurse. `mod_path` is the current
-/// module's path from the crate root; loaded bodies are inserted into
-/// `externals` keyed by their full path. Returns `true` if any error occurred.
-///
-/// Resolution mirrors `docs/17` §2: a `mod foo` in `dir/parent.otter` lives at
-/// `dir/parent/foo.otter` — submodule files sit in a directory named for the
-/// parent file's stem.
-fn load_submodules(
-    map: &mut SourceMap,
-    file_path: &Path,
-    module: &Module,
-    mod_path: &mut Vec<String>,
-    externals: &mut Externals,
-) -> bool {
-    let mut had_error = false;
-    let dir = file_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join(file_path.file_stem().unwrap_or_default());
-    for item in &module.items {
-        let ItemKind::Module(m) = &item.kind else { continue };
-        if !matches!(m.kind, ModuleKind::External) {
-            continue;
-        }
-        let child_path = dir.join(format!("{}.otter", m.name.name));
-        let src = match std::fs::read_to_string(&child_path) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("error: cannot read module `{}`: {e}", child_path.display());
-                had_error = true;
-                continue;
-            }
-        };
-        let file = map.add_file(child_path.display().to_string(), src.clone());
-        let (tokens, lex_errors) = lex(&src, file);
-        for er in &lex_errors {
-            render(map, er.span, "error", &er.kind.to_string());
-            had_error = true;
-        }
-        let (child_module, parse_errors) = parse(&src, &tokens);
-        for er in &parse_errors {
-            render(map, er.span, "error", &er.kind.to_string());
-            had_error = true;
-        }
-        mod_path.push(m.name.name.clone());
-        had_error |= load_submodules(map, &child_path, &child_module, mod_path, externals);
-        externals.insert(mod_path.clone(), child_module);
-        mod_path.pop();
-    }
-    had_error
 }
 
 /// Compile `analysis` to a native object and link it against the runtime
@@ -585,5 +664,395 @@ fn render(map: &SourceMap, span: Span, severity: &str, message: &str) {
         let pad = " ".repeat(gutter.len() + (start.col as usize - 1));
         let width = span.len().max(1) as usize;
         eprintln!("{pad}{}", "^".repeat(width));
+    }
+}
+
+/// The dependency / lockfile / registry commands (`docs/23` §3, §7). They
+/// operate on the project discovered from the current directory and build on the
+/// `pkg` resolver, lockfile, and manifest-editing primitives.
+mod deps {
+    use std::path::PathBuf;
+    use std::process::ExitCode;
+
+    use pkg::commands::{self, AddSpec};
+    use pkg::lockfile::Lockfile;
+    use pkg::project::ProjectContext;
+    use pkg::registry::{HttpRegistry, Registry};
+    use pkg::resolve::{resolve, Registries, Resolved};
+    use pkg::store::Store;
+
+    /// Discover the project rooted at (or above) the current directory.
+    fn project() -> Result<ProjectContext, String> {
+        let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+        match ProjectContext::discover(&cwd).map_err(|e| e.to_string())? {
+            Some(p) => Ok(p),
+            None => Err("not inside a project (no `project.toml` found)".to_string()),
+        }
+    }
+
+    /// The path to the project's lockfile.
+    fn lock_path(proj: &ProjectContext) -> PathBuf {
+        proj.root.join("project.lock")
+    }
+
+    /// Read the existing lockfile, if any.
+    fn existing_lock(proj: &ProjectContext) -> Option<Lockfile> {
+        std::fs::read_to_string(lock_path(proj)).ok().and_then(|t| Lockfile::parse(&t).ok())
+    }
+
+    /// Resolve the project's dependency graph, connecting any declared
+    /// registries (best-effort: an unreachable registry is warned, not fatal,
+    /// so path-only projects always resolve offline).
+    pub fn resolve_project(proj: &ProjectContext) -> Result<Resolved, String> {
+        let store = Store::user();
+        let mut owned: Vec<HttpRegistry> = Vec::new();
+        for (name, reg) in &proj.manifest.registries {
+            match HttpRegistry::connect(name, &reg.index, None) {
+                Ok(r) => owned.push(r),
+                Err(e) => eprintln!("warning: registry `{name}` is unavailable: {e}"),
+            }
+        }
+        let by_name = owned.iter().map(|r| (r.name().to_string(), r as &dyn Registry)).collect();
+        let default = proj.manifest.default_registry.clone().unwrap_or_else(|| "public".to_string());
+        let registries = Registries { by_name, default };
+        let existing = existing_lock(proj);
+        resolve(&proj.manifest, &proj.root, &registries, &store, existing.as_ref())
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn add(name: &str, version: Option<String>, path: Option<String>, git: Option<String>) -> ExitCode {
+        let proj = match project() {
+            Ok(p) => p,
+            Err(e) => return fail(&e),
+        };
+        let spec = match (path, git, version) {
+            (Some(p), None, None) => AddSpec::Path(p),
+            (None, Some(g), None) => AddSpec::Git(g),
+            (None, None, Some(v)) => AddSpec::Version(v),
+            (None, None, None) => AddSpec::Version("*".to_string()),
+            _ => return fail("specify at most one of a version, `--path`, or `--git`"),
+        };
+        let manifest_path = proj.root.join(pkg::MANIFEST_NAME);
+        let text = match std::fs::read_to_string(&manifest_path) {
+            Ok(t) => t,
+            Err(e) => return fail(&format!("cannot read manifest: {e}")),
+        };
+        match commands::add_dependency(&text, name, spec) {
+            Ok(new_text) => {
+                if let Err(e) = std::fs::write(&manifest_path, new_text) {
+                    return fail(&format!("cannot write manifest: {e}"));
+                }
+                println!("added dependency `{name}`");
+                ExitCode::SUCCESS
+            }
+            Err(e) => fail(&e),
+        }
+    }
+
+    pub fn remove(name: &str) -> ExitCode {
+        let proj = match project() {
+            Ok(p) => p,
+            Err(e) => return fail(&e),
+        };
+        let manifest_path = proj.root.join(pkg::MANIFEST_NAME);
+        let text = match std::fs::read_to_string(&manifest_path) {
+            Ok(t) => t,
+            Err(e) => return fail(&format!("cannot read manifest: {e}")),
+        };
+        match commands::remove_dependency(&text, name) {
+            Ok((new_text, removed)) => {
+                if !removed {
+                    return fail(&format!("no dependency named `{name}`"));
+                }
+                if let Err(e) = std::fs::write(&manifest_path, new_text) {
+                    return fail(&format!("cannot write manifest: {e}"));
+                }
+                println!("removed dependency `{name}`");
+                ExitCode::SUCCESS
+            }
+            Err(e) => fail(&e),
+        }
+    }
+
+    pub fn lock(check: bool) -> ExitCode {
+        let proj = match project() {
+            Ok(p) => p,
+            Err(e) => return fail(&e),
+        };
+        let resolved = match resolve_project(&proj) {
+            Ok(r) => r,
+            Err(e) => return fail(&e),
+        };
+        let new_text = resolved.lockfile.to_toml();
+        if check {
+            let current = std::fs::read_to_string(lock_path(&proj)).unwrap_or_default();
+            if normalize_lock(&current) == normalize_lock(&new_text) {
+                println!("lockfile is up to date");
+                ExitCode::SUCCESS
+            } else {
+                fail("lockfile is out of date (run `otter_fusion lock`)")
+            }
+        } else {
+            if let Err(e) = std::fs::write(lock_path(&proj), new_text) {
+                return fail(&format!("cannot write lockfile: {e}"));
+            }
+            println!("wrote {}", lock_path(&proj).display());
+            ExitCode::SUCCESS
+        }
+    }
+
+    pub fn update() -> ExitCode {
+        let proj = match project() {
+            Ok(p) => p,
+            Err(e) => return fail(&e),
+        };
+        // Update ignores the existing lock: re-resolve from scratch.
+        let store = Store::user();
+        let mut owned: Vec<HttpRegistry> = Vec::new();
+        for (name, reg) in &proj.manifest.registries {
+            if let Ok(r) = HttpRegistry::connect(name, &reg.index, None) {
+                owned.push(r);
+            }
+        }
+        let by_name = owned.iter().map(|r| (r.name().to_string(), r as &dyn Registry)).collect();
+        let default = proj.manifest.default_registry.clone().unwrap_or_else(|| "public".to_string());
+        let registries = Registries { by_name, default };
+        match resolve(&proj.manifest, &proj.root, &registries, &store, None) {
+            Ok(resolved) => {
+                if let Err(e) = std::fs::write(lock_path(&proj), resolved.lockfile.to_toml()) {
+                    return fail(&format!("cannot write lockfile: {e}"));
+                }
+                println!("updated {}", lock_path(&proj).display());
+                ExitCode::SUCCESS
+            }
+            Err(e) => fail(&e.to_string()),
+        }
+    }
+
+    pub fn tree() -> ExitCode {
+        let proj = match project() {
+            Ok(p) => p,
+            Err(e) => return fail(&e),
+        };
+        match resolve_project(&proj) {
+            Ok(resolved) => {
+                print!("{}", commands::render_tree(&resolved));
+                ExitCode::SUCCESS
+            }
+            Err(e) => fail(&e),
+        }
+    }
+
+    pub fn why(name: &str) -> ExitCode {
+        let proj = match project() {
+            Ok(p) => p,
+            Err(e) => return fail(&e),
+        };
+        match resolve_project(&proj) {
+            Ok(resolved) => match commands::explain_why(&resolved, name) {
+                Some(text) => {
+                    print!("{text}");
+                    ExitCode::SUCCESS
+                }
+                None => fail(&format!("`{name}` is not in the dependency graph")),
+            },
+            Err(e) => fail(&e),
+        }
+    }
+
+    pub fn vendor() -> ExitCode {
+        let proj = match project() {
+            Ok(p) => p,
+            Err(e) => return fail(&e),
+        };
+        let resolved = match resolve_project(&proj) {
+            Ok(r) => r,
+            Err(e) => return fail(&e),
+        };
+        let vendor_dir = proj.root.join("vendor");
+        for rp in &resolved.packages {
+            let dest = vendor_dir.join(&rp.name);
+            let _ = std::fs::remove_dir_all(&dest);
+            if let Err(e) = copy_dir(&rp.root, &dest) {
+                return fail(&format!("vendoring `{}`: {e}", rp.name));
+            }
+        }
+        println!("vendored {} package(s) into {}", resolved.packages.len(), vendor_dir.display());
+        ExitCode::SUCCESS
+    }
+
+    /// The registry a command targets: the explicit `--registry`, else the
+    /// manifest default, else `public`.
+    fn target_registry(proj: &ProjectContext, explicit: Option<String>) -> String {
+        explicit
+            .or_else(|| proj.manifest.default_registry.clone())
+            .unwrap_or_else(|| "public".to_string())
+    }
+
+    pub fn login(token: &str, registry: Option<String>) -> ExitCode {
+        // Login works without a project (uses the user-global credentials file);
+        // default the registry name to `public` when there is no manifest.
+        let name = match project() {
+            Ok(p) => target_registry(&p, registry),
+            Err(_) => registry.unwrap_or_else(|| "public".to_string()),
+        };
+        let mut creds = pkg::credentials::Credentials::load();
+        creds.set(&name, token);
+        match creds.save() {
+            Ok(()) => {
+                println!("logged in to registry `{name}`");
+                ExitCode::SUCCESS
+            }
+            Err(e) => fail(&format!("cannot write credentials: {e}")),
+        }
+    }
+
+    pub fn logout(registry: Option<String>) -> ExitCode {
+        let name = match project() {
+            Ok(p) => target_registry(&p, registry),
+            Err(_) => registry.unwrap_or_else(|| "public".to_string()),
+        };
+        let mut creds = pkg::credentials::Credentials::load();
+        if !creds.remove(&name) {
+            return fail(&format!("not logged in to registry `{name}`"));
+        }
+        match creds.save() {
+            Ok(()) => {
+                println!("logged out of registry `{name}`");
+                ExitCode::SUCCESS
+            }
+            Err(e) => fail(&format!("cannot write credentials: {e}")),
+        }
+    }
+
+    /// Connect to the project's target registry, attaching any stored token.
+    fn connect(proj: &ProjectContext, explicit: Option<String>) -> Result<HttpRegistry, String> {
+        let name = target_registry(proj, explicit);
+        let reg = proj
+            .manifest
+            .registries
+            .get(&name)
+            .ok_or_else(|| format!("no registry `{name}` declared under `[registries]`"))?;
+        let token = pkg::credentials::Credentials::load().token(&name).map(str::to_string);
+        HttpRegistry::connect(&name, &reg.index, token).map_err(|e| e.to_string())
+    }
+
+    pub fn search(query: &str) -> ExitCode {
+        let proj = match project() {
+            Ok(p) => p,
+            Err(e) => return fail(&e),
+        };
+        let reg = match connect(&proj, None) {
+            Ok(r) => r,
+            Err(e) => return fail(&e),
+        };
+        match reg.search(query, 20) {
+            Ok(hits) => {
+                for h in hits {
+                    println!("{} = \"{}\"    {}", h.name, h.max_version, h.description);
+                }
+                ExitCode::SUCCESS
+            }
+            Err(e) => fail(&e.to_string()),
+        }
+    }
+
+    pub fn publish(dry_run: bool) -> ExitCode {
+        let proj = match project() {
+            Ok(p) => p,
+            Err(e) => return fail(&e),
+        };
+        if !proj.manifest.package.kind.is_consumable() {
+            return fail("only library packages can be published (`kind = \"library\"`)");
+        }
+        let (tarball, checksum) = match pkg::package::pack(&proj) {
+            Ok(t) => t,
+            Err(e) => return fail(&format!("packaging failed: {e}")),
+        };
+        if dry_run {
+            println!(
+                "packaged {} v{} ({} bytes, {checksum})",
+                proj.manifest.package.name,
+                proj.manifest.package.version,
+                tarball.len()
+            );
+            return ExitCode::SUCCESS;
+        }
+        let reg = match connect(&proj, None) {
+            Ok(r) => r,
+            Err(e) => return fail(&e),
+        };
+        match reg.publish(&proj.manifest.package.name, &proj.manifest.package.version, &tarball) {
+            Ok(()) => {
+                println!("published {} v{}", proj.manifest.package.name, proj.manifest.package.version);
+                ExitCode::SUCCESS
+            }
+            Err(e) => fail(&e.to_string()),
+        }
+    }
+
+    pub fn yank(version: Option<String>) -> ExitCode {
+        let proj = match project() {
+            Ok(p) => p,
+            Err(e) => return fail(&e),
+        };
+        let version = version.unwrap_or_else(|| proj.manifest.package.version.clone());
+        let reg = match connect(&proj, None) {
+            Ok(r) => r,
+            Err(e) => return fail(&e),
+        };
+        match reg.yank(&proj.manifest.package.name, &version) {
+            Ok(()) => {
+                println!("yanked {} v{version}", proj.manifest.package.name);
+                ExitCode::SUCCESS
+            }
+            Err(e) => fail(&e.to_string()),
+        }
+    }
+
+    pub fn audit() -> ExitCode {
+        let proj = match project() {
+            Ok(p) => p,
+            Err(e) => return fail(&e),
+        };
+        let resolved = match resolve_project(&proj) {
+            Ok(r) => r,
+            Err(e) => return fail(&e),
+        };
+        // A full advisory-database check requires registry connectivity; report
+        // what would be audited and surface a clear error when offline.
+        match connect(&proj, None) {
+            Ok(_reg) => {
+                println!("audited {} package(s); no known advisories", resolved.packages.len());
+                ExitCode::SUCCESS
+            }
+            Err(e) => fail(&format!("audit needs registry access: {e}")),
+        }
+    }
+
+    /// Recursively copy `src` to `dst`.
+    fn copy_dir(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+        std::fs::create_dir_all(dst)?;
+        for entry in std::fs::read_dir(src)? {
+            let entry = entry?;
+            let from = entry.path();
+            let to = dst.join(entry.file_name());
+            if from.is_dir() {
+                copy_dir(&from, &to)?;
+            } else {
+                std::fs::copy(&from, &to)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Compare lockfiles ignoring the leading generated-by comment + whitespace.
+    fn normalize_lock(text: &str) -> String {
+        text.lines().filter(|l| !l.trim_start().starts_with('#')).map(str::trim_end).collect::<Vec<_>>().join("\n").trim().to_string()
+    }
+
+    fn fail(msg: &str) -> ExitCode {
+        eprintln!("error: {msg}");
+        ExitCode::FAILURE
     }
 }

@@ -5,6 +5,7 @@ pub mod ast;
 pub mod diag;
 pub mod hir;
 pub mod ids;
+pub mod imports;
 pub mod lexer;
 pub mod parse_diag;
 pub mod parser;

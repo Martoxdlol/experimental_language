@@ -20,12 +20,14 @@ pub mod defaults;
 pub mod derive;
 pub mod diag;
 pub mod lower;
+pub mod resolve_ctx;
 pub mod results;
 pub mod symbols;
 
 pub use check::Checker;
 pub use diag::{SemaError, SemaErrorKind};
 pub use lower::{Lowerer, TypeEnv};
+pub use resolve_ctx::ResolveContext;
 pub use results::{Adjust, Builtin, CloneKind, NumIntrinsic, StructFields, ValueRes};
 pub use symbols::{Def, DefKind, ModuleInfo, Program};
 
@@ -70,6 +72,17 @@ pub fn analyze(module: &Module) -> Analysis {
 /// plus the parsed bodies of every file-backed submodule (`externals`, keyed by
 /// module path relative to the crate root).
 pub fn analyze_multi(root: &Module, externals: &symbols::Externals) -> Analysis {
+    analyze_multi_ctx(root, externals, &ResolveContext::direct())
+}
+
+/// As [`analyze_multi`], with an explicit [`ResolveContext`] selecting the run
+/// mode and project context that govern import-scheme availability and `self:`
+/// relative resolution (`docs/17` §17.13).
+pub fn analyze_multi_ctx(
+    root: &Module,
+    externals: &symbols::Externals,
+    ctx: &ResolveContext,
+) -> Analysis {
     // Expand `@Derive(...)` into synthesised `extend` blocks before collection,
     // on the root and every loaded submodule.
     let mut root = root.clone();
@@ -90,7 +103,7 @@ pub fn analyze_multi(root: &Module, externals: &symbols::Externals) -> Analysis 
             (path.clone(), m)
         })
         .collect();
-    let program = Program::collect_multi(&root, &externals);
+    let program = Program::collect_multi_ctx(&root, &externals, ctx);
     let mut tcx = TyCtxt::new();
     let mut errors = program.errors.clone();
     // The checker emits the def-keyed HIR (`structs`/`fn_sigs`/…) directly as it
