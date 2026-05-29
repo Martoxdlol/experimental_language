@@ -1969,6 +1969,22 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         body: &hir::Expr,
         span: Span,
     ) -> CgResult<Option<Value>> {
+        self.h_closure_kind(params, captures, ret, is_async, body, span, false)
+    }
+
+    /// As [`Self::h_closure`], but `by_value` selects the capture discipline
+    /// (`docs/09` §7 by-reference vs `docs/20` §6 by-value snapshot for
+    /// `Thread.spawn`). See [`Self::emit_closure_value_kind`].
+    fn h_closure_kind(
+        &mut self,
+        params: &[(LocalId, Ty)],
+        captures: &[(LocalId, Ty)],
+        ret: Ty,
+        is_async: bool,
+        body: &hir::Expr,
+        span: Span,
+        by_value: bool,
+    ) -> CgResult<Option<Value>> {
         if is_async {
             return Err(CodegenError::new(
                 span,
@@ -1980,15 +1996,29 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             captures: captures.to_vec(),
             ret,
         };
-        let (func_id, env) = self.emit_closure_value(&info, span)?;
+        let (func_id, env) = self.emit_closure_value_kind(&info, by_value, span)?;
         self.closures.push(crate::ClosureJob {
             func_id,
             info,
             body: body.clone(),
             subst: self.subst.clone(),
             span,
+            by_value,
         });
         Ok(Some(env))
+    }
+
+    /// Evaluate the closure argument of `Thread.spawn` (`docs/20` §6): when it is
+    /// a direct closure expression, build it with **by-value** captures so each
+    /// captured local is an independent snapshot taken at the spawn site (no
+    /// shared mutable cell across the thread boundary). Any other expression
+    /// (e.g. a variable already holding a closure) falls back to the ordinary
+    /// evaluation.
+    fn h_spawn_closure_arg(&mut self, arg: &hir::Expr) -> CgResult<Option<Value>> {
+        if let hir::ExprKind::Closure { params, captures, ret, is_async, body } = &arg.kind {
+            return self.h_closure_kind(params, captures, *ret, *is_async, body, arg.span, true);
+        }
+        self.h_expr(arg)
     }
 
     /// A method call `recv.m(..)` / static `Type.m(..)` — mirrors the AST
@@ -2302,7 +2332,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             }
             hir::Intrinsic::ThreadSpawn { output } => {
                 let env = self
-                    .h_expr(&args[0])?
+                    .h_spawn_closure_arg(&args[0])?
                     .ok_or_else(|| CodegenError::new(args[0].span, "spawn closure has no value"))?;
                 self.emit_thread_spawn(env, *output, span)
             }

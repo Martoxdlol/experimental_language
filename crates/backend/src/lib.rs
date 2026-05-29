@@ -677,6 +677,11 @@ struct ClosureJob {
     body: compiler::hir::Expr,
     subst: HashMap<DefId, Ty>,
     span: Span,
+    /// Whether captures are by value (a `Thread.spawn` snapshot; `docs/20` §6)
+    /// rather than by reference (an ordinary closure; `docs/09` §7). Decides how
+    /// the lifted body binds each capture: a direct value from the env slot, or
+    /// a shared cell pointer.
+    by_value: bool,
 }
 
 /// A bare `async { … }` block or `async` closure awaiting `poll`-function
@@ -941,7 +946,7 @@ impl<'a, M: Module> Codegen<'a, M> {
     /// Define a lifted closure function: `(env, params…) -> ret`. Captured
     /// locals are loaded from the environment; parameters come from the block.
     fn define_closure(&mut self, job: ClosureJob) -> CgResult<()> {
-        let ClosureJob { func_id, info, body, subst, span } = job;
+        let ClosureJob { func_id, info, body, subst, span, by_value } = job;
         let mut ctx = self.module.make_context();
         // Signature: env pointer, then each (substituted) parameter.
         let mut sig = self.module.make_signature();
@@ -982,15 +987,22 @@ impl<'a, M: Module> Codegen<'a, M> {
                     async_ctx: None,
                 };
                 let env = block_params[0];
-                // Captures live in the env after the function pointer (offset
-                // 8). Each env slot holds a *cell pointer* (`docs/09` §7); the
-                // closure body reads/writes through the cell, sharing state
-                // with the outer scope.
+                // Captures live in the env after the function pointer (offset 8).
+                // By reference (`docs/09` §7): the slot holds a *cell pointer*;
+                // body reads/writes route through the cell, shared with the outer
+                // scope. By value (`Thread.spawn`, `docs/20` §6): the slot holds
+                // the captured *value* — bind it as a fresh local (a per-worker
+                // copy), so the worker never shares mutable state with the spawner.
                 for (k, (local, ty)) in info.captures.iter().enumerate() {
                     let ct = fg.cx_clty(*ty).expect("capture clty");
                     let off = (8 + k * 8) as i32;
-                    let cell_ptr = fg.b.ins().load(PTR, MemFlags::trusted(), env, off);
-                    fg.bind_local_cell(*local, ct, cell_ptr);
+                    if by_value {
+                        let val = fg.b.ins().load(ct, MemFlags::trusted(), env, off);
+                        fg.bind_local(*local, ct, val);
+                    } else {
+                        let cell_ptr = fg.b.ins().load(PTR, MemFlags::trusted(), env, off);
+                        fg.bind_local_cell(*local, ct, cell_ptr);
+                    }
                 }
                 for (i, (local, ty)) in info.params.iter().enumerate() {
                     let ct = fg.cx_clty(*ty).expect("param clty");

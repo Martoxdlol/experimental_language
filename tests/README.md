@@ -87,26 +87,31 @@ generics/interfaces/closures/iterators, casts/derives/error-handling and the
 - **`concurrency/`** — `Thread.spawn` + `await join`, channels, `Shared` locks,
   and a 100-thread storm (`serial`, deterministic).
 - **`release/`** — release-profile wrapping arithmetic.
-- **`known_bugs/`** — the documented gaps (see below).
+- **`known_bugs/`** — the documented gaps (currently none; see below).
 
 ## Known bugs / runtime notes (current)
 
-The `known_bugs/` cases document spec behaviour the implementation does not yet
-satisfy (they show as XFAIL):
+The `known_bugs/` catalog is currently **empty** — every previously-documented
+gap has been resolved and its case promoted into the matching category:
 
-- Tuple pattern arity mismatch: `var (a,b,c) = (1,2)` **crashes the backend**;
-  `var (a,b) = (1,2,3)` is silently accepted. Both should be compile errors.
-- Duplicate field in a struct literal (`P { x: 1, x: 2 }`) is silently accepted.
-- Record pattern on a tuple struct gives a misleading "not stringifiable" error.
-- A named function cannot be used as a first-class value ("value reference not
-  yet supported").
-- `Thread.spawn` of a float-returning function is rejected.
-- Capturing a **mutable loop variable** into `Thread.spawn` is accepted but
-  data-races (wrong result or crash); it should be a compile error (docs/20 §6).
+- Tuple pattern arity mismatch (too few / too many) → clean compile errors
+  (`tuples/pattern_arity_*`); the too-many case no longer crashes the backend.
+- Duplicate field in a struct literal → rejected
+  (`structs/duplicate_field_in_literal`).
+- Record pattern on a tuple struct → clear "not a record struct" diagnostic
+  (`match/record_pattern_on_tuple_struct`).
+- Named function as a first-class value → works
+  (`functions/first_class_value`), lowered via a closure-ABI thunk.
+- `Thread.spawn` of a float-returning function → works for `f64`/`f32`
+  (`concurrency/thread_float_result`); the worker carries the float bits.
+- Spawn captures are independent by-value snapshots per docs/20 §6
+  (`concurrency/spawn_capture_is_snapshot`) — a captured local is copied at the
+  spawn site, so mutating it afterwards is not observed by the worker.
 
-Separately (not a test, load-dependent): under heavy **cross-process** CPU
-contention, many simultaneous thread-spawning processes can abort the runtime
-("failed to initiate panic"). Thread-spawning cases therefore run `serial`.
+Separately (not a test, load-dependent): under heavy CPU contention many
+simultaneous OS threads can abort the runtime — this is the deferred
+*concurrent-GC root-scanning hardening* (see `ROADMAP.md` GC §; reclamation is
+gated to a single mutator today). Thread-spawning cases therefore run `serial`.
 
 ## Add a case
 

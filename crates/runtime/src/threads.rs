@@ -100,12 +100,18 @@ fn publish_done(ctl: &ThreadCtl, result: i64) {
 /// (`[fn_ptr][captures…]`); the function pointer is its first word. Returns a
 /// registry id for the resulting `JoinHandle<R>`.
 ///
+/// `float_kind` selects the lifted function's result ABI so a float result is
+/// read from the correct register and carried as its raw bit pattern:
+/// `0` → `extern "C" fn(*mut u8) -> i64` (integers / pointers), `8` → `-> f64`
+/// (stored as `f64::to_bits`), `4` → `-> f32` (stored as `f32::to_bits`). The
+/// `Joined<R>.value` slot is byte-identical to the float's representation, so
+/// the joiner reads it back as the float with no further conversion.
+///
 /// # Safety
 /// `env` must be a valid closure environment whose lifted function has the
-/// signature `extern "C" fn(*mut u8) -> i64` (the code generator guarantees a
-/// non-float result so the value is returned in the integer register).
+/// signature implied by `float_kind`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn lang_thread_spawn(env: *mut u8) -> u64 {
+pub unsafe extern "C" fn lang_thread_spawn(env: *mut u8, float_kind: i64) -> u64 {
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     let ctl = new_ctl();
     registry().lock().unwrap().insert(id, ctl.clone());
@@ -118,8 +124,20 @@ pub unsafe extern "C" fn lang_thread_spawn(env: *mut u8) -> u64 {
     let worker = ctl.clone();
     let os = std::thread::spawn(move || {
         let fn_ptr = unsafe { (env_addr as *const usize).read() };
-        let f: extern "C" fn(*mut u8) -> i64 = unsafe { std::mem::transmute(fn_ptr) };
-        let result = f(env_addr as *mut u8);
+        let result = match float_kind {
+            8 => {
+                let f: extern "C" fn(*mut u8) -> f64 = unsafe { std::mem::transmute(fn_ptr) };
+                f(env_addr as *mut u8).to_bits() as i64
+            }
+            4 => {
+                let f: extern "C" fn(*mut u8) -> f32 = unsafe { std::mem::transmute(fn_ptr) };
+                f(env_addr as *mut u8).to_bits() as i64
+            }
+            _ => {
+                let f: extern "C" fn(*mut u8) -> i64 = unsafe { std::mem::transmute(fn_ptr) };
+                f(env_addr as *mut u8)
+            }
+        };
         // Pin the result for the cross-thread handoff to the joiner.
         gc::add_extra_root(result as usize);
         // The environment is no longer needed by the child.

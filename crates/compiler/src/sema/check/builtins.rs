@@ -563,13 +563,9 @@ impl<'a> Checker<'a> {
                 return self.tcx.error;
             }
         };
-        // A float result would be returned in a floating-point register, which
-        // the integer-result thread shim cannot carry (a follow-up).
-        if matches!(self.tcx.kind(r), TyKind::Float(_)) {
-            self.emit(clo.span, SemaErrorKind::Message(
-                "`Thread.spawn` cannot yet return a floating-point value".into(),
-            ));
-        }
+        // A float result is carried across the worker boundary as its raw bit
+        // pattern (the code generator selects the result ABI; `docs/20`), so
+        // float-returning spawns are supported.
         // Captures must be safe to share across threads: an immutable value, or
         // a thread-safe handle (`Sender`/`Receiver` — the channel itself is
         // synchronized; the struct only carries an id). Other managed values

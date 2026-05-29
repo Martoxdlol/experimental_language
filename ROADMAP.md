@@ -1009,6 +1009,15 @@ The tracing GC is functionally complete for single-threaded programs.
       and calls closures via `call_indirect`. First-class: stored in vars/lists,
       passed to and returned from functions (higher-order). 7 tests +
       `examples/closures.otter`.
+- [x] **Named functions as first-class values** (`docs/09` §4): a bare function
+      name in value position (`var f = inc;`, passed to a higher-order fn, stored
+      in a `List<(i64)=>i64>`, used as a `map` argument) lowers to a closure-style
+      env `[thunk_ptr]` whose thunk adapts the function's `(params…)->ret` ABI to
+      the uniform closure-call ABI `(env, params…)->ret` — a synthetic
+      `Direct`-call body reusing the closure path with zero new codegen plumbing
+      (`emit_fn_value`). Generic functions as values are rejected with a clear
+      error (call them directly). JIT + native + GC-stress parity;
+      `functions/first_class_value` case.
 - [x] **Trailing closures + implicit `it` + `List` higher-order methods**
       (`docs/09`, `docs/18`): a trailing closure (`xs.map { it*2 }`) is the
       call's final argument (merged into args at both checker and codegen
@@ -1125,10 +1134,20 @@ The tracing GC is functionally complete for single-threaded programs.
       registry id). `JoinHandle<R>.join()` blocks (in GC *native* state, so the
       joiner stays scannable) and yields `Joined<R> | Panicked` (prelude structs).
       The checker recognises `Thread.spawn`, records the result type, and rejects
-      mutable-managed captures (only immutable captures are shared so far —
-      deep-clone via `Clone` is the follow-up); codegen builds the handle/union.
+      mutable-managed captures (deep-clone of mutable managed captures via
+      `Clone` is the follow-up); codegen builds the handle/union.
       Handles are GC-pinned (`lang_gc_pin`) for their lifetime. JIT + native
       parity; `examples/threads.otter`; 3 CLI tests incl. multi-worker GC stress.
+      **Captures are by-value snapshots** (`docs/20` §6 cross-thread isolation):
+      a spawn closure stores each captured local's *value* (a primitive copy, or
+      an immutable managed pointer) in its env — not a shared cell — so mutating
+      the captured variable after the spawn is never observed by the worker
+      (`emit_closure_value_kind(by_value=true)` + the by-value bind in
+      `define_closure`). **Float results work** (`f64`/`f32`): the worker calls
+      the lifted closure with the matching result ABI and carries the value's
+      raw bits across the boundary (`lang_thread_spawn`'s `float_kind`), and the
+      `Joined<R>.value` slot is byte-identical to the float. `concurrency/
+      spawn_capture_is_snapshot` + `thread_float_result` cases.
       **GC reclamation is currently gated to single-mutator** (collection is
       skipped while >1 thread is live, resuming after join) — memory-safe, with
       precise concurrent root-scanning hardening deferred (`ROADMAP.md` GC §).
@@ -1477,16 +1496,19 @@ The tracing GC is functionally complete for single-threaded programs.
     *spec-correct* behaviour the implementation does not yet meet; it is expected
     to fail today (reported XFAIL, does not fail the suite) and is flagged XPASS
     (suite failure) if it ever starts passing, so the marker gets removed. The
-    suite thus **catalogs the unfinished surface instead of hiding it**. Current
-    XFAILs surfaced: tuple-pattern arity mismatch (backend *crash* / silent
-    accept), duplicate field in struct literal (silent accept), record pattern on
-    a tuple struct (misleading diagnostic), named function as a first-class value
-    (unimplemented), `Thread.spawn` of a float-returning fn (rejected), and
-    capturing a *mutable loop variable* into `Thread.spawn` (accepted but
-    data-races — should be rejected per docs/20 §6). Also observed (load-
-    dependent, not a test): the threaded runtime can abort under heavy
-    cross-process contention, so thread-spawning cases run `serial`. See
-    `tests/README.md`. Runs under `cargo test -p cli --test suite`.
+    suite thus **catalogs the unfinished surface instead of hiding it**. The
+    catalog is **currently empty** — all six previously-surfaced XFAILs were
+    fixed and promoted into their categories: tuple-pattern arity mismatch (now
+    a clean compile error, no backend crash), duplicate struct-literal field
+    (rejected), record pattern on a tuple struct (clear diagnostic), named
+    function as a first-class value (works, via a closure-ABI thunk),
+    `Thread.spawn` of a float-returning fn (works for `f64`/`f32`), and spawn
+    capture-by-value snapshots (`docs/20` §6 — the prior "mutable loop variable"
+    XFAIL's spec-correct behavior). Observed (load-dependent, not a test): the
+    threaded runtime can abort under heavy contention — the deferred
+    concurrent-GC root-scanning hardening (reclamation is single-mutator-gated
+    today) — so thread-spawning cases run `serial`. See `tests/README.md`. Runs
+    under `cargo test -p cli --test suite`.
 - [ ] Cross-file LSP hover/references, manifest dependencies (`pkg:`),
       sysroot/stdlib, `fmt` (needs comment-preserving lexing — ordinary comments
       are not tokens), `lint`/`fix`/`test`/`bench`/`repl`, the rest of the

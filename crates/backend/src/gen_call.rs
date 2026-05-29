@@ -581,8 +581,18 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     /// `Thread.spawn` over an already-evaluated closure env value. Shared by the
     /// AST and HIR walks.
     pub(crate) fn emit_thread_spawn(&mut self, env: Value, r: Ty, _span: Span) -> CgResult<Option<Value>> {
+        // A float result is returned in a floating-point register; tell the
+        // runtime which result ABI the lifted closure uses so it reads the
+        // value from the right register and carries its raw bits (`docs/20`).
+        let r_res = resolve_shallow(self.cx.analysis, r, &self.subst);
+        let float_kind = match self.cx.analysis.tcx.kind(r_res) {
+            TyKind::Float(FloatTy::F64) => 8,
+            TyKind::Float(FloatTy::F32) => 4,
+            _ => 0,
+        };
+        let fk = self.b.ins().iconst(types::I64, float_kind);
         let id = self
-            .call_intrinsic("lang_thread_spawn", &[PTR], Some(types::I64), &[env])
+            .call_intrinsic("lang_thread_spawn", &[PTR, types::I64], Some(types::I64), &[env, fk])
             .expect("lang_thread_spawn returns an id");
         let jh_def = self.cx.analysis.program.join_handle_def;
         let layout = self.struct_layout(jh_def, &[r]);
@@ -844,6 +854,24 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         info: &compiler::sema::results::ClosureInfo,
         span: Span,
     ) -> CgResult<(FuncId, Value)> {
+        self.emit_closure_value_kind(info, false, span)
+    }
+
+    /// As [`Self::emit_closure_value`], but `by_value` selects the capture
+    /// discipline. `false` (ordinary closures, `docs/09` §7): every capture is
+    /// by reference — the env slot stores the captured local's *cell pointer*,
+    /// so mutations are shared with the outer scope. `true` (`Thread.spawn`
+    /// closures, `docs/20` §6 cross-thread isolation): every capture is an
+    /// independent *value snapshot* taken at the spawn site — the env slot
+    /// stores the captured value itself (a primitive copy, or an immutable
+    /// managed pointer), so the worker never shares a mutable cell with the
+    /// spawner. Only managed value slots are GC-traced in the by-value layout.
+    pub(crate) fn emit_closure_value_kind(
+        &mut self,
+        info: &compiler::sema::results::ClosureInfo,
+        by_value: bool,
+        span: Span,
+    ) -> CgResult<(FuncId, Value)> {
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(PTR));
         for (_, ty) in &info.params {
@@ -858,27 +886,43 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         let func_id = self.module.declare_function(&name, Linkage::Local, &sig)
             .expect("declare closure");
 
-        // Environment layout: [fn_ptr][cap0_cell][cap1_cell]…  — `docs/09` §7
-        // says every captured variable is captured by reference. The outer
-        // scope binds each captured local as a *cell* (a managed 8-byte heap
-        // object holding the value); the env slot stores the cell pointer.
-        // Every cap slot is therefore a managed pointer for the GC.
+        // Environment layout: [fn_ptr][cap0][cap1]… By reference, each cap slot
+        // holds a managed cell pointer (all traced). By value, each slot holds
+        // the captured value, so only managed-typed slots are traced.
         let n = info.captures.len();
         let size = (8 + n * 8) as u32;
-        let ptr_offsets: Vec<u32> = (0..n).map(|k| (8 + k * 8) as u32).collect();
+        let ptr_offsets: Vec<u32> = if by_value {
+            info.captures
+                .iter()
+                .enumerate()
+                .filter(|(_, (_, ty))| {
+                    let r = resolve_shallow(self.cx.analysis, *ty, &self.subst);
+                    is_managed_ptr(self.cx.analysis, r)
+                })
+                .map(|(k, _)| (8 + k * 8) as u32)
+                .collect()
+        } else {
+            (0..n).map(|k| (8 + k * 8) as u32).collect()
+        };
         let desc = self.emit_descriptor(size, GC_KIND_PLAIN, &ptr_offsets);
         let env = self.call_intrinsic("lang_alloc", &[PTR], Some(PTR), &[desc])
             .expect("lang_alloc returns a pointer");
         let fref = self.module.declare_func_in_func(func_id, self.b.func);
         let faddr = self.b.ins().func_addr(PTR, fref);
         self.b.ins().store(MemFlags::trusted(), faddr, env, 0);
-        // Capture each enclosing local by its cell pointer (cell-backed locals
-        // hold the cell ptr in their Cranelift var — see `FnGen::fresh_var`).
         for (k, (local, _)) in info.captures.iter().enumerate() {
-            let var = *self.vars.get(local)
-                .ok_or_else(|| CodegenError::new(span, "captured local has no slot"))?;
-            let cell = self.b.use_var(var);
-            self.b.ins().store(MemFlags::trusted(), cell, env, (8 + k * 8) as i32);
+            let v = if by_value {
+                // Snapshot the captured local's current value (loading through
+                // its cell if it is cell-backed in the outer scope).
+                self.read_local(*local)
+                    .ok_or_else(|| CodegenError::new(span, "captured local has no slot"))?
+            } else {
+                // Capture-by-reference: the cell pointer held in the var.
+                let var = *self.vars.get(local)
+                    .ok_or_else(|| CodegenError::new(span, "captured local has no slot"))?;
+                self.b.use_var(var)
+            };
+            self.b.ins().store(MemFlags::trusted(), v, env, (8 + k * 8) as i32);
         }
         Ok((func_id, env))
     }
@@ -930,6 +974,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             body,
             subst: self.subst.clone(),
             span,
+            by_value: false,
         });
         Ok(env)
     }
