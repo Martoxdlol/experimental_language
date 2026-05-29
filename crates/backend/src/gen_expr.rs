@@ -5,83 +5,6 @@ use super::*;
 impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     // -- expressions ---------------------------------------------------------
 
-    /// Generate an expression, then apply any implicit coercion the checker
-    /// recorded at its span (currently: widening into a union/`dynamic` box).
-    pub(crate) fn gen_expr(&mut self, expr: &Expr) -> CgResult<Option<Value>> {
-        let v = self.gen_expr_raw(expr)?;
-        let v = self.apply_adjustment(expr.span, v)?;
-        // A managed-ref result is a potential GC root if it stays live across a
-        // later call (e.g. an outer struct pointer held while a field
-        // expression allocates). Mark it so Cranelift records it in stack maps.
-        if let Some(val) = v {
-            if self.result_is_managed_ref(expr.span) {
-                self.b.declare_value_needs_stack_map(val);
-            }
-        }
-        Ok(v)
-    }
-
-    /// Whether the (post-adjustment) value produced at `span` is a managed
-    /// pointer the GC must treat as a root.
-    pub(crate) fn result_is_managed_ref(&self, span: Span) -> bool {
-        let a = self.cx.analysis;
-        match a.results.adjustment(span) {
-            // Widening to a `*T | null` (NPO) yields a raw nullable pointer, not
-            // a managed box — the collector must not trace it (`docs/19` §2).
-            Some(Adjust::Widen(t)) => {
-                npo_union(a, resolve_shallow(a, t, &self.subst)).is_none()
-            }
-            Some(Adjust::WidenDyn(_)) => true, // a `{vtable,data}` box is managed
-            Some(Adjust::Unbox(t)) => is_managed_ptr(a, resolve_shallow(a, t, &self.subst)),
-            None => {
-                let ty = a.results.expr_ty(span).unwrap_or(a.tcx.error);
-                is_managed_ptr(a, resolve_shallow(a, ty, &self.subst))
-            }
-        }
-    }
-
-    /// Apply any coercion the checker recorded at `span` to a freshly produced
-    /// value: box on widen, unbox on narrow.
-    pub(crate) fn apply_adjustment(&mut self, span: Span, v: Option<Value>) -> CgResult<Option<Value>> {
-        match self.cx.analysis.results.adjustment(span) {
-            Some(Adjust::Widen(target)) => {
-                // Widening into a `*T | null` (NPO) union is the identity on the
-                // raw pointer; `null` becomes a 0 pointer (`docs/19` §2).
-                let tgt = resolve_shallow(self.cx.analysis, target, &self.subst);
-                if npo_union(self.cx.analysis, tgt).is_some() {
-                    let p = v.unwrap_or_else(|| self.b.ins().iconst(PTR, 0));
-                    return Ok(Some(p));
-                }
-                // `expr_ty(span)` is the pre-widening ("raw") type, which equals
-                // the target union only when the value is already boxed.
-                let from = self.cx.analysis.results.expr_ty(span)
-                    .unwrap_or(self.cx.analysis.tcx.error);
-                Ok(Some(self.apply_widen(v, from)))
-            }
-            Some(Adjust::Unbox(target)) => {
-                // Narrowing a `*T | null` (NPO) value is the identity — the value
-                // already *is* the raw pointer (there is no box to load from).
-                let src = self.cx.analysis.results.expr_ty(span)
-                    .unwrap_or(self.cx.analysis.tcx.error);
-                let src = resolve_shallow(self.cx.analysis, src, &self.subst);
-                if npo_union(self.cx.analysis, src).is_some() {
-                    return Ok(v);
-                }
-                let ptr = v.expect("unbox target is a boxed pointer");
-                match clty_of(self.cx.analysis, target) {
-                    Some(ct) => Ok(Some(self.b.ins().load(ct, MemFlags::trusted(), ptr, 8))),
-                    None => Ok(None), // narrowed to `null`
-                }
-            }
-            Some(Adjust::WidenDyn(iface)) => {
-                let from = self.cx.analysis.results.expr_ty(span)
-                    .unwrap_or(self.cx.analysis.tcx.error);
-                Ok(Some(self.gen_widen_dyn(v, from, iface, span)?))
-            }
-            None => Ok(v),
-        }
-    }
-
     /// Wrap a concrete value into an interface object: allocate a managed
     /// `{vtable, data}` box and point its vtable at the (concrete-type,
     /// interface) method table.
@@ -110,6 +33,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     /// the vtable's address.
     pub(crate) fn emit_vtable(&mut self, concrete: Ty, iface: Ty, span: Span) -> CgResult<Value> {
         let analysis = self.cx.analysis;
+        let hir = self.cx.hir;
         let concrete = resolve_shallow(analysis, concrete, &self.subst);
         let TyKind::Named { def: cdef, args: cargs } = analysis.tcx.kind(concrete).clone() else {
             return Err(CodegenError::new(span, "interface data is not a nominal type"));
@@ -117,7 +41,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         let TyKind::Named { def: idef, .. } = analysis.tcx.kind(iface).clone() else {
             return Err(CodegenError::new(span, "interface target is not an interface"));
         };
-        let ext = analysis.results.iface_impls.get(&(cdef, idef)).copied()
+        let ext = hir.iface_impls.get(&(cdef, idef)).copied()
             .ok_or_else(|| CodegenError::new(span, "no impl of interface for this type"))?;
         // Interface methods, in declaration order.
         let methods: Vec<DefId> = (0..analysis.program.defs.len() as u32)
@@ -304,21 +228,6 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         }
     }
 
-    /// Lower `await fut` inside an async `poll` body (`docs/21` §4): save all
-    /// live locals and the inner future into the state struct, set the resume
-    /// state, then poll the inner future. On `Pending`, return `Pending` from
-    /// this `poll` (the executor re-enters at the resume block). On `Ready`,
-    /// continue with the unwrapped value.
-    pub(crate) fn gen_await(&mut self, inner: &Expr, kw_span: Span) -> CgResult<Option<Value>> {
-        // Evaluate the inner future, then suspend on it at this await's site.
-        let fut = self.gen_expr(inner)?.ok_or_else(|| {
-            CodegenError::new(inner.span, "awaited expression has no value")
-        })?;
-        let out = self.cx.analysis.results.awaits.get(&kw_span).copied()
-            .unwrap_or(self.cx.analysis.tcx.error);
-        self.emit_await_suspend(fut, kw_span, out)
-    }
-
     /// Suspend on `fut` at the `await` site keyed by `await_span` (shared by
     /// `await` expressions and `for await` loops): save every live local + the
     /// inner future, return `Pending` if the inner poll is not ready, otherwise
@@ -374,15 +283,9 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         self.i64_to_elem(valw, out, await_span)
     }
 
-    /// Lower `spawn EXPR` (`docs/21` §6): start the inner future on a worker
-    /// and return a fresh `Future<T>` whose own `poll` resolves to `T` when the
-    /// worker finishes. The returned future is awaitable like any other.
-    pub(crate) fn gen_spawn(&mut self, inner: &Expr, kw_span: Span) -> CgResult<Option<Value>> {
-        let fut = self.gen_expr(inner)?.ok_or_else(|| {
-            CodegenError::new(inner.span, "spawn operand has no value")
-        })?;
-        let out = self.cx.analysis.results.async_spawns.get(&kw_span).copied()
-            .unwrap_or(self.cx.analysis.tcx.error);
+    /// `spawn EXPR` over an already-evaluated inner future value: schedule the
+    /// future on a worker and return a fresh `Future<T>`.
+    pub(crate) fn emit_spawn(&mut self, fut: Value, out: Ty) -> CgResult<Option<Value>> {
         let prog = &self.cx.analysis.program;
         let ready_tid = 1000 + prog.ready_def.index() as i64;
         let pending_tid = 1000 + prog.pending_def.index() as i64;
@@ -399,244 +302,13 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         ))
     }
 
-    pub(crate) fn gen_expr_raw(&mut self, expr: &Expr) -> CgResult<Option<Value>> {
-        let ty = self.cx.analysis.results.expr_ty(expr.span)
-            .unwrap_or(self.cx.analysis.tcx.error);
-        match &expr.kind {
-            ExprKind::Int(_) => Ok(Some(self.gen_int_lit(expr, ty)?)),
-            ExprKind::Float(lit) => Ok(Some(self.gen_float_lit(lit, ty, expr.span)?)),
-            ExprKind::Bool(v) => Ok(Some(self.b.ins().iconst(types::I8, i64::from(*v)))),
-            ExprKind::Char(c) => {
-                let scalar = parse_char(&c.raw)
-                    .ok_or_else(|| CodegenError::new(expr.span, "bad char literal"))?;
-                Ok(Some(self.b.ins().iconst(types::I32, i64::from(scalar))))
-            }
-            ExprKind::Null => Ok(None),
-            ExprKind::Str(s) => Ok(Some(self.gen_str_literal(s)?)),
-            ExprKind::Cast { op, expr: inner, .. } => {
-                let from = self.cx.analysis.results.expr_ty(inner.span)
-                    .unwrap_or(self.cx.analysis.tcx.error);
-                // The lowered target type (for `is`, whose own type is `bool`).
-                let target = self.cx.analysis.results.cast_targets
-                    .get(&expr.span)
-                    .copied()
-                    .unwrap_or(ty);
-                match op {
-                    CastOp::Is => self.gen_is(inner, from, target),
-                    CastOp::As => self.gen_cast(inner, from, target),
-                }
-            }
-            ExprKind::Ident(_) => {
-                match self.cx.analysis.results.resolution(expr.span) {
-                    Some(ValueRes::Local(local)) => self.read_local(local).map(Some).ok_or_else(|| {
-                        CodegenError::new(expr.span, "use of unbound local")
-                    }),
-                    // A unit struct used as a value carries no data — only its
-                    // type matters (e.g. once boxed into a union). Represent it
-                    // as a null pointer placeholder.
-                    Some(ValueRes::StructCtor(_)) => Ok(Some(self.b.ins().iconst(PTR, 0))),
-                    // An `extern var` — a C global (`docs/19` §4). Read through
-                    // its imported data symbol.
-                    Some(ValueRes::Global(def))
-                        if self.cx.analysis.program.def(def).kind == DefKind::ExternVar =>
-                    {
-                        let addr = self.extern_var_addr(def);
-                        match clty_of(self.cx.analysis, ty) {
-                            Some(ct) => Ok(Some(self.b.ins().load(ct, MemFlags::trusted(), addr, 0))),
-                            None => Ok(None),
-                        }
-                    }
-                    _ => Err(CodegenError::new(expr.span, "value reference not yet lowerable")),
-                }
-            }
-            ExprKind::Paren(inner) => self.gen_expr(inner),
-            ExprKind::Unary { op, operand, .. } => self.gen_unary(*op, operand, ty),
-            ExprKind::Binary { op, left, right, op_span } => {
-                self.gen_binary(*op, left, right, *op_span)
-            }
-            ExprKind::Block(b) => self.gen_block(b),
-            ExprKind::If { cond, then_block, else_branch } => {
-                self.gen_if(cond, then_block, else_branch.as_ref(), ty)
-            }
-            ExprKind::Return(value) => {
-                let v = match value {
-                    Some(e) => self.gen_expr(e)?,
-                    None => None,
-                };
-                self.emit_return(v)?;
-                Ok(None)
-            }
-            ExprKind::Call { callee, args, trailing_closure, .. } => {
-                // A trailing closure is the call's final argument.
-                if let Some(tc) = trailing_closure {
-                    let mut all = args.clone();
-                    all.push((**tc).clone());
-                    self.gen_call(callee, &all, expr.span)
-                } else {
-                    self.gen_call(callee, args, expr.span)
-                }
-            }
-            ExprKind::StructLit { path, fields, spread } => {
-                let (def, sargs) = match self.cx.analysis.tcx.kind(ty) {
-                    TyKind::Named { def, args } => (*def, args.clone()),
-                    _ => return Err(CodegenError::new(expr.span, "struct literal has non-struct type")),
-                };
-                let _ = path;
-                Ok(Some(self.gen_struct_lit(def, &sargs, fields, spread.as_deref(), expr.span)?))
-            }
-            ExprKind::SelfExpr => self.gen_local_use(expr.span),
-            ExprKind::List(elems) => {
-                let elem = self.list_elem_of(ty).ok_or_else(|| {
-                    CodegenError::new(expr.span, "list literal has non-list type")
-                })?;
-                let list = self.gen_list_new(elem);
-                for el in elems {
-                    let v = self.gen_expr(el)?;
-                    let raw = self.elem_to_i64(v, elem, el.span)?;
-                    self.call_intrinsic("lang_list_push", &[PTR, types::I64], None, &[list, raw]);
-                }
-                Ok(Some(list))
-            }
-            ExprKind::MapLit(items) => self.gen_map_lit(items, ty, expr.span),
-            ExprKind::Closure { is_async, body, .. } => {
-                if *is_async {
-                    return Err(CodegenError::new(
-                        expr.span,
-                        "`async` closure code generation is not yet implemented",
-                    ));
-                }
-                self.gen_closure(body, expr.span)
-            }
-            ExprKind::AsyncBlock(block) => self.gen_async_block(block, expr.span),
-            ExprKind::Await { expr: inner, kw_span } => self.gen_await(inner, *kw_span),
-            ExprKind::Spawn { expr: inner, kw_span } => self.gen_spawn(inner, *kw_span),
-            ExprKind::Index { receiver, index } => self.gen_index_load(receiver, index),
-            ExprKind::Tuple(elems) => {
-                let elem_tys = match self.cx.analysis.tcx.kind(ty).clone() {
-                    TyKind::Tuple(ts) => ts,
-                    _ => return Err(CodegenError::new(expr.span, "tuple has non-tuple type")),
-                };
-                let layout = tuple_layout(self.cx.analysis, &elem_tys);
-                let ptr = self.alloc_struct(&layout);
-                for (i, e) in elems.iter().enumerate() {
-                    let v = self.gen_expr(e)?;
-                    if let (Some(v), Some(Some(_))) = (v, layout.cltys.get(i)) {
-                        self.b.ins().store(MemFlags::trusted(), v, ptr, layout.offsets[i] as i32);
-                    }
-                }
-                Ok(Some(ptr))
-            }
-            ExprKind::Field { receiver, name } => {
-                // A numeric-namespace constant (`i32.MAX`, `f64.NAN`, …).
-                if let Some(intr) = self.cx.analysis.results.num_intrinsics.get(&expr.span).copied() {
-                    return self.gen_num_intrinsic(intr, &[]);
-                }
-                self.gen_field_load(receiver, &name.name)
-            }
-            ExprKind::TupleIndex { receiver, index, .. } => {
-                self.gen_field_load(receiver, &index.to_string())
-            }
-            ExprKind::Match { scrutinee, arms } => self.gen_match(scrutinee, arms, ty),
-            ExprKind::Try { expr: inner, q_span } => self.gen_try(inner, *q_span, ty),
-            ExprKind::Ref { expr: inner, .. } => self.gen_ref(inner),
-            ExprKind::Deref { expr: inner, .. } => self.gen_deref(inner, ty),
-            ExprKind::While { cond, body } => self.gen_while(cond, body),
-            ExprKind::For { pattern, in_async, iter, body } => {
-                if *in_async {
-                    self.gen_for_await(pattern, iter, body)
-                } else {
-                    self.gen_for(pattern, iter, body)
-                }
-            }
-            ExprKind::Loop(body) => self.gen_loop(body, ty),
-            ExprKind::Break(value) => self.gen_break(value.as_deref(), expr.span),
-            ExprKind::Continue => self.gen_continue(expr.span),
-            _ => Err(CodegenError::new(expr.span, "expression not yet lowerable")),
-        }
-    }
-
-    pub(crate) fn gen_int_lit(&mut self, expr: &Expr, ty: Ty) -> CgResult<Value> {
-        let ExprKind::Int(lit) = &expr.kind else { unreachable!() };
-        let digits: String = lit.raw.chars().filter(|c| *c != '_').collect();
-        let radix = match lit.base {
-            compiler::token::IntBase::Dec => 10,
-            compiler::token::IntBase::Hex => 16,
-            compiler::token::IntBase::Oct => 8,
-            compiler::token::IntBase::Bin => 2,
-        };
-        let value = u64::from_str_radix(&digits, radix)
-            .map_err(|_| CodegenError::new(expr.span, "integer literal out of range"))?;
-        let ct = self.cx_clty(ty).unwrap_or(types::I64);
-        Ok(self.b.ins().iconst(ct, value as i64))
-    }
-
-    pub(crate) fn gen_float_lit(&mut self, lit: &FloatLit, ty: Ty, span: Span) -> CgResult<Value> {
-        let raw: String = lit.raw.chars().filter(|c| *c != '_').collect();
-        let v: f64 = raw.parse()
-            .map_err(|_| CodegenError::new(span, "float literal parse error"))?;
-        match self.cx.analysis.tcx.kind(ty) {
-            TyKind::Float(FloatTy::F32) => Ok(self.b.ins().f32const(v as f32)),
-            _ => Ok(self.b.ins().f64const(v)),
-        }
-    }
-
-    pub(crate) fn gen_unary(&mut self, op: UnaryOp, operand: &Expr, ty: Ty) -> CgResult<Option<Value>> {
-        let v = self.gen_expr(operand)?.ok_or_else(|| {
-            CodegenError::new(operand.span, "operand has no value")
-        })?;
-        let is_float = matches!(self.cx.analysis.tcx.kind(ty), TyKind::Float(_));
-        let is_bool = matches!(self.cx.analysis.tcx.kind(ty), TyKind::Bool);
-        let out = match op {
-            UnaryOp::Neg if is_float => self.b.ins().fneg(v),
-            UnaryOp::Neg => self.b.ins().ineg(v),
-            // `!` on a `bool` is *logical* negation (0↔1), not bitwise — a bool
-            // is an `i8` holding 0/1, so `bnot` would give 0xFF/0xFE (both
-            // truthy). Integer `!`/`~` is bitwise complement (`docs/15`).
-            UnaryOp::Not if is_bool => {
-                let one = self.b.ins().iconst(types::I8, 1);
-                self.b.ins().bxor(v, one)
-            }
-            UnaryOp::Not | UnaryOp::BitNot => self.b.ins().bnot(v),
-        };
-        Ok(Some(out))
-    }
-
-    pub(crate) fn gen_binary(&mut self, op: BinaryOp, left: &Expr, right: &Expr, op_span: Span)
+    /// Emit a primitive (non-overloaded, non-short-circuit) binary operation
+    /// given already-evaluated operand values and the left operand's type.
+    /// Shared by the AST and HIR code paths so their arithmetic is identical.
+    pub(crate) fn emit_binop(&mut self, op: BinaryOp, lty: Ty, l: Value, r: Value)
         -> CgResult<Option<Value>>
     {
         use BinaryOp::*;
-        if matches!(op, And | Or) {
-            return self.gen_logical(op, left, right);
-        }
-        // Overloaded operator → call the resolved `extend` method.
-        if let Some(&mdef) = self.cx.analysis.results.operator_methods.get(&op_span) {
-            let l = self.gen_expr(left)?.ok_or_else(|| {
-                CodegenError::new(left.span, "operand has no value")
-            })?;
-            let r = self.gen_expr(right)?.ok_or_else(|| {
-                CodegenError::new(right.span, "operand has no value")
-            })?;
-            // If `mdef` lives in a generic `extend`, the checker recorded the
-            // extend's type arguments at `op_span`; pass them so the method is
-            // monomorphized to this operand's instantiation.
-            let targs = self.instance_args(op_span);
-            let result = self.emit_call(mdef, targs, &[l, r], op_span)?;
-            // `a != b` negates the `eq` result.
-            if matches!(op, Ne) {
-                let v = result.ok_or_else(|| CodegenError::new(op_span, "`eq` returned no value"))?;
-                let zero = self.b.ins().iconst(types::I8, 0);
-                return Ok(Some(self.b.ins().icmp(IntCC::Equal, v, zero)));
-            }
-            return Ok(result);
-        }
-        let lty = self.cx.analysis.results.expr_ty(left.span)
-            .unwrap_or(self.cx.analysis.tcx.error);
-        let l = self.gen_expr(left)?.ok_or_else(|| {
-            CodegenError::new(left.span, "operand has no value")
-        })?;
-        let r = self.gen_expr(right)?.ok_or_else(|| {
-            CodegenError::new(right.span, "operand has no value")
-        })?;
         // `str + str` → runtime concatenation.
         if matches!(op, Add) && matches!(self.cx.analysis.tcx.kind(lty), TyKind::Str) {
             let s = self.call_intrinsic("lang_str_concat", &[PTR, PTR], Some(PTR), &[l, r]);
@@ -701,57 +373,6 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             .expect("declare extern var");
         let gv = self.module.declare_data_in_func(data_id, self.b.func);
         self.b.ins().global_value(PTR, gv)
-    }
-
-    /// `&place` — address-of (`docs/19` §2). The checker restricts the operand
-    /// to an addressable `extern struct` place, whose runtime value already *is*
-    /// the address of its stack-allocated byte block, so `&` is the identity on
-    /// that value (no pin needed for stack values).
-    pub(crate) fn gen_ref(&mut self, inner: &Expr) -> CgResult<Option<Value>> {
-        // `&arr[i]` — the address of a fixed-array element (`docs/19` §4).
-        if let ExprKind::Index { receiver, index } = &inner.kind {
-            let rty = self.cx.analysis.results.expr_ty(receiver.span)
-                .unwrap_or(self.cx.analysis.tcx.error);
-            if matches!(self.cx.analysis.tcx.kind(rty), TyKind::Array { .. }) {
-                let ct = self.array_elem_clty(rty).ok_or_else(|| {
-                    CodegenError::new(receiver.span, "array element has no scalar type")
-                })?;
-                let base = self.aggregate_field_addr(receiver)?;
-                let idx = self.gen_expr(index)?.ok_or_else(|| {
-                    CodegenError::new(index.span, "index has no value")
-                })?;
-                let scaled = self.b.ins().imul_imm(idx, ct.bytes() as i64);
-                return Ok(Some(self.b.ins().iadd(base, scaled)));
-            }
-        }
-        // Otherwise an extern struct place: its value already is the address.
-        let v = self.gen_expr(inner)?.ok_or_else(|| {
-            CodegenError::new(inner.span, "address-of operand has no value")
-        })?;
-        Ok(Some(v))
-    }
-
-    /// `*ptr` — pointer dereference (`docs/19` §2). Panics on null. For a raw
-    /// pointer to an `extern struct` the result is the same address (the value
-    /// representation is the pointer); for a pointer to a scalar it loads the
-    /// pointee. `result_ty` is the (checker-recorded) pointee type.
-    pub(crate) fn gen_deref(&mut self, inner: &Expr, result_ty: Ty) -> CgResult<Option<Value>> {
-        let p = self.gen_expr(inner)?.ok_or_else(|| {
-            CodegenError::new(inner.span, "dereference operand has no value")
-        })?;
-        let zero = self.b.ins().iconst(PTR, 0);
-        let is_null = self.b.ins().icmp(IntCC::Equal, p, zero);
-        self.guard_panic(is_null, "dereference of a null pointer");
-        let rty = resolve_shallow(self.cx.analysis, result_ty, &self.subst);
-        if let TyKind::Named { def, .. } = self.cx.analysis.tcx.kind(rty) {
-            if self.is_extern_struct_def(*def) {
-                return Ok(Some(p));
-            }
-        }
-        match clty_of(self.cx.analysis, rty) {
-            Some(ct) => Ok(Some(self.b.ins().load(ct, MemFlags::trusted(), p, 0))),
-            None => Ok(None),
-        }
     }
 
     /// Emit a guarded panic: when `cond` (an `I8` boolean) is true, call
@@ -975,79 +596,6 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             };
             self.b.ins().icmp(cc, l, r)
         }
-    }
-
-    pub(crate) fn gen_logical(&mut self, op: BinaryOp, left: &Expr, right: &Expr) -> CgResult<Option<Value>> {
-        // Short-circuit via blocks; result is i8 bool in a merge block param.
-        let l = self.gen_expr(left)?.ok_or_else(|| {
-            CodegenError::new(left.span, "operand has no value")
-        })?;
-        let rhs_block = self.b.create_block();
-        let merge = self.b.create_block();
-        self.b.append_block_param(merge, types::I8);
-
-        match op {
-            BinaryOp::And => {
-                // if l { eval rhs } else { false }
-                self.b.ins().brif(l, rhs_block, &[], merge, &[l.into()]);
-            }
-            BinaryOp::Or => {
-                // if l { true } else { eval rhs }
-                self.b.ins().brif(l, merge, &[l.into()], rhs_block, &[]);
-            }
-            _ => unreachable!(),
-        }
-        self.term = true;
-        self.switch(rhs_block);
-        let r = self.gen_expr(right)?.ok_or_else(|| {
-            CodegenError::new(right.span, "operand has no value")
-        })?;
-        if !self.term {
-            self.b.ins().jump(merge, &[r.into()]);
-            self.term = true;
-        }
-        self.switch(merge);
-        Ok(Some(self.b.block_params(merge)[0]))
-    }
-
-    pub(crate) fn gen_if(
-        &mut self,
-        cond: &Expr,
-        then_block: &Block,
-        else_branch: Option<&ElseBranch>,
-        result_ty: Ty,
-    ) -> CgResult<Option<Value>> {
-        let c = self.gen_expr(cond)?.ok_or_else(|| {
-            CodegenError::new(cond.span, "condition has no value")
-        })?;
-        let then_bb = self.b.create_block();
-        let else_bb = self.b.create_block();
-        let merge = self.b.create_block();
-
-        let result_ct = self.cx_clty(result_ty);
-        if let Some(ct) = result_ct {
-            self.b.append_block_param(merge, ct);
-        }
-
-        self.b.ins().brif(c, then_bb, &[], else_bb, &[]);
-        self.term = true;
-
-        // then
-        self.switch(then_bb);
-        let then_val = self.gen_block(then_block)?;
-        self.jump_to_merge(merge, then_val, result_ct)?;
-
-        // else
-        self.switch(else_bb);
-        let else_val = match else_branch {
-            None => None,
-            Some(ElseBranch::Block(b)) => self.gen_block(b)?,
-            Some(ElseBranch::If(e)) => self.gen_expr(e)?,
-        };
-        self.jump_to_merge(merge, else_val, result_ct)?;
-
-        self.switch(merge);
-        Ok(result_ct.map(|_| self.b.block_params(merge)[0]))
     }
 
     pub(crate) fn jump_to_merge(&mut self, merge: cranelift_codegen::ir::Block, val: Option<Value>,

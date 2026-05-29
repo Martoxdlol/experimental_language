@@ -152,7 +152,7 @@ impl<'a> Checker<'a> {
                             // Inference already checked the value (with no
                             // expectation); reuse that type so we don't
                             // double-check. Otherwise check against the field.
-                            let vt = match self.results.expr_types.get(&v.span).copied() {
+                            let vt = match self.results.expr_ty(v.span) {
                                 Some(t) if inferring => t,
                                 _ => self.check_expr(v, Some(fty)),
                             };
@@ -160,7 +160,16 @@ impl<'a> Checker<'a> {
                         }
                         None => {
                             // Field-init shorthand: a local of the same name.
+                            // `check_ident` bypasses the `check_expr` wrapper, so
+                            // record the value's type and build its HIR `Name`
+                            // node here (baking any flow-narrowing `Unbox`) so
+                            // `expect` can bake a widening coercion onto it in
+                            // place — exactly the order `build_hir_node` relies on.
                             let lt = self.check_ident(&fi.name.name, fi.name.span);
+                            if let Some(res) = self.results.resolution(fi.name.span) {
+                                let node = self.build_name_node(res, lt, fi.name.span);
+                                self.results.node_hir.insert(fi.name.span, node);
+                            }
                             self.expect(lt, fty, fi.name.span);
                         }
                     }
@@ -209,7 +218,7 @@ impl<'a> Checker<'a> {
     }
 
     pub(crate) fn check_tuple_ctor(&mut self, def: DefId, callee: &Expr, args: &[Expr], span: Span) -> Ty {
-        self.results.resolutions.insert(callee.span, ValueRes::StructCtor(def));
+        self.record_res(callee.span, ValueRes::StructCtor(def), self.tcx.error);
         let gens = self.prog.def(def).generics.clone();
 
         // Non-generic tuple struct: check args against the declared field types.
@@ -272,7 +281,7 @@ impl<'a> Checker<'a> {
         // type already computed during inference).
         if let Some(concrete) = self.tuple_fields(def, &targs) {
             for (a, fty) in args.iter().zip(&concrete) {
-                let vt = self.results.expr_types.get(&a.span).copied().unwrap_or(self.tcx.error);
+                let vt = self.results.expr_ty(a.span).unwrap_or(self.tcx.error);
                 self.expect(vt, *fty, a.span);
             }
         }

@@ -111,6 +111,119 @@ fn nonce() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64 ^ (n << 32)
 }
 
+/// Run `otter_fusion emit <ir> <file>` with `src` in a temp file.
+fn emit_ir(ir: &str, src: &str) -> (String, String, bool) {
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!("lang_test_{}.otter", nonce()));
+    std::fs::write(&path, src).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_otter_fusion"))
+        .arg("emit")
+        .arg(ir)
+        .arg(&path)
+        .output()
+        .expect("run emit");
+    let _ = std::fs::remove_file(&path);
+    (
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+        out.status.success(),
+    )
+}
+
+#[test]
+fn emit_hir_is_typed_resolved_and_dispatched() {
+    let (out, err, ok) = emit_ir(
+        "hir",
+        "function add(x: i64, y: i64): i64 { x + y }\n\
+         function main() { var z = add(2, 3); println(\"hi\"); }",
+    );
+    assert!(ok, "stderr: {err}");
+    // Every expression carries its type; the operator is a primitive Add.
+    assert!(out.contains("(binary Add"), "no typed binary:\n{out}");
+    assert!(out.contains(":i64"), "no type annotations:\n{out}");
+    // Names are resolved; the call's dispatch kind is explicit.
+    assert!(out.contains("name local"), "no resolved local:\n{out}");
+    assert!(out.contains("call direct"), "no direct dispatch:\n{out}");
+    assert!(out.contains("call builtin Println"), "no builtin dispatch:\n{out}");
+}
+
+#[test]
+fn emit_hir_shows_baked_coercions_and_match_dispatch() {
+    // The data that used to live in the deleted `adjustments` / `pattern_types`
+    // span tables is now on the HIR nodes — and therefore observable in `--emit
+    // hir`: an `is`-narrowed read shows an unbox/widen adjust, and a `match`
+    // shows its arm patterns.
+    let (out, err, ok) = emit_ir(
+        "hir",
+        "function f(x: i64 | str): i64 { match x { i64 n => n + 1, str s => 0 } }",
+    );
+    assert!(ok, "stderr: {err}");
+    assert!(out.contains("match"), "no match in HIR:\n{out}");
+    // The narrowed `n` (a union variant matched as `i64`) is used as an `i64`.
+    assert!(out.contains("(binary Add"), "narrowed arithmetic missing:\n{out}");
+    // A widening coercion is printed as an explicit adjust wrapper somewhere.
+    let (w, _, _) = emit_ir(
+        "hir",
+        "function g(): i64 | str { var u: i64 | str = 5; u }",
+    );
+    assert!(w.contains("widen") || w.contains("adjust"), "no baked widen adjust:\n{w}");
+}
+
+#[test]
+fn emit_hir_is_deterministic() {
+    let src = "struct P { x: i64, y: i64 }\n\
+               function main() { var p = P { x: 1, y: 2 }; }";
+    let a = emit_ir("hir", src).0;
+    let b = emit_ir("hir", src).0;
+    assert_eq!(a, b, "emit hir must be byte-for-byte deterministic");
+    assert!(a.contains("record(x: i64, y: i64)"), "no struct layout:\n{a}");
+}
+
+#[test]
+fn emit_tokens_lists_kinds_and_spans() {
+    let (out, err, ok) = emit_ir("tokens", "function main() {}");
+    assert!(ok, "stderr: {err}");
+    assert!(out.contains("Kw(Function) @ 0..8"), "tokens:\n{out}");
+    assert!(out.lines().count() >= 5, "too few tokens:\n{out}");
+}
+
+#[test]
+fn emit_ast_dumps_the_tree() {
+    let (out, err, ok) = emit_ir("ast", "function main() {}");
+    assert!(ok, "stderr: {err}");
+    assert!(out.contains("Module"), "no Module node:\n{out}");
+    assert!(out.contains("Function"), "no Function item:\n{out}");
+}
+
+#[test]
+fn emit_clif_dumps_cranelift_ir() {
+    let src = "function add(a: i64, b: i64): i64 { a + b }\n\
+               function main(): i64 { add(40, 2) }";
+    let (out, err, ok) = emit_ir("clif", src);
+    assert!(ok, "stderr: {err}");
+    // Per-function Cranelift IR with the source-symbol header.
+    assert!(out.contains("; add"), "missing `add` header:\n{out}");
+    assert!(out.contains("; main"), "missing `main` header:\n{out}");
+    // Cranelift function syntax + real instructions (debug builds emit a
+    // checked `sadd_overflow`; release emits a plain `iadd`).
+    assert!(out.contains("function u0:"), "no clif function:\n{out}");
+    assert!(out.contains("block0:"), "no entry block:\n{out}");
+    assert!(
+        out.contains("sadd_overflow") || out.contains("iadd"),
+        "expected an integer add:\n{out}"
+    );
+    assert!(out.contains("return"), "expected a return:\n{out}");
+}
+
+#[test]
+fn emit_clif_is_deterministic() {
+    let src = "struct P { x: i64 }\n\
+               function main(): i64 { var p = P { x: 7 }; p.x }";
+    let a = emit_ir("clif", src).0;
+    let b = emit_ir("clif", src).0;
+    assert_eq!(a, b, "emit clif must be byte-for-byte deterministic");
+}
+
 #[test]
 fn hello_world() {
     let (out, err, ok) = lang("run", "function main() { println(\"hello, world\") }");

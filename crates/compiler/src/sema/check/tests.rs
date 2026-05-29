@@ -205,8 +205,9 @@
 
     #[test]
     fn union_records_widen_adjustment() {
-        // `var x: i64 | str = 1` widens the i64 literal — an adjustment is
-        // recorded so codegen boxes it.
+        // `var x: i64 | str = 1` widens the i64 literal — the checker bakes a
+        // `Widen` `Adjust` directly onto the HIR node (was the `adjustments`
+        // side table) so codegen boxes it.
         let src = "function f() { var x: i64 | str = 1; }";
         let (tokens, _) = lex(src, FileId(0));
         let (module, _) = parse(src, &tokens);
@@ -215,7 +216,12 @@
         let mut errors = Vec::new();
         let mut ck = Checker::new(&prog, &mut tcx, &mut errors);
         ck.check_program();
-        assert!(!ck.results.adjustments.is_empty(), "expected a widening adjustment");
+        let baked_widen = ck.results.node_hir.values().any(|e| {
+            matches!(&e.kind, crate::hir::ExprKind::Adjust {
+                adjust: crate::sema::results::Adjust::Widen(_), ..
+            })
+        });
+        assert!(baked_widen, "expected a widening `Adjust` baked into the HIR");
     }
 
     #[test]

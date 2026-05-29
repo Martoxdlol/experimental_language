@@ -37,6 +37,9 @@ impl<'a> Checker<'a> {
         //     variants are candidate failures (direct or converted).
         let r = self.ret_ty;
         let r_vars = self.tcx.variants(r);
+        // The `Try` impl's `branch` shape, if the operand is a `Try` wrapper —
+        // handed to the HIR `Try` node at the end (was the `try_branches` table).
+        let mut try_branch: Option<TryBranch> = None;
         let (always_success, failure_candidates): (Vec<Ty>, Vec<Ty>) = if matches!(
             self.tcx.kind(raw_et),
             TyKind::Union(_) | TyKind::Dynamic
@@ -45,7 +48,7 @@ impl<'a> Checker<'a> {
         } else if let Some(tb) = self.find_try_impl(raw_et, q_span) {
             let s = self.tcx.variants(tb.output);
             let f = self.tcx.variants(tb.residual);
-            self.results.try_branches.insert(q_span, tb);
+            try_branch = Some(tb);
             (s, f)
         } else {
             // No way to propagate from this type — emit a clear message
@@ -65,7 +68,7 @@ impl<'a> Checker<'a> {
         let mut conversions: Vec<(Ty, DefId, Ty)> = Vec::new();
         let mut failures: Vec<Ty> = Vec::new();
         let mut successes: Vec<Ty> = always_success.clone();
-        let is_try = self.results.try_branches.contains_key(&q_span);
+        let is_try = try_branch.is_some();
         for v in failure_candidates {
             if r_vars.contains(&v) {
                 failures.push(v);
@@ -83,11 +86,7 @@ impl<'a> Checker<'a> {
                 successes.push(v);
             }
         }
-        if !conversions.is_empty() {
-            self.results.residual_conversions.insert(q_span, conversions);
-        }
-
-        if failures.is_empty() && self.results.residual_conversions.get(&q_span).is_none() {
+        if failures.is_empty() && conversions.is_empty() {
             self.emit(q_span, SemaErrorKind::Message(
                 "nothing to propagate here; remove the `?`".into(),
             ));
@@ -99,6 +98,12 @@ impl<'a> Checker<'a> {
             ));
             return self.tcx.error;
         }
+        // Hand `branch` shape + residual conversions to the HIR `Try` node
+        // (consumed right after this returns); set after `inner` is fully
+        // checked so nested `?` doesn't clobber the slots.
+        let _ = q_span;
+        self.pending_try_branch.set(try_branch);
+        self.pending_residuals.set((!conversions.is_empty()).then_some(conversions));
         self.tcx.mk_union(successes)
     }
 
@@ -150,7 +155,7 @@ impl<'a> Checker<'a> {
     /// target unifies with `operand_ty`, returning the `branch` method, the
     /// solved extend type-args (for codegen monomorphization), and the
     /// resulting `Output | Residual` union.
-    pub(crate) fn find_try_impl(&mut self, operand_ty: Ty, q_span: Span) -> Option<TryBranch> {
+    pub(crate) fn find_try_impl(&mut self, operand_ty: Ty, _q_span: Span) -> Option<TryBranch> {
         let try_def = self.prog.try_def;
         if try_def == DefId(0) {
             return None;
@@ -208,11 +213,8 @@ impl<'a> Checker<'a> {
                 .iter()
                 .map(|g| subst.get(g).copied().unwrap_or(self.tcx.error))
                 .collect();
-            // Record the method-call's type args at the `?` span so codegen
-            // (which monomorphizes by `(method, targs)`) picks the right instance.
-            if !targs.is_empty() {
-                self.results.call_type_args.insert(q_span, targs.clone());
-            }
+            // The monomorphization args travel on `TryBranch.targs` (consumed by
+            // codegen from the HIR `Try` node) — no separate span side table.
             let union_ty = self.tcx.mk_union([output, residual]);
             return Some(TryBranch { method, targs, union_ty, output, residual });
         }
@@ -304,19 +306,18 @@ impl<'a> Checker<'a> {
                 }
             }
             PatternKind::TypeBinding { ty, binding } => {
+                // The matched variant type is recomputed where needed (the HIR
+                // `Pattern` node and exhaustiveness) via `pattern_test_ty` — no
+                // `pattern_types` side table.
                 let env = self.local_env();
                 let t = self.lower_ty(ty, &env);
-                self.results.pattern_types.insert(pattern.span, t);
                 if let Some(b) = binding {
                     self.bind(&b.name, b.span, t);
                 }
             }
             PatternKind::UnitPath(path) => {
                 let module = self.current_module();
-                if let Some(def) = self.prog.resolve_type_in(module, &path.name.name) {
-                    let t = self.tcx.mk_named(def, Vec::new());
-                    self.results.pattern_types.insert(pattern.span, t);
-                } else {
+                if self.prog.resolve_type_in(module, &path.name.name).is_none() {
                     self.emit(path.span, SemaErrorKind::UnknownType {
                         name: path.name.name.clone(),
                     });
@@ -354,8 +355,8 @@ impl<'a> Checker<'a> {
         if let TyKind::Union(variants) = self.tcx.kind(sty).clone() {
             let mut covered: Vec<Ty> = Vec::new();
             for a in arms.iter().filter(|a| a.guard.is_none()) {
-                if let Some(t) = self.results.pattern_types.get(&a.pattern.span) {
-                    covered.push(*t);
+                if let Some(t) = self.pattern_test_ty(&a.pattern) {
+                    covered.push(t);
                 }
                 // A `null` literal pattern covers the `null` variant.
                 if let PatternKind::Literal(e) = &a.pattern.kind {
@@ -379,14 +380,31 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// The matched-variant type of a `TypeBinding`/`UnitPath` pattern (was the
+    /// `pattern_types` side table), recomputed on demand for exhaustiveness and
+    /// the HIR `Pattern` node. `None` for other pattern kinds.
+    pub(crate) fn pattern_test_ty(&mut self, pattern: &Pattern) -> Option<Ty> {
+        match &pattern.kind {
+            PatternKind::TypeBinding { ty, .. } => {
+                let env = self.local_env();
+                Some(self.lower_ty(ty, &env))
+            }
+            PatternKind::UnitPath(path) => {
+                let module = self.current_module();
+                let def = self.prog.resolve_type_in(module, &path.name.name)?;
+                Some(self.tcx.mk_named(def, Vec::new()))
+            }
+            _ => None,
+        }
+    }
+
     /// Does this pattern match every value of `sty` (covering the scrutinee)?
-    pub(crate) fn is_irrefutable(&self, pattern: &Pattern, sty: Ty) -> bool {
+    pub(crate) fn is_irrefutable(&mut self, pattern: &Pattern, sty: Ty) -> bool {
         match &pattern.kind {
             PatternKind::Wildcard | PatternKind::Binding(_) => true,
             PatternKind::Tuple { elems, rest: None } => {
-                match self.tcx.kind(sty) {
+                match self.tcx.kind(sty).clone() {
                     TyKind::Tuple(ets) if ets.len() == elems.len() => {
-                        let ets = ets.clone();
                         elems.iter().zip(ets).all(|(p, et)| self.is_irrefutable(p, et))
                     }
                     _ => false,
@@ -396,7 +414,7 @@ impl<'a> Checker<'a> {
                 // `T x` covers the scrutinee only when `T` is exactly its type
                 // (i.e. a non-union match on its own type).
                 !matches!(self.tcx.kind(sty), TyKind::Union(_) | TyKind::Dynamic)
-                    && self.results.pattern_types.get(&pattern.span) == Some(&sty)
+                    && self.pattern_test_ty(pattern) == Some(sty)
             }
             _ => false,
         }

@@ -84,6 +84,416 @@ Lexer, parser, AST, spans, diagnostics. 205 tests.
 - [ ] Closures + capture analysis; trailing closures; implicit `it`.
 - [ ] Operator → interface desugaring; `ToStr` interpolation.
 
+### Phase 2.5 — Typed HIR (retire span side-tables)  🚧 IN PROGRESS
+
+The architecture (README §"The central decision") moves the compiler off the
+implicit, span-keyed `CheckResults` side-tables and onto a **typed, resolved,
+desugared HIR** that the checker produces and codegen + the LSP consume. Done
+incrementally, test-gated, all existing tests green at every step.
+
+- [x] **Stage 1 — define the complete HIR** (`compiler::hir`). A typed tree
+      where every `Expr` carries its `Ty`, every name a `Res`, every call a
+      `CallKind` (`Direct`/`Method`/`Builtin`/`Closure`/`Extern`), coercions are
+      explicit `Adjust` nodes, builtins/foreign/numeric/concurrency ops are
+      explicit `Intrinsic` variants, and `for`/`?`/operator-overload/string-
+      interpolation/async carry their resolution on the node. Every node keeps
+      its source `Span`. Program-level (def-keyed) facts — struct layouts,
+      extern sigs, interface impls, link libs, local decls — live on the `Hir`
+      container. Additive, zero behavior change. **21 structural tests** mapping
+      every retired `CheckResults` table to its HIR node field. (721 total.)
+- [x] **Stage 2 — lower `AST + CheckResults → HIR` losslessly**
+      (`compiler::hir::lower_program`, checker untouched). Replicates the
+      backend's exact call-dispatch precedence, coercion/intrinsic folding, and
+      `for`-driver selection; records generic args *unresolved* (codegen
+      substitutes per instance). **Verified total over the whole example
+      corpus**: lowering 21/22 single-file programs yields 1673 user-source expr
+      nodes with **zero `Error` nodes** (user *and* synthesized prelude bodies),
+      every node carrying a real source span and a type matching the checker's
+      `expr_types`. 10 focused unit tests + 1 corpus integration gate. (732
+      total.) Follow-ups (forced correct in Stage 3): a multi-file (`modules`)
+      lowering test, and source provenance for compiler-synthesized prelude
+      bodies (currently a synthetic `FileId`).
+- [x] **Stage 3 — repoint codegen to consume HIR only** (no AST tree walk);
+      monomorphization worklist stays at the HIR→codegen boundary. **Done: the
+      production `compile`/`compile_object` paths lower every function from the
+      typed HIR, and the entire AST code-generation walk has been physically
+      deleted** (`gen_stmt.rs` + `gen_match.rs` removed; the AST `gen_*` methods
+      stripped from `gen_expr`/`gen_call`/`gen_struct`/`gen_collections`/
+      `gen_cast`; the `use_hir`/`CgBody`/`BodyView::Ast` migration scaffolding
+      collapsed). Validated by all 12 test binaries + 23 examples green, zero
+      warnings, and a native object build+link smoke test.
+  - [x] `&Hir` threaded through the whole backend context (`Codegen` +
+        `CgShared`, reachable from every `FnGen` method) — built once via
+        `lower_program` in `compile`/`compile_object`.
+  - [x] Isolated def-keyed reads repointed off `CheckResults` onto the HIR:
+        async-`fn` detection (`fn_sigs.async_output`), interface impls
+        (`hir.iface_impls`), `@Link` libraries (`hir.link_libs`), and extern
+        C-ABI signatures (`hir.extern_sigs`). 736 tests green.
+  - [x] Repoint the **expression/statement/pattern walk** to `hir::Expr`
+        (`backend::gen_hir`). Built as a parallel, test-gated path that reached
+        full parity, then promoted to the sole walk; the value-level helpers
+        (`emit_binop`, `gen_compare`, `checked_arith`, `emit_call`, locals,
+        coercions) were extracted to be operand-source-agnostic and are the only
+        codegen helpers that remain — the AST tree walk is gone.
+    - [x] Imperative core + calls: literals, locals, `var`/assign, unary/binary
+          (primitive, incl. bitwise/shift/compare/logical short-circuit), `if`,
+          `block`, `while`, `loop`/`break`-value, `return`, `continue`,
+          `Direct`/`Builtin`/`Extern` calls, and explicit `Adjust` coercions.
+    - [x] Structs: record + tuple-struct literals, field/tuple-index read and
+          write (incl. `@Transparent` newtypes, nested extern structs), tuple-
+          struct constructors.
+    - [x] Casts (shared `emit_cast`/`emit_is`): numeric conversions, `as`/`is`
+          on unions/`dynamic` (tag check + narrow), interface up/downcast,
+          `as str`; tuples; string literals + **builtin-typed** interpolation
+          holes (`"n=$n"`).
+    - [x] GC-correct managed results: `h_expr` marks managed-pointer results as
+          stack-map roots (mirrors `result_is_managed_ref`; the node's own `ty`
+          + `is_managed_ptr`'s NPO handling make one check exact).
+    - [x] Collections + methods: `[…]`/`{…}` list & map literals, `xs[i]`/
+          `m[k]` index load & store, and plain (non-interface) `extend` method
+          calls `recv.m(..)`.
+    - [x] `match` (literal / type-binding `T x` on unions / unit-variant /
+          tuple-destructure arms, with guards) and `for` (List fast path,
+          `Iterator` protocol incl. interface/dyn `next`, and `Map`).
+    - [x] Builtin `str` and `Map` methods, via shared `emit_str_method` /
+          `emit_map_method` (the AST helpers refactored to take pre-evaluated
+          receiver + arg values, so both walks share the dispatch).
+    - [x] Closures: env build shared via `emit_closure_value`; the lifted-body
+          job (`ClosureJob`) carries an AST or HIR body (`CgBody`); closure
+          expressions and closure-value calls both lower via the HIR path.
+    - [x] Builtin `List` methods — `push`/`pop`/`get`/`set`/`insert`/`remove`/
+          `size`/`is_empty`/`clear` **and** the higher-order `map`/`filter`/
+          `fold`/`each` (closure args pass through as their lifted env value),
+          via shared `emit_list_method` + `emit_list_map`/`filter`/`fold`/`each`.
+    - [x] Value-producing intrinsics: empty collection constructors, builtin
+          `.clone()` (shared `emit_builtin_clone`), the numeric namespace
+          (`T.MIN/MAX`, `f*.NAN/is_nan/…`, `{wrapping,saturating,checked,
+          overflowing}_{add,…,shl,shr}` via shared `emit_num_intrinsic` /
+          `emit_int_arith`), and foreign FFI memory (`alloc`/`free`/`realloc`/
+          `alloc_flex`, `CString.from_str`/`CStr.to_str`).
+    - [x] Method-call dispatch (shared `emit_primitive_compare`): dynamic
+          dispatch through an interface object's vtable, builtin-bound fallbacks
+          (`Clone`/`Eq`/`Ord`/`ToStr`/`Hash` on primitives/`str`/collections),
+          interface→concrete resolution for bounded generics, and static
+          `Type.m(..)` calls.
+    - [x] Concurrency intrinsics — `Thread.spawn`/`JoinHandle.join`,
+          `channel<T>()`, `Shared.new`, `yield_now`/`sleep`/`cancel`. All 16
+          `Intrinsic` variants lower on the HIR path.
+    - [x] Channel + `Shared` builtin methods — `Sender.send`, `Receiver.recv`/
+          `try_recv`, `Shared.lock`/`try_lock` (closures under the lock + the
+          `R | LockBusy` union), via shared `emit_channel_*`/`emit_shared_*`.
+          **48 HIR-path JIT tests** (… + thread spawn/join, channel send +
+          try_recv, Shared.lock, all with AST-vs-HIR agreement). 788 total.
+    - [x] `spawn EXPR` (shared `emit_spawn`) — schedule a future on a worker.
+    - [x] User-`to_str` string interpolation — the HIR `StrPart::Interp` carries
+          `stringify_targs` (from `call_type_args`), and `h_stringify`
+          monomorphizes + calls the user `to_str`. (789 total, 49 HIR-path.)
+    - [x] HIR async-analysis helpers (`h_block_has_await`, `h_scan_stmt_awaits`,
+          `h_collect_block_locals` + sub-walkers) — the foundation for HIR async
+          codegen; mirror the AST `support.rs` versions but read `Await`/`Bind`
+          nodes directly. Unit-tested on a lowered async program. (790 total.)
+    - [x] `BodyView { Ast | Hir }` abstraction (`support.rs`) + `async_state_layout`
+          generalized over it (dispatches local-collection to the AST or HIR
+          collector); `BodyView::has_await`/`scan_awaits` dispatch the analysis.
+          The async-codegen functions can now be made body-source-agnostic.
+    - [x] Async state machine on HIR: `await` (`h_await` via the shared
+          `emit_await_suspend`), `async { … }` blocks (`h_async_block`), `spawn`,
+          and `for await` (`h_for_async`); `BodyView` collapsed to a typed-HIR
+          view that drives `define_async_fn`/`build_stateful_poll`/
+          `define_async_job`; `AsyncJob.body`/`ClosureJob.body` carry
+          `compiler::hir::Expr` directly.
+    - [x] Operator overloads (`hir::OpOverload` carries the resolved `extend`
+          method + solved type args, replacing the `operator_methods` +
+          type-args span tables), `?` (`h_try`), `&`/`*` FFI pointer
+          ref/deref, fixed-array `[T;N]` index load/store, `extern var`
+          read/write — the last forms exercised by the test corpus + examples.
+  - [ ] Repoint struct layouts + fn signatures (`compute_layout`,
+        `signature_of`) onto `hir.structs` / `hir.fn_sigs` (def-keyed; can ride
+        with Stage 5's `CheckResults` deletion).
+- [x] **Stage 4 — repoint the LSP to HIR.** `Compiled` lowers the HIR and
+      builds an `HirIndex` by walking it once: `(span, type)` for every node
+      (plus each call's callee-name span → callee type) and `(span, resolution)`
+      for every `Name` and folded call callee, plus per-local types/decls/param
+      flags. Every position query (`resolution_at`/`expr_ty_at`/`definition_span`/
+      `receiver_type_at_dot`/`semantic_tokens`) and the server's hover/
+      references/rename/highlight/completion handlers now read the HIR index —
+      **no `analysis.results` access remains in the LSP.** To make this work the
+      HIR `Call` node gained `callee_span`/`callee_ty` provenance (the desugared
+      dispatch had dropped the callee name). 5 new HIR-backed LSP tests
+      (go-to-def on a method call, ctor-call resolution, references via the
+      folded callee, local hover type, callee function-type hover). 795 total.
+- [~] **Stage 5 — checker emits HIR directly**, deleting `CheckResults` tables
+      one at a time until none remain. **Status:** codegen (Stage 3) and the LSP
+      (Stage 4) no longer read `CheckResults`.
+  - [x] **`link_libs` retired** (first table deleted) — `@Link(lib="…")` is a
+        pure attribute scan with no type inference, so it now derives straight
+        from the program via `hir::collect_link_libs` (consumed as
+        `Hir::link_libs` by the JIT `dlopen` and the CLI's native `-l`). The
+        checker no longer records it; the field is gone from `CheckResults`.
+        3 tests (lowering + the free fn + ffi `@Link` native build).
+  - [x] **8 payload-free builtin marker sets retired** — `channel_news`,
+        `shared_news`, `yield_nows`, `async_sleeps`, `cstring_from_strs`,
+        `cstr_to_strs`, `foreign_frees`, `foreign_reallocs`. These flagged calls
+        to unshadowed prelude builtins (`channel()`, `Shared.new`, `yield_now()`,
+        `sleep()`, `CString.from_str`, `CStr.to_str`, `Foreign.free`,
+        `Foreign.realloc`); `lower` now recognizes them from the callee shape +
+        the absence of a shadowing resolution (the same signal it already uses
+        for builtin methods, and the same condition the checker used to type
+        them), emitting the matching payload-free `Intrinsic`. Checker inserts +
+        the 8 `CheckResults` fields deleted. New lowering tests (shape
+        recognition + a user-shadowed `sleep` staying a normal `Direct` call);
+        channels/shared/async/ffi examples + the realloc/free e2e tests verified.
+  - [x] **`future_cancels` + `builtin_ctors` retired** — `fut.cancel()` is
+        recognized in `lower` by the method name + a `Future`-typed receiver;
+        `List<T>()`/`Map<K,V>()` by the callee's type name resolving to
+        `List`/`Map` (the collection type already rides on the node, so the
+        `Intrinsic::CollectionCtor` is payload-free). Checker inserts + both
+        fields deleted; collection-ctor lowering test added; lists/maps/async
+        examples verified.
+  - [x] **`thread_spawns` + `thread_joins` retired** — `Thread.spawn { … }` is
+        recognized by callee shape, its output `R` read from the `JoinHandle<R>`
+        result type; `jh.join()` by the method name + a `JoinHandle`-typed
+        receiver, its `R` read from that receiver type. Checker inserts + both
+        fields deleted; thread-spawn lowering test added; threads / threads_
+        hardcore examples + thread e2e tests verified.
+  - [x] **`foreign_allocs` retired** — `Foreign.alloc<T>()` / `alloc_zeroed<T>()`
+        recognized by callee shape; `T` recovered from the `*T | null` result
+        pointer (`npo_pointee`), `zeroed` from the method name. Checker insert +
+        field deleted; lowering test added; ffi example + e2e verified.
+  - [x] **`num_intrinsics` retired via a shared recognizer** — the
+        `(type, name) → NumIntrinsic` mapping (`i32.MAX`, `f64.NAN`,
+        `i32.wrapping_add`, `f64.is_nan`, …) was extracted into pure
+        `results::num_constant_of`/`num_method_of` that BOTH the checker (for
+        typing + arg validation) and `lower` (to build `Intrinsic::Num`) call —
+        no duplication, no side table. Checker inserts + field deleted; lowering
+        test (constant + method) added; numerics example verified.
+        **15 of ~43 tables retired.** This exhausts the cleanly-derivable
+        markers; the remaining marker tables carry *checker-resolved* values not
+        present in the result/receiver type — `foreign_flex`'s second type `E`
+        (from generic args), `clone_kinds`' deep-vs-shallow decision, and
+        `static_calls`/`static_recv`' static-dispatch receiver type. Those, plus
+        the structural backbone, require the checker to construct HIR nodes.
+  - [x] **Lock-down test net for the remaining forms** — 6 HIR-shape lowering
+        tests pin the desugaring of the forms still backed by `CheckResults`
+        tables (builtin `clone` → `Intrinsic::Clone`; static dispatch →
+        `Method { is_static }`; operator overload → `Binary { overload }`; `?` →
+        `Try`; the `Iterator` `for` driver → `ForDriver::Iter`; widen → `Adjust`).
+        These are the safety net for the checker-constructs-HIR refactor: the HIR
+        these forms lower to must not change when their source moves off a side
+        table onto the checker's nodes. Extended with broad HIR-node coverage
+        (closures, async blocks, `await` output, the `Map` `for` driver, all
+        match-arm pattern kinds, user-`to_str` interpolation `stringify`, nested
+        field/index span provenance) — ~820 tests total.
+  - [x] **Checker emits `hir::FnSig` directly** — the FIRST genuine
+        "checker constructs HIR" step (not a `lower`-side re-derivation). As
+        `check_function` types each function it builds the `hir::FnSig`
+        (params `(LocalId, Ty)`, return type, async output) and stores it in
+        `results.fn_sigs`; `lower` copies it onto `Hir::fn_sigs` verbatim and the
+        backend's `signature_of`/`define_*` read it. This retired **3 tables at
+        once** — `fn_params`, `fn_return`, `async_fns`. Proves the checker can
+        build HIR node types in-crate (no module cycle), the template for the
+        rest of the structural backbone. Test added; all examples + 812 tests
+        green. **18 of ~43 tables retired.**
+  - [x] **Checker emits `hir::ExternSig` directly** — `record_extern_sig` now
+        builds the HIR `ExternSig` (params + ret) as it types each extern
+        function, so `lower` copies `Hir::extern_sigs` verbatim (no tuple→struct
+        conversion) and the def-keyed CheckResults data is now uniformly HIR-
+        typed (`fn_sigs`, `extern_sigs`, `struct_fields`/`StructFields`). ffi
+        example + 812 tests green.
+  - [x] **Checker builds `hir::Expr` directly for EVERY expression kind (the
+        span-backbone rewrite).** `check_expr` (and `check_lvalue`, for
+        assignment targets) constructs the typed HIR node for each expression as
+        it is checked, into `results.node_hir` (keyed by span, embedding the
+        already-built, already-coerced children). **Every `ExprKind` is now
+        checker-built**: leaves (`Int`/`Float`/`Bool`/`Null`/`Char`/`Name`/
+        `Discard`), operators (`Unary`/`Binary` with overloads), `Cast`/`Ref`/
+        `Deref`/`TupleIndex`/`Index`/`Try`/`Await`/`Spawn`, aggregates (`Str`
+        interpolation / `Map` / `Struct` incl. field-init shorthand / `Field`
+        incl. numeric-namespace intrinsics), the full call-dispatch classifier
+        (`build_call_kind` — direct / extern / builtin / method / tuple-ctor /
+        closure calls and every marker intrinsic, mirroring the old `lower_call`),
+        control flow (`If`/`Match`/`While`/`For`/`Loop`/`Block` with their nested
+        blocks, statements, and patterns via `build_block`/`build_stmt`/
+        `build_pattern`/`build_for_driver`), `Return`/`Break`/`Continue`, and
+        `Closure`/`AsyncBlock`. Verified by node_hir shape tests for each family
+        plus the full e2e suite.
+  - [x] **`lower` repointed onto `node_hir` as the sole construction path; the
+        duplicate table-driven builder is deleted.** `lower_expr` consumes the
+        checker-built node and applies its top-level coercion; the parallel
+        `lower_expr_kind` / `lower_call` / `lower_struct_lit` / `lower_str_parts`
+        / `lower_map_items` / `lower_overload` / `lower_exprs` / `finish_call` /
+        `intrinsic` / `is_builtin_recv` / `for_driver` / `list_elem` / `field_ref`
+        / `lower_else` / `lower_arm` / `res_at` / `error_ty` / `type_args` /
+        `npo_pointee` (~600 lines) are **removed**. A `record_node_locals` walker
+        re-establishes the `Body.locals` map that `res_at`'s side effect used to
+        build. Verified: instrumenting the (now error-recovery-only) fallback
+        showed **zero** misses across the entire test corpus + every example
+        (JIT and native); the only remaining fallback is a graceful `Error` node
+        for expressions the checker could not resolve in already-error programs
+        (e.g. the LSP analysing half-typed code), matching the prior recovery.
+        `lower` now keeps only the top-level body scaffolding (`lower_block` /
+        `lower_stmt` / `lower_pattern` + the `adjustment`/`expr_type`/`local_ty`/
+        `pattern_types`/`struct_fields` accessors).
+  - [~] **Delete the span tables from `CheckResults`** (table-by-table). The
+        retirement mechanism: a check method stashes the datum it just computed
+        in a *transient* per-fact slot on the `Checker` (a `Cell<Option<…>>`),
+        which `build_hir_node` consumes the instant `check_expr_inner` returns
+        for the same node. Construction is synchronous + depth-first — every
+        child node is built (and its slot consumed) before its parent's check
+        method writes these — so one slot per fact suffices and the persistent
+        span-keyed `HashMap` is gone; the datum lives only on the resulting HIR
+        node field.
+      - [x] **`operator_methods`** → `Checker::pending_overload`, consumed into
+            the HIR `Unary`/`Binary` `overload: OpOverload` field. (Its operator
+            type-args, formerly a second write into `call_type_args`, fold into
+            `OpOverload.type_args`.) Deleted from `CheckResults`.
+      - [x] **`cast_targets`** → `pending_cast_target` → HIR `Cast.target`
+            (set *after* the operand check so a nested cast can't clobber it).
+      - [x] **`awaits`** → `pending_await` → HIR `Await.output`.
+      - [x] **`async_spawns`** → `pending_spawn` → HIR `Spawn.output`.
+      - [x] **`try_branches`** + **`residual_conversions`** →
+            `pending_try_branch` / `pending_residuals` → HIR `Try.{branch,
+            residual_conversions}` (`check_try` refactored to use locals for its
+            own internal `is_try` / "nothing to propagate" checks instead of
+            re-reading the tables). Both deleted.
+      - [x] **`clone_kinds`** → `pending_clone_kind` → HIR `Intrinsic::Clone`
+            (6 write sites in `check_builtin_clone`).
+      - [x] **`static_calls`** + **`static_recv`** → `pending_static_recv`
+            (`Some(recv)` marks a static call) → HIR `Call`
+            `{is_static, recv_static}` (both static-call paths; set after the
+            arg checks).
+      - [x] **`foreign_flex`** → `pending_foreign_flex` → HIR
+            `Intrinsic::ForeignFlex`.
+      - [x] **`for_iters`** + **`for_maps`** + **`for_async_iters`** →
+            `pending_for_driver` (a fully-built `ForDriver`) → HIR `For.driver`
+            (`check_for` rewritten to compute the driver, check the body, *then*
+            stash it — so a nested `for` in the body can't clobber the slot;
+            `build_call_kind` takes all its call facts up front so no branch
+            leaks). The `List` fast path is the build-time fallback.
+      - [x] **`stringify_methods`** + the stringify-targs use of
+            **`call_type_args`** → `pending_stringify` (a per-hole `VecDeque` of
+            `(to_str, targs)` in source order, popped per `Interp` part) → HIR
+            `StrPart::Interp.{stringify, stringify_targs}`.
+      - [x] **`call_type_args`** (each generic call's type args) →
+            `pending_type_args` → HIR `Call` `Direct`/`Method` `type_args` (set
+            after the arg checks in all three generic-call paths; the dead
+            `q_span` write — its targs already ride on `TryBranch.targs` — was
+            removed). Both `stringify_methods` and `call_type_args` deleted.
+      - [x] **`closures`** + **`async_blocks`** → `pending_closure` /
+            `pending_async` → HIR `Closure` / `AsyncBlock` node fields. The
+            **backend** no longer reads these tables: its `captured_locals` set
+            (the locals some closure captures, cell-backed by codegen) is now
+            built by `Hir::captured_locals()`, a production HIR walk over the
+            bodies' `Closure`/`AsyncBlock` nodes. `check_thread_spawn`'s capture
+            check reads the closure's HIR node from `node_hir` instead of the
+            table. Both deleted.
+      - 831 tests green + every example (JIT and native) after each deletion.
+        **17 span tables retired so far.**
+  - [x] **The checker emits each function's *whole* body `Block`**
+        (`results.fn_bodies`, keyed by `DefId`): `check_function` calls
+        `build_block` on the body after checking it, and `lower_program`
+        assembles the `Body` from that block directly (recording its locals via
+        `record_block_locals`). Verified: instrumenting `lower`'s block-lowering
+        fallback showed **zero** hits across the whole test corpus + every
+        example (JIT and native) — so for any well-formed program the checker is
+        the sole HIR-body producer; `lower_block`/`lower_stmt`/`lower_pattern`
+        remain only as the graceful error-recovery path for half-typed code.
+        826 tests green (+ the runtime suite).
+  - [x] **`adjustments`** deleted — coercions are now baked directly onto the
+        HIR node instead of a side table. A widening (`Widen`/`WidenDyn`) is baked
+        in place by `expect` via `bake_coercion` (the child node already exists);
+        a flow-narrowing `Unbox` is **recovered structurally** by `build_name_node`
+        from the local's declared (boxed union/interface) type vs the narrowed use
+        type — the same `was_boxed && now_single` test `check_ident` used, with no
+        write. `hir_child`/`lower_expr` no longer apply any adjust (nodes carry it
+        baked). Verified incl. flow-narrowing, widening, and dynamic-dispatch
+        (`WidenDyn`) examples JIT + native.
+  - [x] **`expr_types`** deleted — the `expr_ty(span)` accessor now reads the
+        checked type off the expression's built HIR node in `node_hir` (unwrapping
+        a baked `Adjust` to recover the pre-coercion type), since every checked
+        expression has a node. `check_expr` no longer writes the table; the direct
+        `expr_types.get` reuse sites (inference, dispatch) go through `expr_ty`;
+        `Paren` is mirrored at its span (transparent) so either span resolves; the
+        `Str`/struct-shorthand idents (checked via `check_ident`, not `check_expr`)
+        build their `Name` into `node_hir` so their type resolves. `build_hir_node`
+        is now an exhaustive match (the `_ => None` catch-all is gone).
+  - [x] **`pattern_types`** deleted — a `TypeBind`/`UnitPath` pattern's matched
+        variant type is recomputed where needed (`build_pattern` and the
+        exhaustiveness checker, via a shared `pattern_test_ty` helper that
+        `lower_ty`s the annotation / `mk_named`s the unit path — the function's
+        generic env is still active at body-build time). This made the
+        `build_block`/`build_stmt`/`build_pattern` chain `&mut self`. The HIR
+        `Pattern.ty` for other kinds (informational, unread by codegen) is the
+        child/local type or `error`. Verified: match exhaustiveness, type-binding
+        patterns, destructuring — JIT + native.
+  - [x] **`resolutions`** deleted — **the last span-keyed table.** Every
+        resolution now lives on a `Name` HIR node stored in `node_hir`: value-name
+        uses and `self` (built by `check_ident`/the `SelfExpr` arm via
+        `record_res`), call-dispatch markers (each `resolutions.insert(callee.span,
+        …)` became `record_res` — a `Name(res)` node at the callee span; node-hir
+        keys are unique per span so there is no clobber, unlike a transient),
+        assignment lvalues, and **pattern/var bindings** (`bind` stores a
+        `Name(Local)` marker). `results.resolution(span)` is a shim that reads the
+        `Name` off `node_hir` (unwrapping a narrowing `Adjust`); `hir_local_at`
+        and `build_call_kind` go through it. Verified: name resolution, method/
+        static/closure dispatch, pattern binding, captures — the whole test corpus
+        + every example, JIT and native.
+      - **ALL ~21 span-keyed `CheckResults` side tables are now retired.** The
+        only `HashMap<Span, _>` left in `CheckResults` is `node_hir` — the typed
+        HIR the checker emits (the bridge itself, not a side table).
+  - [ ] **Def-keyed tables** (`fn_sigs` / `struct_fields` / `extern_sigs` /
+        `iface_impls` / `local_decls` / `local_types`) — not span-keyed. They
+        already mirror HIR data (`lower_program` copies them onto the `Hir`), and
+        drop once `lower_program` is folded into the checker so it assembles the
+        `Hir` (bodies + sigs + structs) outright, retiring `node_hir`/`fn_bodies`
+        as the hand-off too. That collapses the last of the `lower` pass.
+- [ ] **Debuggability:** `--emit=tokens|ast|hir|clif` with stable pretty-
+      printers; DWARF line tables for built programs.
+  - [x] `hir::pretty::print_program` — a stable, deterministic HIR printer
+        (definitions in `DefId` order; every expr annotated with its type, every
+        name with its resolution, every call with its dispatch kind). 4 tests.
+  - [x] CLI `otter_fusion emit tokens|ast|hir <file>` — deterministic IR dumps
+        to stdout. `tokens` (kind + span per line) and `hir` (the printer above)
+        have purpose-built printers; `ast` uses a deterministic pretty-`Debug`
+        (bespoke AST printer is a follow-up). 4 e2e tests.
+  - [x] `emit clif` — `otter_fusion emit clif <file>` dumps every function's
+        generated Cranelift IR (post-codegen, pre-machine-code), with a source-
+        symbol header per function, in code-generation order. Backed by
+        `backend::compile_clif` (a `Codegen.clif` capture buffer filled by
+        `record_clif` before each `define_function`; the module is never
+        finalized). Deterministic. 2 e2e tests.
+  - [x] DWARF source-level line tables for built programs.
+        - [x] **Source-location threading** — HIR codegen tags every node's
+              instructions with its source byte offset via Cranelift
+              `set_srcloc` (`h_expr`), so the machine code carries source
+              provenance (Cranelift records per-instruction `MachSrcLoc` ranges).
+              Additive + safe: examples/native build/`--emit=clif` all green.
+        - [x] **Debug-line data capture** — each compiled function's
+              `MachSrcLoc` ranges are captured as `(func, code byte offset,
+              source byte offset)` (`Codegen.line_info`, filled by
+              `capture_safepoints`), exposed on `Jit::source_line_entries()` and
+              tested. This is the source-line provenance the line program
+              serializes. `gimli` dependency added.
+        - [x] **`.debug_line`/`.debug_info` emission** (`backend::dwarf`) — a
+              `gimli` line program over the captured per-function source-line
+              ranges (one sequence per function; rows map a function-relative
+              code offset to a source line via `byte_to_line` over the threaded
+              `SourceMap`), plus a compile-unit DIE. Function start addresses are
+              emitted as 8-byte `Address::Symbol` relocations against each
+              function's object symbol (a `gimli::write::Writer` records them);
+              DWARF cross-section offsets are written as literal values (self-
+              contained in one object). Sections added to the `ObjectProduct`
+              before `emit()`. Wired into `compile_object` for **ELF** targets
+              (standard `.debug_*` + absolute relocations, links cleanly);
+              `byte_to_line` unit-tested; native macOS/`--emit=clif`/examples all
+              green.
+        - [x] **Mach-O DWARF** — `__debug_*` sections in the `__DWARF` segment
+              (format-detected in `emit_dwarf`); links cleanly via `ld64` and the
+              executable carries a debug map to the object's DWARF. Verified by
+              a test that the emitted native object contains a `debug_line`
+              section, and by every example building natively + running. DWARF is
+              now emitted on both ELF and Mach-O.
+
 ### Phase 3 — MIR + monomorphization
 - [ ] Typed MIR (CFG, explicit drops/safepoints/barriers as metadata).
 - [ ] Monomorphization collector (one body per type-arg set).

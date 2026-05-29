@@ -20,9 +20,10 @@
 //! one `Module`-generic backend.
 
 use compiler::ast::*;
+use compiler::hir::Hir;
 use compiler::ids::{DefId, LocalId};
 use compiler::sema::results::ForIter;
-use compiler::sema::{Adjust, Analysis, Builtin, CloneKind, DefKind, NumIntrinsic, ValueRes};
+use compiler::sema::{Adjust, Analysis, Builtin, CloneKind, DefKind, NumIntrinsic};
 use compiler::span::Span;
 use compiler::ty::{FloatTy, IntTy, Ty, TyKind};
 
@@ -43,13 +44,13 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 /// analysis), factored out of the per-function generator below.
 mod support;
 use support::*;
+mod dwarf;
 mod gen_cast;
-mod gen_stmt;
 mod gen_expr;
-mod gen_match;
 mod gen_collections;
 mod gen_struct;
 mod gen_call;
+mod gen_hir;
 
 /// Pointer-width integer type on the host (str/reference values are pointers).
 /// The JIT only targets the 64-bit host, so this is `I64`.
@@ -174,9 +175,18 @@ pub struct Jit {
     /// running the body. A native or JIT driver consumes that future via the
     /// runtime executor.
     main_is_async: bool,
+    /// Per-function source-line provenance `(func, code byte offset, source byte
+    /// offset)` — the debug-line data captured from `set_srcloc` (basis for
+    /// native DWARF; exposed for tests/tooling).
+    line_info: Vec<(FuncId, u32, u32)>,
 }
 
 impl Jit {
+    /// The number of captured source-line mappings (debug-info provenance).
+    pub fn source_line_entries(&self) -> usize {
+        self.line_info.len()
+    }
+
     /// Raw code pointer for a compiled function by language name.
     pub fn func_ptr(&self, name: &str) -> Option<*const u8> {
         self.funcs.get(name).map(|id| self.module.get_finalized_function(*id))
@@ -265,23 +275,23 @@ fn make_isa(triple: target_lexicon::Triple, pic: bool) -> cranelift_codegen::isa
 /// returning the exported `name → FuncId` map and the captured GC safepoints.
 fn run_codegen<M: Module>(
     analysis: &Analysis,
+    hir: &Hir,
     module: &mut M,
-) -> CgResult<(HashMap<String, FuncId>, Vec<Safepoint>, Vec<(i64, FuncId)>)> {
+) -> CgResult<(
+    HashMap<String, FuncId>,
+    Vec<Safepoint>,
+    Vec<(i64, FuncId)>,
+    Vec<(FuncId, u32, u32)>,
+    HashMap<FuncId, u32>,
+)> {
     // Pre-compute the set of locals captured by some closure. A LocalId in
     // this set is cell-backed wherever it is bound (`docs/09` §7).
-    let mut captured_locals: HashSet<LocalId> = HashSet::new();
-    for info in analysis.results.closures.values() {
-        for (id, _) in &info.captures {
-            captured_locals.insert(*id);
-        }
-    }
-    for info in analysis.results.async_blocks.values() {
-        for (id, _) in &info.captures {
-            captured_locals.insert(*id);
-        }
-    }
+    // Locals captured by some closure / `async` block — collected by walking the
+    // HIR (was the `closures` / `async_blocks` side tables).
+    let captured_locals: HashSet<LocalId> = hir.captured_locals();
     let mut cg = Codegen {
         analysis,
+        hir,
         module,
         funcs: HashMap::new(),
         by_name: HashMap::new(),
@@ -290,19 +300,56 @@ fn run_codegen<M: Module>(
         async_jobs: Vec::new(),
         safepoints: Vec::new(),
         captured_locals,
+        clif: None,
+        line_info: Vec::new(),
+        func_len: HashMap::new(),
     };
     cg.seed()?;
     cg.run()?;
     let drops = cg.collect_drops();
-    Ok((cg.by_name, cg.safepoints, drops))
+    Ok((cg.by_name, cg.safepoints, drops, cg.line_info, cg.func_len))
+}
+
+/// Compile `analysis` and return the generated Cranelift IR of every function
+/// as deterministic text (`--emit=clif`). Functions are emitted in code-
+/// generation order (entry points first, then their callees / lifted closures /
+/// async `poll`s as the worklist drains). The module is never finalized — only
+/// the IR text is collected, so this is side-effect-free.
+pub fn compile_clif(analysis: &Analysis) -> CgResult<String> {
+    let hir = compiler::hir::lower_program(analysis);
+    let isa = make_isa(target_lexicon::Triple::host(), false);
+    let builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
+    let mut module = JITModule::new(builder);
+
+    // Locals captured by some closure / `async` block — collected by walking the
+    // HIR (was the `closures` / `async_blocks` side tables).
+    let captured_locals: HashSet<LocalId> = hir.captured_locals();
+    let mut cg = Codegen {
+        analysis,
+        hir: &hir,
+        module: &mut module,
+        funcs: HashMap::new(),
+        by_name: HashMap::new(),
+        worklist: Vec::new(),
+        closures: Vec::new(),
+        async_jobs: Vec::new(),
+        safepoints: Vec::new(),
+        captured_locals,
+        clif: Some(Vec::new()),
+        line_info: Vec::new(),
+        func_len: HashMap::new(),
+    };
+    cg.seed()?;
+    cg.run()?;
+    Ok(cg.clif.take().unwrap_or_default().join("\n"))
 }
 
 /// Compile every lowerable function in `analysis` and return a runnable [`Jit`].
 /// `dlopen` each library named by `@Link(lib = "…")` (`docs/19` §13) so its
 /// symbols become visible to the JIT's `dlsym(RTLD_DEFAULT)` lookup. (Native
 /// builds instead pass `-l<lib>` to the linker — see the CLI.)
-fn dlopen_link_libs(analysis: &Analysis) {
-    if analysis.results.link_libs.is_empty() {
+fn dlopen_link_libs(hir: &Hir) {
+    if hir.link_libs.is_empty() {
         return;
     }
     // RTLD_NOW (2) | RTLD_GLOBAL (8) — resolve now, export symbols process-wide.
@@ -311,7 +358,7 @@ fn dlopen_link_libs(analysis: &Analysis) {
         fn dlopen(filename: *const std::os::raw::c_char, flag: std::os::raw::c_int) -> *mut std::os::raw::c_void;
     }
     let ext = if cfg!(target_os = "macos") { "dylib" } else { "so" };
-    for lib in &analysis.results.link_libs {
+    for lib in &hir.link_libs {
         let name = format!("lib{lib}.{ext}\0");
         // SAFETY: a NUL-terminated path; a failed open just leaves the symbol
         // unresolved (the call will error later) — best-effort, like the linker.
@@ -321,14 +368,34 @@ fn dlopen_link_libs(analysis: &Analysis) {
     }
 }
 
+/// JIT-compile and return a runnable [`Jit`], walking the AST per function.
 pub fn compile(analysis: &Analysis) -> CgResult<Jit> {
-    dlopen_link_libs(analysis);
+    compile_jit(analysis)
+}
+
+/// Alias for [`compile`] retained by the code-generation test suite. Code
+/// generation always lowers from the typed HIR ([`gen_hir`]); the AST is no
+/// longer walked, so this is identical to [`compile`].
+pub fn compile_hir(analysis: &Analysis) -> CgResult<Jit> {
+    compile(analysis)
+}
+
+/// The number of lowerable function bodies (every body is HIR-lowered). Retained
+/// by tests that assert the HIR code path is exercised.
+pub fn hir_eligible_fns(analysis: &Analysis) -> usize {
+    compiler::hir::lower_program(analysis).bodies.len()
+}
+
+fn compile_jit(analysis: &Analysis) -> CgResult<Jit> {
+    let hir = compiler::hir::lower_program(analysis);
+    dlopen_link_libs(&hir);
     let isa = make_isa(target_lexicon::Triple::host(), false);
     let mut builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
     register_runtime_symbols(&mut builder);
     let mut module = JITModule::new(builder);
 
-    let (by_name, safepoints, drops) = run_codegen(analysis, &mut module)?;
+    let (by_name, safepoints, drops, line_info, _func_len) =
+        run_codegen(analysis, &hir, &mut module)?;
 
     module.finalize_definitions().expect("finalize");
 
@@ -349,14 +416,14 @@ pub fn compile(analysis: &Analysis) -> CgResult<Jit> {
         unsafe { runtime::gc::lang_gc_register_drop(*type_id as u64, f) };
     }
 
-    let main_is_async = main_is_async(analysis);
+    let main_is_async = main_is_async(analysis, &hir);
     let pending_tid = Some(1000 + analysis.program.pending_def.index() as i64);
-    Ok(Jit { module, funcs: by_name, pending_tid, main_is_async })
+    Ok(Jit { module, funcs: by_name, pending_tid, main_is_async, line_info })
 }
 
 /// Whether the user `main` is declared `async function` — its compiled symbol
 /// returns a `Future<…>` box and must be driven by the runtime executor.
-fn main_is_async(analysis: &Analysis) -> bool {
+fn main_is_async(analysis: &Analysis, hir: &Hir) -> bool {
     analysis
         .program
         .defs
@@ -365,10 +432,11 @@ fn main_is_async(analysis: &Analysis) -> bool {
         .any(|(idx, d)| {
             d.name == "main"
                 && matches!(d.kind, DefKind::Function)
-                && analysis
-                    .results
-                    .async_fns
-                    .contains_key(&compiler::ids::DefId(idx as u32))
+                && hir
+                    .fn_sigs
+                    .get(&compiler::ids::DefId(idx as u32))
+                    .and_then(|s| s.async_output)
+                    .is_some()
         })
 }
 
@@ -381,7 +449,7 @@ fn main_is_async(analysis: &Analysis) -> bool {
 /// runtime address (`func_addr`), adds the recorded code offset to form the
 /// precise pc, and calls `lang_gc_register_safepoint` — then enables the
 /// collector and calls the program's `main`.
-pub fn compile_object(analysis: &Analysis, out: &Path) -> CgResult<()> {
+pub fn compile_object(analysis: &Analysis, out: &Path, src: &str, src_name: &str) -> CgResult<()> {
     let mut triple = target_lexicon::Triple::host();
     // A bare `*-apple-darwin` host triple yields a Mach-O object with an
     // "unknown" platform that the linker rejects; promote it to `macosx` with a
@@ -402,17 +470,30 @@ pub fn compile_object(analysis: &Analysis, out: &Path) -> CgResult<()> {
     // Symbol names are written verbatim; the `object` crate applies the
     // platform mangling (the leading `_` on Mach-O), so the bare `lang_*`
     // runtime names match `libruntime.a`'s exported symbols after linking.
-    let (by_name, safepoints, drops) = run_codegen(analysis, &mut module)?;
+    let hir = compiler::hir::lower_program(analysis);
+    let (by_name, safepoints, drops, line_info, func_len) =
+        run_codegen(analysis, &hir, &mut module)?;
 
     let user_main = *by_name
         .get("main")
         .ok_or_else(|| CodegenError::new(Span::dummy(), "no `main` function to build"))?;
 
-    let main_async = main_is_async(analysis);
+    let main_async = main_is_async(analysis, &hir);
     let pending_tid = 1000 + analysis.program.pending_def.index() as i64;
     emit_native_entry(&mut module, user_main, main_async, pending_tid, &safepoints, &drops)?;
 
-    let product = module.finish();
+    // Attach DWARF `.debug_line`/`.debug_info` (source-level debug info) to the
+    // object: a `gimli` line program over the captured per-function source-line
+    // ranges, with function start addresses as `Address::Symbol` relocations.
+    // Debug sections are non-allocated, so this never affects the loaded program.
+    //
+    // ELF places `.debug_*` sections directly; Mach-O uses `__debug_*` in the
+    // `__DWARF` segment (handled in `emit_dwarf` by object format).
+    let mut product = module.finish();
+    if let Err(e) = dwarf::emit_dwarf(&mut product, &line_info, &func_len, src, src_name) {
+        // Debug info is best-effort: a failure must not block the build.
+        eprintln!("warning: could not emit DWARF debug info: {e}");
+    }
     let bytes = product.emit().expect("emit object");
     std::fs::write(out, bytes)
         .map_err(|e| CodegenError::new(Span::dummy(), format!("write object: {e}")))?;
@@ -581,22 +662,23 @@ fn emit_native_entry<M: Module>(
 pub(crate) type Instance = (DefId, Vec<Ty>);
 
 /// A lifted closure function awaiting code generation: its Cranelift id, the
-/// closure's analysis, AST body, and the enclosing instance's substitution.
+/// closure's analysis, typed HIR body, and the enclosing instance's
+/// substitution.
 struct ClosureJob {
     func_id: FuncId,
     info: compiler::sema::results::ClosureInfo,
-    body: Expr,
+    body: compiler::hir::Expr,
     subst: HashMap<DefId, Ty>,
     span: Span,
 }
 
 /// A bare `async { … }` block or `async` closure awaiting `poll`-function
-/// generation: its Cranelift id, analysis, AST body, substitution, and the
-/// future `Output` type.
+/// generation: its Cranelift id, analysis, typed HIR body, substitution, and
+/// the future `Output` type.
 struct AsyncJob {
     poll_fid: FuncId,
     info: compiler::sema::results::AsyncInfo,
-    body: Expr,
+    body: compiler::hir::Expr,
     subst: HashMap<DefId, Ty>,
     span: Span,
     out: Ty,
@@ -623,6 +705,9 @@ struct AsyncCtx {
 
 struct Codegen<'a, M: Module> {
     analysis: &'a Analysis,
+    /// The typed, resolved, desugared HIR the checker produced — the sole source
+    /// of function bodies and the program facts code generation consumes.
+    hir: &'a Hir,
     module: &'a mut M,
     /// Compiled instances and their Cranelift ids.
     funcs: HashMap<Instance, FuncId>,
@@ -644,6 +729,15 @@ struct Codegen<'a, M: Module> {
     /// LocalIds are program-wide unique, so a global set is enough — a binding
     /// in any function consults this set at its declaration site.
     captured_locals: HashSet<LocalId>,
+    /// When `Some`, every function's generated Cranelift IR text is appended
+    /// here (debug observability: `--emit=clif`). `None` on normal builds.
+    clif: Option<Vec<String>>,
+    /// Per-function source-line provenance for debug info: `(func, code byte
+    /// offset, source byte offset)` from each compiled function's `MachSrcLoc`
+    /// ranges (set via `set_srcloc`). The basis for DWARF `.debug_line`.
+    line_info: Vec<(FuncId, u32, u32)>,
+    /// Each compiled function's total code length (for DWARF `end_sequence`).
+    func_len: HashMap<FuncId, u32>,
 }
 
 impl<'a, M: Module> Codegen<'a, M> {
@@ -658,7 +752,7 @@ impl<'a, M: Module> Codegen<'a, M> {
             return Vec::new();
         }
         let mut out = Vec::new();
-        for (&(type_def, iface_def), &extend_def) in &self.analysis.results.iface_impls {
+        for (&(type_def, iface_def), &extend_def) in &self.hir.iface_impls {
             if iface_def != drop_def {
                 continue;
             }
@@ -733,6 +827,14 @@ impl<'a, M: Module> Codegen<'a, M> {
         Ok(())
     }
 
+    /// Append a function's generated Cranelift IR to the `--emit=clif` buffer
+    /// (only when collecting). `label` is a readable header (the source symbol).
+    fn record_clif(&mut self, label: &str, ctx: &cranelift_codegen::Context) {
+        if let Some(buf) = &mut self.clif {
+            buf.push(format!("; {label}\n{}", ctx.func.display()));
+        }
+    }
+
     fn define_instance(&mut self, inst: Instance) -> CgResult<()> {
         let (def, args) = inst;
         let func_id = self.funcs[&(def, args.clone())];
@@ -743,11 +845,21 @@ impl<'a, M: Module> Codegen<'a, M> {
         // it lowers to a `Future` state machine (`docs/21`): the function named
         // `func_id` becomes a *constructor* that allocates the machine, and a
         // separate `poll` function runs the body.
-        if let Some(&out) = self.analysis.results.async_fns.get(&def) {
-            let Some(body) = f.body.clone() else { return Ok(()) };
-            return self.define_async_fn(def, args, func_id, &body, out);
+        if let Some(out) = self.hir.fn_sigs.get(&def).and_then(|s| s.async_output) {
+            if f.body.is_none() {
+                return Ok(());
+            }
+            // An async function lowers to a `Future` state machine driven from
+            // its typed HIR body (`docs/21`).
+            let hir = self.hir;
+            let hb = hir.bodies.get(&def).ok_or_else(|| {
+                CodegenError::new(self.analysis.program.def(def).span, "async function has no HIR body")
+            })?;
+            return self.define_async_fn(def, args, func_id, BodyView(&hb.block), out);
         }
-        let Some(body) = f.body.clone() else { return Ok(()) };
+        if f.body.is_none() {
+            return Ok(());
+        }
 
         let subst = build_subst(self.analysis, def, &args);
         let mut ctx = self.module.make_context();
@@ -755,10 +867,10 @@ impl<'a, M: Module> Codegen<'a, M> {
             signature_of(self.module, self.analysis, def, &subst)?.expect("declared sig");
         let mut fctx = FunctionBuilderContext::new();
 
-        let ret_ty = self.analysis.results.fn_return.get(&def).copied()
-            .unwrap_or(self.analysis.tcx.null);
-        let param_locals =
-            self.analysis.results.fn_params.get(&def).cloned().unwrap_or_default();
+        let fsig = self.hir.fn_sigs.get(&def);
+        let ret_ty = fsig.map(|s| s.ret).unwrap_or(self.analysis.tcx.null);
+        let param_locals: Vec<LocalId> =
+            fsig.map(|s| s.params.iter().map(|(l, _)| *l).collect()).unwrap_or_default();
 
         {
             let mut b = FunctionBuilder::new(&mut ctx.func, &mut fctx);
@@ -769,7 +881,7 @@ impl<'a, M: Module> Codegen<'a, M> {
 
             {
                 let mut fg = FnGen {
-                    cx: CgShared { analysis: self.analysis, captured_locals: &self.captured_locals },
+                    cx: CgShared { analysis: self.analysis, hir: self.hir, captured_locals: &self.captured_locals },
                     module: self.module,
                     funcs: &mut self.funcs,
                     worklist: &mut self.worklist,
@@ -790,30 +902,31 @@ impl<'a, M: Module> Codegen<'a, M> {
                     let ct = fg.cx_clty(ty).expect("param clty");
                     fg.bind_local(*local, ct, param_vals[i]);
                 }
-                let val = fg.gen_block(&body)?;
+                // Codegen walks the typed, desugared HIR body (`gen_hir`); the
+                // params bound above and `emit_return` below are shared.
+                let hir = fg.cx.hir;
+                let hb = hir.bodies.get(&def).ok_or_else(|| {
+                    CodegenError::new(
+                        fg.cx.analysis.program.def(def).span,
+                        "function has no HIR body",
+                    )
+                })?;
+                let val = fg.h_block(&hb.block)?;
                 fg.emit_return(val)?;
             }
             b.seal_all_blocks();
             b.finalize();
         }
 
+        let clif_label = self.analysis.program.def(def).name.clone();
+        self.record_clif(&clif_label, &ctx);
         self.module.define_function(func_id, &mut ctx)
             .map_err(|e| CodegenError::new(self.analysis.program.def(def).span,
                 format!("define: {e}")))?;
 
-        // Capture this function's GC safepoints: the SP-relative offsets of
-        // live references at each call, plus FP→bottom-of-frame, for the
-        // runtime's precise root scan.
-        if let Some(cc) = ctx.compiled_code() {
-            let frame_to_fp =
-                cc.buffer.frame_layout().map(|fl| fl.frame_to_fp_offset).unwrap_or(0);
-            for (code_offset, _span, map) in cc.buffer.user_stack_maps() {
-                let offsets: Vec<u32> = map.entries().map(|(_, off)| off).collect();
-                if !offsets.is_empty() {
-                    self.safepoints.push((func_id, *code_offset, frame_to_fp, offsets));
-                }
-            }
-        }
+        // Capture this function's GC safepoints (precise root scan) and its
+        // source-line provenance (debug info).
+        self.capture_safepoints(func_id, &ctx);
         self.module.clear_context(&mut ctx);
         Ok(())
     }
@@ -845,7 +958,7 @@ impl<'a, M: Module> Codegen<'a, M> {
             let block_params: Vec<Value> = b.block_params(entry).to_vec();
             {
                 let mut fg = FnGen {
-                    cx: CgShared { analysis: self.analysis, captured_locals: &self.captured_locals },
+                    cx: CgShared { analysis: self.analysis, hir: self.hir, captured_locals: &self.captured_locals },
                     module: self.module,
                     funcs: &mut self.funcs,
                     worklist: &mut self.worklist,
@@ -876,24 +989,16 @@ impl<'a, M: Module> Codegen<'a, M> {
                     let ct = fg.cx_clty(*ty).expect("param clty");
                     fg.bind_local(*local, ct, block_params[i + 1]);
                 }
-                let val = fg.gen_expr(&body)?;
+                let val = fg.h_expr(&body)?;
                 fg.emit_return(val)?;
             }
             b.seal_all_blocks();
             b.finalize();
         }
+        self.record_clif("<closure>", &ctx);
         self.module.define_function(func_id, &mut ctx)
             .map_err(|e| CodegenError::new(span, format!("define closure: {e}")))?;
-        if let Some(cc) = ctx.compiled_code() {
-            let frame_to_fp =
-                cc.buffer.frame_layout().map(|fl| fl.frame_to_fp_offset).unwrap_or(0);
-            for (code_offset, _span, map) in cc.buffer.user_stack_maps() {
-                let offsets: Vec<u32> = map.entries().map(|(_, off)| off).collect();
-                if !offsets.is_empty() {
-                    self.safepoints.push((func_id, *code_offset, frame_to_fp, offsets));
-                }
-            }
-        }
+        self.capture_safepoints(func_id, &ctx);
         self.module.clear_context(&mut ctx);
         Ok(())
     }
@@ -910,6 +1015,19 @@ impl<'a, M: Module> Codegen<'a, M> {
                     self.safepoints.push((func_id, *code_offset, frame_to_fp, offsets));
                 }
             }
+            // Source-line provenance for debug info: each `MachSrcLoc` maps a
+            // code byte range to the source byte offset we set via `set_srcloc`.
+            let mut any = false;
+            for ml in cc.buffer.get_srclocs_sorted() {
+                let src = ml.loc.bits();
+                if src != 0 {
+                    self.line_info.push((func_id, ml.start, src));
+                    any = true;
+                }
+            }
+            if any {
+                self.func_len.insert(func_id, cc.code_info().total_size);
+            }
         }
     }
 
@@ -924,18 +1042,22 @@ impl<'a, M: Module> Codegen<'a, M> {
         def: DefId,
         args: Vec<Ty>,
         ctor_fid: FuncId,
-        body: &Block,
+        body: BodyView,
         out: Ty,
     ) -> CgResult<()> {
         // A body containing `await` needs the full suspension state machine;
         // `await`-free bodies use the simpler path below.
-        if block_has_await(body) {
+        if body.has_await() {
             return self.define_async_fn_stateful(def, args, ctor_fid, body, out);
         }
 
         let subst = build_subst(self.analysis, def, &args);
-        let param_locals =
-            self.analysis.results.fn_params.get(&def).cloned().unwrap_or_default();
+        let param_locals: Vec<LocalId> = self
+            .hir
+            .fn_sigs
+            .get(&def)
+            .map(|s| s.params.iter().map(|(l, _)| *l).collect())
+            .unwrap_or_default();
 
         // State struct layout: [state @0][param0 @8][param1 @16]… Managed params
         // are GC-traced. (Body locals live in the poll function's own frame in
@@ -976,7 +1098,7 @@ impl<'a, M: Module> Codegen<'a, M> {
             let self_val = b.block_params(entry)[0];
             {
                 let mut fg = FnGen {
-                    cx: CgShared { analysis: self.analysis, captured_locals: &self.captured_locals },
+                    cx: CgShared { analysis: self.analysis, hir: self.hir, captured_locals: &self.captured_locals },
                     module: self.module,
                     funcs: &mut self.funcs,
                     worklist: &mut self.worklist,
@@ -1003,12 +1125,14 @@ impl<'a, M: Module> Codegen<'a, M> {
                         fg.bind_local(*local, ct, loaded);
                     }
                 }
-                let val = fg.gen_block(body)?;
+                let val = fg.gen_body_view(&body)?;
                 fg.emit_return(val)?;
             }
             b.seal_all_blocks();
             b.finalize();
         }
+        let clif_label = format!("{}$poll", self.analysis.program.def(def).name);
+        self.record_clif(&clif_label, &ctx);
         self.module.define_function(poll_fid, &mut ctx)
             .map_err(|e| CodegenError::new(self.analysis.program.def(def).span,
                 format!("define poll: {e}")))?;
@@ -1028,7 +1152,7 @@ impl<'a, M: Module> Codegen<'a, M> {
             let pvals: Vec<Value> = b.block_params(entry).to_vec();
             {
                 let mut fg = FnGen {
-                    cx: CgShared { analysis: self.analysis, captured_locals: &self.captured_locals },
+                    cx: CgShared { analysis: self.analysis, hir: self.hir, captured_locals: &self.captured_locals },
                     module: self.module,
                     funcs: &mut self.funcs,
                     worklist: &mut self.worklist,
@@ -1065,6 +1189,8 @@ impl<'a, M: Module> Codegen<'a, M> {
             b.seal_all_blocks();
             b.finalize();
         }
+        let clif_label = format!("{}$ctor", self.analysis.program.def(def).name);
+        self.record_clif(&clif_label, &cctx);
         self.module.define_function(ctor_fid, &mut cctx)
             .map_err(|e| CodegenError::new(self.analysis.program.def(def).span,
                 format!("define async ctor: {e}")))?;
@@ -1085,13 +1211,13 @@ impl<'a, M: Module> Codegen<'a, M> {
         poll_fid: FuncId,
         subst: &HashMap<DefId, Ty>,
         out: Ty,
-        body: &Block,
+        body: BodyView,
         entry_set: &HashSet<LocalId>,
         live: &[(LocalId, i32, ClType)],
         err_span: Span,
     ) -> CgResult<()> {
         let mut await_spans = Vec::new();
-        scan_stmt_awaits(body, &mut await_spans);
+        body.scan_awaits(&mut await_spans);
 
         let mut poll_sig = self.module.make_signature();
         poll_sig.params.push(AbiParam::new(PTR));
@@ -1118,7 +1244,7 @@ impl<'a, M: Module> Codegen<'a, M> {
             }
             {
                 let mut fg = FnGen {
-                    cx: CgShared { analysis: self.analysis, captured_locals: &self.captured_locals },
+                    cx: CgShared { analysis: self.analysis, hir: self.hir, captured_locals: &self.captured_locals },
                     module: self.module,
                     funcs: &mut self.funcs,
                     worklist: &mut self.worklist,
@@ -1167,7 +1293,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     self_val, ctx_val, inner_off: ASYNC_INNER_OFF, save_locals,
                     awaits: awaits.clone(), pending_block,
                 });
-                let val = fg.gen_block(body)?;
+                let val = fg.gen_body_view(&body)?;
                 fg.emit_return(val)?;
 
                 // Resume blocks: reload every local, jump to the await's poll.
@@ -1189,6 +1315,7 @@ impl<'a, M: Module> Codegen<'a, M> {
             b.seal_all_blocks();
             b.finalize();
         }
+        self.record_clif("<async poll>", &ctx);
         self.module.define_function(poll_fid, &mut ctx)
             .map_err(|e| CodegenError::new(err_span, format!("define poll: {e}")))?;
         self.capture_safepoints(poll_fid, &ctx);
@@ -1206,12 +1333,16 @@ impl<'a, M: Module> Codegen<'a, M> {
         def: DefId,
         args: Vec<Ty>,
         ctor_fid: FuncId,
-        body: &Block,
+        body: BodyView,
         out: Ty,
     ) -> CgResult<()> {
         let subst = build_subst(self.analysis, def, &args);
-        let param_locals =
-            self.analysis.results.fn_params.get(&def).cloned().unwrap_or_default();
+        let param_locals: Vec<LocalId> = self
+            .hir
+            .fn_sigs
+            .get(&def)
+            .map(|s| s.params.iter().map(|(l, _)| *l).collect())
+            .unwrap_or_default();
 
         // Lay out the state struct and build the poll function.
         let layout = async_state_layout(self.analysis, &subst, &param_locals, body, &self.captured_locals);
@@ -1246,7 +1377,7 @@ impl<'a, M: Module> Codegen<'a, M> {
             let pvals: Vec<Value> = b.block_params(entry).to_vec();
             {
                 let mut fg = FnGen {
-                    cx: CgShared { analysis: self.analysis, captured_locals: &self.captured_locals },
+                    cx: CgShared { analysis: self.analysis, hir: self.hir, captured_locals: &self.captured_locals },
                     module: self.module,
                     funcs: &mut self.funcs,
                     worklist: &mut self.worklist,
@@ -1282,6 +1413,8 @@ impl<'a, M: Module> Codegen<'a, M> {
             b.seal_all_blocks();
             b.finalize();
         }
+        let clif_label = format!("{}$ctor", self.analysis.program.def(def).name);
+        self.record_clif(&clif_label, &cctx);
         self.module.define_function(ctor_fid, &mut cctx)
             .map_err(|e| CodegenError::new(self.analysis.program.def(def).span,
                 format!("define async ctor: {e}")))?;
@@ -1295,15 +1428,20 @@ impl<'a, M: Module> Codegen<'a, M> {
     /// result wrapped in `Ready<Output> | Pending` (`docs/21`).
     fn define_async_job(&mut self, job: AsyncJob) -> CgResult<()> {
         let AsyncJob { poll_fid, info, body, subst, span, out } = job;
+        // A view of the wrapped HIR block.
+        let block_view = match &body.kind {
+            compiler::hir::ExprKind::Block(b) => Some(BodyView(b)),
+            _ => None,
+        };
         // A block containing `await` is a suspendable state machine; its
         // captures are the entry locals (pre-stored by `gen_async_block`).
-        if let ExprKind::Block(block) = &body.kind {
-            if block_has_await(block) {
+        if let Some(bv) = block_view {
+            if bv.has_await() {
                 let cap_ids: Vec<LocalId> = info.captures.iter().map(|(l, _)| *l).collect();
-                let layout = async_state_layout(self.analysis, &subst, &cap_ids, block, &self.captured_locals);
+                let layout = async_state_layout(self.analysis, &subst, &cap_ids, bv, &self.captured_locals);
                 let entry_set: HashSet<LocalId> = cap_ids.into_iter().collect();
                 return self.build_stateful_poll(
-                    poll_fid, &subst, out, block, &entry_set, &layout.live, span,
+                    poll_fid, &subst, out, bv, &entry_set, &layout.live, span,
                 );
             }
         }
@@ -1322,7 +1460,7 @@ impl<'a, M: Module> Codegen<'a, M> {
             let self_val = b.block_params(entry)[0];
             {
                 let mut fg = FnGen {
-                    cx: CgShared { analysis: self.analysis, captured_locals: &self.captured_locals },
+                    cx: CgShared { analysis: self.analysis, hir: self.hir, captured_locals: &self.captured_locals },
                     module: self.module,
                     funcs: &mut self.funcs,
                     worklist: &mut self.worklist,
@@ -1355,12 +1493,13 @@ impl<'a, M: Module> Codegen<'a, M> {
                         }
                     }
                 }
-                let val = fg.gen_expr(&body)?;
+                let val = fg.h_expr(&body)?;
                 fg.emit_return(val)?;
             }
             b.seal_all_blocks();
             b.finalize();
         }
+        self.record_clif("<async block poll>", &ctx);
         self.module.define_function(poll_fid, &mut ctx)
             .map_err(|e| CodegenError::new(span, format!("define async block poll: {e}")))?;
         self.capture_safepoints(poll_fid, &ctx);
@@ -1371,6 +1510,9 @@ impl<'a, M: Module> Codegen<'a, M> {
 
 struct CgShared<'a> {
     analysis: &'a Analysis,
+    /// The typed HIR (see [`Codegen::hir`]) — reachable from every per-function
+    /// generator method as codegen migrates its reads off `CheckResults`.
+    hir: &'a Hir,
     /// Reference into [`Codegen::captured_locals`] — the set of LocalIds the
     /// closure analysis identified as captured anywhere in the program. Cell-
     /// backed binding/access for these locals (`docs/09` §7) is gated on
@@ -1548,6 +1690,11 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     /// every safepoint where it is live. Use for managed-pointer temporaries
     /// that outlive a later allocation but are not themselves `gen_expr`
     /// results (which `gen_expr` already marks).
+    /// Generate a function/async body by walking its typed HIR block.
+    pub(crate) fn gen_body_view(&mut self, body: &BodyView) -> CgResult<Option<Value>> {
+        self.h_block(body.0)
+    }
+
     pub(crate) fn mark_root(&mut self, v: Value) -> Value {
         self.b.declare_value_needs_stack_map(v);
         v

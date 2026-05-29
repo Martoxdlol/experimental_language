@@ -134,7 +134,7 @@ impl<'a> Checker<'a> {
             && !self.tcx.is_never(found)
             && matches!(self.tcx.kind(expected), TyKind::Union(_) | TyKind::Dynamic)
         {
-            self.results.adjustments.insert(span, Adjust::Widen(expected));
+            self.bake_coercion(span, Adjust::Widen(expected));
         }
         // Coerce a concrete value to an interface object (build its vtable box).
         if found != expected
@@ -142,7 +142,7 @@ impl<'a> Checker<'a> {
             && !self.tcx.is_never(found)
             && self.implements_dyn(found, expected)
         {
-            self.results.adjustments.insert(span, Adjust::WidenDyn(expected));
+            self.bake_coercion(span, Adjust::WidenDyn(expected));
         }
     }
 
@@ -199,7 +199,9 @@ impl<'a> Checker<'a> {
         self.next_local += 1;
         self.results.local_types.insert(id, ty);
         self.results.local_decls.insert(id, span);
-        self.results.resolutions.insert(span, ValueRes::Local(id));
+        // Record the binding's resolution as a `Name(Local)` HIR node at its span
+        // (was `resolutions.insert`); `resolution(span)`/`hir_local_at` read it.
+        self.record_res(span, ValueRes::Local(id), ty);
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(name.to_string(), (ty, id));
         }

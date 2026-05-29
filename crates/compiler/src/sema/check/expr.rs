@@ -7,8 +7,839 @@ impl<'a> Checker<'a> {
 
     pub(crate) fn check_expr(&mut self, expr: &Expr, expected: Option<Ty>) -> Ty {
         let ty = self.check_expr_inner(expr, expected);
-        self.results.expr_types.insert(expr.span, ty);
+        // The checker builds the typed HIR node for every expression as it checks
+        // it; its `.ty` (or its inner type, under a baked `Adjust`) is the checked
+        // type that `results.expr_ty` reports — no separate `expr_types` table.
+        if let Some(node) = self.build_hir_node(expr, ty) {
+            self.results.node_hir.insert(expr.span, node);
+        }
         ty
+    }
+
+    /// Construct the [`crate::hir::Expr`] for `expr` directly during checking,
+    /// for the node kinds that have been migrated off the span side tables.
+    /// Returns `None` for kinds still lowered from tables (HIR lowering falls
+    /// back to its table-driven construction for those). The node carries its
+    /// *raw* (pre-coercion) type — the `Adjust` wrapper is applied by lowering.
+    pub(crate) fn build_hir_node(&mut self, expr: &Expr, ty: Ty) -> Option<crate::hir::Expr> {
+        use crate::hir::{self, ExprKind as H};
+        let kind = match &expr.kind {
+            ExprKind::Int(lit) => H::Int(crate::hir::parse_int_lit(lit)),
+            ExprKind::Float(lit) => H::Float(crate::hir::parse_float_lit(lit)),
+            ExprKind::Bool(b) => H::Bool(*b),
+            ExprKind::Null => H::Null,
+            ExprKind::Char(c) => H::Char(crate::hir::parse_char_lit(&c.raw).unwrap_or(0)),
+            // A resolved value name (`self` resolves to its local too); a
+            // narrowed read bakes in its `Unbox` via `build_name_node`.
+            ExprKind::Ident(_) | ExprKind::SelfExpr => {
+                let res = self.results.resolution(expr.span)?;
+                return Some(self.build_name_node(res, ty, expr.span));
+            }
+            ExprKind::Underscore => H::Discard,
+            // Parentheses are transparent in the HIR; mirror the inner node at
+            // this span so `expr_ty` (which reads `node_hir`) resolves either span.
+            ExprKind::Paren(inner) => return self.hir_child(inner),
+            // Composites: buildable once every child's HIR node exists.
+            ExprKind::Tuple(elems) => {
+                H::Tuple(elems.iter().map(|e| self.hir_child(e)).collect::<Option<_>>()?)
+            }
+            ExprKind::List(elems) => {
+                H::List(elems.iter().map(|e| self.hir_child(e)).collect::<Option<_>>()?)
+            }
+            ExprKind::Unary { op, operand, .. } => H::Unary {
+                op: crate::hir::lower_unop(*op),
+                operand: Box::new(self.hir_child(operand)?),
+                overload: self.hir_overload(),
+            },
+            ExprKind::Binary { op, left, right, .. } => H::Binary {
+                op: crate::hir::lower_binop(*op),
+                left: Box::new(self.hir_child(left)?),
+                right: Box::new(self.hir_child(right)?),
+                overload: self.hir_overload(),
+            },
+            ExprKind::Cast { op, expr: inner, .. } => H::Cast {
+                op: crate::hir::lower_castop(*op),
+                expr: Box::new(self.hir_child(inner)?),
+                // `check_cast` stashed the resolved target; otherwise the node's
+                // own type is the target.
+                target: self.pending_cast_target.take().unwrap_or(ty),
+            },
+            ExprKind::Ref { expr: inner, .. } => H::Ref(Box::new(self.hir_child(inner)?)),
+            ExprKind::Deref { expr: inner, .. } => H::Deref(Box::new(self.hir_child(inner)?)),
+            ExprKind::TupleIndex { receiver, index, .. } => H::TupleIndex {
+                receiver: Box::new(self.hir_child(receiver)?),
+                index: *index,
+            },
+            ExprKind::Index { receiver, index } => H::Index {
+                receiver: Box::new(self.hir_child(receiver)?),
+                index: Box::new(self.hir_child(index)?),
+            },
+            ExprKind::Try { expr: inner, .. } => H::Try {
+                expr: Box::new(self.hir_child(inner)?),
+                branch: self.pending_try_branch.take(),
+                residual_conversions: self.pending_residuals.take().unwrap_or_default(),
+            },
+            ExprKind::Await { expr: inner, .. } => H::Await {
+                expr: Box::new(self.hir_child(inner)?),
+                output: self.pending_await.take()?,
+            },
+            ExprKind::Spawn { expr: inner, .. } => H::Spawn {
+                expr: Box::new(self.hir_child(inner)?),
+                output: self.pending_spawn.take()?,
+            },
+            ExprKind::Field { receiver, name } => {
+                // A numeric-namespace constant (`i32.MAX`, `f64.NAN`) is an
+                // intrinsic, not a field access — recognized via the shared
+                // `num_constant_of` recognizer (was the `num_intrinsics` table).
+                if let ExprKind::Ident(recv) = &receiver.kind {
+                    if self.results.resolution(receiver.span).is_none() {
+                        if let Some(intr) =
+                            crate::sema::results::num_constant_of(self.tcx, &recv.name, &name.name)
+                        {
+                            return Some(hir::Expr {
+                                kind: H::Intrinsic {
+                                    intrinsic: crate::hir::Intrinsic::Num(intr),
+                                    args: vec![],
+                                },
+                                ty,
+                                span: expr.span,
+                            });
+                        }
+                    }
+                }
+                let recv_ty = self.results.expr_ty(receiver.span)?;
+                let field = self.hir_field_ref(recv_ty, &name.name);
+                H::Field { receiver: Box::new(self.hir_child(receiver)?), field }
+            }
+            ExprKind::Call { .. } => self.build_call_kind(expr, ty)?,
+            ExprKind::Continue => H::Continue,
+            ExprKind::Return(v) => H::Return(match v {
+                Some(e) => Some(Box::new(self.hir_child(e)?)),
+                None => None,
+            }),
+            ExprKind::Break(v) => H::Break(match v {
+                Some(e) => Some(Box::new(self.hir_child(e)?)),
+                None => None,
+            }),
+            ExprKind::If { cond, then_block, else_branch } => H::If {
+                cond: Box::new(self.hir_child(cond)?),
+                then_block: self.build_block(then_block)?,
+                else_branch: self.build_else(else_branch.as_ref())?,
+            },
+            ExprKind::Match { scrutinee, arms } => {
+                let mut hir_arms = Vec::with_capacity(arms.len());
+                for a in arms {
+                    hir_arms.push(crate::hir::MatchArm {
+                        pattern: self.build_pattern(&a.pattern)?,
+                        guard: match &a.guard {
+                            Some(g) => Some(self.hir_child(g)?),
+                            None => None,
+                        },
+                        body: self.hir_child(&a.body)?,
+                        span: a.span,
+                    });
+                }
+                H::Match { scrutinee: Box::new(self.hir_child(scrutinee)?), arms: hir_arms }
+            }
+            ExprKind::Block(b) => H::Block(self.build_block(b)?),
+            ExprKind::Loop(b) => H::Loop(self.build_block(b)?),
+            ExprKind::While { cond, body } => H::While {
+                cond: Box::new(self.hir_child(cond)?),
+                body: self.build_block(body)?,
+            },
+            ExprKind::For { pattern, in_async, iter, body } => H::For {
+                pattern: self.build_pattern(pattern)?,
+                iter: Box::new(self.hir_child(iter)?),
+                body: self.build_block(body)?,
+                driver: self.build_for_driver(iter, *in_async),
+                in_async: *in_async,
+            },
+            ExprKind::Closure { is_async, body, .. } => {
+                // The closure body must be built first (so its nested closures
+                // consume their own slots) before we take *this* closure's info.
+                let body = Box::new(self.hir_child(body)?);
+                match self.pending_closure.take() {
+                    Some(info) => H::Closure {
+                        params: info.params,
+                        captures: info.captures,
+                        ret: info.ret,
+                        is_async: *is_async,
+                        body,
+                    },
+                    None => H::Error,
+                }
+            }
+            ExprKind::AsyncBlock(block) => {
+                let body = self.build_block(block)?;
+                match self.pending_async.take() {
+                    Some(info) => H::AsyncBlock {
+                        output: info.output,
+                        params: info.params,
+                        captures: info.captures,
+                        body,
+                    },
+                    None => H::Error,
+                }
+            }
+            // An anonymous `function(){…}` expression is not lowered by codegen
+            // today (it falls through to `Error`), mirroring `lower_expr_kind`.
+            ExprKind::AnonFn(_) => H::Error,
+            ExprKind::Str(s) => H::Str(self.hir_str_parts(s)?),
+            ExprKind::MapLit(items) => H::Map(self.hir_map_entries(items)?),
+            ExprKind::StructLit { fields, spread, .. } => {
+                let (def, type_args) = match self.tcx.kind(ty) {
+                    crate::ty::TyKind::Named { def, args } => (*def, args.clone()),
+                    _ => (crate::ids::DefId(0), Vec::new()),
+                };
+                let mut hir_fields = Vec::with_capacity(fields.len());
+                for fi in fields {
+                    let value = match &fi.value {
+                        Some(e) => self.hir_child(e)?,
+                        // Field-init shorthand `Foo { x }` — `check_struct_lit`
+                        // already built the (narrowed/widened) `Name` node for the
+                        // local at the field name's span.
+                        None => self.results.node_hir.get(&fi.name.span).cloned()?,
+                    };
+                    hir_fields.push(crate::hir::FieldInit {
+                        index: self.hir_field_index(def, &fi.name.name),
+                        name: fi.name.name.clone(),
+                        value,
+                        span: fi.span,
+                    });
+                }
+                let spread = match spread {
+                    Some(e) => Some(Box::new(self.hir_child(e)?)),
+                    None => None,
+                };
+                H::Struct { def, type_args, fields: hir_fields, spread }
+            }
+        };
+        Some(hir::Expr { kind, ty, span: expr.span })
+    }
+
+    /// The already-built HIR node for a child expression (skipping `Paren`
+    /// grouping, which the HIR drops), or `None` if that child kind has not yet
+    /// been migrated — in which case the enclosing node can't be checker-built
+    /// and falls back to table-driven lowering.
+    fn hir_child(&self, mut e: &Expr) -> Option<crate::hir::Expr> {
+        while let ExprKind::Paren(inner) = &e.kind {
+            e = inner;
+        }
+        // The stored node already carries its coercion: a narrowing `Unbox` baked
+        // by `build_name_node`, or a widening baked in place by `expect`.
+        self.results.node_hir.get(&e.span).cloned()
+    }
+
+    /// Build a value-name HIR node, baking in a flow-narrowing `Unbox` coercion
+    /// when the use is a narrowed read of a boxed local (was the narrowing write
+    /// into the `adjustments` table). The narrowing is *recovered structurally*:
+    /// a `Local` whose declared (wide) type is a boxed union / `dynamic` /
+    /// interface but whose use type `ty` here is a single concrete variant must
+    /// unbox at the use — exactly the `was_boxed && now_single` test `check_ident`
+    /// applied. No side table is consulted.
+    /// Record a value-name / callee-dispatch / binding resolution at `span` by
+    /// storing its `Name` HIR node in `node_hir` (was `resolutions.insert`).
+    /// `results.resolution(span)` reads it back. The node also serves as the
+    /// expression's HIR node for a value-name use.
+    pub(crate) fn record_res(
+        &mut self,
+        span: Span,
+        res: crate::sema::results::ValueRes,
+        ty: Ty,
+    ) {
+        let node = self.build_name_node(res, ty, span);
+        self.results.node_hir.insert(span, node);
+    }
+
+    pub(crate) fn build_name_node(
+        &self,
+        res: crate::sema::results::ValueRes,
+        ty: Ty,
+        span: Span,
+    ) -> crate::hir::Expr {
+        use crate::sema::results::{Adjust, ValueRes};
+        let name = crate::hir::Expr { kind: crate::hir::ExprKind::Name(res), ty, span };
+        if let ValueRes::Local(id) = res {
+            if let Some(wide) = self.results.local_ty(id) {
+                let was_boxed = (matches!(self.tcx.kind(wide), TyKind::Union(_) | TyKind::Dynamic)
+                    && !self.is_npo_union(wide))
+                    || self.is_interface(wide);
+                let now_single = !matches!(self.tcx.kind(ty), TyKind::Union(_) | TyKind::Dynamic)
+                    && !self.is_interface(ty);
+                if was_boxed && now_single {
+                    return crate::hir::Expr {
+                        kind: crate::hir::ExprKind::Adjust {
+                            adjust: Adjust::Unbox(ty),
+                            expr: Box::new(name),
+                        },
+                        ty,
+                        span,
+                    };
+                }
+            }
+        }
+        name
+    }
+
+    /// Bake a widening coercion (`Widen` / `WidenDyn`) onto the already-built HIR
+    /// node at `span`, wrapping it in an `Adjust` (was the `adjustments` table).
+    /// The coercion is recorded by the parent's `expect`, *after* the child node
+    /// was built and stored, so the node exists. Any coercion previously baked at
+    /// this span is replaced (wrapping the *raw* node), matching the old
+    /// last-write-wins `HashMap`.
+    pub(crate) fn bake_coercion(&mut self, span: Span, adjust: crate::sema::results::Adjust) {
+        use crate::sema::results::Adjust;
+        let Some(node) = self.results.node_hir.get(&span) else { return };
+        let raw = match &node.kind {
+            crate::hir::ExprKind::Adjust { expr, .. } => (**expr).clone(),
+            _ => node.clone(),
+        };
+        let ty = match adjust {
+            Adjust::Widen(t) | Adjust::Unbox(t) | Adjust::WidenDyn(t) => t,
+        };
+        self.results.node_hir.insert(
+            span,
+            crate::hir::Expr {
+                kind: crate::hir::ExprKind::Adjust { adjust, expr: Box::new(raw) },
+                ty,
+                span,
+            },
+        );
+    }
+
+    /// Resolve a field access to its struct/index/name (mirrors
+    /// `lower::field_ref`).
+    fn hir_field_ref(&self, recv_ty: Ty, name: &str) -> crate::hir::FieldRef {
+        let def = match self.tcx.kind(recv_ty) {
+            crate::ty::TyKind::Named { def, .. } => *def,
+            _ => crate::ids::DefId(0),
+        };
+        crate::hir::FieldRef {
+            struct_def: def,
+            index: self.hir_field_index(def, name),
+            name: name.to_string(),
+        }
+    }
+
+    /// The positional index of field `name` within struct `def` (mirrors
+    /// `lower::field_index`).
+    fn hir_field_index(&self, def: crate::ids::DefId, name: &str) -> u32 {
+        use crate::sema::results::StructFields as SF;
+        match self.results.struct_fields.get(&def) {
+            Some(SF::Record(fs)) => fs.iter().position(|(n, _)| n == name).unwrap_or(0) as u32,
+            Some(SF::Tuple(_)) => name.parse().unwrap_or(0),
+            _ => name.parse().unwrap_or(0),
+        }
+    }
+
+    /// Build the HIR string parts (mirrors `lower::lower_str_parts`); returns
+    /// `None` if any interpolation hole's expression has not been migrated.
+    fn hir_str_parts(&self, s: &StringLit) -> Option<Vec<crate::hir::StrPart>> {
+        use crate::hir::StrPart;
+        // The `(to_str method, targs)` per interpolation hole, in source order,
+        // as the `Str` check arm stashed them. Pop one per `Interp` part.
+        let mut holes = self.pending_stringify.take().unwrap_or_default();
+        let mut out = Vec::with_capacity(s.parts.len());
+        for p in &s.parts {
+            out.push(match p {
+                StringPart::Text { text, .. } => StrPart::Text(text.clone()),
+                StringPart::Ident(id) => {
+                    let res = self.results.resolution(id.span)?;
+                    // `$x` may be flow-narrowed (a union unboxed to a single
+                    // variant inside an `is` branch) — `build_name_node` bakes the
+                    // `Unbox` in, just as a `${expr}` hole gets it via `hir_child`.
+                    let expr = self.build_name_node(res, self.results.expr_ty(id.span)?, id.span);
+                    let (stringify, stringify_targs) = holes.pop_front().unwrap_or((None, Vec::new()));
+                    StrPart::Interp { expr: Box::new(expr), stringify, stringify_targs }
+                }
+                StringPart::Expr(e) => {
+                    let expr = Box::new(self.hir_child(e)?);
+                    let (stringify, stringify_targs) = holes.pop_front().unwrap_or((None, Vec::new()));
+                    StrPart::Interp { expr, stringify, stringify_targs }
+                }
+            });
+        }
+        Some(out)
+    }
+
+    /// Build the HIR map entries (mirrors `lower::lower_map_items`); returns
+    /// `None` if any key/value/spread sub-expression is not yet migrated.
+    fn hir_map_entries(&self, items: &[MapItem]) -> Option<Vec<crate::hir::MapEntry>> {
+        use crate::hir::MapEntry;
+        let mut out = Vec::with_capacity(items.len());
+        for it in items {
+            out.push(match it {
+                MapItem::Entry { key, value, .. } => MapEntry::Kv {
+                    key: self.hir_child(key)?,
+                    value: self.hir_child(value)?,
+                },
+                MapItem::Spread(base) => MapEntry::Spread(self.hir_child(base)?),
+            });
+        }
+        Some(out)
+    }
+
+    /// Build a [`crate::hir::Block`] (mirrors `lower::lower_block`); `None` if any
+    /// contained statement or trailing expression is not yet migrated.
+    pub(crate) fn build_block(&mut self, b: &Block) -> Option<crate::hir::Block> {
+        let mut stmts = Vec::with_capacity(b.stmts.len());
+        for s in &b.stmts {
+            // `Some(None)` = a block-level item with no def, intentionally
+            // dropped (no runtime effect), matching `lower_stmt`. `None` = the
+            // statement can't be migrated yet, so the whole block bails out.
+            match self.build_stmt(s)? {
+                Some(stmt) => stmts.push(stmt),
+                None => {}
+            }
+        }
+        let trailing = match &b.trailing {
+            Some(e) => Some(Box::new(self.hir_child(e)?)),
+            None => None,
+        };
+        let ty = b
+            .trailing
+            .as_ref()
+            .map(|e| self.results.expr_ty(e.span).unwrap_or(self.tcx.error))
+            .unwrap_or(self.tcx.null);
+        Some(crate::hir::Block { stmts, trailing, ty, span: b.span })
+    }
+
+    /// Build a statement (mirrors `lower::lower_stmt`). Returns `None` if not yet
+    /// migratable; `Some(None)` for an item statement whose def is absent (which
+    /// lowering drops).
+    fn build_stmt(&mut self, s: &Stmt) -> Option<Option<crate::hir::Stmt>> {
+        use crate::hir::StmtKind as SK;
+        let kind = match &s.kind {
+            StmtKind::Var(lv) => SK::Let {
+                pattern: self.build_pattern(&lv.pattern)?,
+                init: self.hir_child(&lv.init)?,
+            },
+            StmtKind::Assign { target, value } => SK::Assign {
+                target: self.hir_child(target)?,
+                value: self.hir_child(value)?,
+            },
+            StmtKind::Expr(e) => SK::Expr(self.hir_child(e)?),
+            StmtKind::Item(item) => match self.span_def(item.span) {
+                Some(d) => SK::Item(d),
+                None => return Some(None),
+            },
+        };
+        Some(Some(crate::hir::Stmt { kind, span: s.span }))
+    }
+
+    /// The [`DefId`] of the item declared at `span` (mirrors lowering's
+    /// `span2def` index), or `None` if none.
+    fn span_def(&self, span: Span) -> Option<crate::ids::DefId> {
+        self.prog
+            .defs
+            .iter()
+            .position(|d| d.span == span)
+            .map(|i| crate::ids::DefId(i as u32))
+    }
+
+    /// Build the `else` branch of an `if` (mirrors `lower::lower_else`). The
+    /// outer `Option` is the "not yet migratable" signal; the inner is the
+    /// presence of an `else`.
+    fn build_else(&mut self, else_branch: Option<&ElseBranch>) -> Option<Option<Box<crate::hir::Expr>>> {
+        match else_branch {
+            None => Some(None),
+            Some(ElseBranch::Block(b)) => {
+                let block = self.build_block(b)?;
+                let ty = block.ty;
+                Some(Some(Box::new(crate::hir::Expr {
+                    kind: crate::hir::ExprKind::Block(block),
+                    ty,
+                    span: b.span,
+                })))
+            }
+            Some(ElseBranch::If(e)) => Some(Some(Box::new(self.hir_child(e)?))),
+        }
+    }
+
+    /// Build a pattern (mirrors `lower::lower_pattern`); `None` if a literal
+    /// sub-pattern's expression is not yet migrated.
+    fn build_pattern(&mut self, p: &Pattern) -> Option<crate::hir::Pattern> {
+        use crate::hir::PatternKind as PK;
+        // The pattern's HIR type. Only `TypeBind`/`UnitPath` carry a meaningful
+        // `test_ty` (the matched variant, used by codegen); other kinds' `.ty` is
+        // informational. The matched type is recomputed here (was `pattern_types`)
+        // — the function's generic env is still active at body-build time.
+        let (kind, ty) = match &p.kind {
+            PatternKind::Wildcard => (PK::Wildcard, self.tcx.error),
+            PatternKind::Binding(id) => (PK::Bind(self.hir_local_at(id.span)), self.tcx.error),
+            PatternKind::Literal(e) => {
+                let inner = self.hir_child(e)?;
+                let ty = inner.ty;
+                (PK::Literal(Box::new(inner)), ty)
+            }
+            PatternKind::TypeBinding { ty: ast_ty, binding } => {
+                let env = self.local_env();
+                let test_ty = self.lower_ty(ast_ty, &env);
+                let bind = binding.as_ref().map(|i| self.hir_local_at(i.span));
+                (PK::TypeBind { test_ty, bind }, test_ty)
+            }
+            PatternKind::UnitPath(tp) => {
+                let def = self.hir_path_def(tp);
+                let test_ty = self.tcx.mk_named(def, Vec::new());
+                (PK::UnitPath { def, test_ty }, test_ty)
+            }
+            PatternKind::TupleStruct { path, fields, rest } => {
+                let def = self.hir_path_def(path);
+                let fields = fields.iter().map(|f| self.build_pattern(f)).collect::<Option<_>>()?;
+                (PK::TupleStruct { def, fields, rest: rest.as_ref().map(|r| self.build_rest(r)) },
+                 self.tcx.error)
+            }
+            PatternKind::RecordStruct { path, fields, has_rest } => {
+                let def = self.hir_path_def(path);
+                let mut fs = Vec::with_capacity(fields.len());
+                for f in fields {
+                    fs.push(self.build_field_pattern(def, f)?);
+                }
+                (PK::RecordStruct { def, fields: fs, has_rest: *has_rest }, self.tcx.error)
+            }
+            PatternKind::Tuple { elems, rest } => {
+                let elems = elems.iter().map(|e| self.build_pattern(e)).collect::<Option<_>>()?;
+                (PK::Tuple { elems, rest: rest.as_ref().map(|(i, r)| (*i, self.build_rest(r))) },
+                 self.tcx.error)
+            }
+            PatternKind::List { elems, rest } => {
+                let elems = elems.iter().map(|e| self.build_pattern(e)).collect::<Option<_>>()?;
+                (PK::List { elems, rest: rest.as_ref().map(|(i, r)| (*i, self.build_rest(r))) },
+                 self.tcx.error)
+            }
+            PatternKind::Or(ps) => {
+                let ps = ps.iter().map(|p| self.build_pattern(p)).collect::<Option<_>>()?;
+                (PK::Or(ps), self.tcx.error)
+            }
+        };
+        Some(crate::hir::Pattern { kind, ty, span: p.span })
+    }
+
+    fn build_field_pattern(
+        &mut self,
+        def: crate::ids::DefId,
+        f: &FieldPattern,
+    ) -> Option<crate::hir::FieldPattern> {
+        let pattern = match &f.pattern {
+            Some(p) => self.build_pattern(p)?,
+            None => crate::hir::Pattern {
+                kind: crate::hir::PatternKind::Bind(self.hir_local_at(f.name.span)),
+                ty: self.results.expr_ty(f.name.span).unwrap_or(self.tcx.error),
+                span: f.name.span,
+            },
+        };
+        Some(crate::hir::FieldPattern {
+            index: self.hir_field_index(def, &f.name.name),
+            name: f.name.name.clone(),
+            pattern,
+            span: f.span,
+        })
+    }
+
+    fn build_rest(&self, r: &RestPattern) -> crate::hir::RestPattern {
+        crate::hir::RestPattern {
+            bind: r.name.as_ref().map(|i| self.hir_local_at(i.span)),
+            span: r.span,
+        }
+    }
+
+    /// The local bound at a binding-occurrence span (mirrors `lower::local_at`).
+    fn hir_local_at(&self, span: Span) -> crate::ids::LocalId {
+        match self.results.resolution(span) {
+            Some(crate::sema::results::ValueRes::Local(id)) => id,
+            _ => crate::ids::LocalId(u32::MAX),
+        }
+    }
+
+    /// Resolve a type path to its def (mirrors `lower::path_def`).
+    fn hir_path_def(&self, path: &TypePath) -> crate::ids::DefId {
+        self.prog
+            .resolve_type_in(self.cur_module, &path.name.name)
+            .unwrap_or(crate::ids::DefId(0))
+    }
+
+    /// The `for` loop driver `check_for` stashed for this node (was the
+    /// `for_iters` / `for_maps` / `for_async_iters` tables); falls back to the
+    /// `List` fast path for error-recovery when none was recorded.
+    fn build_for_driver(&self, iter: &Expr, _in_async: bool) -> crate::hir::ForDriver {
+        self.pending_for_driver.take().unwrap_or_else(|| {
+            let iter_ty = self.results.expr_ty(iter.span).unwrap_or(self.tcx.error);
+            let elem = self.hir_list_elem(iter_ty).unwrap_or(self.tcx.error);
+            crate::hir::ForDriver::ListFast { elem }
+        })
+    }
+
+    fn hir_list_elem(&self, ty: Ty) -> Option<Ty> {
+        match self.tcx.kind(ty) {
+            crate::ty::TyKind::Named { def, args }
+                if *def == self.prog.list_def && !args.is_empty() =>
+            {
+                Some(args[0])
+            }
+            _ => None,
+        }
+    }
+
+    /// Map child expressions to their built HIR nodes (mirrors
+    /// `lower::lower_exprs`); `None` if any child has not yet been migrated.
+    fn hir_args(&self, xs: &[&Expr]) -> Option<Vec<crate::hir::Expr>> {
+        xs.iter().map(|e| self.hir_child(e)).collect()
+    }
+
+    /// The NPO (null-pointer-optimized) pointee of `ty` (mirrors
+    /// `lower::npo_pointee`): the pointer payload of a `*T | null` union.
+    fn hir_npo_pointee(&self, ty: Ty) -> Ty {
+        for v in self.tcx.variants(ty) {
+            if let crate::ty::TyKind::Ptr(p) = self.tcx.kind(v) {
+                return *p;
+            }
+        }
+        self.tcx.error
+    }
+
+    /// Whether a method-call receiver has a builtin type the backend dispatches
+    /// structurally (mirrors `lower::is_builtin_recv`).
+    fn hir_is_builtin_recv(&self, receiver: &Expr) -> Option<bool> {
+        let ty = self.results.expr_ty(receiver.span)?;
+        Some(match self.tcx.kind(ty) {
+            crate::ty::TyKind::Str => true,
+            crate::ty::TyKind::Named { def, .. } => {
+                let p = self.prog;
+                *def == p.list_def
+                    || *def == p.map_def
+                    || (p.sender_def != crate::ids::DefId(0) && *def == p.sender_def)
+                    || (p.receiver_def != crate::ids::DefId(0) && *def == p.receiver_def)
+                    || (p.shared_def != crate::ids::DefId(0) && *def == p.shared_def)
+            }
+            _ => false,
+        })
+    }
+
+    /// The call type arguments recorded at `span` (mirrors `lower::type_args`).
+
+    /// Classify a call into its HIR [`ExprKind`] exactly as `lower::lower_call`
+    /// does (folding the marker-set tables into explicit `Intrinsic`/`CallKind`
+    /// variants). Returns `None` if any operand has not yet been migrated, so
+    /// lowering falls back to its table-driven path for the whole call.
+    fn build_call_kind(&self, ce: &Expr, raw_ty: Ty) -> Option<crate::hir::ExprKind> {
+        use crate::hir::{CallKind, ExprKind as H, Intrinsic};
+        use crate::ids::DefId;
+        use crate::sema::results::{num_method_of, ValueRes};
+        use crate::ty::TyKind;
+        let ExprKind::Call { callee, args, trailing_closure, .. } = &ce.kind else {
+            unreachable!("build_call_kind on non-call");
+        };
+        // A trailing closure is the call's final argument.
+        let mut all: Vec<&Expr> = args.iter().collect();
+        if let Some(tc) = trailing_closure {
+            all.push(tc);
+        }
+        // Build an `Intrinsic` node from the given operand expressions.
+        let intrinsic = |intr: Intrinsic, ops: &[&Expr]| -> Option<H> {
+            let args: Option<Vec<_>> = ops.iter().map(|e| self.hir_child(e)).collect();
+            Some(H::Intrinsic { intrinsic: intr, args: args? })
+        };
+        // Finish a `Call`, attaching callee provenance.
+        let finish = |kind: CallKind, cargs: Vec<crate::hir::Expr>| -> Option<H> {
+            let callee_span = match &callee.kind {
+                ExprKind::Field { name, .. } => name.span,
+                _ => callee.span,
+            };
+            // Mirror `lower::expr_ty`: a missing callee type (common for a
+            // method-callee `Field` span) falls back to the error type rather
+            // than bailing the whole node out to table-driven lowering.
+            let callee_ty = self.results.expr_ty(callee.span).unwrap_or(self.tcx.error);
+            Some(H::Call { kind, args: cargs, callee_span, callee_ty })
+        };
+        let r = &self.results;
+        // Consume the call-classification facts the check methods stashed for
+        // this node (was the `clone_kinds` / `static_calls`+`static_recv` /
+        // `foreign_flex` tables). Take all up front so no branch leaves a slot
+        // set for a sibling call's build.
+        let pending_clone = self.pending_clone_kind.take();
+        let pending_static = self.pending_static_recv.take();
+        let pending_flex = self.pending_foreign_flex.take();
+        let pending_targs = self.pending_type_args.take().unwrap_or_default();
+
+        // --- payload-free prelude builtins recognized by callee shape -------
+        if r.resolution(callee.span).is_none() {
+            let head1 = &all[..1.min(all.len())];
+            if let ExprKind::Ident(n) = &callee.kind {
+                match n.name.as_str() {
+                    "channel" => return intrinsic(Intrinsic::ChannelNew, &[]),
+                    "yield_now" => return intrinsic(Intrinsic::YieldNow, &[]),
+                    "sleep" => return intrinsic(Intrinsic::AsyncSleep, head1),
+                    _ => {}
+                }
+            }
+            if let ExprKind::Field { receiver, name } = &callee.kind {
+                if let ExprKind::Ident(recv) = &receiver.kind {
+                    match (recv.name.as_str(), name.name.as_str()) {
+                        ("Shared", "new") => return intrinsic(Intrinsic::SharedNew, &all),
+                        ("CString", "from_str") => {
+                            return intrinsic(Intrinsic::CStringFromStr, head1)
+                        }
+                        ("CStr", "to_str") => return intrinsic(Intrinsic::CStrToStr, head1),
+                        ("Foreign", "free") => return intrinsic(Intrinsic::ForeignFree, head1),
+                        ("Foreign", "realloc") => {
+                            return intrinsic(Intrinsic::ForeignRealloc, &all[..2.min(all.len())])
+                        }
+                        ("Foreign", "alloc") | ("Foreign", "alloc_zeroed") => {
+                            let ty = self.hir_npo_pointee(raw_ty);
+                            let zeroed = name.name == "alloc_zeroed";
+                            return intrinsic(Intrinsic::ForeignAlloc { ty, zeroed }, &[]);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        // `Thread.spawn { … }`.
+        if let ExprKind::Field { receiver, name } = &callee.kind {
+            if name.name == "spawn" && r.resolution(callee.span).is_none() {
+                if matches!(&receiver.kind, ExprKind::Ident(rn) if rn.name == "Thread") {
+                    let out = match self.tcx.kind(raw_ty) {
+                        TyKind::Named { args, .. } => args.first().copied().unwrap_or(self.tcx.error),
+                        _ => self.tcx.error,
+                    };
+                    return intrinsic(Intrinsic::ThreadSpawn { output: out }, &all);
+                }
+            }
+        }
+        // --- marker-set intrinsics keyed by the call span -------------------
+        if let Some((t, e)) = pending_flex {
+            return intrinsic(Intrinsic::ForeignFlex { ty: t, elem: e }, &all[..1.min(all.len())]);
+        }
+        // `fut.cancel()`.
+        if let ExprKind::Field { receiver, name } = &callee.kind {
+            if name.name == "cancel" && r.resolution(callee.span).is_none() {
+                let rty = self.results.expr_ty(receiver.span)?;
+                let fut = self.prog.future_def;
+                if fut != DefId(0)
+                    && matches!(self.tcx.kind(rty), TyKind::Named { def, .. } if *def == fut)
+                {
+                    return intrinsic(Intrinsic::FutureCancel, &[receiver]);
+                }
+            }
+        }
+        // Numeric-namespace method.
+        if let ExprKind::Field { receiver, name } = &callee.kind {
+            if r.resolution(callee.span).is_none() {
+                if let ExprKind::Ident(recv) = &receiver.kind {
+                    if let Some(intr) = num_method_of(self.tcx, &recv.name, &name.name) {
+                        return intrinsic(Intrinsic::Num(intr), &all);
+                    }
+                }
+            }
+        }
+        // `JoinHandle<R>.join()`.
+        if let ExprKind::Field { receiver, name } = &callee.kind {
+            if name.name == "join" && r.resolution(callee.span).is_none() {
+                let rty = self.results.expr_ty(receiver.span)?;
+                let jh = self.prog.join_handle_def;
+                let out = match self.tcx.kind(rty) {
+                    TyKind::Named { def, args } if jh != DefId(0) && *def == jh => {
+                        Some(args.first().copied().unwrap_or(self.tcx.error))
+                    }
+                    _ => None,
+                };
+                if let Some(out) = out {
+                    return intrinsic(Intrinsic::ThreadJoin { output: out }, &[receiver]);
+                }
+            }
+        }
+        // Empty builtin collection constructor `List<T>()` / `Map<K,V>()`.
+        if r.resolution(callee.span).is_none() {
+            let type_name = match &callee.kind {
+                ExprKind::Ident(n) => Some(n.name.as_str()),
+                ExprKind::Field { receiver, name } if name.name == "new" => match &receiver.kind {
+                    ExprKind::Ident(rn) => Some(rn.name.as_str()),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(tn) = type_name {
+                if let Some(def) = self.prog.resolve_type_in(self.cur_module, tn) {
+                    if def == self.prog.list_def || def == self.prog.map_def {
+                        return intrinsic(Intrinsic::CollectionCtor, &[]);
+                    }
+                }
+            }
+        }
+        if let ExprKind::Field { receiver, .. } = &callee.kind {
+            if let Some(kind) = pending_clone {
+                return intrinsic(Intrinsic::Clone(kind), &[receiver]);
+            }
+        }
+        // --- builtin List/Map/str/Sender/Receiver/Shared methods ------------
+        if let ExprKind::Field { receiver, name } = &callee.kind {
+            if r.resolution(callee.span).is_none() && self.hir_is_builtin_recv(receiver)? {
+                let mut cargs = vec![self.hir_child(receiver)?];
+                cargs.extend(self.hir_args(&all)?);
+                return finish(CallKind::BuiltinMethod { name: name.name.clone() }, cargs);
+            }
+        }
+        // --- a call through a closure / function-pointer value --------------
+        let res = r.resolution(callee.span);
+        let is_value =
+            matches!(res, Some(ValueRes::Local(_)) | Some(ValueRes::Global(_)) | None);
+        if is_value {
+            let cty = self.results.expr_ty(callee.span)?;
+            if matches!(self.tcx.kind(cty), TyKind::Func { is_extern: false, .. }) {
+                let callee_hir = Box::new(self.hir_child(callee)?);
+                let cargs = self.hir_args(&all)?;
+                return finish(CallKind::Closure { callee: callee_hir }, cargs);
+            }
+        }
+        // --- resolution-directed dispatch -----------------------------------
+        match res {
+            Some(ValueRes::Function(d)) => {
+                let kind = if self.prog.def(d).kind == DefKind::ExternFunction {
+                    CallKind::Extern { def: d }
+                } else {
+                    CallKind::Direct { def: d, type_args: pending_targs.clone() }
+                };
+                finish(kind, self.hir_args(&all)?)
+            }
+            Some(ValueRes::Builtin(b)) => finish(CallKind::Builtin(b), self.hir_args(&all)?),
+            Some(ValueRes::StructCtor(d)) => {
+                let type_args = match self.tcx.kind(raw_ty) {
+                    TyKind::Named { args, .. } => args.clone(),
+                    _ => Vec::new(),
+                };
+                finish(CallKind::TupleCtor { def: d, type_args }, self.hir_args(&all)?)
+            }
+            Some(ValueRes::Method(d)) => {
+                let type_args = pending_targs;
+                if let Some(recv) = pending_static {
+                    let kind = CallKind::Method {
+                        def: d,
+                        type_args,
+                        recv_static: Some(recv),
+                        is_static: true,
+                    };
+                    finish(kind, self.hir_args(&all)?)
+                } else if let ExprKind::Field { receiver, .. } = &callee.kind {
+                    let mut cargs = vec![self.hir_child(receiver)?];
+                    cargs.extend(self.hir_args(&all)?);
+                    let kind =
+                        CallKind::Method { def: d, type_args, recv_static: None, is_static: false };
+                    finish(kind, cargs)
+                } else {
+                    Some(H::Error)
+                }
+            }
+            _ => Some(H::Error),
+        }
+    }
+
+    /// The operator-overload target for the operator expression currently being
+    /// built. `try_operator_overload` stashes it in `pending_overload` the moment
+    /// it resolves the method; this consumes it (the value lives only between
+    /// `check_expr_inner` returning and `build_hir_node` running for the same
+    /// node, so a single transient slot suffices and no side table is kept).
+    fn hir_overload(&self) -> Option<crate::hir::OpOverload> {
+        self.pending_overload.take()
     }
 
     pub(crate) fn check_expr_inner(&mut self, expr: &Expr, expected: Option<Ty>) -> Ty {
@@ -21,15 +852,25 @@ impl<'a> Checker<'a> {
             ExprKind::Str(s) => {
                 // Type-check interpolation holes. Each must be stringifiable;
                 // full `ToStr` dispatch arrives with interfaces — for now the
-                // primitives that `as str` covers are accepted.
+                // primitives that `as str` covers are accepted. For each hole
+                // (in source order) record the `(to_str method, targs)` the HIR
+                // `Str` node needs — `None` for a builtin-typed hole codegen
+                // formats directly (was `stringify_methods` + `call_type_args`).
+                let mut holes: std::collections::VecDeque<(Option<crate::ids::DefId>, Vec<Ty>)> =
+                    std::collections::VecDeque::new();
                 for part in &s.parts {
                     let (pty, pspan) = match part {
                         StringPart::Expr(e) => (self.check_expr(e, None), e.span),
                         StringPart::Ident(id) => {
                             let t = self.check_ident(&id.name, id.span);
                             // `check_ident` bypasses the `check_expr` wrapper, so
-                            // record the type for codegen's stringify lookup.
-                            self.results.expr_types.insert(id.span, t);
+                            // build the hole's HIR `Name` node here (baking any
+                            // narrowing) — `expr_ty` reads its type and
+                            // `hir_str_parts` reuses it.
+                            if let Some(res) = self.results.resolution(id.span) {
+                                let node = self.build_name_node(res, t, id.span);
+                                self.results.node_hir.insert(id.span, node);
+                            }
                             (t, id.span)
                         }
                         StringPart::Text { .. } => continue,
@@ -40,28 +881,30 @@ impl<'a> Checker<'a> {
                         // via `@Derive(ToStr)`) — the `ToStr` protocol of
                         // `docs/01` §8.
                         if let Some((mdef, targs)) = self.tostr_method(pty) {
-                            self.results.stringify_methods.insert(pspan, mdef);
-                            if !targs.is_empty() {
-                                self.results.call_type_args.insert(pspan, targs);
-                            }
+                            holes.push_back((Some(mdef), targs));
                         } else {
+                            holes.push_back((None, Vec::new()));
                             let t = self.display(pty);
                             self.emit(pspan, SemaErrorKind::Message(format!(
                                 "cannot interpolate `{t}`: it has no `to_str(): str` \
                                  method (add one or `@Derive(ToStr)`)"
                             )));
                         }
+                    } else {
+                        // A builtin-typed hole — codegen formats it directly.
+                        holes.push_back((None, Vec::new()));
                     }
                 }
+                self.pending_stringify.set(Some(holes));
                 self.tcx.str
             }
             ExprKind::Ident(name) => self.check_ident(&name.name, expr.span),
             ExprKind::SelfExpr => match (self.self_local, self.lookup("self")) {
                 (Some(id), Some((ty, _))) => {
-                    self.results.resolutions.insert(expr.span, ValueRes::Local(id));
                     // `self` used inside a closure / `async { … }` block is a
                     // capture, like any other enclosing local.
                     self.record_capture(id, ty);
+                    self.record_res(expr.span, ValueRes::Local(id), ty);
                     ty
                 }
                 _ => {
@@ -153,11 +996,10 @@ impl<'a> Checker<'a> {
                     ));
                 }
                 let ity = self.check_expr(iter, None);
-                let elem = match self.async_iterator_elem(ity) {
+                let (elem, driver) = match self.async_iterator_elem(ity) {
                     Some(info) => {
                         let elem = info.elem;
-                        self.results.for_async_iters.insert(iter.span, info);
-                        elem
+                        (elem, Some(crate::hir::ForDriver::AsyncIter(info)))
                     }
                     None => {
                         if !self.tcx.is_error(ity) {
@@ -167,7 +1009,7 @@ impl<'a> Checker<'a> {
                                 self.display(ity)
                             )));
                         }
-                        self.tcx.error
+                        (self.tcx.error, None)
                     }
                 };
                 self.push_scope();
@@ -176,29 +1018,28 @@ impl<'a> Checker<'a> {
                 self.check_block(body, None);
                 self.loops.pop();
                 self.pop_scope();
+                // Hand the loop driver to the HIR `For` node — set after the body
+                // so a nested `for` cannot clobber the slot (was `for_async_iters`).
+                self.pending_for_driver.set(driver);
                 self.tcx.null
             }
             ExprKind::For { pattern, iter, body, .. } => {
                 let ity = self.check_expr(iter, None);
-                let elem = match self.list_elem(ity) {
-                    Some(e) => e,
-                    None if self.tcx.is_error(ity) => self.tcx.error,
+                let (elem, driver) = match self.list_elem(ity) {
+                    Some(e) => (e, Some(crate::hir::ForDriver::ListFast { elem: e })),
+                    None if self.tcx.is_error(ity) => (self.tcx.error, None),
                     None if self.map_kv(ity).is_some() => {
                         // `for entry in map` yields `Entry<K, V>` (docs/18 §6).
                         let (kt, vt) = self.map_kv(ity).unwrap();
                         let entry_ty = self.tcx.mk_named(self.prog.entry_def, vec![kt, vt]);
-                        self.results.for_maps.insert(iter.span, (kt, vt, entry_ty));
-                        entry_ty
+                        (entry_ty, Some(crate::hir::ForDriver::Map { key: kt, value: vt, entry: entry_ty }))
                     }
                     None => match self.iterator_elem(ity) {
                         Some((elem, next, next_targs, item_ty, done_ty)) => {
-                            self.results.for_iters.insert(
-                                iter.span,
-                                crate::sema::results::ForIter {
-                                    elem, next, next_targs, iter_ty: ity, done_ty, item_ty,
-                                },
-                            );
-                            elem
+                            let info = crate::sema::results::ForIter {
+                                elem, next, next_targs, iter_ty: ity, done_ty, item_ty,
+                            };
+                            (elem, Some(crate::hir::ForDriver::Iter(info)))
                         }
                         None => {
                             self.emit(iter.span, SemaErrorKind::Message(format!(
@@ -206,7 +1047,7 @@ impl<'a> Checker<'a> {
                                  `next(self): Item<T> | Done` method",
                                 self.display(ity)
                             )));
-                            self.tcx.error
+                            (self.tcx.error, None)
                         }
                     },
                 };
@@ -216,6 +1057,10 @@ impl<'a> Checker<'a> {
                 self.check_block(body, None);
                 self.loops.pop();
                 self.pop_scope();
+                // Hand the loop driver to the HIR `For` node — set after the body
+                // so a nested `for` cannot clobber the slot (was `for_iters` /
+                // `for_maps`).
+                self.pending_for_driver.set(driver);
                 self.tcx.null
             }
             ExprKind::Loop(body) => {
@@ -365,18 +1210,20 @@ impl<'a> Checker<'a> {
             // The closure's *value* type is `(params) => Future<Output>`; the
             // recorded `AsyncInfo` drives state-machine lowering.
             let fut_ty = self.tcx.mk_named(self.prog.future_def, vec![body_out]);
-            self.results.async_blocks.insert(span, crate::sema::results::AsyncInfo {
+            let _ = span;
+            self.pending_async.set(Some(crate::sema::results::AsyncInfo {
                 output: body_out,
                 params: param_locals,
                 captures: frame.captures,
-            });
+            }));
             return self.tcx.mk_func(param_tys, fut_ty, false);
         }
-        self.results.closures.insert(span, crate::sema::results::ClosureInfo {
+        let _ = span;
+        self.pending_closure.set(Some(crate::sema::results::ClosureInfo {
             params: param_locals,
             captures: frame.captures,
             ret: body_out,
-        });
+        }));
         self.tcx.mk_func(param_tys, body_out, false)
     }
 
@@ -398,7 +1245,8 @@ impl<'a> Checker<'a> {
         }
         match self.future_output(fty) {
             Some(out) => {
-                self.results.awaits.insert(kw_span, out);
+                let _ = kw_span;
+                self.pending_await.set(Some(out));
                 out
             }
             None => {
@@ -422,7 +1270,8 @@ impl<'a> Checker<'a> {
         }
         match self.future_output(fty) {
             Some(out) => {
-                self.results.async_spawns.insert(kw_span, out);
+                let _ = kw_span;
+                self.pending_spawn.set(Some(out));
                 self.tcx.mk_named(self.prog.future_def, vec![out])
             }
             None => {
@@ -447,11 +1296,12 @@ impl<'a> Checker<'a> {
         let out = self.check_block(block, out_expected);
         self.in_async = prev_async;
         let frame = self.closure_stack.pop().expect("async block frame");
-        self.results.async_blocks.insert(span, crate::sema::results::AsyncInfo {
+        let _ = span;
+        self.pending_async.set(Some(crate::sema::results::AsyncInfo {
             output: out,
             params: Vec::new(),
             captures: frame.captures,
-        });
+        }));
         self.tcx.mk_named(self.prog.future_def, vec![out])
     }
 
@@ -505,38 +1355,29 @@ impl<'a> Checker<'a> {
 
     pub(crate) fn check_ident(&mut self, name: &str, span: Span) -> Ty {
         if let Some((ty, id)) = self.lookup(name) {
-            self.results.resolutions.insert(span, ValueRes::Local(id));
             self.record_capture(id, ty);
             // Flow narrowing: if this local is narrowed in the current branch,
-            // report the narrowed type. When narrowed from a boxed type (a union
-            // box or an interface object) to a single concrete variant, codegen
-            // must unbox at this use — both layouts carry the payload at offset 8.
-            if let Some(&narrowed) = self.narrowings.get(&id) {
-                // A `*T | null` (NPO) value is a raw pointer, not a box, so
-                // narrowing it to `*T` needs no unbox — the representation is
-                // unchanged (`docs/19` §2).
-                let was_boxed = (matches!(self.tcx.kind(ty), TyKind::Union(_) | TyKind::Dynamic)
-                    && !self.is_npo_union(ty))
-                    || self.is_interface(ty);
-                let now_single = !matches!(self.tcx.kind(narrowed), TyKind::Union(_) | TyKind::Dynamic)
-                    && !self.is_interface(narrowed);
-                if was_boxed && now_single {
-                    self.results.adjustments.insert(span, Adjust::Unbox(narrowed));
-                }
-                return narrowed;
-            }
-            return ty;
+            // report the narrowed type. The unbox-at-use coercion (when narrowed
+            // from a boxed union / interface to a single variant) is recovered
+            // structurally by `build_name_node` (which `record_res` calls) from
+            // the local's declared type vs this use type.
+            let result = self.narrowings.get(&id).copied().unwrap_or(ty);
+            self.record_res(span, ValueRes::Local(id), result);
+            return result;
         }
         // A module-level value: function, var, or extern function/var.
         let module = self.current_module();
         if let Some(def) = self.prog.resolve_value_in(module, name) {
-            self.results.resolutions.insert(span, self.value_res(def));
-            return self.value_def_ty(def);
+            let res = self.value_res(def);
+            let t = self.value_def_ty(def);
+            self.record_res(span, res, t);
+            return t;
         }
         // A compiler builtin (temporary prelude; see `Builtin`).
         if let Some(b) = Builtin::from_name(name) {
-            self.results.resolutions.insert(span, ValueRes::Builtin(b));
-            return self.builtin_ty(b);
+            let t = self.builtin_ty(b);
+            self.record_res(span, ValueRes::Builtin(b), t);
+            return t;
         }
         self.emit(span, SemaErrorKind::UnknownValue { name: name.to_string() });
         self.tcx.error
@@ -579,8 +1420,12 @@ impl<'a> Checker<'a> {
     pub(crate) fn check_cast(&mut self, op: CastOp, inner: &Expr, target: &Type, cast_span: Span) -> Ty {
         let env = self.local_env();
         let to = self.lower_ty(target, &env);
-        self.results.cast_targets.insert(cast_span, to);
         let from = self.check_expr(inner, None);
+        // Hand the resolved target to the `Cast` HIR node (consumed right after
+        // this returns); set it *after* checking `inner` so a nested cast child
+        // doesn't clobber the slot. `cast_span` is the node's own span.
+        let _ = cast_span;
+        self.pending_cast_target.set(Some(to));
         match op {
             CastOp::Is => self.tcx.bool,
             CastOp::As => {
@@ -759,7 +1604,6 @@ impl<'a> Checker<'a> {
             )));
         }
         let ty = self.tcx.mk_named(def, tys);
-        self.results.builtin_ctors.insert(span, ty);
         Some(ty)
     }
 
@@ -794,7 +1638,6 @@ impl<'a> Checker<'a> {
                 if !args.is_empty() {
                     self.emit(span, SemaErrorKind::ArgCount { expected: 0, found: args.len() });
                 }
-                self.results.yield_nows.insert(span);
                 return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.null]);
             }
             // `sleep(ms)` (`docs/21` §9): a `Future<null>` completing after a delay.
@@ -809,7 +1652,6 @@ impl<'a> Checker<'a> {
                     let a = self.check_expr(&args[0], Some(i64t));
                     self.expect(a, i64t, args[0].span);
                 }
-                self.results.async_sleeps.insert(span);
                 return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.null]);
             }
         }
@@ -1007,7 +1849,7 @@ impl<'a> Checker<'a> {
         {
             return self.check_generic_call(def, callee, args, generics, span);
         }
-        self.results.resolutions.insert(callee.span, self.value_res(def));
+        self.record_res(callee.span, self.value_res(def), self.tcx.error);
         let callee_ty = self.value_def_ty(def);
         self.check_args_against(callee_ty, args, trailing, span)
     }

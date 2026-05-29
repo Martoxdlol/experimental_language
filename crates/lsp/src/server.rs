@@ -172,15 +172,13 @@ impl LanguageServer for Backend {
             match res {
                 ValueRes::Local(id) => {
                     let name = c
-                        .analysis
-                        .results
+                        .index
                         .local_decls
                         .get(&id)
                         .map(|s| c.map.slice(*s).to_string())
                         .unwrap_or_else(|| c.map.slice(span).to_string());
                     let ty = c
-                        .analysis
-                        .results
+                        .index
                         .local_types
                         .get(&id)
                         .map(|t| c.display_ty(*t))
@@ -193,8 +191,8 @@ impl LanguageServer for Backend {
                 | ValueRes::StructCtor(d) => {
                     let def = c.analysis.program.def(d);
                     lines.push(format!("```otter-fusion\n{}\n```", c.def_label(def)));
-                    if let Some(ret) = c.analysis.results.fn_return.get(&d) {
-                        lines.push(format!("returns `{}`", c.display_ty(*ret)));
+                    if let Some(ret) = c.hir.fn_sigs.get(&d).map(|s| s.ret) {
+                        lines.push(format!("returns `{}`", c.display_ty(ret)));
                     }
                 }
                 ValueRes::Builtin(b) => {
@@ -261,11 +259,10 @@ impl LanguageServer for Backend {
 
         let include_decl = params.context.include_declaration;
         let mut spans: Vec<Span> = c
-            .analysis
-            .results
+            .index
             .resolutions
             .iter()
-            .filter(|(s, r)| **r == target && s.file == DOC_FILE)
+            .filter(|(s, r)| *r == target && s.file == DOC_FILE)
             .map(|(s, _)| *s)
             .collect();
 
@@ -281,7 +278,7 @@ impl LanguageServer for Backend {
         } else {
             // Exclude the binding occurrence of a local.
             if let ValueRes::Local(id) = target {
-                if let Some(dspan) = c.analysis.results.local_decls.get(&id) {
+                if let Some(dspan) = c.index.local_decls.get(&id) {
                     spans.retain(|s| s != dspan);
                 }
             }
@@ -309,11 +306,10 @@ impl LanguageServer for Backend {
 
         // Collect every use site plus the declaration.
         let mut spans: HashSet<Span> = c
-            .analysis
-            .results
+            .index
             .resolutions
             .iter()
-            .filter(|(s, r)| **r == target && s.file == DOC_FILE)
+            .filter(|(s, r)| *r == target && s.file == DOC_FILE)
             .map(|(s, _)| *s)
             .collect();
         if let Some(dspan) = c.definition_span(target) {
@@ -379,11 +375,10 @@ impl LanguageServer for Backend {
 
         // Collect every occurrence of the same resolution in this document.
         let mut spans: Vec<Span> = c
-            .analysis
-            .results
+            .index
             .resolutions
             .iter()
-            .filter(|(s, r)| **r == target && s.file == DOC_FILE)
+            .filter(|(s, r)| *r == target && s.file == DOC_FILE)
             .map(|(s, _)| *s)
             .collect();
         if let Some(dspan) = c.definition_span(target) {
@@ -653,7 +648,7 @@ fn default_completions(c: &Compiled) -> Vec<CompletionItem> {
 
     // 1. Locals (highest priority — most contextually relevant).
     let mut locals: HashSet<String> = HashSet::new();
-    for s in c.analysis.results.local_decls.values() {
+    for s in c.index.local_decls.values() {
         if s.file == DOC_FILE {
             locals.insert(c.map.slice(*s).to_string());
         }

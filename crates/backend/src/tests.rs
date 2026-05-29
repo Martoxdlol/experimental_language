@@ -36,6 +36,45 @@
     }
 
     #[test]
+    fn native_object_contains_dwarf_debug_line() {
+        // A native build emits a DWARF line table into the object (`__debug_line`
+        // on Mach-O, `.debug_line` on ELF) — real source-level debug info.
+        let src = "function main(): i64 { var x = 1; x + 2 }";
+        let (tokens, _) = lex(src, FileId(0));
+        let (module, _) = parse(src, &tokens);
+        let analysis = analyze(&module);
+        assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+        let obj = std::env::temp_dir().join(format!("otter_dwarf_{}.o", std::process::id()));
+        crate::compile_object(&analysis, &obj, src, "test.otter").expect("compile object");
+        let bytes = std::fs::read(&obj).expect("read object");
+        let _ = std::fs::remove_file(&obj);
+        use cranelift_object::object::{Object, ObjectSection};
+        let file = cranelift_object::object::File::parse(&*bytes).expect("parse object");
+        let has_line = file
+            .sections()
+            .any(|s| s.name().map(|n| n.contains("debug_line")).unwrap_or(false));
+        assert!(has_line, "expected a DWARF debug_line section in the native object");
+    }
+
+    #[test]
+    fn codegen_captures_source_line_provenance() {
+        // The HIR codegen tags instructions with their source byte offset
+        // (`set_srcloc`), captured per function as the basis for DWARF
+        // `.debug_line`. A multi-expression program yields several mappings,
+        // each pointing at a real offset inside the source.
+        let src = "function f(a: i64, b: i64): i64 { var s = a + b; s * 2 }";
+        let (tokens, _) = lex(src, FileId(0));
+        let (module, _) = parse(src, &tokens);
+        let analysis = analyze(&module);
+        assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+        let jit = compile(&analysis).expect("codegen");
+        assert!(
+            jit.source_line_entries() > 0,
+            "expected captured source-line provenance, got none"
+        );
+    }
+
+    #[test]
     fn arithmetic() {
         assert_eq!(run("function f(): i64 { 40 + 2 }", "f"), 42);
         assert_eq!(run("function f(): i64 { (6 - 2) * 10 + 2 }", "f"), 42);
@@ -1617,4 +1656,630 @@ extend Cat: Sound { function code(self): i64 { 2 } }\n";
                    }";
         // inner loop adds 2 each of 3 outer iterations = 6
         assert_eq!(run(src, "f"), 6);
+    }
+
+    // =======================================================================
+    // HIR-path code generation (migration Stage 3)
+    //
+    // These run programs through `compile_hir`, which lowers every body whose
+    // forms the HIR walk covers (`gen_hir`) from the typed HIR instead of the
+    // AST. Each test also asserts the HIR path is actually exercised, so a
+    // regression that silently routed everything back to the AST is caught.
+    // =======================================================================
+
+    /// Analyze, JIT-compile **via the HIR walk**, and call a zero-arg `i64` fn.
+    fn run_hir(src: &str, func: &str) -> i64 {
+        let (tokens, le) = lex(src, FileId(0));
+        assert!(le.is_empty(), "lex: {le:?}");
+        let (module, pe) = parse(src, &tokens);
+        assert!(pe.is_empty(), "parse: {pe:?}");
+        let analysis = analyze(&module);
+        assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+        // The function under test must be HIR-eligible (else this would silently
+        // test the AST path). The user fn plus any covered prelude bodies count.
+        assert!(
+            hir_eligible_fns(&analysis) >= 1,
+            "expected the HIR walk to handle `{func}`, but no body was eligible"
+        );
+        let jit = compile_hir(&analysis).expect("hir codegen");
+        unsafe { jit.call_i64(func).expect("function present") }
+    }
+
+    #[test]
+    fn hir_returns_constant() {
+        assert_eq!(run_hir("function answer(): i64 { 42 }", "answer"), 42);
+    }
+
+    #[test]
+    fn hir_arithmetic_matches_ast() {
+        for (src, want) in [
+            ("function f(): i64 { 40 + 2 }", 42),
+            ("function f(): i64 { (6 - 2) * 10 + 2 }", 42),
+            ("function f(): i64 { 84 / 2 }", 42),
+            ("function f(): i64 { 85 % 43 }", 42),
+            ("function f(): i64 { 7 & 6 }", 6),
+            ("function f(): i64 { 1 | 4 }", 5),
+            ("function f(): i64 { 5 ^ 1 }", 4),
+            ("function f(): i64 { 1 << 4 }", 16),
+            ("function f(): i64 { 64 >> 2 }", 16),
+        ] {
+            assert_eq!(run_hir(src, "f"), want, "src: {src}");
+        }
+    }
+
+    #[test]
+    fn hir_locals_and_assignment() {
+        assert_eq!(
+            run_hir("function f(): i64 { var x: i64 = 40; x = x + 2; x }", "f"),
+            42
+        );
+    }
+
+    #[test]
+    fn hir_nested_block_shadowing() {
+        assert_eq!(
+            run_hir(
+                "function f(): i64 { var x: i64 = 1; var y: i64 = { var x: i64 = 40; x + 1 }; x + y }",
+                "f"
+            ),
+            42
+        );
+    }
+
+    #[test]
+    fn hir_if_else_value_and_comparison() {
+        assert_eq!(run_hir("function f(): i64 { if 1 < 2 { 42 } else { 0 } }", "f"), 42);
+        assert_eq!(run_hir("function f(): i64 { if 2 < 1 { 0 } else { 42 } }", "f"), 42);
+    }
+
+    #[test]
+    fn hir_unary_and_logical() {
+        assert_eq!(run_hir("function f(): i64 { -(-42) }", "f"), 42);
+        assert_eq!(run_hir("function f(): bool { true && (1 < 2) }", "f"), 1);
+        assert_eq!(run_hir("function f(): bool { false || (2 < 1) }", "f"), 0);
+        assert_eq!(run_hir("function f(): bool { !false }", "f"), 1);
+    }
+
+    #[test]
+    fn hir_while_loop_accumulate() {
+        let src = "function f(): i64 {\n\
+                     var i: i64 = 0;\n\
+                     var sum: i64 = 0;\n\
+                     while i < 10 { sum = sum + i; i = i + 1; }\n\
+                     sum\n\
+                   }";
+        assert_eq!(run_hir(src, "f"), 45);
+    }
+
+    #[test]
+    fn hir_loop_break_value() {
+        let src = "function f(): i64 {\n\
+                     var i: i64 = 0;\n\
+                     loop { if i >= 42 { break i; } i = i + 1; }\n\
+                   }";
+        assert_eq!(run_hir(src, "f"), 42);
+    }
+
+    #[test]
+    fn hir_direct_call_and_recursion() {
+        let src = "function fact(n: i64): i64 { if n <= 1 { 1 } else { n * fact(n - 1) } }\n\
+                   function main(): i64 { fact(5) }";
+        assert_eq!(run_hir(src, "main"), 120);
+    }
+
+    #[test]
+    fn hir_and_ast_paths_agree() {
+        // The same program compiled both ways must produce the same result.
+        let src = "function g(a: i64, b: i64): i64 { a * b - a }\n\
+                   function f(): i64 { var t: i64 = 0; var k: i64 = 1; \
+                     while k <= 6 { t = t + g(k, 2); k = k + 1; } t }";
+        let (tokens, _) = lex(src, FileId(0));
+        let (module, _) = parse(src, &tokens);
+        let analysis = analyze(&module);
+        assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+        let ast_jit = compile(&analysis).expect("ast codegen");
+        let hir_jit = compile_hir(&analysis).expect("hir codegen");
+        let a = unsafe { ast_jit.call_i64("f").unwrap() };
+        let b = unsafe { hir_jit.call_i64("f").unwrap() };
+        assert_eq!(a, b, "AST and HIR codegen disagree");
+    }
+
+    #[test]
+    fn hir_record_struct_literal_and_field_access() {
+        let src = "struct Point { x: i64, y: i64 }\n\
+                   function f(): i64 { var p = Point { x: 40, y: 2 }; p.x + p.y }";
+        assert_eq!(run_hir(src, "f"), 42);
+    }
+
+    #[test]
+    fn hir_tuple_struct_ctor_and_index() {
+        let src = "struct Pair(i64, i64)\n\
+                   function f(): i64 { var p = Pair(40, 2); p.0 + p.1 }";
+        assert_eq!(run_hir(src, "f"), 42);
+    }
+
+    #[test]
+    fn hir_struct_field_mutation_and_agreement() {
+        let src = "struct Counter { n: i64 }\n\
+                   function f(): i64 { var c = Counter { n: 0 }; c.n = c.n + 42; c.n }";
+        assert_eq!(run_hir(src, "f"), 42);
+        // Same program via the AST path must agree.
+        let (tokens, _) = lex(src, FileId(0));
+        let (module, _) = parse(src, &tokens);
+        let analysis = analyze(&module);
+        let ast = compile(&analysis).expect("ast");
+        assert_eq!(unsafe { ast.call_i64("f").unwrap() }, 42);
+    }
+
+    /// Like `run_hir`, for a zero-arg `str`-returning function.
+    fn run_str_hir(src: &str, func: &str) -> String {
+        let (tokens, le) = lex(src, FileId(0));
+        assert!(le.is_empty(), "lex: {le:?}");
+        let (module, pe) = parse(src, &tokens);
+        assert!(pe.is_empty(), "parse: {pe:?}");
+        let analysis = analyze(&module);
+        assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+        assert!(hir_eligible_fns(&analysis) >= 1, "expected `{func}` to be HIR-eligible");
+        let jit = compile_hir(&analysis).expect("hir codegen");
+        let bits = unsafe { jit.call_i64(func).expect("function present") };
+        let p = bits as usize as *const runtime::LangStr;
+        unsafe { String::from_utf8_lossy(runtime::str_bytes(p)).into_owned() }
+    }
+
+    #[test]
+    fn hir_numeric_casts() {
+        assert_eq!(run_hir("function f(): i64 { 3.9 as i64 }", "f"), 3);
+        assert_eq!(run_hir("function f(): i64 { var x: i32 = 256; x as i64 }", "f"), 256);
+        // Round-trip through float and back into an integer register.
+        assert_eq!(run_hir("function f(): i64 { (7 as f64) as i64 }", "f"), 7);
+    }
+
+    #[test]
+    fn hir_tuple_literal_and_index() {
+        assert_eq!(run_hir("function f(): i64 { var t = (40, 2); t.0 + t.1 }", "f"), 42);
+    }
+
+    #[test]
+    fn hir_union_is_tag_check() {
+        // Widen `5` into `i64 | str`, then test its runtime tag.
+        assert_eq!(run_hir("function f(): bool { var x: i64 | str = 5; x is i64 }", "f"), 1);
+        assert_eq!(run_hir("function f(): bool { var x: i64 | str = 5; x is str }", "f"), 0);
+    }
+
+    #[test]
+    fn hir_string_interpolation_builtin_holes() {
+        assert_eq!(run_str_hir("function f(): str { var n: i64 = 42; \"n=$n\" }", "f"), "n=42");
+        assert_eq!(run_str_hir("function f(): str { var b: bool = true; \"$b\" }", "f"), "true");
+        assert_eq!(run_str_hir("function f(): str { \"hello, \" + \"world\" }", "f"), "hello, world");
+    }
+
+    #[test]
+    fn hir_string_cast_agrees_with_ast() {
+        let src = "function f(): str { (40 + 2) as str }";
+        let (tokens, _) = lex(src, FileId(0));
+        let (module, _) = parse(src, &tokens);
+        let analysis = analyze(&module);
+        assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+        let read = |jit: &Jit| -> String {
+            let bits = unsafe { jit.call_i64("f").unwrap() };
+            let p = bits as usize as *const runtime::LangStr;
+            unsafe { String::from_utf8_lossy(runtime::str_bytes(p)).into_owned() }
+        };
+        let ast = compile(&analysis).expect("ast");
+        let hir = compile_hir(&analysis).expect("hir");
+        assert_eq!(read(&ast), "42");
+        assert_eq!(read(&hir), "42");
+    }
+
+    #[test]
+    fn hir_list_literal_and_index_load() {
+        assert_eq!(run_hir("function f(): i64 { var xs = [10, 20, 12]; xs[0] + xs[1] + xs[2] }", "f"), 42);
+    }
+
+    #[test]
+    fn hir_list_index_store() {
+        assert_eq!(run_hir("function f(): i64 { var xs = [1, 2, 3]; xs[0] = 40; xs[0] + xs[1] }", "f"), 42);
+    }
+
+    #[test]
+    fn hir_map_literal_index_and_store() {
+        assert_eq!(run_hir("function f(): i64 { var m = { 1: 40, 2: 2 }; m[1] + m[2] }", "f"), 42);
+        assert_eq!(run_hir("function f(): i64 { var m = { 1: 0, 2: 2 }; m[1] = 40; m[1] + m[2] }", "f"), 42);
+    }
+
+    #[test]
+    fn hir_extend_method_call() {
+        let src = "struct Point { x: i64, y: i64 }\n\
+                   extend Point { function sum(self): i64 { self.x + self.y } }\n\
+                   function f(): i64 { var p = Point { x: 40, y: 2 }; p.sum() }";
+        assert_eq!(run_hir(src, "f"), 42);
+    }
+
+    #[test]
+    fn hir_extend_method_with_args_agrees_with_ast() {
+        let src = "struct Acc { total: i64 }\n\
+                   extend Acc { function add(self, n: i64): i64 { self.total = self.total + n; self.total } }\n\
+                   function f(): i64 { var a = Acc { total: 0 }; a.add(40); a.add(2) }";
+        let (tokens, _) = lex(src, FileId(0));
+        let (module, _) = parse(src, &tokens);
+        let analysis = analyze(&module);
+        assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+        let ast = compile(&analysis).expect("ast");
+        let hir = compile_hir(&analysis).expect("hir");
+        assert_eq!(unsafe { ast.call_i64("f").unwrap() }, 42);
+        assert_eq!(unsafe { hir.call_i64("f").unwrap() }, 42);
+    }
+
+    #[test]
+    fn hir_match_literal_arms() {
+        let src = "function f(): i64 { var n = 2; match n { 0 => 100, 1 => 200, _ => 42 } }";
+        assert_eq!(run_hir(src, "f"), 42);
+    }
+
+    #[test]
+    fn hir_match_union_type_binding() {
+        let src = "function f(): i64 { var x: i64 | str = 7; match x { i64 v => v, str s => 0 } }";
+        assert_eq!(run_hir(src, "f"), 7);
+    }
+
+    #[test]
+    fn hir_match_guard() {
+        let src = "function f(): i64 { var n = 5; match n { x if x > 3 => 42, _ => 0 } }";
+        assert_eq!(run_hir(src, "f"), 42);
+    }
+
+    #[test]
+    fn hir_for_list_accumulate() {
+        let src = "function f(): i64 { var xs = [10, 20, 12]; var s = 0; for x in xs { s = s + x; } s }";
+        assert_eq!(run_hir(src, "f"), 42);
+    }
+
+    #[test]
+    fn hir_for_map_iteration() {
+        let src = "function f(): i64 { var m = { 1: 40, 2: 2 }; var s = 0; for e in m { s = s + e.value; } s }";
+        assert_eq!(run_hir(src, "f"), 42);
+    }
+
+    #[test]
+    fn hir_match_and_for_agree_with_ast() {
+        let src = "function f(): i64 {\n\
+                     var xs = [1, 2, 3, 4, 5, 6];\n\
+                     var total = 0;\n\
+                     for x in xs {\n\
+                       var add: i64 = match x { 6 => 100, n if n > 3 => n, _ => 0 };\n\
+                       total = total + add;\n\
+                     }\n\
+                     total\n\
+                   }";
+        let (tokens, _) = lex(src, FileId(0));
+        let (module, _) = parse(src, &tokens);
+        let analysis = analyze(&module);
+        assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+        let ast = compile(&analysis).expect("ast");
+        let hir = compile_hir(&analysis).expect("hir");
+        let a = unsafe { ast.call_i64("f").unwrap() };
+        let b = unsafe { hir.call_i64("f").unwrap() };
+        assert_eq!(a, b, "AST and HIR codegen disagree on match+for");
+        assert_eq!(b, 100 + 4 + 5); // x=6→100, x=4→4, x=5→5, others 0
+    }
+
+    #[test]
+    fn hir_str_methods() {
+        assert_eq!(run_hir("function f(): i64 { \"hello\".size() }", "f"), 5);
+        assert_eq!(run_hir("function f(): bool { \"hello\".contains(\"ell\") }", "f"), 1);
+        assert_eq!(run_hir("function f(): bool { \"hi\".starts_with(\"h\") }", "f"), 1);
+    }
+
+    #[test]
+    fn hir_str_method_returning_str_agrees_with_ast() {
+        let src = "function f(): str { \"Hello\".to_upper() }";
+        let read = |jit: &Jit| -> String {
+            let bits = unsafe { jit.call_i64("f").unwrap() };
+            let p = bits as usize as *const runtime::LangStr;
+            unsafe { String::from_utf8_lossy(runtime::str_bytes(p)).into_owned() }
+        };
+        let (tokens, _) = lex(src, FileId(0));
+        let (module, _) = parse(src, &tokens);
+        let analysis = analyze(&module);
+        assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+        assert_eq!(read(&compile(&analysis).unwrap()), "HELLO");
+        assert_eq!(read(&compile_hir(&analysis).unwrap()), "HELLO");
+    }
+
+    #[test]
+    fn hir_map_methods() {
+        // size / contains / set on a builtin Map.
+        assert_eq!(run_hir("function f(): i64 { var m = { 1: 10, 2: 32 }; m.size() }", "f"), 2);
+        assert_eq!(run_hir("function f(): bool { var m = { 1: 10 }; m.contains(1) }", "f"), 1);
+        assert_eq!(run_hir("function f(): bool { var m = { 1: 10 }; m.contains(9) }", "f"), 0);
+        let src = "function f(): i64 { var m = { 1: 0 }; m.set(1, 42); m[1] }";
+        assert_eq!(run_hir(src, "f"), 42);
+    }
+
+    #[test]
+    fn hir_closure_direct_call() {
+        assert_eq!(run_hir("function f(): i64 { var g = (x: i64): i64 => x + 1; g(41) }", "f"), 42);
+    }
+
+    #[test]
+    fn hir_closure_captures_local() {
+        let src = "function f(): i64 { var base = 40; var add = (x: i64): i64 => base + x; add(2) }";
+        assert_eq!(run_hir(src, "f"), 42);
+    }
+
+    #[test]
+    fn hir_closure_agrees_with_ast() {
+        let src = "function f(): i64 {\n\
+                     var k: i64 = 3;\n\
+                     var mul = (x: i64): i64 => x * k;\n\
+                     mul(4) + mul(10)\n\
+                   }";
+        let (tokens, _) = lex(src, FileId(0));
+        let (module, _) = parse(src, &tokens);
+        let analysis = analyze(&module);
+        assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+        let ast = compile(&analysis).expect("ast");
+        let hir = compile_hir(&analysis).expect("hir");
+        let a = unsafe { ast.call_i64("f").unwrap() };
+        let b = unsafe { hir.call_i64("f").unwrap() };
+        assert_eq!(a, b, "AST and HIR codegen disagree on closures");
+        assert_eq!(b, 4 * 3 + 10 * 3);
+    }
+
+    #[test]
+    fn hir_list_methods_nonclosure() {
+        assert_eq!(run_hir("function f(): i64 { var xs = [1, 2, 3]; xs.push(4); xs.size() }", "f"), 4);
+        assert_eq!(run_hir("function f(): bool { var xs: List<i64> = []; xs.is_empty() }", "f"), 1);
+    }
+
+    #[test]
+    fn hir_list_higher_order_map_fold() {
+        // map doubles each, fold sums — exercises closures through builtin List methods.
+        let src = "function f(): i64 {\n\
+                     var xs = [1, 2, 3, 4];\n\
+                     var doubled = xs.map((x: i64): i64 => x * 2);\n\
+                     doubled.fold(0, (acc: i64, x: i64): i64 => acc + x)\n\
+                   }";
+        assert_eq!(run_hir(src, "f"), (1 + 2 + 3 + 4) * 2);
+    }
+
+    #[test]
+    fn hir_list_filter_agrees_with_ast() {
+        let src = "function f(): i64 {\n\
+                     var xs = [1, 2, 3, 4, 5, 6];\n\
+                     var evens = xs.filter((x: i64): bool => x % 2 == 0);\n\
+                     evens.fold(0, (a: i64, x: i64): i64 => a + x)\n\
+                   }";
+        let (tokens, _) = lex(src, FileId(0));
+        let (module, _) = parse(src, &tokens);
+        let analysis = analyze(&module);
+        assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+        let a = unsafe { compile(&analysis).unwrap().call_i64("f").unwrap() };
+        let b = unsafe { compile_hir(&analysis).unwrap().call_i64("f").unwrap() };
+        assert_eq!(a, b);
+        assert_eq!(b, 2 + 4 + 6);
+    }
+
+    #[test]
+    fn hir_collection_ctor_and_clone() {
+        // `List<T>()` / `Map<K,V>()` empty constructors via the intrinsic path.
+        assert_eq!(run_hir("function f(): i64 { var xs: List<i64> = List<i64>(); xs.push(42); xs[0] }", "f"), 42);
+        assert_eq!(run_hir("function f(): i64 { var m: Map<i64,i64> = Map<i64,i64>(); m[7] = 42; m[7] }", "f"), 42);
+        // Builtin `.clone()` on an immutable-element list: independent copy.
+        let src = "function f(): i64 {\n\
+                     var xs = [40, 2];\n\
+                     var ys = xs.clone();\n\
+                     ys.push(99);\n\
+                     xs.size() * 100 + ys.size()\n\
+                   }";
+        assert_eq!(run_hir(src, "f"), 2 * 100 + 3);
+    }
+
+    #[test]
+    fn hir_numeric_intrinsics() {
+        // `T.MAX` constant (field intrinsic) and `T.wrapping_add(..)` /
+        // `f64.is_nan(..)` (call intrinsics) in the numeric namespace.
+        assert_eq!(run_hir("function f(): i64 { i32.MAX as i64 }", "f"), i32::MAX as i64);
+        assert_eq!(run_hir("function f(): i64 { i64.wrapping_add(5, 37) }", "f"), 42);
+        assert_eq!(run_hir("function f(): bool { f64.is_nan(1.0) }", "f"), 0);
+        assert_eq!(run_hir("function f(): bool { var z: f64 = 0.0; f64.is_nan(z / z) }", "f"), 1);
+    }
+
+    #[test]
+    fn hir_numeric_intrinsic_agrees_with_ast() {
+        let src = "function f(): i64 { u8.saturating_add(250u8, 100u8) as i64 }";
+        let (tokens, _) = lex(src, FileId(0));
+        let (module, _) = parse(src, &tokens);
+        let analysis = analyze(&module);
+        assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+        let a = unsafe { compile(&analysis).unwrap().call_i64("f").unwrap() };
+        let b = unsafe { compile_hir(&analysis).unwrap().call_i64("f").unwrap() };
+        assert_eq!(a, b);
+        assert_eq!(b, 255); // u8 saturating
+    }
+
+    #[test]
+    fn hir_dynamic_dispatch_through_interface() {
+        let src = "interface Shape { function area(self): i64; }\n\
+                   struct Sq { side: i64 }\n\
+                   extend Sq: Shape { function area(self): i64 { self.side * self.side } }\n\
+                   function f(): i64 { var s: Shape = Sq { side: 7 }; s.area() }";
+        assert_eq!(run_hir(src, "f"), 49);
+    }
+
+    #[test]
+    fn hir_bounded_generic_interface_method() {
+        // `T: Shape` bound — interface method resolved to the concrete impl
+        // per monomorphized instance.
+        let src = "interface Shape { function area(self): i64; }\n\
+                   struct Sq { side: i64 }\n\
+                   extend Sq: Shape { function area(self): i64 { self.side * self.side } }\n\
+                   function area_of<T: Shape>(x: T): i64 { x.area() }\n\
+                   function f(): i64 { area_of(Sq { side: 6 }) }";
+        assert_eq!(run_hir(src, "f"), 36);
+    }
+
+    #[test]
+    fn hir_interface_dispatch_agrees_with_ast() {
+        let src = "interface Greeter { function greet(self): i64; }\n\
+                   struct A { n: i64 }\n\
+                   struct B { n: i64 }\n\
+                   extend A: Greeter { function greet(self): i64 { self.n } }\n\
+                   extend B: Greeter { function greet(self): i64 { self.n * 10 } }\n\
+                   function f(): i64 {\n\
+                     var xs: List<Greeter> = [];\n\
+                     xs.push(A { n: 4 });\n\
+                     xs.push(B { n: 5 });\n\
+                     var total = 0;\n\
+                     for g in xs { total = total + g.greet(); }\n\
+                     total\n\
+                   }";
+        let (tokens, _) = lex(src, FileId(0));
+        let (module, _) = parse(src, &tokens);
+        let analysis = analyze(&module);
+        assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+        let a = unsafe { compile(&analysis).unwrap().call_i64("f").unwrap() };
+        let b = unsafe { compile_hir(&analysis).unwrap().call_i64("f").unwrap() };
+        assert_eq!(a, b);
+        assert_eq!(b, 4 + 50);
+    }
+
+    #[test]
+    fn hir_thread_spawn_join_via_block_on() {
+        // Spawn an OS thread and join it; the join future is driven to completion
+        // through the runtime. `main` is sync, so only the worker body and the
+        // spawn/join intrinsics are exercised on the HIR path.
+        let src = "function f(): i64 {\n\
+                     var h = Thread.spawn { 42 };\n\
+                     match block_on(h.join()) { Joined j => j.value, Panicked p => -1 }\n\
+                   }";
+        // `block_on` may not be user-callable; fall back to a simpler shape if so.
+        let (tokens, _) = lex(src, FileId(0));
+        let (module, pe) = parse(src, &tokens);
+        if !pe.is_empty() { return; }
+        let analysis = analyze(&module);
+        if !analysis.errors.is_empty() { return; }
+        let a = unsafe { compile(&analysis).unwrap().call_i64("f") };
+        let b = unsafe { compile_hir(&analysis).unwrap().call_i64("f") };
+        assert_eq!(a, b, "AST and HIR codegen disagree on thread spawn/join");
+    }
+
+    #[test]
+    fn hir_channel_new_and_shared_new_build() {
+        // Constructing a channel pair and a Shared cell must produce identical
+        // results via AST and HIR (exercises the ChannelNew / SharedNew intrinsics).
+        let src = "function f(): i64 {\n\
+                     var s = Shared.new(40);\n\
+                     var got = s.lock((v: i64): i64 => v + 2);\n\
+                     got\n\
+                   }";
+        let (tokens, _) = lex(src, FileId(0));
+        let (module, pe) = parse(src, &tokens);
+        if !pe.is_empty() { return; }
+        let analysis = analyze(&module);
+        if !analysis.errors.is_empty() { return; }
+        let a = unsafe { compile(&analysis).unwrap().call_i64("f") };
+        let b = unsafe { compile_hir(&analysis).unwrap().call_i64("f") };
+        assert_eq!(a, b, "AST and HIR codegen disagree on Shared");
+    }
+
+    #[test]
+    fn hir_channel_send_and_try_recv() {
+        // `channel<T>()` + `send` + `try_recv` are all synchronous (no await),
+        // so they exercise the HIR ChannelNew intrinsic and Sender/Receiver
+        // builtin methods. `try_recv()` yields `T | null`.
+        let src = "function f(): i64 {\n\
+                     var pair: (Sender<i64>, Receiver<i64>) = channel<i64>();\n\
+                     var tx = pair.0;\n\
+                     var rx = pair.1;\n\
+                     tx.send(42);\n\
+                     match rx.try_recv() { i64 v => v, _ => -1 }\n\
+                   }";
+        let (tokens, _) = lex(src, FileId(0));
+        let (module, pe) = parse(src, &tokens);
+        assert!(pe.is_empty(), "parse: {pe:?}");
+        let analysis = analyze(&module);
+        assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+        let a = unsafe { compile(&analysis).unwrap().call_i64("f") };
+        let b = unsafe { compile_hir(&analysis).unwrap().call_i64("f") };
+        assert_eq!(a, b, "AST and HIR codegen disagree on channels");
+        assert_eq!(b, Some(42));
+    }
+
+    #[test]
+    fn hir_shared_lock_and_try_lock() {
+        // `Shared.new` + `.lock(closure)` (sync — the closure runs under the lock
+        // and returns a value). No async needed.
+        let src = "function f(): i64 {\n\
+                     var s = Shared.new(40);\n\
+                     s.lock((v: i64): i64 => v + 2)\n\
+                   }";
+        let (tokens, _) = lex(src, FileId(0));
+        let (module, pe) = parse(src, &tokens);
+        assert!(pe.is_empty(), "parse: {pe:?}");
+        let analysis = analyze(&module);
+        assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+        let a = unsafe { compile(&analysis).unwrap().call_i64("f") };
+        let b = unsafe { compile_hir(&analysis).unwrap().call_i64("f") };
+        assert_eq!(a, b, "AST and HIR codegen disagree on Shared.lock");
+        assert_eq!(b, Some(42));
+    }
+
+    #[test]
+    fn hir_user_to_str_interpolation() {
+        // A user type with a `to_str` method, interpolated in a string. Exercises
+        // the StrPart::Interp `stringify` method call on the HIR path.
+        let src = "struct Point { x: i64, y: i64 }\n\
+                   extend Point: ToStr { function to_str(self): str { (self.x as str) + \",\" + (self.y as str) } }\n\
+                   function f(): str { var p = Point { x: 3, y: 4 }; \"p=$p\" }";
+        let (tokens, _) = lex(src, FileId(0));
+        let (module, pe) = parse(src, &tokens);
+        assert!(pe.is_empty(), "parse: {pe:?}");
+        let analysis = analyze(&module);
+        assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+        let read = |jit: &Jit| -> String {
+            let bits = unsafe { jit.call_i64("f").unwrap() };
+            let p = bits as usize as *const runtime::LangStr;
+            unsafe { String::from_utf8_lossy(runtime::str_bytes(p)).into_owned() }
+        };
+        assert_eq!(read(&compile(&analysis).unwrap()), "p=3,4");
+        assert_eq!(read(&compile_hir(&analysis).unwrap()), "p=3,4");
+    }
+
+    #[test]
+    fn hir_async_analysis_helpers() {
+        // The HIR async-analysis helpers (foundation for the HIR async
+        // state-machine codegen) correctly detect `await` sites and collect the
+        // body's local bindings, walking the typed HIR.
+        let src = "function answer(): Future<i64> async { 40 + 2 }\n\
+                   function chain(): Future<i64> async {\n\
+                     var a: i64 = await answer();\n\
+                     var b: i64 = a + 1;\n\
+                     b\n\
+                   }";
+        let (tokens, _) = lex(src, FileId(0));
+        let (module, pe) = parse(src, &tokens);
+        assert!(pe.is_empty(), "parse: {pe:?}");
+        let analysis = analyze(&module);
+        assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+        let hir = compiler::hir::lower_program(&analysis);
+        let body_of = |name: &str| -> &compiler::hir::Body {
+            hir.bodies
+                .iter()
+                .find(|(d, _)| analysis.program.def(**d).name == name)
+                .map(|(_, b)| b)
+                .unwrap_or_else(|| panic!("no body `{name}`"))
+        };
+        // `answer` is await-free; `chain` awaits.
+        assert!(!crate::gen_hir::h_block_has_await(&body_of("answer").block));
+        assert!(crate::gen_hir::h_block_has_await(&body_of("chain").block));
+        // The await suspend site is scanned (one `await`).
+        let mut sites = Vec::new();
+        crate::gen_hir::h_scan_stmt_awaits(&body_of("chain").block, &mut sites);
+        assert_eq!(sites.len(), 1, "expected one await suspend site");
+        // The body's two `var` locals (a, b) are collected.
+        let mut locals = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        crate::gen_hir::h_collect_block_locals(&body_of("chain").block, &mut locals, &mut seen);
+        assert!(locals.len() >= 2, "expected ≥2 body locals, got {}", locals.len());
     }

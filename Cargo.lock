@@ -102,6 +102,7 @@ dependencies = [
  "cranelift-jit",
  "cranelift-module",
  "cranelift-object",
+ "gimli 0.31.1",
  "runtime",
  "target-lexicon",
 ]
@@ -253,7 +254,7 @@ dependencies = [
  "cranelift-control",
  "cranelift-entity",
  "cranelift-isle",
- "gimli",
+ "gimli 0.33.0",
  "hashbrown 0.17.1",
  "libm",
  "log",
@@ -538,6 +539,15 @@ dependencies = [
  "memchr",
  "pin-project-lite",
  "slab",
+]
+
+[[package]]
+name = "gimli"
+version = "0.31.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "07e28edb80900c19c28f1072f2e8aeca7fa06b23cd4169cefe1af5aa3260783f"
+dependencies = [
+ "indexmap",
 ]
 
 [[package]]

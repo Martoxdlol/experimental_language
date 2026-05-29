@@ -14,3 +14,4 @@ cranelift-module = "0.132"
 cranelift-codegen = "0.132"
 cranelift-frontend = "0.132"
 target-lexicon = "0.13"
+gimli = { version = "0.31", default-features = false, features = ["write"] }

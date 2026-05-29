@@ -405,7 +405,7 @@ impl<'a> Checker<'a> {
             let def = self.prog.def(d);
             def.kind == DefKind::InterfaceMethod && def.parent == Some(iface) && def.name == "hash"
         })?;
-        self.results.resolutions.insert(callee_span, ValueRes::Method(method));
+        self.record_res(callee_span, ValueRes::Method(method), self.tcx.error);
         Some(self.tcx.int(IntTy::U64))
     }
 
@@ -414,10 +414,10 @@ impl<'a> Checker<'a> {
     /// [`CloneKind`] for codegen); `None` for user types, which clone through
     /// their own `Clone` impl. Emits an error for collections whose elements are
     /// not (yet) cloneable.
-    pub(crate) fn check_builtin_clone(&mut self, rty: Ty, callee_span: Span, name_span: Span) -> Option<Ty> {
+    pub(crate) fn check_builtin_clone(&mut self, rty: Ty, _callee_span: Span, name_span: Span) -> Option<Ty> {
         use crate::sema::results::CloneKind;
         if self.is_immutable_value(rty) {
-            self.results.clone_kinds.insert(callee_span, CloneKind::Identity);
+            self.pending_clone_kind.set(Some(CloneKind::Identity));
             return Some(rty);
         }
         // A `Shared<T>` handle clones to another handle for the *same* cell
@@ -429,12 +429,12 @@ impl<'a> Checker<'a> {
                     || *def == self.prog.sender_def
                     || *def == self.prog.receiver_def)
         {
-            self.results.clone_kinds.insert(callee_span, CloneKind::Identity);
+            self.pending_clone_kind.set(Some(CloneKind::Identity));
             return Some(rty);
         }
         if let Some(elem) = self.list_elem(rty) {
             if self.is_immutable_value(elem) {
-                self.results.clone_kinds.insert(callee_span, CloneKind::List);
+                self.pending_clone_kind.set(Some(CloneKind::List));
                 return Some(rty);
             }
             // A `List` of mutable elements is still cloneable when the
@@ -442,7 +442,7 @@ impl<'a> Checker<'a> {
             // per-element deep clone.
             let clone_def = self.prog.clone_def;
             if clone_def != DefId(0) && self.type_implements(elem, clone_def) {
-                self.results.clone_kinds.insert(callee_span, CloneKind::ListDeep);
+                self.pending_clone_kind.set(Some(CloneKind::ListDeep));
                 return Some(rty);
             }
             self.emit(name_span, SemaErrorKind::Message(format!(
@@ -454,7 +454,7 @@ impl<'a> Checker<'a> {
         }
         if let Some((kt, vt)) = self.map_kv(rty) {
             if self.is_immutable_value(kt) && self.is_immutable_value(vt) {
-                self.results.clone_kinds.insert(callee_span, CloneKind::Map);
+                self.pending_clone_kind.set(Some(CloneKind::Map));
                 return Some(rty);
             }
             // The key type must be immutable (its hash would otherwise become
@@ -465,7 +465,7 @@ impl<'a> Checker<'a> {
                 && clone_def != DefId(0)
                 && self.type_implements(vt, clone_def)
             {
-                self.results.clone_kinds.insert(callee_span, CloneKind::MapDeep);
+                self.pending_clone_kind.set(Some(CloneKind::MapDeep));
                 return Some(rty);
             }
             self.emit(name_span, SemaErrorKind::Message(format!(
@@ -520,19 +520,24 @@ impl<'a> Checker<'a> {
         // a thread-safe handle (`Sender`/`Receiver` — the channel itself is
         // synchronized; the struct only carries an id). Other managed values
         // would need a deep clone at the boundary (a follow-up — `docs/20` §1).
-        if let Some(info) = self.results.closures.get(&clo.span).cloned() {
-            for (_, cap_ty) in &info.captures {
-                if !self.is_thread_shareable(*cap_ty) {
-                    self.emit(clo.span, SemaErrorKind::Message(format!(
-                        "`Thread.spawn` can only capture immutable values or channel \
-                         endpoints so far; captured value of type `{}` would need a \
-                         deep clone across the thread boundary (`docs/20` §1)",
-                        self.display(*cap_ty)
-                    )));
-                }
+        // The closure was just checked, so its HIR node (with the resolved
+        // captures) is already in `node_hir` (was the `closures` side table).
+        let cap_tys: Vec<Ty> = match self.results.node_hir.get(&clo.span).map(|n| &n.kind) {
+            Some(crate::hir::ExprKind::Closure { captures, .. }) => {
+                captures.iter().map(|(_, t)| *t).collect()
+            }
+            _ => Vec::new(),
+        };
+        for cap_ty in cap_tys {
+            if !self.is_thread_shareable(cap_ty) {
+                self.emit(clo.span, SemaErrorKind::Message(format!(
+                    "`Thread.spawn` can only capture immutable values or channel \
+                     endpoints so far; captured value of type `{}` would need a \
+                     deep clone across the thread boundary (`docs/20` §1)",
+                    self.display(cap_ty)
+                )));
             }
         }
-        self.results.thread_spawns.insert(span, r);
         self.tcx.mk_named(self.prog.join_handle_def, vec![r])
     }
 
@@ -551,7 +556,6 @@ impl<'a> Checker<'a> {
         }
         match name.name.as_str() {
             "join" => {
-                self.results.thread_joins.insert(span, r);
                 let joined = self.tcx.mk_named(self.prog.joined_def, vec![r]);
                 let panicked = self.tcx.mk_named(self.prog.panicked_def, Vec::new());
                 let union = self.tcx.mk_union([joined, panicked]);
@@ -636,9 +640,7 @@ impl<'a> Checker<'a> {
                 method.name
             )));
         }
-        self.results.resolutions.insert(callee.span, ValueRes::Method(mdef));
-        self.results.static_calls.insert(callee.span);
-        self.results.static_recv.insert(callee.span, pty);
+        self.record_res(callee.span, ValueRes::Method(mdef), self.tcx.error);
         let (params, ret) = self.iface_method_sig(mdef, iface, &iargs, pty);
         if args.len() != params.len() {
             self.emit(span, SemaErrorKind::ArgCount { expected: params.len(), found: args.len() });
@@ -647,6 +649,9 @@ impl<'a> Checker<'a> {
             let at = self.check_expr(a, Some(*pt));
             self.expect(at, *pt, a.span);
         }
+        // Mark this a static call (with its receiver type) for the HIR `Call`
+        // node — set after the args so a nested static call cannot clobber it.
+        self.pending_static_recv.set(Some(pty));
         ret
     }
 
@@ -686,8 +691,7 @@ impl<'a> Checker<'a> {
                 method.name, self.prog.def(struct_def).name
             )));
         }
-        self.results.resolutions.insert(callee.span, ValueRes::Method(mdef));
-        self.results.static_calls.insert(callee.span);
+        self.record_res(callee.span, ValueRes::Method(mdef), self.tcx.error);
 
         // Substitution chain:
         //   * `ext_subst` maps the extend's generics → the struct's `Param`s.
@@ -734,7 +738,9 @@ impl<'a> Checker<'a> {
             .map(|g| subst.get(g).copied().unwrap_or(self.tcx.error))
             .collect();
         let recv_ty_solved = self.tcx.mk_named(struct_def, recv_args_solved);
-        self.results.static_recv.insert(callee.span, recv_ty_solved);
+        // Static call (with solved receiver) for the HIR `Call` node; set after
+        // arg inference so a nested static call cannot clobber the slot.
+        self.pending_static_recv.set(Some(recv_ty_solved));
         // Report unsolved struct generics with a clear, struct-anchored message.
         for g in &struct_gens {
             if subst.get(g).is_none() {
@@ -777,7 +783,7 @@ impl<'a> Checker<'a> {
         }
         for (i, a) in args.iter().enumerate() {
             if let Some(pt) = param_tys.get(i) {
-                let at = self.results.expr_types.get(&a.span).copied().unwrap_or(self.tcx.error);
+                let at = self.results.expr_ty(a.span).unwrap_or(self.tcx.error);
                 self.expect(at, *pt, a.span);
             }
         }
@@ -795,8 +801,10 @@ impl<'a> Checker<'a> {
         for g in &method_gens {
             targs.push(subst.get(g).copied().unwrap_or(self.tcx.error));
         }
+        // Hand the solved type args to the HIR `Call` node (was `call_type_args`);
+        // args were checked during inference above, none re-checked after here.
         if !targs.is_empty() {
-            self.results.call_type_args.insert(callee.span, targs.clone());
+            self.pending_type_args.set(Some(targs.clone()));
         }
         // Enforce each bound on the inferred type arguments.
         let mut all_gens = ext_gens.clone();
@@ -836,7 +844,6 @@ impl<'a> Checker<'a> {
                 self.check_expr(a, None);
             }
         }
-        self.results.channel_news.insert(span);
         let sender = self.tcx.mk_named(self.prog.sender_def, vec![elem]);
         let receiver = self.tcx.mk_named(self.prog.receiver_def, vec![elem]);
         self.tcx.mk_tuple(vec![sender, receiver])
@@ -894,7 +901,6 @@ impl<'a> Checker<'a> {
             return self.tcx.error;
         }
         let elem = self.check_expr(&args[0], None);
-        self.results.shared_news.insert(span);
         self.tcx.mk_named(self.prog.shared_def, vec![elem])
     }
 
@@ -932,7 +938,6 @@ impl<'a> Checker<'a> {
                     )));
                     return self.tcx.error;
                 }
-                self.results.foreign_allocs.insert(span, (t, method == "alloc_zeroed"));
                 // `*T | null` — a raw nullable pointer (NPO).
                 let ptr = self.tcx.mk_ptr(t);
                 self.tcx.mk_union([ptr, self.tcx.null])
@@ -949,7 +954,6 @@ impl<'a> Checker<'a> {
                         self.display(at)
                     )));
                 }
-                self.results.foreign_frees.insert(span);
                 self.tcx.null
             }
             "realloc" => {
@@ -976,7 +980,6 @@ impl<'a> Checker<'a> {
                 let usize_t = self.tcx.int(IntTy::Usize);
                 let szt = self.check_expr(&args[1], Some(usize_t));
                 self.expect(szt, usize_t, args[1].span);
-                self.results.foreign_reallocs.insert(span);
                 self.tcx.mk_union([ptr_t, self.tcx.null])
             }
             "alloc_flex" => {
@@ -1005,7 +1008,7 @@ impl<'a> Checker<'a> {
                 let usize_t = self.tcx.int(IntTy::Usize);
                 let ct = self.check_expr(&args[0], Some(usize_t));
                 self.expect(ct, usize_t, args[0].span);
-                self.results.foreign_flex.insert(span, (t, e));
+                self.pending_foreign_flex.set(Some((t, e)));
                 let ptr_t = self.tcx.mk_ptr(t);
                 self.tcx.mk_union([ptr_t, self.tcx.null])
             }
@@ -1029,7 +1032,6 @@ impl<'a> Checker<'a> {
         }
         let at = self.check_expr(&args[0], Some(self.tcx.str));
         self.expect(at, self.tcx.str, args[0].span);
-        self.results.cstring_from_strs.insert(span);
         self.tcx.mk_ptr(self.tcx.int(IntTy::U8))
     }
 
@@ -1046,7 +1048,6 @@ impl<'a> Checker<'a> {
                 "`CStr.to_str` expects a raw pointer `*T`, got `{}`", self.display(at)
             )));
         }
-        self.results.cstr_to_strs.insert(span);
         self.tcx.str
     }
 
@@ -1089,100 +1090,51 @@ impl<'a> Checker<'a> {
     /// (`docs/18` §10). Returns the constant's type, or `None` if `tyname` is not
     /// a primitive numeric type with that constant.
     pub(crate) fn check_num_constant(&mut self, tyname: &str, name: &Ident, field_span: Span) -> Option<Ty> {
-        use crate::sema::results::NumIntrinsic;
-        if let Some(it) = IntTy::from_name(tyname) {
-            let ty = self.tcx.int(it);
-            let intr = match name.name.as_str() {
-                "MIN" => NumIntrinsic::IntBound { ty, max: false },
-                "MAX" => NumIntrinsic::IntBound { ty, max: true },
-                _ => return None,
-            };
-            self.results.num_intrinsics.insert(field_span, intr);
-            return Some(ty);
-        }
-        if let Some(ft) = FloatTy::from_name(tyname) {
-            let ty = self.tcx.float(ft);
-            let kind = match name.name.as_str() {
-                "INFINITY" => 0u8,
-                "NEG_INFINITY" => 1,
-                "NAN" => 2,
-                _ => return None,
-            };
-            self.results.num_intrinsics.insert(field_span, NumIntrinsic::FloatConst { ty, kind });
-            return Some(ty);
-        }
-        None
+        use crate::sema::results::{num_constant_of, NumIntrinsic};
+        // Recognition lives in the shared `num_constant_of`; HIR lowering calls
+        // the same helper, so no `num_intrinsics` side table is recorded.
+        let _ = field_span;
+        let intr = num_constant_of(&self.tcx, tyname, &name.name)?;
+        Some(match intr {
+            NumIntrinsic::IntBound { ty, .. } | NumIntrinsic::FloatConst { ty, .. } => ty,
+            _ => unreachable!("num_constant_of yields only IntBound/FloatConst"),
+        })
     }
 
     /// Numeric-namespace methods on a primitive type (`docs/18` §10, `docs/14`
     /// §5): the `{wrapping,saturating,checked,overflowing}_{add,sub,mul}` integer
     /// families and the `f*.is_nan`/`is_infinite`/`is_finite` float predicates.
     pub(crate) fn check_num_method(&mut self, tyname: &str, name: &Ident, args: &[Expr], span: Span) -> Option<Ty> {
-        use crate::sema::results::NumIntrinsic;
-        if let Some(ft) = FloatTy::from_name(tyname) {
-            let fty = self.tcx.float(ft);
-            let kind = match name.name.as_str() {
-                "is_nan" => 0u8,
-                "is_infinite" => 1,
-                "is_finite" => 2,
-                _ => return None,
-            };
-            self.check_num_args(args, &[fty], span);
-            self.results.num_intrinsics.insert(span, NumIntrinsic::FloatPred { ty: fty, kind });
-            return Some(self.tcx.bool);
-        }
-        let it = IntTy::from_name(tyname)?;
-        let ity = self.tcx.int(it);
-        let (family, base) = if let Some(b) = name.name.strip_prefix("wrapping_") {
-            (0u8, b)
-        } else if let Some(b) = name.name.strip_prefix("saturating_") {
-            (1, b)
-        } else if let Some(b) = name.name.strip_prefix("checked_") {
-            (2, b)
-        } else if let Some(b) = name.name.strip_prefix("overflowing_") {
-            (3, b)
-        } else {
-            return None;
-        };
-        let op = match base {
-            "add" => 0u8,
-            "sub" => 1,
-            "mul" => 2,
-            "div" => 3,
-            "rem" => 4,
-            "neg" => 5,
-            "shl" => 6,
-            "shr" => 7,
-            _ => return None,
-        };
-        // Argument arities differ by op (`docs/14` §5, `docs/18` §10):
-        //   * unary: `neg`;
-        //   * binary with `u32` shift count: `shl`, `shr`;
-        //   * binary `(T, T)`: the rest.
-        let u32_ty = self.tcx.int(IntTy::U32);
-        let expected: &[Ty] = match op {
-            5 => &[ity][..],
-            6 | 7 => {
-                let v = vec![ity, u32_ty];
-                self.results.num_intrinsics.insert(span, NumIntrinsic::IntArith { ty: ity, family, op });
-                self.check_num_args(args, &v, span);
-                return Some(match family {
-                    2 => self.tcx.mk_union([ity, self.tcx.null]),
-                    3 => self.tcx.mk_tuple(vec![ity, self.tcx.bool]),
-                    _ => ity,
-                });
+        use crate::sema::results::{num_method_of, NumIntrinsic};
+        // Recognition lives in the shared `num_method_of`; HIR lowering calls the
+        // same helper, so no `num_intrinsics` side table is recorded here. This
+        // function still validates argument arities and computes the result type.
+        let intr = num_method_of(&self.tcx, tyname, &name.name)?;
+        match intr {
+            NumIntrinsic::FloatPred { ty, .. } => {
+                self.check_num_args(args, &[ty], span);
+                Some(self.tcx.bool)
             }
-            _ => &[ity, ity][..],
-        };
-        self.check_num_args(args, expected, span);
-        self.results.num_intrinsics.insert(span, NumIntrinsic::IntArith { ty: ity, family, op });
-        // Result type by family: wrapping/saturating → T; checked → T | null;
-        // overflowing → (T, bool).
-        Some(match family {
-            2 => self.tcx.mk_union([ity, self.tcx.null]),
-            3 => self.tcx.mk_tuple(vec![ity, self.tcx.bool]),
-            _ => ity,
-        })
+            // Argument arities differ by op (`docs/14` §5, `docs/18` §10): `neg`
+            // is unary; `shl`/`shr` take `(T, u32)`; the rest take `(T, T)`.
+            // Result by family: wrapping/saturating → T; checked → T | null;
+            // overflowing → (T, bool).
+            NumIntrinsic::IntArith { ty, family, op } => {
+                let u32_ty = self.tcx.int(IntTy::U32);
+                let expected: Vec<Ty> = match op {
+                    5 => vec![ty],
+                    6 | 7 => vec![ty, u32_ty],
+                    _ => vec![ty, ty],
+                };
+                self.check_num_args(args, &expected, span);
+                Some(match family {
+                    2 => self.tcx.mk_union([ty, self.tcx.null]),
+                    3 => self.tcx.mk_tuple(vec![ty, self.tcx.bool]),
+                    _ => ty,
+                })
+            }
+            _ => unreachable!("num_method_of yields only FloatPred/IntArith"),
+        }
     }
 
     /// Check positional args against expected primitive types (for numeric

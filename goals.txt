@@ -12,9 +12,12 @@
 
 /goal Apply language branding, this language is now officially called "Otter Fusion", file extensions is `.otter`. Keep most code as agnostic to the language name as possible but use the name in the places needed (like the extension)
 
----
 
 /goal I don't want to see the name "lang" ever again. The idea is that the language code is as agnostic as possible. BUT, I DON'T WANT TO SEE "lang" as a NOT CLEAR placeholder anywhere were the real name which is already established should be. Replace WITHOUT USING BASH OR GREP all places where we are using "lang" for "otter-fusion" or "otter_fusion" (use _ for cli or commands).
+
+---
+
+/goal Refactor to the architecture in README: introduce a typed, resolved, desugared HIR that the type-checker produces and codegen + LSP consume, retiring the ~40 Span-keyed CheckResults tables (they become HIR node fields). Build it at full Rust/C/Java quality — no shortcuts, no skipped or deferred hard cases. Staged, test-gated: (1) define complete HIR; (2) lower AST+CheckResults→HIR losslessly; (3) repoint codegen to HIR only; (4) repoint LSP; (5) checker emits HIR directly, delete CheckResults table-by-table. TEST CONSTANTLY AND HEAVILY: write many, many new tests all the time — unit + integration + e2e — covering every HIR node, every lowering, every desugar, every pass, and every edge case; run the full suite after every change; keep ALL existing tests green at every step and NEVER advance on red. Every node preserves its source span (provenance through every lowering). Debuggability/observability are first-class: add --emit=tokens|ast|hir|clif with stable pretty-printers + DWARF source-level debug info for built programs. Monomorphization stays at the HIR→codegen worklist; MIR is a separate later project. Read docs + ROADMAP first; keep ROADMAP updated.
 
 /goal implement fully working LSP + VS Code extension. Make it fully featured and as efficient as possible. Currently colors don't match the grammar. Grammar colors are nice! But once the lsp loads colors changes and look ugly. Use colors from grammar. Make autocomplete work.
 

@@ -73,12 +73,21 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// Check an assignment target and return the type it holds.
+    /// Check an assignment target and return the type it holds. An lvalue is not
+    /// routed through [`Checker::check_expr`], so build its HIR node here too
+    /// (Stage 5) — otherwise an enclosing block could not be checker-emitted.
     pub(crate) fn check_lvalue(&mut self, target: &Expr) -> Ty {
+        let ty = self.check_lvalue_inner(target);
+        if let Some(node) = self.build_hir_node(target, ty) {
+            self.results.node_hir.insert(target.span, node);
+        }
+        ty
+    }
+
+    fn check_lvalue_inner(&mut self, target: &Expr) -> Ty {
         match &target.kind {
             ExprKind::Ident(name) => match self.lookup(&name.name) {
                 Some((ty, id)) => {
-                    self.results.resolutions.insert(target.span, ValueRes::Local(id));
                     // An assignment to an enclosing-scope binding is itself a
                     // capture (`docs/09` §7): the closure mutates the outer's
                     // cell. Without this, `name = s` inside a closure body
@@ -86,6 +95,7 @@ impl<'a> Checker<'a> {
                     // closure's `captures` list — codegen would then have no
                     // env slot to write through.
                     self.record_capture(id, ty);
+                    self.record_res(target.span, ValueRes::Local(id), ty);
                     ty
                 }
                 None => {
@@ -94,8 +104,9 @@ impl<'a> Checker<'a> {
                     let module = self.current_module();
                     if let Some(def) = self.prog.resolve_value_in(module, &name.name) {
                         if self.prog.def(def).kind == DefKind::ExternVar {
-                            self.results.resolutions.insert(target.span, ValueRes::Global(def));
-                            return self.value_def_ty(def);
+                            let t = self.value_def_ty(def);
+                            self.record_res(target.span, ValueRes::Global(def), t);
+                            return t;
                         }
                     }
                     self.emit(target.span, SemaErrorKind::UnknownValue {

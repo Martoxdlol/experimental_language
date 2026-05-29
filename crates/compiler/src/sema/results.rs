@@ -87,157 +87,40 @@ pub enum StructFields {
 /// Everything the checker learns about a program.
 #[derive(Default)]
 pub struct CheckResults {
-    /// The resolved type of every expression node, by its span.
-    pub expr_types: HashMap<Span, Ty>,
-    /// What each value-position name resolves to, by the name's span.
-    pub resolutions: HashMap<Span, ValueRes>,
     /// The type of every local binding.
     pub local_types: HashMap<LocalId, Ty>,
     /// The declaration (binding occurrence) span of every local — its `var`
     /// name, parameter name, or pattern binding. Consumed by the LSP for
     /// go-to-definition / find-references on locals.
     pub local_decls: HashMap<LocalId, Span>,
-    /// Per function: its parameter locals in order, and its return type.
-    pub fn_params: HashMap<DefId, Vec<LocalId>>,
-    pub fn_return: HashMap<DefId, Ty>,
-    /// Per `extern function`: its lowered parameter types and return type. An
-    /// extern function has no body (no param locals), so codegen reads its C-ABI
-    /// signature from here instead of `fn_params`/`fn_return`.
-    pub extern_sigs: HashMap<DefId, (Vec<Ty>, Ty)>,
+    /// Per `extern function`: its C-ABI signature, built by the checker as the
+    /// HIR [`crate::hir::ExternSig`] node data (Stage 5). An extern function has
+    /// no body, so codegen reads its signature from here.
+    pub extern_sigs: HashMap<DefId, crate::hir::ExternSig>,
     /// Per struct def: its lowered field-type layout template.
     pub struct_fields: HashMap<DefId, StructFields>,
-    /// Implicit coercions the checker inserted, keyed by the coerced
-    /// expression's span (the code generator applies them after evaluating the
-    /// expression).
-    pub adjustments: HashMap<Span, Adjust>,
-    /// The lowered target type of each `as`/`is` cast, keyed by the cast
-    /// expression's span (needed for `is`, whose result type is `bool`).
-    pub cast_targets: HashMap<Span, Ty>,
-    /// For type-matching patterns (`i64 x`, unit-struct names), the lowered
-    /// variant type the pattern tests for, keyed by the pattern's span.
-    pub pattern_types: HashMap<Span, Ty>,
-    /// The generic type arguments at each generic call/constructor site, keyed
-    /// by the callee's span. These are expressed in the *caller's* type
-    /// parameters (so they may contain `Param`s); the monomorphizer substitutes
-    /// the caller's instantiation to get concrete arguments.
-    pub call_type_args: HashMap<Span, Vec<Ty>>,
-    /// For an overloaded operator (one whose operands are user types), the
-    /// `extend` method it resolves to, keyed by the operator's span. Codegen
-    /// emits a method call instead of a primitive instruction.
-    pub operator_methods: HashMap<Span, DefId>,
-    /// For a string-interpolation hole of a user type, the `to_str(self): str`
-    /// method to call, keyed by the hole expression's span (`docs/01` §8).
-    pub stringify_methods: HashMap<Span, DefId>,
-    /// `?` residual conversions (`docs/13` §4): for each `?` (keyed by its
-    /// span), the failure variants that propagate via a `FromResidual` impl
-    /// rather than directly — `(residual variant, from_residual method, target
-    /// type)`. On a match the value is unboxed, converted, and re-boxed.
-    pub residual_conversions: HashMap<Span, Vec<(Ty, DefId, Ty)>>,
-    /// `?` on a non-union wrapper type (`docs/13` §3): for each such `?`
-    /// (keyed by the `?` span), the `branch` method to call on the operand
-    /// to obtain its `Output | Residual` union, the monomorphization arguments
-    /// (the wrapper extend's solved generics), and the resulting union type.
-    /// Codegen emits the branch call before the existing union partition.
-    pub try_branches: HashMap<Span, TryBranch>,
-    /// Builtin collection constructor calls (`Map<K,V>()`, `List<T>()`, and
-    /// their `.new` forms), keyed by the call expression's span. The value is
-    /// the lowered collection type to allocate (empty).
-    pub builtin_ctors: HashMap<Span, Ty>,
-    /// `for` loops driven by the `Iterator` protocol (rather than the `List`
-    /// fast path), keyed by the iterable expression's span.
-    pub for_iters: HashMap<Span, ForIter>,
-    /// `for entry in map` loops, keyed by the iterable expression's span. The
-    /// values are `(key type, value type, Entry<K,V> type)`.
-    pub for_maps: HashMap<Span, (Ty, Ty, Ty)>,
     /// Interface implementations: `(implementing type def, interface def) →
     /// extend block def`. Lets codegen monomorphize an interface-method call on
     /// a generic type parameter to the concrete `extend` impl.
     pub iface_impls: HashMap<(DefId, DefId), DefId>,
-    /// Closure expressions, keyed by the closure's span. Carries the analysis
-    /// codegen needs to lower it to a heap environment + lifted function.
-    pub closures: HashMap<Span, ClosureInfo>,
-    /// Builtin `.clone()` calls (`docs/10`/`docs/15`), keyed by the call's
-    /// `callee` span. User/derived `clone` methods go through normal method
-    /// resolution instead and are *not* recorded here.
-    pub clone_kinds: HashMap<Span, CloneKind>,
-    /// Static method calls `Type.method(...)` / `T.method(...)` (`docs/09` §6,
-    /// `docs/10`), keyed by the call's `callee` span. The resolution table holds
-    /// the (interface or extend) method; this set tells codegen the call takes
-    /// **no receiver** (do not prepend `self`).
-    pub static_calls: std::collections::HashSet<Span>,
-    /// For each static call, the receiver type it was made on (a `Param` for
-    /// `T.method()`, a `Named` for `Type.method()`), so codegen can resolve an
-    /// interface static method to the concrete impl after substitution.
-    pub static_recv: HashMap<Span, Ty>,
-    /// Numeric-namespace intrinsics (`docs/18` §10, `docs/14` §5): `i32.MAX`,
-    /// `i32.wrapping_add(a,b)`, `f64.NAN`, `f64.is_nan(x)`, … keyed by the field
-    /// or call expression's span. Codegen emits the constant/operation directly.
-    pub num_intrinsics: HashMap<Span, NumIntrinsic>,
-    /// `Shared.new(v)` calls (`docs/20` §4), keyed by the call span. Codegen
-    /// allocates a runtime mutex cell and wraps it in a `Shared<T>` handle.
-    pub shared_news: std::collections::HashSet<Span>,
-    /// `Foreign.alloc<T>()` / `alloc_zeroed<T>()` calls (`docs/19` §5), keyed by
-    /// the call span → (`T`, `zeroed`). Codegen emits a `lang_foreign_alloc`
-    /// of `sizeof(T)` bytes; the result is a raw `*T | null` (NPO).
-    pub foreign_allocs: HashMap<Span, (Ty, bool)>,
-    /// `Foreign.free(p)` calls (`docs/19` §5), keyed by the call span. Codegen
-    /// emits `lang_foreign_free` on the raw pointer argument.
-    pub foreign_frees: std::collections::HashSet<Span>,
-    /// `Foreign.realloc<T>(p, new_size)` calls (`docs/19` §5). Codegen emits
-    /// `lang_foreign_realloc(p, new_size)`.
-    pub foreign_reallocs: std::collections::HashSet<Span>,
-    /// `Foreign.alloc_flex<T, E>(extra_count)` calls (`docs/19` §5), keyed by
-    /// span → (`T`, `E`). Codegen allocates `sizeof(T) + extra_count*sizeof(E)`.
-    pub foreign_flex: HashMap<Span, (Ty, Ty)>,
-    /// `CString.from_str(s)` calls (`docs/19` §6): marshal a `str` into a
-    /// NUL-terminated C string on the foreign heap (returns `*u8`).
-    pub cstring_from_strs: std::collections::HashSet<Span>,
-    /// `CStr.to_str(p)` calls (`docs/19` §6): copy a C string into a `str`.
-    pub cstr_to_strs: std::collections::HashSet<Span>,
-    /// Libraries named by `@Link(lib = "…")` on extern functions (`docs/19`
-    /// §13), in first-seen order. Native builds pass `-l<lib>`; the JIT
-    /// `dlopen`s each so the symbols resolve.
-    pub link_libs: Vec<String>,
-    /// `channel<T>()` calls (`docs/20` §2), keyed by the call span. Codegen
-    /// allocates a runtime channel and builds the `(Sender<T>, Receiver<T>)`
-    /// tuple; the element type is read from the recorded result type.
-    pub channel_news: std::collections::HashSet<Span>,
-    /// `Thread.spawn { … }` calls (`docs/20`), keyed by the call's span. The
-    /// value is the closure's result type `R` (so codegen builds `JoinHandle<R>`
-    /// and, at `join`, `Joined<R>`).
-    pub thread_spawns: HashMap<Span, Ty>,
-    /// `JoinHandle<R>.join()` calls (`docs/20`), keyed by the call's span. The
-    /// value is `R` (codegen builds the `Joined<R> | Panicked` result).
-    pub thread_joins: HashMap<Span, Ty>,
-    /// Async functions/methods (`docs/21` §3): the future `Output` type, keyed
-    /// by the function def. Such a function's body is lowered to a `Future`
-    /// state machine whose `poll` runs the body; calling it constructs the
-    /// machine instead of running the body.
-    pub async_fns: HashMap<DefId, Ty>,
-    /// `await e` expressions (`docs/21` §4), keyed by the `await` keyword span.
-    /// The value is the awaited future's `Output` (the type `await` yields).
-    pub awaits: HashMap<Span, Ty>,
-    /// `yield_now()` calls (`docs/21`): a builtin returning a `Future<null>`
-    /// that suspends once. Keyed by the call span.
-    pub yield_nows: std::collections::HashSet<Span>,
-    /// `spawn EXPR` expressions (`docs/21` §6), keyed by the `spawn` keyword
-    /// span. The value is the inner future's `Output` `T`. `spawn EXPR`
-    /// evaluates to a `Future<T>` whose poll either delivers the result of the
-    /// scheduled task or registers a waker.
-    pub async_spawns: HashMap<Span, Ty>,
-    /// `sleep(ms)` calls (`docs/21`): a `Future<null>` completing after a delay.
-    pub async_sleeps: std::collections::HashSet<Span>,
-    /// `fut.cancel()` calls (`docs/21` §8), keyed by the call's callee span — a
-    /// no-op for the compute-only futures we generate (no I/O to release).
-    pub future_cancels: std::collections::HashSet<Span>,
-    /// `for await x in stream` loops (`docs/21` §10), keyed by the iterable
-    /// expression's span. Carries the `AsyncIterator` protocol resolution.
-    pub for_async_iters: HashMap<Span, ForAsyncIter>,
-    /// Bare `async { … }` blocks and `async` closures (`docs/21` §6–7), keyed by
-    /// the expression's span. Carries the future `Output`, captured locals, and
-    /// (for closures) parameters — everything codegen needs to lower the block
-    /// to a `Future` state machine over a captured environment.
-    pub async_blocks: HashMap<Span, AsyncInfo>,
+    /// The HIR signature of every checked function / `extend` method, built by
+    /// the checker as it types each one (Stage 5: the checker emits HIR node
+    /// data directly rather than the separate `fn_params`/`fn_return`/`async_fns`
+    /// span tables). Consumed by HIR lowering (→ `Hir::fn_sigs`) and the backend.
+    pub fn_sigs: HashMap<DefId, crate::hir::FnSig>,
+    /// Stage-5 migration bridge: the typed HIR node the checker builds for an
+    /// expression as it checks it, keyed by span. As each `check_expr` arm is
+    /// migrated to construct its `hir::Expr` here (using already-built children),
+    /// HIR lowering consumes the prebuilt node instead of re-deriving it from the
+    /// span side tables; once every arm is migrated the per-expression tables
+    /// (`expr_types`/`resolutions`/`adjustments`/…) are deleted and this becomes
+    /// the checker's direct HIR output. Currently holds the leaf nodes.
+    pub node_hir: HashMap<Span, crate::hir::Expr>,
+    /// The checker-built HIR body `Block` of each function / `extend` method,
+    /// keyed by `DefId` (Stage 5: the checker emits the whole body, not just
+    /// individual expressions). `lower_program` assembles each `Body` from this
+    /// directly instead of re-running its own block/statement/pattern lowering.
+    pub fn_bodies: HashMap<DefId, crate::hir::Block>,
 }
 
 /// What codegen needs to lower a bare `async { … }` block or an `async`
@@ -271,6 +154,78 @@ pub enum NumIntrinsic {
     /// shl/shr take `(T, u32)`. Result by family: 0/1 → `T`, 2 → `T | null`,
     /// 3 → `(T, bool)`.
     IntArith { ty: Ty, family: u8, op: u8 },
+}
+
+/// The numeric-namespace *constant* named by `Type.NAME` (`i32.MIN`, `f64.NAN`,
+/// …), or `None` if `tyname`/`name` is not such a constant. Shared by the type
+/// checker (for typing) and HIR lowering (to build the `Intrinsic::Num` node),
+/// so the recognition lives in exactly one place. The operand/result type is
+/// embedded in the returned [`NumIntrinsic`].
+pub fn num_constant_of(tcx: &crate::ty::TyCtxt, tyname: &str, name: &str) -> Option<NumIntrinsic> {
+    use crate::ty::{FloatTy, IntTy};
+    if let Some(it) = IntTy::from_name(tyname) {
+        let ty = tcx.int(it);
+        return match name {
+            "MIN" => Some(NumIntrinsic::IntBound { ty, max: false }),
+            "MAX" => Some(NumIntrinsic::IntBound { ty, max: true }),
+            _ => None,
+        };
+    }
+    if let Some(ft) = FloatTy::from_name(tyname) {
+        let ty = tcx.float(ft);
+        let kind = match name {
+            "INFINITY" => 0u8,
+            "NEG_INFINITY" => 1,
+            "NAN" => 2,
+            _ => return None,
+        };
+        return Some(NumIntrinsic::FloatConst { ty, kind });
+    }
+    None
+}
+
+/// The numeric-namespace *method* named by `Type.name(..)` — the float
+/// predicates (`is_nan`/`is_infinite`/`is_finite`) and the integer
+/// `{wrapping,saturating,checked,overflowing}_{add,sub,mul,div,rem,neg,shl,shr}`
+/// families — or `None`. Shared by the checker and HIR lowering (see
+/// [`num_constant_of`]). The operand type is embedded in the result.
+pub fn num_method_of(tcx: &crate::ty::TyCtxt, tyname: &str, name: &str) -> Option<NumIntrinsic> {
+    use crate::ty::{FloatTy, IntTy};
+    if let Some(ft) = FloatTy::from_name(tyname) {
+        let ty = tcx.float(ft);
+        let kind = match name {
+            "is_nan" => 0u8,
+            "is_infinite" => 1,
+            "is_finite" => 2,
+            _ => return None,
+        };
+        return Some(NumIntrinsic::FloatPred { ty, kind });
+    }
+    let it = IntTy::from_name(tyname)?;
+    let ty = tcx.int(it);
+    let (family, base) = if let Some(b) = name.strip_prefix("wrapping_") {
+        (0u8, b)
+    } else if let Some(b) = name.strip_prefix("saturating_") {
+        (1, b)
+    } else if let Some(b) = name.strip_prefix("checked_") {
+        (2, b)
+    } else if let Some(b) = name.strip_prefix("overflowing_") {
+        (3, b)
+    } else {
+        return None;
+    };
+    let op = match base {
+        "add" => 0u8,
+        "sub" => 1,
+        "mul" => 2,
+        "div" => 3,
+        "rem" => 4,
+        "neg" => 5,
+        "shl" => 6,
+        "shr" => 7,
+        _ => return None,
+    };
+    Some(NumIntrinsic::IntArith { ty, family, op })
 }
 
 /// How codegen should clone a builtin-typed receiver (`docs/15` §8).
@@ -372,23 +327,35 @@ impl CheckResults {
         Self::default()
     }
 
+    /// The checked type of the expression at `span`, read off its built HIR node
+    /// (was the `expr_types` side table). The node's *checked* type is the inner
+    /// type: a baked `Adjust` wrapper carries the post-coercion type, so unwrap
+    /// it to recover the pre-coercion type the checker recorded.
     pub fn expr_ty(&self, span: Span) -> Option<Ty> {
-        self.expr_types.get(&span).copied()
+        self.node_hir.get(&span).map(|n| match &n.kind {
+            crate::hir::ExprKind::Adjust { expr, .. } => expr.ty,
+            _ => n.ty,
+        })
     }
 
+    /// What the value-position name / callee / binding at `span` resolves to,
+    /// read off the `Name` HIR node the checker recorded there (was the
+    /// `resolutions` side table). Value uses, call-dispatch markers, and pattern
+    /// bindings all store a `Name(res)` node at their span (a narrowed use wraps
+    /// it in `Adjust`, so unwrap that).
     pub fn resolution(&self, span: Span) -> Option<ValueRes> {
-        self.resolutions.get(&span).copied()
+        let node = self.node_hir.get(&span)?;
+        match &node.kind {
+            crate::hir::ExprKind::Name(res) => Some(*res),
+            crate::hir::ExprKind::Adjust { expr, .. } => match &expr.kind {
+                crate::hir::ExprKind::Name(res) => Some(*res),
+                _ => None,
+            },
+            _ => None,
+        }
     }
 
     pub fn local_ty(&self, id: LocalId) -> Option<Ty> {
         self.local_types.get(&id).copied()
-    }
-
-    pub fn adjustment(&self, span: Span) -> Option<Adjust> {
-        self.adjustments.get(&span).copied()
-    }
-
-    pub fn type_args(&self, span: Span) -> Option<&[Ty]> {
-        self.call_type_args.get(&span).map(|v| v.as_slice())
     }
 }

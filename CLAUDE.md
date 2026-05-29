@@ -1,5 +1,30 @@
-We are designing a programming language called **Otter Fusion**. Source files use the `.otter` extension. Inspired in rust.
+We are designing and building a language called "Otter Fusion". Extension format `.otter`. 
 
-Every surface a user actually sees or types carries the **Otter Fusion** brand: the `.otter` file extension, the `otter_fusion` CLI binary, the `otter_fusion_lsp` language server, the `OTTER_FUSION_GC` / `OTTER_FUSION_GC_DEBUG` env vars, the `source.otter-fusion` TextMate scope, the VS Code language id / settings keys / command ids (`otter-fusion.*`), the diagnostic source label, and hover code fences. Only *internal* identifiers that are never exposed to the user stay brand-agnostic: the C-ABI runtime symbols (`lang_*`), the runtime `LangStr` type, the `liblangc` doc nickname, and internal test helpers. Do not "rebrand" those internal symbols — and do not reintroduce `lang` on any user-visible surface.
+We prefer most of the compiler code to be name agnostic but do use the name in places where it makes sense (like the extension, or the CLI name).
 
-When you write docs, do it in HTML format following existing styles. Add as many diagrams, colors and visual support as you can. Make it as visually appealing as possible. Use CSS for styling and make sure to include it in the HTML document.
+This language is aimed to be at the same level or rust, c, go or any other production ready language. Anything less is insulting. 
+
+**We do not take shortcuts** 
+
+**We are not building a prototype or proof of concept**
+
+**We are building a well architected fully featured end to end working language**
+
+# RULES
+
+- Do not take shortcuts
+- Follow the correct architecture decisions
+- Follow docs, you cannot change language design without asking (but if it make sense to change something please ask)
+- Make code modular clean and organized, use multiple modules/crates, document functions
+- ALWAYS do unit and integration tests, cover as many cases as possible
+- Do integration tests in a large variety and quantity. 
+- Make end to end (or close to it) tests
+- Keep dependencies and logic updated
+- Implement the compiler in a efficient way and ensure the generated code is efficient as well.
+- Ensure examples are working and up to date
+- Ensure docs are up to date and consistent
+- Keep roadmap and your memory updated and consistent with the actual state of the project
+- Read docs whenever is needed
+- Approach building the lenguage as if you were building a production ready language, with the same quality bar as rust, c, go or any other production ready language. Anything less is insulting.
+- Follow design inspiration from how rust does stuff. Rust is our base for features, design and architecture.
+- Follow docs and keep them updated, don't deviate unless is necessary, in this case ask me first. You are allowed to make design decisions but ask me first if it is a big thing that will change the language itself

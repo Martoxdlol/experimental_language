@@ -57,6 +57,39 @@ pub struct Checker<'a> {
     /// `async` function/closure body or a bare `async { … }` block) — i.e.
     /// whether `await` is permitted here (`docs/21` §4).
     in_async: bool,
+    /// Transient hand-off slots: a check method stashes the datum it just
+    /// computed for the expression node being checked, and `build_hir_node`
+    /// consumes it the instant `check_expr_inner` returns for the same node.
+    /// Because construction is synchronous and depth-first (every child node is
+    /// built — and its own slot consumed — before its parent's check method
+    /// sets these), one slot per fact suffices and no persistent span-keyed side
+    /// table is kept; the datum lives only on the resulting HIR node field.
+    /// (Replaces `operator_methods` / `cast_targets` / `awaits` / `async_spawns`
+    /// / `try_branches` / `residual_conversions`.)
+    pending_overload: std::cell::Cell<Option<crate::hir::OpOverload>>,
+    pending_cast_target: std::cell::Cell<Option<Ty>>,
+    pending_await: std::cell::Cell<Option<Ty>>,
+    pending_spawn: std::cell::Cell<Option<Ty>>,
+    pending_try_branch: std::cell::Cell<Option<TryBranch>>,
+    pending_residuals: std::cell::Cell<Option<Vec<(Ty, crate::ids::DefId, Ty)>>>,
+    pending_clone_kind: std::cell::Cell<Option<crate::sema::results::CloneKind>>,
+    /// A static-method call's solved receiver type (was `static_calls` +
+    /// `static_recv`): `Some(recv)` marks the call static.
+    pending_static_recv: std::cell::Cell<Option<Ty>>,
+    pending_foreign_flex: std::cell::Cell<Option<(Ty, Ty)>>,
+    pending_for_driver: std::cell::Cell<Option<crate::hir::ForDriver>>,
+    /// A generic call's solved type arguments (was the call-keyed use of
+    /// `call_type_args`), consumed by `build_call_kind`.
+    pending_type_args: std::cell::Cell<Option<Vec<Ty>>>,
+    /// Per-hole `(to_str method, targs)` for a string literal's interpolation
+    /// holes, in source order (was `stringify_methods` + the hole-keyed use of
+    /// `call_type_args`). `build_hir_node`'s `Str` arm pops them in order.
+    pending_stringify:
+        std::cell::Cell<Option<std::collections::VecDeque<(Option<crate::ids::DefId>, Vec<Ty>)>>>,
+    /// A closure / `async` block's resolved capture+param info (was the
+    /// `closures` / `async_blocks` tables), consumed by `build_hir_node`.
+    pending_closure: std::cell::Cell<Option<crate::sema::results::ClosureInfo>>,
+    pending_async: std::cell::Cell<Option<crate::sema::results::AsyncInfo>>,
     /// Side tables recorded for downstream phases.
     pub results: CheckResults,
 }
@@ -90,6 +123,20 @@ impl<'a> Checker<'a> {
             narrowings: HashMap::new(),
             closure_stack: Vec::new(),
             in_async: false,
+            pending_overload: std::cell::Cell::new(None),
+            pending_cast_target: std::cell::Cell::new(None),
+            pending_await: std::cell::Cell::new(None),
+            pending_spawn: std::cell::Cell::new(None),
+            pending_try_branch: std::cell::Cell::new(None),
+            pending_residuals: std::cell::Cell::new(None),
+            pending_clone_kind: std::cell::Cell::new(None),
+            pending_static_recv: std::cell::Cell::new(None),
+            pending_foreign_flex: std::cell::Cell::new(None),
+            pending_for_driver: std::cell::Cell::new(None),
+            pending_type_args: std::cell::Cell::new(None),
+            pending_stringify: std::cell::Cell::new(None),
+            pending_closure: std::cell::Cell::new(None),
+            pending_async: std::cell::Cell::new(None),
             results: CheckResults::new(),
         }
     }
@@ -131,34 +178,10 @@ impl<'a> Checker<'a> {
             Some(t) => self.lower_ty(t, &env),
             None => self.tcx.null,
         };
-        self.results.extern_sigs.insert(def, (ptys, rty));
-        // `@Link(lib = "z")` / `@Link("z")` (`docs/19` §13): record the library
-        // to link (native) / `dlopen` (JIT). De-duplicated, first-seen order.
-        for attr in self.prog.def(def).attrs.clone() {
-            if attr.name.name != "Link" {
-                continue;
-            }
-            for a in &attr.args {
-                let value = match a {
-                    crate::ast::AttrArg::Named { name, value, .. } if name.name == "lib" => value,
-                    crate::ast::AttrArg::Positional(e) => e,
-                    _ => continue,
-                };
-                if let crate::ast::ExprKind::Str(s) = &value.kind {
-                    // A library name is a plain (non-interpolated) string literal.
-                    let lib = match s.parts.as_slice() {
-                        [] => Some(String::new()),
-                        [crate::ast::StringPart::Text { text, .. }] => Some(text.clone()),
-                        _ => None,
-                    };
-                    if let Some(lib) = lib {
-                        if !lib.is_empty() && !self.results.link_libs.contains(&lib) {
-                            self.results.link_libs.push(lib);
-                        }
-                    }
-                }
-            }
-        }
+        self.results.extern_sigs.insert(def, crate::hir::ExternSig { params: ptys, ret: rty });
+        // `@Link(lib = "…")` libraries (`docs/19` §13) are no longer recorded
+        // here: they are derived from the program's attributes by
+        // `hir::collect_link_libs` (consumed as `Hir::link_libs`).
     }
 
     /// Whether `ty` is a C-ABI-compatible (`ReprC`) field type for an extern

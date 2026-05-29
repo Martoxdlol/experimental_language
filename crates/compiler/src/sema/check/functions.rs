@@ -39,11 +39,12 @@ impl<'a> Checker<'a> {
         // codegen (which lowers the body to a `Future` state machine) and check
         // the body against it.
         let prev_async = self.in_async;
+        let mut async_output: Option<Ty> = None;
         let body_ret = if f.is_async {
             match self.future_output(ret_ty) {
                 Some(out) => {
                     self.in_async = true;
-                    self.results.async_fns.insert(def, out);
+                    async_output = Some(out);
                     out
                 }
                 None => {
@@ -63,13 +64,12 @@ impl<'a> Checker<'a> {
             ret_ty
         };
         self.ret_ty = body_ret;
-        self.results.fn_return.insert(def, ret_ty);
         self.scopes.clear();
         // `next_local` is NOT reset per function: local ids must be globally
         // unique because `results.local_types` is a program-wide map.
         self.self_local = None;
         self.push_scope();
-        let mut param_locals = Vec::new();
+        let mut param_sig: Vec<(LocalId, Ty)> = Vec::new();
         for p in &f.params {
             match &p.kind {
                 ParamKind::SelfParam => {
@@ -77,20 +77,32 @@ impl<'a> Checker<'a> {
                     let sty = self_ty.unwrap_or(self.tcx.error);
                     let id = self.bind("self", p.span, sty);
                     self.self_local = Some(id);
-                    param_locals.push(id);
+                    param_sig.push((id, sty));
                 }
                 ParamKind::Normal { name, ty } => {
                     let pty = self.lower_ty(ty, &env);
-                    param_locals.push(self.bind(&name.name, name.span, pty));
+                    let id = self.bind(&name.name, name.span, pty);
+                    param_sig.push((id, pty));
                 }
             }
         }
-        self.results.fn_params.insert(def, param_locals);
+        // The checker emits the HIR signature directly (Stage 5): no separate
+        // `fn_params`/`fn_return`/`async_fns` side tables.
+        self.results.fn_sigs.insert(
+            def,
+            crate::hir::FnSig { params: param_sig, ret: ret_ty, async_output },
+        );
         if let Some(body) = &f.body {
             let bty = self.check_block(body, Some(body_ret));
             // The body block's value is the function's result (the future's
             // `Output` for an async body).
             self.expect(bty, body_ret, body.span);
+            // Stage 5: emit the whole body's HIR `Block` directly (every
+            // expression was just checker-built into `node_hir`), so lowering
+            // assembles the `Body` from it instead of re-lowering the block.
+            if let Some(block) = self.build_block(body) {
+                self.results.fn_bodies.insert(def, block);
+            }
         }
         self.in_async = prev_async;
         self.pop_scope();

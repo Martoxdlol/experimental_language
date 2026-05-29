@@ -7,7 +7,7 @@
 use crate::{CgResult, CodegenError, Instance, PTR};
 use compiler::ast::*;
 use compiler::ids::{DefId, LocalId};
-use compiler::sema::{Analysis, DefKind, StructFields, ValueRes};
+use compiler::sema::{Analysis, DefKind, StructFields};
 use compiler::span::Span;
 use compiler::ty::{FloatTy, IntTy, Ty, TyKind};
 use cranelift_codegen::ir::{types, AbiParam, Type as ClType};
@@ -15,295 +15,6 @@ use cranelift_module::{FuncId, Linkage, Module};
 use std::collections::{HashMap, HashSet};
 
 // -- async body analysis (state-machine lowering, `docs/21`) ----------------
-
-/// Whether `block` contains an `await` in its own async scope (NOT descending
-/// into nested closures / `async { … }` blocks, which have their own `poll`).
-pub(crate) fn block_has_await(block: &Block) -> bool {
-    block.stmts.iter().any(stmt_has_await)
-        || block.trailing.as_deref().is_some_and(expr_has_await)
-}
-
-pub(crate) fn stmt_has_await(stmt: &Stmt) -> bool {
-    match &stmt.kind {
-        StmtKind::Var(v) => expr_has_await(&v.init),
-        StmtKind::Assign { target, value } => expr_has_await(target) || expr_has_await(value),
-        StmtKind::Expr(e) => expr_has_await(e),
-        StmtKind::Item(_) => false,
-    }
-}
-
-pub(crate) fn expr_has_await(e: &Expr) -> bool {
-    match &e.kind {
-        ExprKind::Await { .. } => true,
-        // Nested async scopes have their own poll function — do not descend.
-        ExprKind::Closure { .. } | ExprKind::AnonFn(_) | ExprKind::AsyncBlock(_) => false,
-        ExprKind::Paren(x) | ExprKind::Unary { operand: x, .. }
-        | ExprKind::Cast { expr: x, .. } | ExprKind::Field { receiver: x, .. }
-        | ExprKind::TupleIndex { receiver: x, .. } | ExprKind::Try { expr: x, .. }
-        | ExprKind::Ref { expr: x, .. } | ExprKind::Deref { expr: x, .. }
-        | ExprKind::Spawn { expr: x, .. } => expr_has_await(x),
-        ExprKind::Binary { left, right, .. } => expr_has_await(left) || expr_has_await(right),
-        ExprKind::Tuple(xs) | ExprKind::List(xs) => xs.iter().any(expr_has_await),
-        ExprKind::Call { callee, args, trailing_closure, .. } => {
-            expr_has_await(callee)
-                || args.iter().any(expr_has_await)
-                || trailing_closure.as_deref().is_some_and(expr_has_await)
-        }
-        ExprKind::Index { receiver, index } => expr_has_await(receiver) || expr_has_await(index),
-        ExprKind::StructLit { fields, spread, .. } => {
-            fields.iter().any(|f| f.value.as_ref().is_some_and(expr_has_await))
-                || spread.as_deref().is_some_and(expr_has_await)
-        }
-        ExprKind::MapLit(items) => items.iter().any(|it| match it {
-            MapItem::Entry { key, value, .. } => expr_has_await(key) || expr_has_await(value),
-            MapItem::Spread(e) => expr_has_await(e),
-        }),
-        ExprKind::If { cond, then_block, else_branch } => {
-            expr_has_await(cond) || block_has_await(then_block)
-                || match else_branch {
-                    Some(ElseBranch::If(e)) => expr_has_await(e),
-                    Some(ElseBranch::Block(b)) => block_has_await(b),
-                    None => false,
-                }
-        }
-        ExprKind::Match { scrutinee, arms } => {
-            expr_has_await(scrutinee)
-                || arms.iter().any(|a| {
-                    a.guard.as_ref().is_some_and(expr_has_await) || expr_has_await(&a.body)
-                })
-        }
-        ExprKind::Block(b) | ExprKind::Loop(b) => block_has_await(b),
-        ExprKind::While { cond, body } => expr_has_await(cond) || block_has_await(body),
-        ExprKind::For { in_async, iter, body, .. } => {
-            *in_async || expr_has_await(iter) || block_has_await(body)
-        }
-        ExprKind::Return(v) | ExprKind::Break(v) => v.as_deref().is_some_and(expr_has_await),
-        _ => false,
-    }
-}
-
-/// Record the local a binding-site `span` resolves to (deduped, in order).
-pub(crate) fn push_local(a: &Analysis, span: Span, out: &mut Vec<LocalId>, seen: &mut HashSet<LocalId>) {
-    if let Some(ValueRes::Local(id)) = a.results.resolution(span) {
-        if seen.insert(id) {
-            out.push(id);
-        }
-    }
-}
-
-/// Enumerate every local *binding* introduced in `block` (so an async state
-/// struct can reserve a slot for each), NOT descending into nested closures /
-/// `async { … }` blocks (their locals live in their own frames).
-pub(crate) fn collect_block_locals(a: &Analysis, block: &Block, out: &mut Vec<LocalId>, seen: &mut HashSet<LocalId>) {
-    for s in &block.stmts {
-        collect_stmt_locals(a, s, out, seen);
-    }
-    if let Some(t) = &block.trailing {
-        collect_expr_locals(a, t, out, seen);
-    }
-}
-
-pub(crate) fn collect_stmt_locals(a: &Analysis, s: &Stmt, out: &mut Vec<LocalId>, seen: &mut HashSet<LocalId>) {
-    match &s.kind {
-        StmtKind::Var(v) => {
-            collect_pat_locals(a, &v.pattern, out, seen);
-            collect_expr_locals(a, &v.init, out, seen);
-        }
-        StmtKind::Assign { target, value } => {
-            collect_expr_locals(a, target, out, seen);
-            collect_expr_locals(a, value, out, seen);
-        }
-        StmtKind::Expr(e) => collect_expr_locals(a, e, out, seen),
-        StmtKind::Item(_) => {}
-    }
-}
-
-pub(crate) fn collect_pat_locals(a: &Analysis, p: &Pattern, out: &mut Vec<LocalId>, seen: &mut HashSet<LocalId>) {
-    match &p.kind {
-        PatternKind::Binding(name) => push_local(a, name.span, out, seen),
-        PatternKind::TypeBinding { binding: Some(name), .. } => push_local(a, name.span, out, seen),
-        PatternKind::TupleStruct { fields, rest, .. } => {
-            for f in fields {
-                collect_pat_locals(a, f, out, seen);
-            }
-            if let Some(r) = rest {
-                if let Some(n) = &r.name {
-                    push_local(a, n.span, out, seen);
-                }
-            }
-        }
-        PatternKind::RecordStruct { fields, .. } => {
-            for f in fields {
-                match &f.pattern {
-                    Some(sub) => collect_pat_locals(a, sub, out, seen),
-                    None => push_local(a, f.name.span, out, seen), // shorthand binds the field
-                }
-            }
-        }
-        PatternKind::Tuple { elems, rest } | PatternKind::List { elems, rest } => {
-            for e in elems {
-                collect_pat_locals(a, e, out, seen);
-            }
-            if let Some((_, r)) = rest {
-                if let Some(n) = &r.name {
-                    push_local(a, n.span, out, seen);
-                }
-            }
-        }
-        PatternKind::Or(ps) => {
-            for sub in ps {
-                collect_pat_locals(a, sub, out, seen);
-            }
-        }
-        _ => {}
-    }
-}
-
-pub(crate) fn collect_expr_locals(a: &Analysis, e: &Expr, out: &mut Vec<LocalId>, seen: &mut HashSet<LocalId>) {
-    match &e.kind {
-        // Nested async/closure scopes own their locals.
-        ExprKind::Closure { .. } | ExprKind::AnonFn(_) | ExprKind::AsyncBlock(_) => {}
-        ExprKind::Paren(x) | ExprKind::Unary { operand: x, .. }
-        | ExprKind::Cast { expr: x, .. } | ExprKind::Field { receiver: x, .. }
-        | ExprKind::TupleIndex { receiver: x, .. } | ExprKind::Try { expr: x, .. }
-        | ExprKind::Ref { expr: x, .. } | ExprKind::Deref { expr: x, .. }
-        | ExprKind::Await { expr: x, .. } | ExprKind::Spawn { expr: x, .. } => {
-            collect_expr_locals(a, x, out, seen)
-        }
-        ExprKind::Binary { left, right, .. } => {
-            collect_expr_locals(a, left, out, seen);
-            collect_expr_locals(a, right, out, seen);
-        }
-        ExprKind::Tuple(xs) | ExprKind::List(xs) => {
-            for x in xs {
-                collect_expr_locals(a, x, out, seen);
-            }
-        }
-        ExprKind::Call { callee, args, trailing_closure, .. } => {
-            collect_expr_locals(a, callee, out, seen);
-            for x in args {
-                collect_expr_locals(a, x, out, seen);
-            }
-            if let Some(tc) = trailing_closure {
-                collect_expr_locals(a, tc, out, seen);
-            }
-        }
-        ExprKind::Index { receiver, index } => {
-            collect_expr_locals(a, receiver, out, seen);
-            collect_expr_locals(a, index, out, seen);
-        }
-        ExprKind::StructLit { fields, spread, .. } => {
-            for f in fields {
-                if let Some(v) = &f.value {
-                    collect_expr_locals(a, v, out, seen);
-                }
-            }
-            if let Some(s) = spread {
-                collect_expr_locals(a, s, out, seen);
-            }
-        }
-        ExprKind::MapLit(items) => {
-            for it in items {
-                match it {
-                    MapItem::Entry { key, value, .. } => {
-                        collect_expr_locals(a, key, out, seen);
-                        collect_expr_locals(a, value, out, seen);
-                    }
-                    MapItem::Spread(x) => collect_expr_locals(a, x, out, seen),
-                }
-            }
-        }
-        ExprKind::If { cond, then_block, else_branch } => {
-            collect_expr_locals(a, cond, out, seen);
-            collect_block_locals(a, then_block, out, seen);
-            match else_branch {
-                Some(ElseBranch::If(x)) => collect_expr_locals(a, x, out, seen),
-                Some(ElseBranch::Block(b)) => collect_block_locals(a, b, out, seen),
-                None => {}
-            }
-        }
-        ExprKind::Match { scrutinee, arms } => {
-            collect_expr_locals(a, scrutinee, out, seen);
-            for arm in arms {
-                collect_pat_locals(a, &arm.pattern, out, seen);
-                if let Some(g) = &arm.guard {
-                    collect_expr_locals(a, g, out, seen);
-                }
-                collect_expr_locals(a, &arm.body, out, seen);
-            }
-        }
-        ExprKind::Block(b) | ExprKind::Loop(b) => collect_block_locals(a, b, out, seen),
-        ExprKind::While { cond, body } => {
-            collect_expr_locals(a, cond, out, seen);
-            collect_block_locals(a, body, out, seen);
-        }
-        ExprKind::For { pattern, iter, body, .. } => {
-            collect_pat_locals(a, pattern, out, seen);
-            collect_expr_locals(a, iter, out, seen);
-            collect_block_locals(a, body, out, seen);
-        }
-        ExprKind::Return(v) | ExprKind::Break(v) => {
-            if let Some(x) = v {
-                collect_expr_locals(a, x, out, seen);
-            }
-        }
-        _ => {}
-    }
-}
-
-/// Collect the spans of `await`s that appear in a *statement-level* position
-/// (the whole RHS of a `var`/assignment, a bare expression statement, a block's
-/// trailing expression, or `return`) — the positions where no sibling
-/// sub-expression temporary is live across the suspension point, so saving and
-/// restoring named locals alone is correct. Recurses through control-flow
-/// bodies. Awaits elsewhere are not collected (and are rejected at codegen)
-/// until ANF hoisting lands.
-pub(crate) fn scan_stmt_awaits(block: &Block, out: &mut Vec<Span>) {
-    for s in &block.stmts {
-        match &s.kind {
-            StmtKind::Var(v) => scan_value_await(&v.init, out),
-            StmtKind::Assign { value, .. } => scan_value_await(value, out),
-            StmtKind::Expr(e) => scan_value_await(e, out),
-            StmtKind::Item(_) => {}
-        }
-    }
-    if let Some(t) = &block.trailing {
-        scan_value_await(t, out);
-    }
-}
-
-pub(crate) fn scan_value_await(e: &Expr, out: &mut Vec<Span>) {
-    match &e.kind {
-        ExprKind::Await { kw_span, .. } => out.push(*kw_span),
-        ExprKind::Paren(x) | ExprKind::Return(Some(x)) | ExprKind::Break(Some(x)) => {
-            scan_value_await(x, out)
-        }
-        ExprKind::Block(b) | ExprKind::Loop(b) => scan_stmt_awaits(b, out),
-        ExprKind::While { body, .. } => scan_stmt_awaits(body, out),
-        ExprKind::For { in_async, iter, body, .. } => {
-            // `for await` introduces one suspend site (the `next_async()` await),
-            // keyed by the iterable span.
-            if *in_async {
-                out.push(iter.span);
-            }
-            scan_stmt_awaits(body, out);
-        }
-        ExprKind::If { then_block, else_branch, .. } => {
-            scan_stmt_awaits(then_block, out);
-            match else_branch {
-                Some(ElseBranch::If(x)) => scan_value_await(x, out),
-                Some(ElseBranch::Block(b)) => scan_stmt_awaits(b, out),
-                None => {}
-            }
-        }
-        ExprKind::Match { arms, .. } => {
-            for arm in arms {
-                scan_value_await(&arm.body, out);
-            }
-        }
-        _ => {}
-    }
-}
 
 /// The state-struct layout for an async body that suspends: `[state @0][inner
 /// future @8][local_i @16 + i*8]` over every body local (the `entry` locals —
@@ -323,16 +34,31 @@ pub(crate) struct AsyncLayout {
 /// Offset of the suspended-inner-future slot in every async state struct.
 pub(crate) const ASYNC_INNER_OFF: i32 = 8;
 
+/// A view of an async/function body's typed HIR block. The async state-machine
+/// codegen drives the body walk, the `await`-site scan, and the local collection
+/// through this thin wrapper.
+#[derive(Clone, Copy)]
+pub(crate) struct BodyView<'a>(pub(crate) &'a compiler::hir::Block);
+
+impl<'a> BodyView<'a> {
+    pub(crate) fn has_await(&self) -> bool {
+        crate::gen_hir::h_block_has_await(self.0)
+    }
+    pub(crate) fn scan_awaits(&self, out: &mut Vec<Span>) {
+        crate::gen_hir::h_scan_stmt_awaits(self.0, out)
+    }
+}
+
 pub(crate) fn async_state_layout(
     analysis: &Analysis,
     subst: &HashMap<DefId, Ty>,
     entry: &[LocalId],
-    body: &Block,
+    body: BodyView,
     captured_locals: &HashSet<LocalId>,
 ) -> AsyncLayout {
     let mut all_locals = entry.to_vec();
     let mut seen: HashSet<LocalId> = all_locals.iter().copied().collect();
-    collect_block_locals(analysis, body, &mut all_locals, &mut seen);
+    crate::gen_hir::h_collect_block_locals(body.0, &mut all_locals, &mut seen);
     let mut slot_off = HashMap::new();
     let mut ptr_offsets = vec![ASYNC_INNER_OFF as u32]; // the inner-future slot is managed
     let mut live = Vec::new();
@@ -409,15 +135,17 @@ pub(crate) fn signature_of(
     def: DefId,
     subst: &HashMap<DefId, Ty>,
 ) -> CgResult<Option<cranelift_codegen::ir::Signature>> {
-    let results = &analysis.results;
-    let ret = results.fn_return.get(&def).copied().unwrap_or(analysis.tcx.null);
-    let params = results.fn_params.get(&def).cloned().unwrap_or_default();
+    // The function's HIR signature carries its parameter (LocalId, Ty) pairs and
+    // return type (the checker built it; Stage 5 retired `fn_params`/`fn_return`).
+    let fsig = analysis.results.fn_sigs.get(&def);
+    let ret = fsig.map(|s| s.ret).unwrap_or(analysis.tcx.null);
     let mut sig = module.make_signature();
-    for p in &params {
-        let ty = results.local_ty(*p).unwrap_or(analysis.tcx.error);
-        match clty_subst(analysis, ty, subst) {
-            Some(ct) => sig.params.push(AbiParam::new(ct)),
-            None => return Ok(None),
+    if let Some(fsig) = fsig {
+        for (_, ty) in &fsig.params {
+            match clty_subst(analysis, *ty, subst) {
+                Some(ct) => sig.params.push(AbiParam::new(ct)),
+                None => return Ok(None),
+            }
         }
     }
     if let Some(ct) = clty_subst(analysis, ret, subst) {
@@ -903,33 +631,5 @@ pub(crate) fn unescape_into(text: &str, out: &mut Vec<u8>) {
             None => {}
         }
     }
-}
-
-/// Decode a `char` literal (with surrounding quotes) to its scalar value.
-pub(crate) fn parse_char(raw: &str) -> Option<u32> {
-    let inner = raw.strip_prefix('\'')?.strip_suffix('\'')?;
-    let mut chars = inner.chars();
-    let first = chars.next()?;
-    if first != '\\' {
-        return if chars.next().is_none() { Some(first as u32) } else { None };
-    }
-    let esc = chars.next()?;
-    let val = match esc {
-        'n' => '\n' as u32,
-        'r' => '\r' as u32,
-        't' => '\t' as u32,
-        '\\' => '\\' as u32,
-        '\'' => '\'' as u32,
-        '"' => '"' as u32,
-        '0' => 0,
-        'u' => {
-            // \u{...}
-            let rest: String = chars.collect();
-            let hex = rest.strip_prefix('{')?.strip_suffix('}')?;
-            return u32::from_str_radix(hex, 16).ok();
-        }
-        _ => return None,
-    };
-    if chars.next().is_none() { Some(val) } else { None }
 }
 

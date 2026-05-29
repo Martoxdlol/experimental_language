@@ -14,7 +14,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcCommand, ExitCode};
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 use compiler::ast::{ItemKind, Module, ModuleKind};
 use compiler::lexer::lex;
@@ -59,6 +59,28 @@ enum Command {
         #[arg(long)]
         release: bool,
     },
+    /// Pretty-print an intermediate representation to stdout (observability).
+    /// Output is stable and deterministic, so it is safe to snapshot-test.
+    Emit {
+        /// Which representation to print.
+        #[arg(value_enum)]
+        ir: EmitIr,
+        /// Path to the `.otter` source file.
+        file: PathBuf,
+    },
+}
+
+/// The intermediate representations `otter_fusion emit` can print.
+#[derive(Clone, Copy, ValueEnum)]
+enum EmitIr {
+    /// The lexer's token stream (one token per line, with spans).
+    Tokens,
+    /// The parsed, untyped abstract syntax tree.
+    Ast,
+    /// The typed, resolved, desugared High-level IR the checker produces.
+    Hir,
+    /// The generated Cranelift IR (post-codegen, pre-machine-code) per function.
+    Clif,
 }
 
 /// What to do after a successful check.
@@ -74,8 +96,76 @@ fn main() -> ExitCode {
         Command::Check { file } => (file, Stage::Check, false),
         Command::Build { file, output, release } => (file, Stage::Build { output }, release),
         Command::Run { file, release } => (file, Stage::Run, release),
+        Command::Emit { ir, file } => return emit(&file, ir),
     };
     drive(&file, stage, release)
+}
+
+/// Pretty-print one intermediate representation of `path` to stdout. Front-end
+/// diagnostics go to stderr; the IR is emitted best-effort so a partially
+/// broken program can still be inspected (parsing recovers; HIR lowering is
+/// total). Output is deterministic.
+fn emit(path: &Path, ir: EmitIr) -> ExitCode {
+    let display = path.display();
+    let src = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: cannot read `{display}`: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut map = SourceMap::new();
+    let file = map.add_file(display.to_string(), src.clone());
+
+    let (tokens, lex_errors) = lex(&src, file);
+    for e in &lex_errors {
+        render(&map, e.span, "error", &e.kind.to_string());
+    }
+    if let EmitIr::Tokens = ir {
+        for t in &tokens {
+            println!("{:?} @ {}..{}", t.kind, t.span.lo.0, t.span.hi.0);
+        }
+        return ExitCode::SUCCESS;
+    }
+
+    let (module, parse_errors) = parse(&src, &tokens);
+    for e in &parse_errors {
+        render(&map, e.span, "error", &e.kind.to_string());
+    }
+    match ir {
+        EmitIr::Ast => {
+            // The AST derives a deterministic pretty `Debug`; a bespoke printer
+            // is a follow-up. (Tokens and HIR have purpose-built printers.)
+            println!("{module:#?}");
+        }
+        EmitIr::Hir => {
+            let mut externals = Externals::new();
+            load_submodules(&mut map, path, &module, &mut Vec::new(), &mut externals);
+            let analysis = analyze_multi(&module, &externals);
+            for e in &analysis.errors {
+                render(&map, e.span, "error", &e.kind.to_string());
+            }
+            let hir = compiler::hir::lower_program(&analysis);
+            print!("{}", compiler::hir::print_program(&hir, &analysis.tcx, &analysis.program));
+        }
+        EmitIr::Clif => {
+            let mut externals = Externals::new();
+            load_submodules(&mut map, path, &module, &mut Vec::new(), &mut externals);
+            let analysis = analyze_multi(&module, &externals);
+            for e in &analysis.errors {
+                render(&map, e.span, "error", &e.kind.to_string());
+            }
+            // Cranelift IR is only well-formed for an error-free program.
+            if analysis.errors.is_empty() {
+                match backend::compile_clif(&analysis) {
+                    Ok(text) => print!("{text}"),
+                    Err(e) => render(&map, e.span, "error", &format!("codegen: {}", e.message)),
+                }
+            }
+        }
+        EmitIr::Tokens => unreachable!("handled above"),
+    }
+    ExitCode::SUCCESS
 }
 
 fn drive(path: &Path, stage: Stage, release: bool) -> ExitCode {
@@ -217,7 +307,11 @@ fn load_submodules(
 fn build_executable(map: &SourceMap, analysis: &Analysis, exe: &Path) -> ExitCode {
     // Emit the relocatable object next to the executable.
     let obj = exe.with_extension("o");
-    if let Err(e) = backend::compile_object(analysis, &obj) {
+    // The main source file (FileId 0) backs DWARF line tables.
+    let main_file = map.file(compiler::span::FileId(0));
+    if let Err(e) =
+        backend::compile_object(analysis, &obj, &main_file.src, &main_file.name)
+    {
         render(map, e.span, "error", &format!("codegen: {}", e.message));
         return ExitCode::FAILURE;
     }
@@ -240,8 +334,9 @@ fn build_executable(map: &SourceMap, analysis: &Analysis, exe: &Path) -> ExitCod
     } else {
         cmd.args(["-lpthread", "-ldl", "-lm"]);
     }
-    // Libraries requested via `@Link(lib = "…")` (`docs/19` §13).
-    for lib in &analysis.results.link_libs {
+    // Libraries requested via `@Link(lib = "…")` (`docs/19` §13), derived from
+    // the program's attributes (no checker side table).
+    for lib in compiler::hir::collect_link_libs(analysis) {
         cmd.arg(format!("-l{lib}"));
     }
 

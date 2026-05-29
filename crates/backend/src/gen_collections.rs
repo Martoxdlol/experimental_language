@@ -48,32 +48,6 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         }
     }
 
-    /// The address of an aggregate field used as a place — the base struct
-    /// pointer plus the field's byte offset (no load). Used to index into a
-    /// fixed-array extern-struct field, `s.data[i]` (`docs/19` §4).
-    pub(crate) fn aggregate_field_addr(&mut self, place: &Expr) -> CgResult<Value> {
-        let (recv, fname): (&Expr, String) = match &place.kind {
-            ExprKind::Field { receiver, name } => (receiver, name.name.clone()),
-            ExprKind::TupleIndex { receiver, index, .. } => (receiver, index.to_string()),
-            _ => return Err(CodegenError::new(
-                place.span,
-                "fixed-array access is only supported on an extern struct field",
-            )),
-        };
-        let r_ty = self.cx.analysis.results.expr_ty(recv.span)
-            .unwrap_or(self.cx.analysis.tcx.error);
-        let layout = self.layout_for_ty(r_ty).ok_or_else(|| {
-            CodegenError::new(recv.span, "array-field receiver is not a struct")
-        })?;
-        let base = self.gen_expr(recv)?.ok_or_else(|| {
-            CodegenError::new(recv.span, "receiver has no value")
-        })?;
-        let idx = layout.index_of(&fname).ok_or_else(|| {
-            CodegenError::new(place.span, "unknown array field")
-        })?;
-        Ok(self.b.ins().iadd_imm(base, layout.offsets[idx] as i64))
-    }
-
     /// The element Cranelift type and size of a fixed-array type `[T; N]`.
     pub(crate) fn array_elem_clty(&self, arr_ty: Ty) -> Option<ClType> {
         if let TyKind::Array { elem, .. } = self.cx.analysis.tcx.kind(arr_ty).clone() {
@@ -83,106 +57,23 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         None
     }
 
-    pub(crate) fn gen_index_load(&mut self, receiver: &Expr, index: &Expr) -> CgResult<Option<Value>> {
-        let rty = self.cx.analysis.results.expr_ty(receiver.span)
-            .unwrap_or(self.cx.analysis.tcx.error);
-        // A fixed-size FFI array `[T; N]` field — `arr[i]` loads element `T`.
-        if matches!(self.cx.analysis.tcx.kind(rty), TyKind::Array { .. }) {
-            let ct = self.array_elem_clty(rty).ok_or_else(|| {
-                CodegenError::new(receiver.span, "array element has no scalar type")
-            })?;
-            let base = self.aggregate_field_addr(receiver)?;
-            let idx = self.gen_expr(index)?.ok_or_else(|| {
-                CodegenError::new(index.span, "index has no value")
-            })?;
-            let scaled = self.b.ins().imul_imm(idx, ct.bytes() as i64);
-            let addr = self.b.ins().iadd(base, scaled);
-            return Ok(Some(self.b.ins().load(ct, MemFlags::trusted(), addr, 0)));
-        }
-        // `map[key]` — panics on a missing key.
-        if let Some((kt, vt)) = self.map_kv_of(rty) {
-            let map = self.gen_expr(receiver)?.ok_or_else(|| {
-                CodegenError::new(receiver.span, "map has no value")
-            })?;
-            let kv = self.gen_expr(index)?;
-            let key = self.elem_to_i64(kv, kt, index.span)?;
-            let raw = self.call_intrinsic("lang_map_index", &[PTR, types::I64], Some(types::I64), &[map, key])
-                .expect("map_index returns a value");
-            return self.i64_to_elem(raw, vt, receiver.span);
-        }
-        let elem = self.list_elem_of(rty).ok_or_else(|| {
-            CodegenError::new(receiver.span, "indexing is only supported on `List` and `Map`")
-        })?;
-        let list = self.gen_expr(receiver)?.ok_or_else(|| {
-            CodegenError::new(receiver.span, "list has no value")
-        })?;
-        let idx = self.gen_expr(index)?.ok_or_else(|| {
-            CodegenError::new(index.span, "index has no value")
-        })?;
-        let raw = self.call_intrinsic("lang_list_get", &[PTR, types::I64], Some(types::I64), &[list, idx])
-            .expect("list_get returns a value");
-        self.i64_to_elem(raw, elem, receiver.span)
-    }
-
-    pub(crate) fn gen_index_store(&mut self, receiver: &Expr, index: &Expr, val: Option<Value>) -> CgResult<()> {
-        let rty = self.cx.analysis.results.expr_ty(receiver.span)
-            .unwrap_or(self.cx.analysis.tcx.error);
-        // A fixed-size FFI array `[T; N]` field — `arr[i] = v` stores element `T`.
-        if matches!(self.cx.analysis.tcx.kind(rty), TyKind::Array { .. }) {
-            let ct = self.array_elem_clty(rty).ok_or_else(|| {
-                CodegenError::new(receiver.span, "array element has no scalar type")
-            })?;
-            let base = self.aggregate_field_addr(receiver)?;
-            let idx = self.gen_expr(index)?.ok_or_else(|| {
-                CodegenError::new(index.span, "index has no value")
-            })?;
-            let scaled = self.b.ins().imul_imm(idx, ct.bytes() as i64);
-            let addr = self.b.ins().iadd(base, scaled);
-            if let Some(v) = val {
-                self.b.ins().store(MemFlags::trusted(), v, addr, 0);
-            }
-            return Ok(());
-        }
-        // `map[key] = v` — insert or replace.
-        if let Some((kt, vt)) = self.map_kv_of(rty) {
-            let map = self.gen_expr(receiver)?.ok_or_else(|| {
-                CodegenError::new(receiver.span, "map has no value")
-            })?;
-            let kv = self.gen_expr(index)?;
-            let key = self.elem_to_i64(kv, kt, index.span)?;
-            let raw = self.elem_to_i64(val, vt, receiver.span)?;
-            self.call_intrinsic("lang_map_set", &[PTR, types::I64, types::I64], None, &[map, key, raw]);
-            return Ok(());
-        }
-        let elem = self.list_elem_of(rty).ok_or_else(|| {
-            CodegenError::new(receiver.span, "indexed assignment is only supported on `List` and `Map`")
-        })?;
-        let list = self.gen_expr(receiver)?.ok_or_else(|| {
-            CodegenError::new(receiver.span, "list has no value")
-        })?;
-        let idx = self.gen_expr(index)?.ok_or_else(|| {
-            CodegenError::new(index.span, "index has no value")
-        })?;
-        let raw = self.elem_to_i64(val, elem, receiver.span)?;
-        self.call_intrinsic("lang_list_set", &[PTR, types::I64, types::I64], None, &[list, idx, raw]);
-        Ok(())
-    }
-
-    /// Lower a builtin `List<E>` method call.
-    pub(crate) fn gen_list_method(
+    /// Builtin `List<E>` method dispatch over an already-evaluated receiver and
+    /// argument values. `arg_tys` carries each argument's type so a closure
+    /// argument (whose value is its lifted env) can recover its return type.
+    /// Shared by the AST and HIR walks.
+    pub(crate) fn emit_list_method(
         &mut self,
-        receiver: &Expr,
+        list: Value,
         elem: Ty,
         name: &str,
-        args: &[Expr],
+        args: &[Option<Value>],
+        arg_tys: &[Ty],
+        recv_span: Span,
     ) -> CgResult<Option<Value>> {
-        let list = self.gen_expr(receiver)?.ok_or_else(|| {
-            CodegenError::new(receiver.span, "list has no value")
-        })?;
+        let arg = |i: usize| args.get(i).copied().flatten();
         match name {
             "push" => {
-                let v = self.gen_expr(&args[0])?;
-                let raw = self.elem_to_i64(v, elem, args[0].span)?;
+                let raw = self.elem_to_i64(arg(0), elem, recv_span)?;
                 self.call_intrinsic("lang_list_push", &[PTR, types::I64], None, &[list, raw]);
                 Ok(None)
             }
@@ -194,11 +85,8 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 Ok(Some(self.b.ins().icmp(IntCC::Equal, n, zero)))
             }
             "set" => {
-                let idx = self.gen_expr(&args[0])?.ok_or_else(|| {
-                    CodegenError::new(args[0].span, "index has no value")
-                })?;
-                let v = self.gen_expr(&args[1])?;
-                let raw = self.elem_to_i64(v, elem, args[1].span)?;
+                let idx = arg(0).ok_or_else(|| CodegenError::new(recv_span, "index has no value"))?;
+                let raw = self.elem_to_i64(arg(1), elem, recv_span)?;
                 self.call_intrinsic("lang_list_set", &[PTR, types::I64, types::I64], None, &[list, idx, raw]);
                 Ok(None)
             }
@@ -223,7 +111,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 self.switch(then_bb);
                 let raw = self.call_intrinsic("lang_list_pop", &[PTR], Some(types::I64), &[list])
                     .expect("pop");
-                let ev = self.i64_to_elem(raw, elem, receiver.span)?;
+                let ev = self.i64_to_elem(raw, elem, recv_span)?;
                 let boxed = self.box_value(ev, elem);
                 self.b.ins().jump(merge, &[boxed.into()]);
                 self.term = true;
@@ -237,19 +125,14 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 Ok(Some(self.b.block_params(merge)[0]))
             }
             "insert" => {
-                let idx = self.gen_expr(&args[0])?.ok_or_else(|| {
-                    CodegenError::new(args[0].span, "index has no value")
-                })?;
-                let v = self.gen_expr(&args[1])?;
-                let raw = self.elem_to_i64(v, elem, args[1].span)?;
+                let idx = arg(0).ok_or_else(|| CodegenError::new(recv_span, "index has no value"))?;
+                let raw = self.elem_to_i64(arg(1), elem, recv_span)?;
                 self.call_intrinsic("lang_list_insert", &[PTR, types::I64, types::I64], None, &[list, idx, raw]);
                 Ok(None)
             }
             // `remove(i): E | null` — bounds-checked; result is a boxed union.
             "remove" => {
-                let idx = self.gen_expr(&args[0])?.ok_or_else(|| {
-                    CodegenError::new(args[0].span, "index has no value")
-                })?;
+                let idx = arg(0).ok_or_else(|| CodegenError::new(recv_span, "index has no value"))?;
                 let size = self.call_intrinsic("lang_list_size", &[PTR], Some(types::I64), &[list])
                     .expect("size");
                 let zero = self.b.ins().iconst(types::I64, 0);
@@ -267,7 +150,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 self.switch(then_bb);
                 let raw = self.call_intrinsic("lang_list_remove", &[PTR, types::I64], Some(types::I64), &[list, idx])
                     .expect("remove");
-                let ev = self.i64_to_elem(raw, elem, receiver.span)?;
+                let ev = self.i64_to_elem(raw, elem, recv_span)?;
                 let boxed = self.box_value(ev, elem);
                 self.b.ins().jump(merge, &[boxed.into()]);
                 self.term = true;
@@ -282,9 +165,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             }
             // `get(i): E | null` — bounds-checked; result is a boxed union.
             "get" => {
-                let idx = self.gen_expr(&args[0])?.ok_or_else(|| {
-                    CodegenError::new(args[0].span, "index has no value")
-                })?;
+                let idx = arg(0).ok_or_else(|| CodegenError::new(recv_span, "index has no value"))?;
                 let size = self.call_intrinsic("lang_list_size", &[PTR], Some(types::I64), &[list])
                     .expect("size");
                 let zero = self.b.ins().iconst(types::I64, 0);
@@ -302,7 +183,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 self.switch(then_bb);
                 let raw = self.call_intrinsic("lang_list_get", &[PTR, types::I64], Some(types::I64), &[list, idx])
                     .expect("get");
-                let ev = self.i64_to_elem(raw, elem, receiver.span)?;
+                let ev = self.i64_to_elem(raw, elem, recv_span)?;
                 let boxed = self.box_value(ev, elem);
                 self.b.ins().jump(merge, &[boxed.into()]);
                 self.term = true;
@@ -315,44 +196,47 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 self.switch(merge);
                 Ok(Some(self.b.block_params(merge)[0]))
             }
-            "map" => self.gen_list_map(list, elem, &args[0]),
-            "filter" => self.gen_list_filter(list, elem, &args[0]),
-            "each" => self.gen_list_each(list, elem, &args[0]),
-            "fold" => self.gen_list_fold(list, elem, &args[0], &args[1]),
+            "map" => {
+                let f = arg(0).ok_or_else(|| CodegenError::new(recv_span, "closure has no value"))?;
+                let u = self.func_ret(arg_tys.first().copied().unwrap_or(elem));
+                self.emit_list_map(list, elem, f, u, recv_span)
+            }
+            "filter" => {
+                let f = arg(0).ok_or_else(|| CodegenError::new(recv_span, "closure has no value"))?;
+                self.emit_list_filter(list, elem, f, recv_span)
+            }
+            "each" => {
+                let f = arg(0).ok_or_else(|| CodegenError::new(recv_span, "closure has no value"))?;
+                self.emit_list_each(list, elem, f, recv_span)
+            }
+            "fold" => {
+                let init = arg(0);
+                let f = arg(1).ok_or_else(|| CodegenError::new(recv_span, "closure has no value"))?;
+                let acc = self.func_ret(arg_tys.get(1).copied().unwrap_or(elem));
+                self.emit_list_fold(list, elem, init, f, acc, recv_span)
+            }
             other => Err(CodegenError::new(
-                receiver.span,
+                recv_span,
                 format!("`List` method `{other}` is not yet lowerable"),
             )),
         }
     }
 
-    /// The closure-argument's return type (the `R` of its `(…) => R`).
-    pub(crate) fn closure_ret(&self, arg: &Expr) -> Ty {
-        let fty = resolve_shallow(
-            self.cx.analysis,
-            self.cx.analysis.results.expr_ty(arg.span).unwrap_or(self.cx.analysis.tcx.error),
-            &self.subst,
-        );
-        match self.cx.analysis.tcx.kind(fty) {
-            TyKind::Func { ret, .. } => *ret,
-            _ => self.cx.analysis.tcx.error,
-        }
-    }
-
     /// `xs.map(f)` — a new list of `f` applied to each element.
-    pub(crate) fn gen_list_map(&mut self, list: Value, elem: Ty, fexpr: &Expr) -> CgResult<Option<Value>> {
+    /// `xs.map(f)` — a new list of `f` applied to each element. `f` is the
+    /// already-evaluated closure value; `u` is its return type; `span` is for
+    /// diagnostics. Shared by the AST and HIR walks.
+    pub(crate) fn emit_list_map(&mut self, list: Value, elem: Ty, f: Value, u: Ty, span: Span)
+        -> CgResult<Option<Value>>
+    {
         self.mark_root(list);
-        let f = self.gen_expr(fexpr)?.ok_or_else(|| {
-            CodegenError::new(fexpr.span, "closure has no value")
-        })?;
         self.mark_root(f);
-        let u = self.closure_ret(fexpr);
         let result = self.gen_list_new(u);
         self.mark_root(result);
         let u_clty = self.cx_clty(u);
-        self.list_for_each(list, elem, fexpr.span, |this, ev| {
+        self.list_for_each(list, elem, span, |this, ev| {
             let out = this.emit_closure_call(f, &[ev], u_clty);
-            let raw = this.elem_to_i64(out, u, fexpr.span)?;
+            let raw = this.elem_to_i64(out, u, span)?;
             this.call_intrinsic("lang_list_push", &[PTR, types::I64], None, &[result, raw]);
             Ok(())
         })?;
@@ -360,15 +244,14 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     }
 
     /// `xs.filter(pred)` — a new list of the elements for which `pred` is true.
-    pub(crate) fn gen_list_filter(&mut self, list: Value, elem: Ty, fexpr: &Expr) -> CgResult<Option<Value>> {
+    pub(crate) fn emit_list_filter(&mut self, list: Value, elem: Ty, f: Value, span: Span)
+        -> CgResult<Option<Value>>
+    {
         self.mark_root(list);
-        let f = self.gen_expr(fexpr)?.ok_or_else(|| {
-            CodegenError::new(fexpr.span, "closure has no value")
-        })?;
         self.mark_root(f);
         let result = self.gen_list_new(elem);
         self.mark_root(result);
-        self.list_for_each(list, elem, fexpr.span, |this, ev| {
+        self.list_for_each(list, elem, span, |this, ev| {
             let keep = this.emit_closure_call(f, &[ev], Some(types::I8))
                 .expect("predicate returns bool");
             let then_bb = this.b.create_block();
@@ -376,7 +259,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             this.b.ins().brif(keep, then_bb, &[], cont, &[]);
             this.term = true;
             this.switch(then_bb);
-            let raw = this.elem_to_i64(Some(ev), elem, fexpr.span)?;
+            let raw = this.elem_to_i64(Some(ev), elem, span)?;
             this.call_intrinsic("lang_list_push", &[PTR, types::I64], None, &[result, raw]);
             this.b.ins().jump(cont, &[]);
             this.term = true;
@@ -387,32 +270,33 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     }
 
     /// `xs.each(f)` — call `f` on each element for its side effects.
-    pub(crate) fn gen_list_each(&mut self, list: Value, elem: Ty, fexpr: &Expr) -> CgResult<Option<Value>> {
+    pub(crate) fn emit_list_each(&mut self, list: Value, elem: Ty, f: Value, span: Span)
+        -> CgResult<Option<Value>>
+    {
         self.mark_root(list);
-        let f = self.gen_expr(fexpr)?.ok_or_else(|| {
-            CodegenError::new(fexpr.span, "closure has no value")
-        })?;
         self.mark_root(f);
-        self.list_for_each(list, elem, fexpr.span, |this, ev| {
+        self.list_for_each(list, elem, span, |this, ev| {
             this.emit_closure_call(f, &[ev], None);
             Ok(())
         })?;
         Ok(None)
     }
 
-    /// `xs.fold(init, f)` — left fold, threading the accumulator.
-    pub(crate) fn gen_list_fold(&mut self, list: Value, elem: Ty, init: &Expr, fexpr: &Expr)
-        -> CgResult<Option<Value>>
-    {
+    /// `xs.fold(init, f)` — left fold, threading the accumulator. `init_v` is the
+    /// evaluated initial value, `f` the evaluated closure, `acc_ty` its result
+    /// type. Shared by the AST and HIR walks.
+    pub(crate) fn emit_list_fold(
+        &mut self,
+        list: Value,
+        elem: Ty,
+        init_v: Option<Value>,
+        f: Value,
+        acc_ty: Ty,
+        span: Span,
+    ) -> CgResult<Option<Value>> {
         self.mark_root(list);
-        let acc_ty = self.closure_ret(fexpr);
         let acc_clty = self.cx_clty(acc_ty);
-        let init_v = self.gen_expr(init)?;
-        let f = self.gen_expr(fexpr)?.ok_or_else(|| {
-            CodegenError::new(fexpr.span, "closure has no value")
-        })?;
         self.mark_root(f);
-        // The accumulator threads through the loop as a block parameter.
         let acc_var = self.b.declare_var(acc_clty.unwrap_or(types::I64));
         if is_managed_ptr(self.cx.analysis, resolve_shallow(self.cx.analysis, acc_ty, &self.subst)) {
             self.b.declare_var_needs_stack_map(acc_var);
@@ -420,14 +304,23 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         if let Some(v) = init_v {
             self.b.def_var(acc_var, v);
         }
-        self.list_for_each(list, elem, fexpr.span, |this, ev| {
+        self.list_for_each(list, elem, span, |this, ev| {
             let acc = this.b.use_var(acc_var);
             let out = this.emit_closure_call(f, &[acc, ev], acc_clty)
-                .ok_or_else(|| CodegenError::new(fexpr.span, "fold closure has no result"))?;
+                .ok_or_else(|| CodegenError::new(span, "fold closure has no result"))?;
             this.b.def_var(acc_var, out);
             Ok(())
         })?;
         Ok(init_v.map(|_| self.b.use_var(acc_var)))
+    }
+
+    /// The result type `R` of a closure of type `(…) => R`.
+    pub(crate) fn func_ret(&self, fty: Ty) -> Ty {
+        let fty = resolve_shallow(self.cx.analysis, fty, &self.subst);
+        match self.cx.analysis.tcx.kind(fty) {
+            TyKind::Func { ret, .. } => *ret,
+            _ => self.cx.analysis.tcx.error,
+        }
     }
 
     /// Run `body` for each element of `list` (narrowed to `elem`), as an index
@@ -560,7 +453,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             return None;
         }
         let prog = &self.cx.analysis.program;
-        let ext = self.cx.analysis.results.iface_impls.get(&(cdef, iface)).copied()?;
+        let ext = self.cx.hir.iface_impls.get(&(cdef, iface)).copied()?;
         let method = (0..prog.defs.len() as u32).map(DefId).find(|&d| {
             let def = prog.def(d);
             def.kind == DefKind::ExtendMethod && def.parent == Some(ext) && def.name == mname
@@ -589,23 +482,22 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     }
 
     /// Lower a builtin `Map<K, V>` method call.
-    pub(crate) fn gen_map_method(
+    /// Builtin `Map<K,V>` method dispatch over an already-evaluated receiver
+    /// `map` and argument values.
+    pub(crate) fn emit_map_method(
         &mut self,
-        receiver: &Expr,
+        map: Value,
         kt: Ty,
         vt: Ty,
         name: &str,
-        args: &[Expr],
+        args: &[Option<Value>],
+        recv_span: Span,
     ) -> CgResult<Option<Value>> {
-        let map = self.gen_expr(receiver)?.ok_or_else(|| {
-            CodegenError::new(receiver.span, "map has no value")
-        })?;
+        let arg = |i: usize| args.get(i).copied().flatten();
         match name {
             "set" => {
-                let kv = self.gen_expr(&args[0])?;
-                let key = self.elem_to_i64(kv, kt, args[0].span)?;
-                let vv = self.gen_expr(&args[1])?;
-                let val = self.elem_to_i64(vv, vt, args[1].span)?;
+                let key = self.elem_to_i64(arg(0), kt, recv_span)?;
+                let val = self.elem_to_i64(arg(1), vt, recv_span)?;
                 self.call_intrinsic("lang_map_set", &[PTR, types::I64, types::I64], None, &[map, key, val]);
                 Ok(None)
             }
@@ -621,8 +513,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 Ok(None)
             }
             "contains" => {
-                let kv = self.gen_expr(&args[0])?;
-                let key = self.elem_to_i64(kv, kt, args[0].span)?;
+                let key = self.elem_to_i64(arg(0), kt, recv_span)?;
                 let c = self.call_intrinsic("lang_map_contains", &[PTR, types::I64], Some(types::I64), &[map, key])
                     .expect("contains");
                 let zero = self.b.ins().iconst(types::I64, 0);
@@ -631,8 +522,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             // `get(k): V | null` / `remove(k): V | null` — boxed-union result.
             "get" | "remove" => {
                 let removing = name == "remove";
-                let kv = self.gen_expr(&args[0])?;
-                let key = self.elem_to_i64(kv, kt, args[0].span)?;
+                let key = self.elem_to_i64(arg(0), kt, recv_span)?;
                 let present = self.call_intrinsic("lang_map_contains", &[PTR, types::I64], Some(types::I64), &[map, key])
                     .expect("contains");
                 let zero = self.b.ins().iconst(types::I64, 0);
@@ -648,7 +538,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 self.switch(then_bb);
                 let raw = self.call_intrinsic("lang_map_get", &[PTR, types::I64], Some(types::I64), &[map, key])
                     .expect("get");
-                let ev = self.i64_to_elem(raw, vt, receiver.span)?;
+                let ev = self.i64_to_elem(raw, vt, recv_span)?;
                 let boxed = self.box_value(ev, vt);
                 if removing {
                     self.call_intrinsic("lang_map_remove", &[PTR, types::I64], None, &[map, key]);
@@ -668,7 +558,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             "values" => Ok(Some(self.gen_map_values_iter(map, vt))),
             "entries" => Ok(Some(self.gen_map_entries_iter(map, kt, vt))),
             other => Err(CodegenError::new(
-                receiver.span,
+                recv_span,
                 format!("`Map` method `{other}` is not yet lowerable"),
             )),
         }
@@ -736,45 +626,20 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         ptr
     }
 
-    /// Lower a map literal `{ k: v, ..base }` to an allocation plus inserts.
-    pub(crate) fn gen_map_lit(&mut self, items: &[MapItem], ty: Ty, span: Span) -> CgResult<Option<Value>> {
-        let (kt, vt) = self.map_kv_of(ty).ok_or_else(|| {
-            CodegenError::new(span, "map literal has non-map type")
-        })?;
-        let map = self.gen_map_new(kt, vt);
-        for item in items {
-            match item {
-                MapItem::Entry { key, value, .. } => {
-                    let kv = self.gen_expr(key)?;
-                    let k = self.elem_to_i64(kv, kt, key.span)?;
-                    let vv = self.gen_expr(value)?;
-                    let v = self.elem_to_i64(vv, vt, value.span)?;
-                    self.call_intrinsic("lang_map_set", &[PTR, types::I64, types::I64], None, &[map, k, v]);
-                }
-                MapItem::Spread(base) => {
-                    let src = self.gen_expr(base)?.ok_or_else(|| {
-                        CodegenError::new(base.span, "map spread source has no value")
-                    })?;
-                    self.call_intrinsic("lang_map_extend", &[PTR, PTR], None, &[map, src]);
-                }
-            }
-        }
-        Ok(Some(map))
-    }
-
-    /// Lower a builtin `str` method call.
-    pub(crate) fn gen_str_method(
+    /// Builtin `str` method dispatch over an already-evaluated receiver `s` and
+    /// argument values.
+    pub(crate) fn emit_str_method(
         &mut self,
-        receiver: &Expr,
+        s: Value,
         name: &str,
-        args: &[Expr],
+        args: &[Option<Value>],
+        recv_span: Span,
     ) -> CgResult<Option<Value>> {
-        let s = self.gen_expr(receiver)?.ok_or_else(|| {
-            CodegenError::new(receiver.span, "str receiver has no value")
-        })?;
-        let arg_str = |this: &mut Self, i: usize| -> CgResult<Value> {
-            this.gen_expr(&args[i])?
-                .ok_or_else(|| CodegenError::new(args[i].span, "argument has no value"))
+        let arg_str = |_this: &mut Self, i: usize| -> CgResult<Value> {
+            args.get(i)
+                .copied()
+                .flatten()
+                .ok_or_else(|| CodegenError::new(recv_span, "argument has no value"))
         };
         match name {
             "size" => Ok(self.call_intrinsic("lang_str_size", &[PTR], Some(types::I64), &[s])),
@@ -856,7 +721,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 Ok(Some(self.b.block_params(merge)[0]))
             }
             other => Err(CodegenError::new(
-                receiver.span,
+                recv_span,
                 format!("`str` method `{other}` is not yet lowerable"),
             )),
         }

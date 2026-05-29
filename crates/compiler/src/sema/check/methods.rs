@@ -75,7 +75,6 @@ impl<'a> Checker<'a> {
                 if !args.is_empty() {
                     self.emit(span, SemaErrorKind::ArgCount { expected: 0, found: args.len() });
                 }
-                self.results.future_cancels.insert(callee.span);
                 return self.tcx.null;
             }
         }
@@ -99,7 +98,7 @@ impl<'a> Checker<'a> {
             )));
             return self.tcx.error;
         };
-        self.results.resolutions.insert(callee.span, ValueRes::Method(method_def));
+        self.record_res(callee.span, ValueRes::Method(method_def), self.tcx.error);
 
         let (env, _) = self.fn_env(method_def);
         let Some(ItemKind::Function(f)) = self.prog.def(method_def).item.clone() else {
@@ -181,19 +180,19 @@ impl<'a> Checker<'a> {
         // order so codegen monomorphizes the call to this concrete instantiation.
         let parent = self.prog.def(method_def).parent;
         let ext_gens = parent.map(|p| self.prog.def(p).generics.clone()).unwrap_or_default();
+        let mut call_targs: Vec<Ty> = Vec::new();
         if !ext_gens.is_empty() || !method_gens.is_empty() {
-            let mut targs: Vec<Ty> = ext_gens
+            call_targs = ext_gens
                 .iter()
                 .map(|g| subst.get(g).copied().unwrap_or(self.tcx.error))
                 .collect();
             for g in &method_gens {
-                targs.push(subst.get(g).copied().unwrap_or(self.tcx.error));
+                call_targs.push(subst.get(g).copied().unwrap_or(self.tcx.error));
             }
-            self.results.call_type_args.insert(callee.span, targs.clone());
             // Enforce bounds on the inferred arguments.
             let mut all_gens = ext_gens.clone();
             all_gens.extend_from_slice(&method_gens);
-            self.check_bounds(&all_gens, &targs, span);
+            self.check_bounds(&all_gens, &call_targs, span);
         }
         if args.len() != param_tys.len() {
             self.emit(span, SemaErrorKind::ArgCount {
@@ -207,13 +206,19 @@ impl<'a> Checker<'a> {
                 // re-`expect` against the substituted param. Otherwise check
                 // normally with the substituted param as the expected type.
                 if need_inference {
-                    let at = self.results.expr_types.get(&a.span).copied().unwrap_or(self.tcx.error);
+                    let at = self.results.expr_ty(a.span).unwrap_or(self.tcx.error);
                     self.expect(at, *pt, a.span);
                 } else {
                     let at = self.check_expr(a, Some(*pt));
                     self.expect(at, *pt, a.span);
                 }
             }
+        }
+        // Hand the solved type args to the HIR `Call` node — set after the arg
+        // checks so a nested generic-call arg can't clobber the slot (was
+        // `call_type_args`).
+        if !call_targs.is_empty() {
+            self.pending_type_args.set(Some(call_targs));
         }
         ret
     }
@@ -554,7 +559,7 @@ impl<'a> Checker<'a> {
         };
         // Record the interface method; codegen monomorphizes it to the concrete
         // `extend` impl of whatever the type parameter is instantiated with.
-        self.results.resolutions.insert(callee.span, ValueRes::Method(method));
+        self.record_res(callee.span, ValueRes::Method(method), self.tcx.error);
         let (params, ret) = self.iface_method_sig(method, iface, &iargs, rty);
         if args.len() != params.len() {
             self.emit(span, SemaErrorKind::ArgCount {
@@ -599,7 +604,7 @@ impl<'a> Checker<'a> {
             )));
             return self.tcx.error;
         };
-        self.results.resolutions.insert(callee.span, ValueRes::Method(method));
+        self.record_res(callee.span, ValueRes::Method(method), self.tcx.error);
         let (params, ret) = self.iface_method_sig(method, iface, &iargs, rty);
         if args.len() != params.len() {
             self.emit(span, SemaErrorKind::ArgCount {
@@ -704,7 +709,7 @@ impl<'a> Checker<'a> {
         explicit: &[Type],
         span: Span,
     ) -> Ty {
-        self.results.resolutions.insert(callee.span, ValueRes::Function(def));
+        self.record_res(callee.span, ValueRes::Function(def), self.tcx.error);
         let gens = self.prog.def(def).generics.clone();
         let (params, ret) = match self.prog.def(def).item.clone() {
             Some(ItemKind::Function(f)) => (f.params, f.return_type),
@@ -753,7 +758,6 @@ impl<'a> Checker<'a> {
         // Record the instantiation arguments in declaration order.
         let type_args: Vec<Ty> =
             gens.iter().map(|g| map.get(g).copied().unwrap_or(self.tcx.error)).collect();
-        self.results.call_type_args.insert(callee.span, type_args.clone());
         // Enforce each parameter's interface bounds against its argument.
         self.check_bounds(&gens, &type_args, span);
 
@@ -761,9 +765,15 @@ impl<'a> Checker<'a> {
         for (i, a) in args.iter().enumerate() {
             if let Some(pty) = param_tys.get(i) {
                 let expected = self.subst_ty(*pty, &map);
-                let aty = self.results.expr_types.get(&a.span).copied().unwrap_or(self.tcx.error);
+                let aty = self.results.expr_ty(a.span).unwrap_or(self.tcx.error);
                 self.expect(aty, expected, a.span);
             }
+        }
+        // Hand the solved type args to the HIR `Call` node (was `call_type_args`);
+        // these arg `expect`s do not re-run `check_expr`, so no nested call can
+        // clobber the slot here.
+        if !type_args.is_empty() {
+            self.pending_type_args.set(Some(type_args.clone()));
         }
 
         match &ret {
@@ -835,8 +845,7 @@ impl<'a> Checker<'a> {
         ) && self.is_extern_struct(ty);
         // `&arr[i]` — the address of a fixed-array element; result `*Elem`.
         let array_elem = if let ExprKind::Index { receiver, .. } = &operand.kind {
-            let rty = self.results.expr_types.get(&receiver.span).copied()
-                .unwrap_or(self.tcx.error);
+            let rty = self.results.expr_ty(receiver.span).unwrap_or(self.tcx.error);
             matches!(self.tcx.kind(rty), TyKind::Array { .. })
         } else {
             false
@@ -1017,21 +1026,25 @@ impl<'a> Checker<'a> {
             )));
             return Some(self.tcx.error);
         };
-        self.results.operator_methods.insert(op_span, mdef);
         // If the operator method lives in a *generic* `extend` (e.g. a derived
         // `eq`/`lt` on `Pair<A, B>`), record the extend's solved type arguments
         // so codegen monomorphizes the method to this operand's instantiation —
         // exactly as the general method-call path does.
-        if let Some(parent) = self.prog.def(mdef).parent {
-            let ext_gens = self.prog.def(parent).generics.clone();
-            if !ext_gens.is_empty() {
-                let targs: Vec<Ty> = ext_gens
+        let type_args: Vec<Ty> = match self.prog.def(mdef).parent {
+            Some(parent) => {
+                let ext_gens = self.prog.def(parent).generics.clone();
+                ext_gens
                     .iter()
                     .map(|g| op_subst.get(g).copied().unwrap_or(self.tcx.error))
-                    .collect();
-                self.results.call_type_args.insert(op_span, targs);
+                    .collect()
             }
-        }
+            None => Vec::new(),
+        };
+        // Hand the resolved overload to the HIR node being built for this
+        // operator expression (consumed by `build_hir_node` in the enclosing
+        // `check_expr`, right after this returns) — no persistent side table.
+        self.pending_overload
+            .set(Some(crate::hir::OpOverload { method: mdef, type_args }));
 
         let (env, _) = self.fn_env(mdef);
         let Some(ItemKind::Function(f)) = self.prog.def(mdef).item.clone() else {

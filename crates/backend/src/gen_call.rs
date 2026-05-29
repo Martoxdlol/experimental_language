@@ -3,212 +3,9 @@
 use super::*;
 
 impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
-    pub(crate) fn gen_call(&mut self, callee: &Expr, args: &[Expr], span: Span) -> CgResult<Option<Value>> {
-        // `Thread.spawn { … }` and `JoinHandle.join()` (`docs/20`): recognised by
-        // their checker-recorded span tables (no normal resolution).
-        if self.cx.analysis.results.thread_spawns.contains_key(&span) {
-            return self.gen_thread_spawn(args, span);
-        }
-        if self.cx.analysis.results.channel_news.contains(&span) {
-            return self.gen_channel_new(span);
-        }
-        if self.cx.analysis.results.shared_news.contains(&span) {
-            return self.gen_shared_new(args, span);
-        }
-        // `Foreign.alloc<T>()` / `alloc_zeroed<T>()` (`docs/19` §5): a foreign
-        // (unmanaged) allocation of `sizeof(T)` bytes; the result is the raw
-        // `*T | null` (NPO) pointer.
-        if let Some(&(t, zeroed)) = self.cx.analysis.results.foreign_allocs.get(&span) {
-            let size = self.sizeof_ty(t);
-            let sz = self.b.ins().iconst(types::I64, size as i64);
-            let f = if zeroed { "lang_foreign_alloc_zeroed" } else { "lang_foreign_alloc" };
-            return Ok(self.call_intrinsic(f, &[types::I64], Some(PTR), &[sz]));
-        }
-        // `Foreign.alloc_flex<T, E>(n)` (`docs/19` §5): `sizeof(T) + n*sizeof(E)`.
-        if let Some(&(t, e)) = self.cx.analysis.results.foreign_flex.get(&span) {
-            let base = self.sizeof_ty(t) as i64;
-            let esz = self.sizeof_ty(e) as i64;
-            let n = self.gen_expr(&args[0])?.ok_or_else(|| {
-                CodegenError::new(args[0].span, "alloc_flex count has no value")
-            })?;
-            let extra = self.b.ins().imul_imm(n, esz);
-            let base_v = self.b.ins().iconst(types::I64, base);
-            let total = self.b.ins().iadd(base_v, extra);
-            return Ok(self.call_intrinsic("lang_foreign_alloc", &[types::I64], Some(PTR), &[total]));
-        }
-        // `Foreign.realloc<T>(p, new_size)` (`docs/19` §5).
-        if self.cx.analysis.results.foreign_reallocs.contains(&span) {
-            let p = self.gen_expr(&args[0])?.ok_or_else(|| {
-                CodegenError::new(args[0].span, "realloc pointer has no value")
-            })?;
-            let sz = self.gen_expr(&args[1])?.ok_or_else(|| {
-                CodegenError::new(args[1].span, "realloc size has no value")
-            })?;
-            return Ok(self.call_intrinsic(
-                "lang_foreign_realloc", &[PTR, types::I64], Some(PTR), &[p, sz],
-            ));
-        }
-        // `Foreign.free(p)` (`docs/19` §5): free a foreign allocation.
-        if self.cx.analysis.results.foreign_frees.contains(&span) {
-            let p = self.gen_expr(&args[0])?.ok_or_else(|| {
-                CodegenError::new(args[0].span, "free argument has no value")
-            })?;
-            self.call_intrinsic("lang_foreign_free", &[PTR], None, &[p]);
-            return Ok(None);
-        }
-        // `CString.from_str(s)` / `CStr.to_str(p)` (`docs/19` §6): str ↔ C string.
-        if self.cx.analysis.results.cstring_from_strs.contains(&span) {
-            let s = self.gen_expr(&args[0])?.ok_or_else(|| {
-                CodegenError::new(args[0].span, "from_str argument has no value")
-            })?;
-            return Ok(self.call_intrinsic("lang_cstring_from_str", &[PTR], Some(PTR), &[s]));
-        }
-        if self.cx.analysis.results.cstr_to_strs.contains(&span) {
-            let p = self.gen_expr(&args[0])?.ok_or_else(|| {
-                CodegenError::new(args[0].span, "to_str argument has no value")
-            })?;
-            return Ok(self.call_intrinsic("lang_cstr_to_str", &[PTR], Some(PTR), &[p]));
-        }
-        if self.cx.analysis.results.yield_nows.contains(&span) {
-            let prog = &self.cx.analysis.program;
-            let ready_tid = 1000 + prog.ready_def.index() as i64;
-            let pending_tid = 1000 + prog.pending_def.index() as i64;
-            let rt = self.b.ins().iconst(types::I64, ready_tid);
-            let pt = self.b.ins().iconst(types::I64, pending_tid);
-            return Ok(self.call_intrinsic(
-                "lang_async_yield", &[types::I64, types::I64], Some(PTR), &[rt, pt],
-            ));
-        }
-        if self.cx.analysis.results.async_sleeps.contains(&span) {
-            let ms = self.gen_expr(&args[0])?.ok_or_else(|| {
-                CodegenError::new(args[0].span, "sleep argument has no value")
-            })?;
-            let prog = &self.cx.analysis.program;
-            let ready_tid = 1000 + prog.ready_def.index() as i64;
-            let pending_tid = 1000 + prog.pending_def.index() as i64;
-            let rt = self.b.ins().iconst(types::I64, ready_tid);
-            let pt = self.b.ins().iconst(types::I64, pending_tid);
-            return Ok(self.call_intrinsic(
-                "lang_async_sleep", &[types::I64, types::I64, types::I64], Some(PTR), &[ms, rt, pt],
-            ));
-        }
-        // `fut.cancel()` (`docs/21` §8): evaluate the receiver for effect; a
-        // compute-only future has nothing to release.
-        if let ExprKind::Field { receiver, .. } = &callee.kind {
-            if self.cx.analysis.results.future_cancels.contains(&callee.span) {
-                self.gen_expr(receiver)?;
-                return Ok(None);
-            }
-        }
-        if let Some(intr) = self.cx.analysis.results.num_intrinsics.get(&span).copied() {
-            return self.gen_num_intrinsic(intr, args);
-        }
-        if self.cx.analysis.results.thread_joins.contains_key(&span) {
-            if let ExprKind::Field { receiver, .. } = &callee.kind {
-                return self.gen_thread_join(receiver, span);
-            }
-        }
-        // Empty-collection constructors `Map<K,V>()` / `List<T>()` (and `.new`
-        // forms): the checker recorded the type to allocate, keyed by call span.
-        if let Some(ty) = self.cx.analysis.results.builtin_ctors.get(&span).copied() {
-            if let Some((kt, vt)) = self.map_kv_of(ty) {
-                return Ok(Some(self.gen_map_new(kt, vt)));
-            }
-            if let Some(elem) = self.list_elem_of(ty) {
-                return Ok(Some(self.gen_list_new(elem)));
-            }
-            return Err(CodegenError::new(span, "unknown builtin constructor"));
-        }
-        // Builtin `.clone()` for primitives, `str`, and immutable-element
-        // collections (`docs/15` §8). User/derived clones resolve as methods.
-        if let ExprKind::Field { receiver, .. } = &callee.kind {
-            if let Some(kind) = self.cx.analysis.results.clone_kinds.get(&callee.span).copied() {
-                return self.gen_builtin_clone(receiver, kind);
-            }
-        }
-        // Builtin `List<E>`/`Map<K,V>`/`str` methods. The checker records no
-        // resolution for these — so a *resolved* call (e.g. a `T: Clone` bound's
-        // `clone`, monomorphized to a `List` receiver) must skip this and go
-        // through the method-dispatch path below instead.
-        if let ExprKind::Field { receiver, name } = &callee.kind {
-            if self.cx.analysis.results.resolution(callee.span).is_none() {
-            let rty = self.cx.analysis.results.expr_ty(receiver.span)
-                .unwrap_or(self.cx.analysis.tcx.error);
-            if let Some(elem) = self.list_elem_of(rty) {
-                return self.gen_list_method(receiver, elem, &name.name, args);
-            }
-            if let Some((kt, vt)) = self.map_kv_of(rty) {
-                return self.gen_map_method(receiver, kt, vt, &name.name, args);
-            }
-            if matches!(self.cx.analysis.tcx.kind(rty), TyKind::Str) {
-                return self.gen_str_method(receiver, &name.name, args);
-            }
-            // Builtin `Sender<T>`/`Receiver<T>` methods (`docs/20` §2).
-            if let TyKind::Named { def, args: targs } = self.cx.analysis.tcx.kind(rty).clone() {
-                if def == self.cx.analysis.program.sender_def && self.cx.analysis.program.sender_def != DefId(0) {
-                    let elem = targs.first().copied().unwrap_or(self.cx.analysis.tcx.error);
-                    return self.gen_channel_send(receiver, elem, args);
-                }
-                if def == self.cx.analysis.program.receiver_def && self.cx.analysis.program.receiver_def != DefId(0) {
-                    let elem = targs.first().copied().unwrap_or(self.cx.analysis.tcx.error);
-                    return self.gen_channel_recv(receiver, elem, &name.name, span);
-                }
-                if def == self.cx.analysis.program.shared_def && self.cx.analysis.program.shared_def != DefId(0) {
-                    let elem = targs.first().copied().unwrap_or(self.cx.analysis.tcx.error);
-                    return self.gen_shared_lock(receiver, elem, &name.name, args, span);
-                }
-            }
-            }
-        }
-        // Calling a closure *value* — a local/global of `Func` type, or any
-        // other `Func`-typed expression that is not a named function/method.
-        let is_value_callee = matches!(
-            self.cx.analysis.results.resolution(callee.span),
-            Some(ValueRes::Local(_)) | Some(ValueRes::Global(_)) | None
-        );
-        if is_value_callee {
-            let callee_ty = resolve_shallow(
-                self.cx.analysis,
-                self.cx.analysis.results.expr_ty(callee.span).unwrap_or(self.cx.analysis.tcx.error),
-                &self.subst,
-            );
-            if let TyKind::Func { ret, is_extern: false, .. } = self.cx.analysis.tcx.kind(callee_ty).clone() {
-                return self.gen_closure_call(callee, ret, args);
-            }
-        }
-        let def = match self.cx.analysis.results.resolution(callee.span) {
-            Some(ValueRes::Function(d)) => d,
-            Some(ValueRes::Builtin(b)) => return self.gen_builtin_call(b, args),
-            Some(ValueRes::StructCtor(d)) => return self.gen_tuple_ctor(d, args, span),
-            Some(ValueRes::Method(d)) => {
-                if self.cx.analysis.results.static_calls.contains(&callee.span) {
-                    return self.gen_static_call(d, callee, args, span);
-                }
-                return self.gen_method_call(d, callee, args, span);
-            }
-            _ => return Err(CodegenError::new(callee.span, "call target not lowerable")),
-        };
-        // An `extern function` is a direct C-ABI call by its real symbol name —
-        // no monomorphization, no body (`docs/19`).
-        if self.cx.analysis.program.def(def).kind == DefKind::ExternFunction {
-            return self.gen_extern_call(def, args, span);
-        }
-        // The instance's generic arguments, resolved through this instance's
-        // own substitution (for nested generic calls).
-        let targs = self.instance_args(callee.span);
-        let mut arg_vals = Vec::with_capacity(args.len());
-        for a in args {
-            let v = self.gen_expr(a)?.ok_or_else(|| {
-                CodegenError::new(a.span, "argument has no value")
-            })?;
-            arg_vals.push(v);
-        }
-        self.emit_call(def, targs, &arg_vals, span)
-    }
-
-    /// Lower a numeric-namespace intrinsic (`docs/18` §10, `docs/14` §5):
-    /// constants, float predicates, and the integer overflow-arithmetic families.
-    pub(crate) fn gen_num_intrinsic(&mut self, intr: NumIntrinsic, args: &[Expr]) -> CgResult<Option<Value>> {
+    /// Numeric-namespace intrinsic over already-evaluated argument values.
+    /// Shared by the AST and HIR walks.
+    pub(crate) fn emit_num_intrinsic(&mut self, intr: NumIntrinsic, args: &[Value]) -> CgResult<Option<Value>> {
         match intr {
             NumIntrinsic::IntBound { ty, max } => {
                 let it = self.int_ty_of(ty);
@@ -228,9 +25,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 }))
             }
             NumIntrinsic::FloatPred { ty: _, kind } => {
-                let v = self.gen_expr(&args[0])?.ok_or_else(|| {
-                    CodegenError::new(args[0].span, "float predicate arg has no value")
-                })?;
+                let v = args[0];
                 let r = match kind {
                     // is_nan: v != v
                     0 => self.b.ins().fcmp(FloatCC::NotEqual, v, v),
@@ -252,7 +47,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 Ok(Some(r))
             }
             NumIntrinsic::IntArith { ty, family, op } => {
-                self.gen_int_arith(ty, family, op, args)
+                self.emit_int_arith(ty, family, op, args)
             }
         }
     }
@@ -275,26 +70,20 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
 
     /// Lower a `{wrapping,saturating,checked,overflowing}_{add,sub,mul,div,
     /// rem,neg,shl,shr}` call. Op codes follow `NumIntrinsic::IntArith`.
-    pub(crate) fn gen_int_arith(&mut self, ty: Ty, family: u8, op: u8, args: &[Expr]) -> CgResult<Option<Value>> {
+    pub(crate) fn emit_int_arith(&mut self, ty: Ty, family: u8, op: u8, args: &[Value]) -> CgResult<Option<Value>> {
         let it = self.int_ty_of(ty);
         let signed = it.is_signed();
-        let ct = int_clty(it);
-        // Arg evaluation: neg is unary, shl/shr take a u32 shift; the rest are
-        // both `T`.
-        let a = self.gen_expr(&args[0])?.ok_or_else(|| CodegenError::new(args[0].span, "arg"))?;
-        let b_opt = match op {
-            5 => None, // neg
-            _ => Some(self.gen_expr(&args[1])?.ok_or_else(|| CodegenError::new(args[1].span, "arg"))?),
+        // Arg layout: neg is unary; shl/shr take a `u32` shift; the rest `(T, T)`.
+        let a = args[0];
+        let b = if op == 5 { a } else { args[1] };
+        let r = match op {
+            0 | 1 | 2 => self.gen_int_arith_addsubmul(ty, it, signed, family, op, a, b)?,
+            3 | 4 => self.gen_int_arith_divrem(ty, it, signed, family, op, a, b)?,
+            5 => self.gen_int_arith_neg(ty, it, signed, family, a)?,
+            6 | 7 => self.gen_int_arith_shift(ty, it, signed, family, op, a, b)?,
+            _ => return Err(CodegenError::new(Span::dummy(), "unknown int arith op")),
         };
-        match op {
-            0 | 1 | 2 => self.gen_int_arith_addsubmul(ty, it, signed, family, op, a, b_opt.unwrap()),
-            3 | 4 => self.gen_int_arith_divrem(ty, it, signed, family, op, a, b_opt.unwrap()),
-            5 => self.gen_int_arith_neg(ty, it, signed, family, a),
-            6 | 7 => self.gen_int_arith_shift(ty, it, signed, family, op, a, b_opt.unwrap()),
-            _ => Err(CodegenError::new(args[0].span, "unknown int arith op")),
-        }
-        .map(|v| Some(v))
-        .or_else(|e| Err(e)).map(|some| some).map(|v| { let _ = ct; v })
+        Ok(Some(r))
     }
 
     /// Wrap a binary-overflow style result `(res, ovf)` according to `family`.
@@ -560,35 +349,26 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         Ok(self.package_int_arith(family, ty, res, ovf, sat_clamp))
     }
 
-    /// Lower a builtin `.clone()` (`docs/15` §8). Immutable values clone to
-    /// themselves (sharing is sound); collections of immutable elements copy
-    /// their backing storage into a fresh managed object.
-    pub(crate) fn gen_builtin_clone(
-        &mut self,
-        receiver: &Expr,
-        kind: CloneKind,
-    ) -> CgResult<Option<Value>> {
-
-        let v = self.gen_expr(receiver)?.ok_or_else(|| {
-            CodegenError::new(receiver.span, "clone receiver has no value")
-        })?;
-        let rty = self.cx.analysis.results.expr_ty(receiver.span)
-            .unwrap_or(self.cx.analysis.tcx.error);
+    /// Builtin `.clone()` over an already-evaluated receiver value `v` of type
+    /// `rty`. Shared by the AST and HIR walks.
+    pub(crate) fn emit_builtin_clone(&mut self, v: Value, rty: Ty, kind: CloneKind, span: Span)
+        -> CgResult<Option<Value>>
+    {
         Ok(match kind {
             CloneKind::Identity => Some(v),
             CloneKind::List => self.call_intrinsic("lang_list_clone", &[PTR], Some(PTR), &[v]),
             CloneKind::Map => self.call_intrinsic("lang_map_clone", &[PTR], Some(PTR), &[v]),
             CloneKind::ListDeep => {
                 let elem = self.list_elem_of(rty).ok_or_else(|| {
-                    CodegenError::new(receiver.span, "deep-clone target is not a List")
+                    CodegenError::new(span, "deep-clone target is not a List")
                 })?;
-                Some(self.gen_list_clone_deep(v, elem, receiver.span)?)
+                Some(self.gen_list_clone_deep(v, elem, span)?)
             }
             CloneKind::MapDeep => {
                 let (kt, vt) = self.map_kv_of(rty).ok_or_else(|| {
-                    CodegenError::new(receiver.span, "deep-clone target is not a Map")
+                    CodegenError::new(span, "deep-clone target is not a Map")
                 })?;
-                Some(self.gen_map_clone_deep(v, kt, vt, receiver.span)?)
+                Some(self.gen_map_clone_deep(v, kt, vt, span)?)
             }
         })
     }
@@ -634,7 +414,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         // User type: dispatch through its `Clone` impl.
         if let TyKind::Named { def: tdef, args } = self.cx.analysis.tcx.kind(ty).clone() {
             let clone_def = self.cx.analysis.program.clone_def;
-            if let Some(&ext) = self.cx.analysis.results.iface_impls.get(&(tdef, clone_def)) {
+            if let Some(&ext) = self.cx.hir.iface_impls.get(&(tdef, clone_def)) {
                 let method = (0..self.cx.analysis.program.defs.len() as u32)
                     .map(DefId)
                     .find(|&d| {
@@ -781,27 +561,11 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         }
     }
 
-    /// Emit an intrinsic comparison for an `Eq`/`Ord` method (`eq`/`lt`/`le`/
-    /// `gt`/`ge`) on a primitive or `str` receiver — the same code paths
-    /// `gen_binary` uses for `==`/`<`/… on builtins, so a bounded `T`'s
-    /// comparison agrees with a direct operator.
-    pub(crate) fn gen_primitive_compare(
-        &mut self,
-        op: BinaryOp,
-        recv_ty: Ty,
-        receiver: &Expr,
-        args: &[Expr],
-        span: Span,
-    ) -> CgResult<Option<Value>> {
-        let other = args.first().ok_or_else(|| {
-            CodegenError::new(span, "comparison method missing its argument")
-        })?;
-        let l = self.gen_expr(receiver)?.ok_or_else(|| {
-            CodegenError::new(receiver.span, "comparison receiver has no value")
-        })?;
-        let r = self.gen_expr(other)?.ok_or_else(|| {
-            CodegenError::new(other.span, "comparison argument has no value")
-        })?;
+    /// Emit a primitive/`str` comparison over already-evaluated operand values.
+    /// Shared by the AST and HIR walks.
+    pub(crate) fn emit_primitive_compare(&mut self, op: BinaryOp, recv_ty: Ty, l: Value, r: Value)
+        -> CgResult<Option<Value>>
+    {
         if matches!(self.cx.analysis.tcx.kind(recv_ty), TyKind::Str) {
             return Ok(Some(self.gen_str_compare(op, l, r)));
         }
@@ -814,21 +578,12 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         Ok(Some(self.gen_compare(op, is_float, signed, l, r)))
     }
 
-    /// Lower `Thread.spawn { … }` (`docs/20` §1): evaluate the closure to its
-    /// heap environment, spawn an OS thread to run it, and wrap the returned
-    /// worker id in a `JoinHandle<R>`.
-    pub(crate) fn gen_thread_spawn(&mut self, args: &[Expr], span: Span) -> CgResult<Option<Value>> {
-        let clo = args.first().ok_or_else(|| {
-            CodegenError::new(span, "`Thread.spawn` closure argument missing")
-        })?;
-        let env = self.gen_expr(clo)?.ok_or_else(|| {
-            CodegenError::new(clo.span, "spawn closure has no value")
-        })?;
+    /// `Thread.spawn` over an already-evaluated closure env value. Shared by the
+    /// AST and HIR walks.
+    pub(crate) fn emit_thread_spawn(&mut self, env: Value, r: Ty, _span: Span) -> CgResult<Option<Value>> {
         let id = self
             .call_intrinsic("lang_thread_spawn", &[PTR], Some(types::I64), &[env])
             .expect("lang_thread_spawn returns an id");
-        let r = self.cx.analysis.results.thread_spawns.get(&span).copied()
-            .unwrap_or(self.cx.analysis.tcx.error);
         let jh_def = self.cx.analysis.program.join_handle_def;
         let layout = self.struct_layout(jh_def, &[r]);
         let ptr = self.alloc_struct(&layout);
@@ -841,18 +596,9 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         Ok(Some(ptr))
     }
 
-    /// Lower `JoinHandle<R>.join()` (`docs/20` §1): build the async, non-
-    /// blocking `Future<Joined<R> | Panicked>` whose poll function (in the
-    /// runtime) reports `Pending` until the worker finishes and then resolves
-    /// to `Joined<R> { value } | Panicked { message }`. Awaiting (or
-    /// `block_on`-ing) the future drives it to completion without parking the
-    /// calling OS thread (`docs/21`).
-    pub(crate) fn gen_thread_join(&mut self, receiver: &Expr, span: Span) -> CgResult<Option<Value>> {
-        let r = self.cx.analysis.results.thread_joins.get(&span).copied()
-            .unwrap_or(self.cx.analysis.tcx.error);
-        let jh = self.gen_expr(receiver)?.ok_or_else(|| {
-            CodegenError::new(receiver.span, "join receiver has no value")
-        })?;
+    /// `JoinHandle<R>.join()` over an already-evaluated handle value. Shared by
+    /// the AST and HIR walks.
+    pub(crate) fn emit_thread_join(&mut self, jh: Value, r: Ty, _span: Span) -> CgResult<Option<Value>> {
         let jh_def = self.cx.analysis.program.join_handle_def;
         let jh_layout = self.struct_layout(jh_def, &[r]);
         let id_off = jh_layout.offsets[jh_layout.index_of("id").unwrap_or(0)] as i32;
@@ -924,20 +670,19 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         Ok(p)
     }
 
-    /// Lower `Sender<T>.send(value)` (`docs/20` §2): enqueue onto the channel.
-    pub(crate) fn gen_channel_send(&mut self, receiver: &Expr, elem: Ty, args: &[Expr]) -> CgResult<Option<Value>> {
-        let chan = self.gen_channel_id(receiver)?;
-        let v = self.gen_expr(&args[0])?;
-        let raw = self.elem_to_i64(v, elem, args[0].span)?;
+    /// `Sender<T>.send(v)` over an already-read channel id and value. Shared.
+    pub(crate) fn emit_channel_send(&mut self, chan: Value, elem: Ty, v: Option<Value>, span: Span)
+        -> CgResult<Option<Value>>
+    {
+        let raw = self.elem_to_i64(v, elem, span)?;
         self.call_intrinsic("lang_chan_send", &[types::I64, types::I64], None, &[chan, raw]);
         Ok(None)
     }
 
-    /// Lower `Receiver<T>.recv()` / `.try_recv()` (`docs/20` §2).
-    pub(crate) fn gen_channel_recv(&mut self, receiver: &Expr, elem: Ty, method: &str, span: Span)
+    /// `Receiver<T>.recv()`/`.try_recv()` over an already-read channel id. Shared.
+    pub(crate) fn emit_channel_recv(&mut self, chan: Value, elem: Ty, method: &str, span: Span)
         -> CgResult<Option<Value>>
     {
-        let chan = self.gen_channel_id(receiver)?;
         if method == "recv" {
             // Async recv: build a `Future<T>` interface-object box. The runtime
             // future's `poll` pops a message (→ `Ready<T>`) or registers the
@@ -995,53 +740,45 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         Ok(Some(self.b.block_params(merge)[0]))
     }
 
-    /// Read the channel id field from a `Sender`/`Receiver` receiver value.
-    pub(crate) fn gen_channel_id(&mut self, receiver: &Expr) -> CgResult<Value> {
-        let rty = self.cx.analysis.results.expr_ty(receiver.span)
-            .unwrap_or(self.cx.analysis.tcx.error);
+    /// Read the `chan` id field from an already-evaluated `Sender`/`Receiver`
+    /// struct value. Shared by the AST and HIR walks.
+    pub(crate) fn emit_channel_id(&mut self, ptr: Value, rty: Ty, span: Span) -> CgResult<Value> {
         let layout = self.layout_for_ty(rty)
-            .ok_or_else(|| CodegenError::new(receiver.span, "channel end is not a struct"))?;
-        let ptr = self.gen_expr(receiver)?.ok_or_else(|| {
-            CodegenError::new(receiver.span, "channel receiver has no value")
-        })?;
+            .ok_or_else(|| CodegenError::new(span, "channel end is not a struct"))?;
         let off = layout.offsets[layout.index_of("chan").unwrap_or(0)] as i32;
         Ok(self.b.ins().load(types::I64, MemFlags::trusted(), ptr, off))
     }
 
-    /// Lower `Shared.new(value)` (`docs/20` §4): create a runtime mutex cell and
-    /// wrap its id in a `Shared<T>` handle.
-    pub(crate) fn gen_shared_new(&mut self, args: &[Expr], span: Span) -> CgResult<Option<Value>> {
-        let elem = self.cx.analysis.results.expr_ty(args[0].span)
-            .unwrap_or(self.cx.analysis.tcx.error);
-        let v = self.gen_expr(&args[0])?;
-        let raw = self.elem_to_i64(v, elem, args[0].span)?;
+    /// `Shared.new(v)` over an already-evaluated value. Shared by both walks.
+    pub(crate) fn emit_shared_new(&mut self, v: Option<Value>, elem: Ty, result_ty: Ty, span: Span)
+        -> CgResult<Option<Value>>
+    {
+        let raw = self.elem_to_i64(v, elem, span)?;
         let id = self.call_intrinsic("lang_shared_new", &[types::I64], Some(types::I64), &[raw])
             .expect("shared id");
-        let result_ty = self.cx.analysis.results.expr_ty(span)
-            .unwrap_or(self.cx.analysis.tcx.error);
         let shared = self.build_channel_end(result_ty, id, span)?; // {id} struct, same shape
         Ok(Some(shared))
     }
 
-    /// Lower `Shared<T>.lock(body)` / `.try_lock(body)` (`docs/20` §4): acquire
-    /// the lock, run the closure with the protected value, release.
-    pub(crate) fn gen_shared_lock(&mut self, receiver: &Expr, elem: Ty, method: &str, args: &[Expr], span: Span)
-        -> CgResult<Option<Value>>
-    {
+    /// `Shared<T>.lock(body)` / `.try_lock(body)` over an already-read mutex id
+    /// and already-built closure env. Shared by the AST and HIR walks.
+    pub(crate) fn emit_shared_lock(
+        &mut self,
+        id: Value,
+        elem: Ty,
+        method: &str,
+        env: Value,
+        r_ty: Ty,
+        union_ty: Ty,
+        span: Span,
+    ) -> CgResult<Option<Value>> {
         let try_lock = method == "try_lock";
-        let id = self.gen_shared_id(receiver)?;
-        // The closure that runs under the lock, and its result clty.
-        let r_ty = self.cx.analysis.results.closures.get(&args[0].span).map(|c| c.ret)
-            .unwrap_or(self.cx.analysis.tcx.error);
         let r_clty = self.cx_clty(r_ty);
 
         if !try_lock {
             let raw = self.call_intrinsic("lang_shared_lock", &[types::I64], Some(types::I64), &[id])
                 .expect("lock value");
             let inner = self.i64_to_elem(raw, elem, span)?;
-            let env = self.gen_expr(&args[0])?.ok_or_else(|| {
-                CodegenError::new(args[0].span, "lock body has no value")
-            })?;
             let call_args: Vec<Value> = inner.into_iter().collect();
             let r = self.emit_closure_call(env, &call_args, r_clty);
             self.call_intrinsic("lang_shared_unlock", &[types::I64], None, &[id]);
@@ -1058,7 +795,6 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         let zero = self.b.ins().iconst(types::I64, 0);
         let acquired = self.b.ins().icmp(IntCC::NotEqual, got, zero);
 
-        let union_ty = self.cx.analysis.results.expr_ty(span).unwrap_or(self.cx.analysis.tcx.error);
         let busy_def = self.cx.analysis.program.lock_busy_def;
         let busy_ty = self.cx.analysis.tcx.variants(union_ty).into_iter()
             .find(|t| matches!(self.cx.analysis.tcx.kind(*t), TyKind::Named { def, .. } if *def == busy_def))
@@ -1073,9 +809,6 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
 
         self.switch(ok_bb);
         let inner = self.i64_to_elem(raw, elem, span)?;
-        let env = self.gen_expr(&args[0])?.ok_or_else(|| {
-            CodegenError::new(args[0].span, "try_lock body has no value")
-        })?;
         let call_args: Vec<Value> = inner.into_iter().collect();
         let r = self.emit_closure_call(env, &call_args, r_clty);
         self.call_intrinsic("lang_shared_unlock", &[types::I64], None, &[id]);
@@ -1095,217 +828,23 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         Ok(Some(self.b.block_params(merge)[0]))
     }
 
-    /// Read the channel/mutex id field from a `Shared` receiver value.
-    pub(crate) fn gen_shared_id(&mut self, receiver: &Expr) -> CgResult<Value> {
-        let rty = self.cx.analysis.results.expr_ty(receiver.span)
-            .unwrap_or(self.cx.analysis.tcx.error);
+    /// Read the `id` field from an already-evaluated `Shared` struct value.
+    pub(crate) fn emit_shared_id(&mut self, ptr: Value, rty: Ty, span: Span) -> CgResult<Value> {
         let layout = self.layout_for_ty(rty)
-            .ok_or_else(|| CodegenError::new(receiver.span, "`Shared` is not a struct"))?;
-        let ptr = self.gen_expr(receiver)?.ok_or_else(|| {
-            CodegenError::new(receiver.span, "`Shared` receiver has no value")
-        })?;
+            .ok_or_else(|| CodegenError::new(span, "`Shared` is not a struct"))?;
         let off = layout.offsets[layout.index_of("id").unwrap_or(0)] as i32;
         Ok(self.b.ins().load(types::I64, MemFlags::trusted(), ptr, off))
     }
 
-    /// Lower a call to an `extern function`: declare it as a C-ABI import by its
-    /// real symbol name (the `object` crate applies platform mangling for native
-    /// output; the JIT resolves it via `dlsym`) and call it directly (`docs/19`).
-    pub(crate) fn gen_extern_call(&mut self, def: DefId, args: &[Expr], span: Span) -> CgResult<Option<Value>> {
-        let (ptys, rty) = self
-            .cx
-            .analysis
-            .results
-            .extern_sigs
-            .get(&def)
-            .cloned()
-            .ok_or_else(|| CodegenError::new(span, "extern signature not recorded"))?;
-        let mut sig = self.module.make_signature();
-        for pt in &ptys {
-            let ct = clty_of(self.cx.analysis, *pt)
-                .ok_or_else(|| CodegenError::new(span, "extern parameter is zero-sized"))?;
-            sig.params.push(AbiParam::new(ct));
-        }
-        let ret_clty = clty_of(self.cx.analysis, rty);
-        if let Some(rc) = ret_clty {
-            sig.returns.push(AbiParam::new(rc));
-        }
-        let mut arg_vals = Vec::with_capacity(args.len());
-        for a in args {
-            let v = self
-                .gen_expr(a)?
-                .ok_or_else(|| CodegenError::new(a.span, "extern argument has no value"))?;
-            arg_vals.push(v);
-        }
-        let name = self.cx.analysis.program.def(def).name.clone();
-        let id = self
-            .module
-            .declare_function(&name, Linkage::Import, &sig)
-            .map_err(|e| CodegenError::new(span, format!("declare extern `{name}`: {e}")))?;
-        let fref = self.module.declare_func_in_func(id, self.b.func);
-        let inst = self.b.ins().call(fref, &arg_vals);
-        Ok(self.b.inst_results(inst).first().copied())
-    }
-
-    /// The generic arguments recorded for the call at `callee_span`, resolved
-    /// through the current instance's substitution.
-    pub(crate) fn instance_args(&self, callee_span: Span) -> Vec<Ty> {
-        match self.cx.analysis.results.type_args(callee_span) {
-            Some(ts) => ts
-                .iter()
-                .map(|t| resolve_shallow(self.cx.analysis, *t, &self.subst))
-                .collect(),
-            None => Vec::new(),
-        }
-    }
-
-    /// Lower a static method call `Type.method(args)` / `T.method(args)`
-    /// (`docs/09` §6, `docs/10`): no receiver is passed. For an interface static
-    /// method reached through a bound, resolve it to the concrete impl using the
-    /// (substituted) receiver type the checker recorded.
-    pub(crate) fn gen_static_call(
+    /// Declare a lifted closure function `(env, params…) -> ret` and build its
+    /// heap environment `[fn_ptr][cap0_cell]…`, returning `(func id, env value)`.
+    /// Shared by the AST and HIR closure paths; the caller queues the body in
+    /// the matching IR via a [`crate::ClosureJob`].
+    pub(crate) fn emit_closure_value(
         &mut self,
-        def: DefId,
-        callee: &Expr,
-        args: &[Expr],
+        info: &compiler::sema::results::ClosureInfo,
         span: Span,
-    ) -> CgResult<Option<Value>> {
-        let (target, targs) = if self.cx.analysis.program.def(def).kind == DefKind::InterfaceMethod {
-            let recv = self.cx.analysis.results.static_recv.get(&callee.span).copied()
-                .unwrap_or(self.cx.analysis.tcx.error);
-            let recv = resolve_shallow(self.cx.analysis, recv, &self.subst);
-            self.resolve_iface_method(def, recv).ok_or_else(|| {
-                CodegenError::new(span, "cannot resolve static interface method to a concrete impl")
-            })?
-        } else {
-            (def, self.instance_args(callee.span))
-        };
-        let mut arg_vals = Vec::with_capacity(args.len());
-        for a in args {
-            let v = self.gen_expr(a)?.ok_or_else(|| {
-                CodegenError::new(a.span, "argument has no value")
-            })?;
-            arg_vals.push(v);
-        }
-        self.emit_call(target, targs, &arg_vals, span)
-    }
-
-    /// Lower `recv.method(args)`: the receiver becomes the leading `self` arg.
-    pub(crate) fn gen_method_call(
-        &mut self,
-        def: DefId,
-        callee: &Expr,
-        args: &[Expr],
-        span: Span,
-    ) -> CgResult<Option<Value>> {
-        let ExprKind::Field { receiver, .. } = &callee.kind else {
-            return Err(CodegenError::new(span, "malformed method call"));
-        };
-        let recv_ty = resolve_shallow(
-            self.cx.analysis,
-            self.cx.analysis.results.expr_ty(receiver.span).unwrap_or(self.cx.analysis.tcx.error),
-            &self.subst,
-        );
-        // A method on an interface object dispatches dynamically via its vtable.
-        if self.cx.analysis.program.def(def).kind == DefKind::InterfaceMethod
-            && matches!(self.cx.analysis.tcx.kind(recv_ty),
-                TyKind::Named { def: d, .. } if self.cx.analysis.program.def(*d).kind == DefKind::Interface)
-        {
-            return self.gen_dyn_method_call(def, receiver, args, span);
-        }
-        // `Clone.clone` reached through a `T: Clone` bound: if the monomorphized
-        // receiver is a builtin-cloneable type (primitive/`str`/immutable
-        // collection), emit the intrinsic clone rather than seeking an `extend`.
-        if self.cx.analysis.program.def(def).kind == DefKind::InterfaceMethod
-            && self.cx.analysis.program.def(def).parent == Some(self.cx.analysis.program.clone_def)
-        {
-            if let Some(kind) = self.builtin_clone_kind(recv_ty) {
-                return self.gen_builtin_clone(receiver, kind);
-            }
-        }
-        // `Eq.eq` / `Ord.{lt,le,gt,ge}` reached through a `T: Eq`/`T: Ord` bound:
-        // if the monomorphized receiver is a primitive or `str`, emit the
-        // intrinsic comparison rather than seeking an `extend` impl (primitives
-        // implement these structurally — `docs/15`).
-        let parent = self.cx.analysis.program.def(def).parent;
-        if self.cx.analysis.program.def(def).kind == DefKind::InterfaceMethod
-            && (parent == Some(self.cx.analysis.program.eq_def)
-                || parent == Some(self.cx.analysis.program.ord_def))
-            && self.cx.analysis.program.eq_def != DefId(0)
-        {
-            if let Some(op) = compare_op(&self.cx.analysis.program.def(def).name) {
-                if self.is_primitive_comparable(recv_ty) {
-                    return self.gen_primitive_compare(op, recv_ty, receiver, args, span);
-                }
-            }
-        }
-        // `ToStr.to_str` reached through a `T: ToStr` bound on a directly
-        // stringifiable receiver (primitive/`str`/`null`): emit the `as str`
-        // intrinsic rather than seeking an `extend` impl (`docs/15`).
-        if self.cx.analysis.program.def(def).kind == DefKind::InterfaceMethod
-            && parent == Some(self.cx.analysis.program.to_str_def)
-            && self.cx.analysis.program.to_str_def != DefId(0)
-        {
-            if matches!(
-                self.cx.analysis.tcx.kind(recv_ty),
-                TyKind::Int(_) | TyKind::Float(_) | TyKind::Bool | TyKind::Char | TyKind::Str | TyKind::Null
-            ) {
-                let v = self.gen_expr(receiver)?.ok_or_else(|| {
-                    CodegenError::new(receiver.span, "to_str receiver has no value")
-                })?;
-                return Ok(Some(self.cast_to_str(v, recv_ty, span)?));
-            }
-        }
-        // `Hash.hash` reached through a `T: Hash` bound on a primitive or `str`
-        // receiver: emit the runtime hashing intrinsic rather than seeking an
-        // `extend` impl (`docs/15` §7). Numeric/`bool`/`char` receivers widen to
-        // `i64`; floats are passed bit-equivalently to `lang_hash_f64`.
-        if self.cx.analysis.program.def(def).kind == DefKind::InterfaceMethod
-            && parent == Some(self.cx.analysis.program.hash_def)
-            && self.cx.analysis.program.hash_def != DefId(0)
-        {
-            if matches!(
-                self.cx.analysis.tcx.kind(recv_ty),
-                TyKind::Int(_) | TyKind::Float(_) | TyKind::Bool | TyKind::Char | TyKind::Str
-            ) {
-                let v = self.gen_expr(receiver)?.ok_or_else(|| {
-                    CodegenError::new(receiver.span, "hash receiver has no value")
-                })?;
-                return Ok(Some(self.gen_primitive_hash(v, recv_ty)));
-            }
-        }
-        // An interface method on a generic type parameter is resolved to the
-        // concrete `extend` impl of whatever the parameter was monomorphized to.
-        let (target, targs) = if self.cx.analysis.program.def(def).kind == DefKind::InterfaceMethod {
-            self.resolve_iface_method(def, recv_ty).ok_or_else(|| {
-                CodegenError::new(span, "cannot resolve interface method to a concrete impl")
-            })?
-        } else {
-            // A generic `extend`'s method takes the extend's type arguments,
-            // recorded by the checker at the call site.
-            (def, self.instance_args(callee.span))
-        };
-        let self_val = self.gen_expr(receiver)?.ok_or_else(|| {
-            CodegenError::new(receiver.span, "method receiver has no value")
-        })?;
-        let mut arg_vals = vec![self_val];
-        for a in args {
-            let v = self.gen_expr(a)?.ok_or_else(|| {
-                CodegenError::new(a.span, "argument has no value")
-            })?;
-            arg_vals.push(v);
-        }
-        self.emit_call(target, targs, &arg_vals, span)
-    }
-
-    /// Lower a closure expression to a heap environment `[fn_ptr, captures…]`
-    /// and queue its lifted function for compilation. The environment pointer
-    /// is the closure value.
-    pub(crate) fn gen_closure(&mut self, body: &Expr, span: Span) -> CgResult<Option<Value>> {
-        let info = self.cx.analysis.results.closures.get(&span).cloned()
-            .ok_or_else(|| CodegenError::new(span, "closure was not analysed"))?;
-
-        // Declare the lifted function: (env, params…) -> ret.
+    ) -> CgResult<(FuncId, Value)> {
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(PTR));
         for (_, ty) in &info.params {
@@ -1324,8 +863,6 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         // says every captured variable is captured by reference. The outer
         // scope binds each captured local as a *cell* (a managed 8-byte heap
         // object holding the value); the env slot stores the cell pointer.
-        // The closure body loads the cell ptr from the env and reads/writes
-        // through it, so primitive mutations propagate to the outer scope.
         // Every cap slot is therefore a managed pointer for the GC.
         let n = info.captures.len();
         let size = (8 + n * 8) as u32;
@@ -1333,118 +870,18 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         let desc = self.emit_descriptor(size, GC_KIND_PLAIN, &ptr_offsets);
         let env = self.call_intrinsic("lang_alloc", &[PTR], Some(PTR), &[desc])
             .expect("lang_alloc returns a pointer");
-        // Store the function pointer at offset 0.
         let fref = self.module.declare_func_in_func(func_id, self.b.func);
         let faddr = self.b.ins().func_addr(PTR, fref);
         self.b.ins().store(MemFlags::trusted(), faddr, env, 0);
-        // Capture each enclosing local: for a cell-backed local, `use_var`
-        // gives the cell pointer directly (`fresh_var` declared the variable
-        // as `PTR`). The outer's local is therefore cell-backed at this point
-        // (captured locals always are — see `FnGen::fresh_var`).
+        // Capture each enclosing local by its cell pointer (cell-backed locals
+        // hold the cell ptr in their Cranelift var — see `FnGen::fresh_var`).
         for (k, (local, _)) in info.captures.iter().enumerate() {
             let var = *self.vars.get(local)
                 .ok_or_else(|| CodegenError::new(span, "captured local has no slot"))?;
             let cell = self.b.use_var(var);
             self.b.ins().store(MemFlags::trusted(), cell, env, (8 + k * 8) as i32);
         }
-
-        self.closures.push(ClosureJob {
-            func_id,
-            info,
-            body: body.clone(),
-            subst: self.subst.clone(),
-            span,
-        });
-        Ok(Some(env))
-    }
-
-    /// Lower a bare `async { … }` block (`docs/21` §6) to a `Future` state
-    /// machine: allocate a state struct holding the captured locals, wrap it in
-    /// a `Future<Output>` box, and queue the block's body as the `poll` function.
-    pub(crate) fn gen_async_block(&mut self, block: &Block, span: Span) -> CgResult<Option<Value>> {
-        let info = self.cx.analysis.results.async_blocks.get(&span).cloned()
-            .ok_or_else(|| CodegenError::new(span, "async block was not analysed"))?;
-        if !info.params.is_empty() {
-            return Err(CodegenError::new(span, "async closure lowering is not yet implemented"));
-        }
-
-        // Declare the poll function: (self: ptr, ctx: ptr) -> ptr.
-        let mut sig = self.module.make_signature();
-        sig.params.push(AbiParam::new(PTR));
-        sig.params.push(AbiParam::new(PTR));
-        sig.returns.push(AbiParam::new(PTR));
-        let name = format!("asyncblk.{}$poll", DATA_CTR.fetch_add(1, Ordering::Relaxed));
-        let poll_fid = self.module.declare_function(&name, Linkage::Local, &sig)
-            .expect("declare async block poll");
-
-        // A block containing `await` needs the full state-machine layout (room
-        // for every body local + the inner future); an await-free block only
-        // needs to store the captures. The constructor here and the `poll`
-        // function (in `define_async_job`) compute the same layout.
-        let (size, ptr_offsets, cap_offs): (u32, Vec<u32>, Vec<i32>) = if block_has_await(block) {
-            let cap_ids: Vec<LocalId> = info.captures.iter().map(|(l, _)| *l).collect();
-            let layout = async_state_layout(self.cx.analysis, &self.subst, &cap_ids, block, self.cx.captured_locals);
-            let cap_offs = cap_ids.iter().map(|l| layout.slot_off[l]).collect();
-            (layout.state_size, layout.ptr_offsets, cap_offs)
-        } else {
-            // [state @0][cap0_cell @8][cap1_cell @16]… — each slot stores a
-            // cell pointer (`docs/09` §7): the outer scope's binding for every
-            // captured local is cell-backed, so the GC must trace each slot.
-            let n = info.captures.len();
-            let mut cap_offs = Vec::new();
-            for k in 0..n {
-                cap_offs.push((8 + k * 8) as i32);
-            }
-            let ptr_offsets: Vec<u32> = cap_offs.iter().map(|&o| o as u32).collect();
-            ((8 + n * 8) as u32, ptr_offsets, cap_offs)
-        };
-        let desc = self.emit_descriptor(size, GC_KIND_PLAIN, &ptr_offsets);
-        let state = self.call_intrinsic("lang_alloc", &[PTR], Some(PTR), &[desc])
-            .expect("lang_alloc returns a pointer");
-        let zero = self.b.ins().iconst(types::I64, 0);
-        self.b.ins().store(MemFlags::trusted(), zero, state, 0);
-        for (k, (local, _)) in info.captures.iter().enumerate() {
-            let var = *self.vars.get(local)
-                .ok_or_else(|| CodegenError::new(span, "captured local has no slot"))?;
-            let v = self.b.use_var(var);
-            self.b.ins().store(MemFlags::trusted(), v, state, cap_offs[k]);
-        }
-        let out = info.output;
-        let fut = self.emit_future_box(poll_fid, state);
-        // The block body becomes the poll function body.
-        let body = Expr { kind: ExprKind::Block(block.clone()), span };
-        self.async_jobs.push(AsyncJob {
-            poll_fid,
-            info,
-            body,
-            subst: self.subst.clone(),
-            span,
-            out,
-        });
-        Ok(Some(fut))
-    }
-
-    /// Call a closure value: load its function pointer and call indirectly,
-    /// passing the environment as the leading argument.
-    pub(crate) fn gen_closure_call(
-        &mut self,
-        callee: &Expr,
-        ret: Ty,
-        args: &[Expr],
-    ) -> CgResult<Option<Value>> {
-        let env = self.gen_expr(callee)?.ok_or_else(|| {
-            CodegenError::new(callee.span, "closure value has no value")
-        })?;
-        let mut arg_vals = Vec::with_capacity(args.len());
-        for a in args {
-            // Implicit widenings recorded by the checker are applied by gen_expr.
-            let v = self.gen_expr(a)?.ok_or_else(|| {
-                CodegenError::new(a.span, "argument has no value")
-            })?;
-            arg_vals.push(v);
-        }
-        let ret_clty = self.cx_clty(ret);
-        Ok(self.emit_closure_call(env, &arg_vals, ret_clty))
+        Ok((func_id, env))
     }
 
     /// Call a closure `env` value with already-evaluated arguments: load its
@@ -1465,47 +902,6 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         let sigref = self.b.import_signature(sig);
         let call = self.b.ins().call_indirect(sigref, fnptr, &arg_vals);
         self.b.inst_results(call).first().copied()
-    }
-
-    /// Dispatch `obj.method(args)` through `obj`'s vtable: load the function
-    /// pointer at the method's slot and call it indirectly with the data pointer
-    /// as `self`.
-    pub(crate) fn gen_dyn_method_call(
-        &mut self,
-        iface_method: DefId,
-        receiver: &Expr,
-        args: &[Expr],
-        span: Span,
-    ) -> CgResult<Option<Value>> {
-        let iface = self.cx.analysis.program.def(iface_method).parent
-            .ok_or_else(|| CodegenError::new(span, "interface method has no interface"))?;
-        let prog = &self.cx.analysis.program;
-        let slot = (0..prog.defs.len() as u32)
-            .map(DefId)
-            .filter(|&d| {
-                let de = prog.def(d);
-                de.kind == DefKind::InterfaceMethod && de.parent == Some(iface)
-            })
-            .position(|d| d == iface_method)
-            .ok_or_else(|| CodegenError::new(span, "method not found in interface"))?;
-
-        let obj = self.gen_expr(receiver)?.ok_or_else(|| {
-            CodegenError::new(receiver.span, "interface receiver has no value")
-        })?;
-        let mut arg_vals = Vec::with_capacity(args.len());
-        for a in args {
-            let v = self.gen_expr(a)?.ok_or_else(|| {
-                CodegenError::new(a.span, "argument has no value")
-            })?;
-            arg_vals.push(v);
-        }
-        let ret_ty = resolve_shallow(
-            self.cx.analysis,
-            self.cx.analysis.results.expr_ty(span).unwrap_or(self.cx.analysis.tcx.error),
-            &self.subst,
-        );
-        let ret_clty = clty_of(self.cx.analysis, ret_ty);
-        self.emit_vtable_call(slot, obj, &arg_vals, ret_clty)
     }
 
     /// Index of an interface method within its interface (its vtable slot).
@@ -1561,7 +957,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         let TyKind::Named { def: cdef, args } = self.cx.analysis.tcx.kind(recv).clone() else {
             return None;
         };
-        let ext = self.cx.analysis.results.iface_impls.get(&(cdef, iface)).copied()?;
+        let ext = self.cx.hir.iface_impls.get(&(cdef, iface)).copied()?;
         let method = (0..prog.defs.len() as u32).map(DefId).find(|&d| {
             let def = prog.def(d);
             def.kind == DefKind::ExtendMethod && def.parent == Some(ext) && def.name == mname
@@ -1595,53 +991,6 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         let func_ref = self.module.declare_func_in_func(func_id, self.b.func);
         let inst = self.b.ins().call(func_ref, arg_vals);
         Ok(self.b.inst_results(inst).first().copied())
-    }
-
-    /// Lower a call to a builtin (`print`/`println`): one `str` argument.
-    pub(crate) fn gen_builtin_call(&mut self, b: Builtin, args: &[Expr]) -> CgResult<Option<Value>> {
-        match b {
-            Builtin::Print | Builtin::Println => {
-                let arg = self.gen_expr(&args[0])?.ok_or_else(|| {
-                    CodegenError::new(args[0].span, "builtin argument has no value")
-                })?;
-                let name = if matches!(b, Builtin::Print) { "lang_print" } else { "lang_println" };
-                self.call_intrinsic(name, &[PTR], None, &[arg]);
-                Ok(None)
-            }
-            // Diverging builtins (`never`): call the runtime, then terminate the
-            // block with a trap so any code after the call is correctly dead.
-            Builtin::Panic => {
-                let msg = self.gen_expr(&args[0])?.ok_or_else(|| {
-                    CodegenError::new(args[0].span, "panic message has no value")
-                })?;
-                self.call_intrinsic("lang_panic", &[PTR], None, &[msg]);
-                self.emit_unreachable();
-                Ok(None)
-            }
-            // The attached value is evaluated (its side effects run, it is boxed
-            // into `dynamic`) but the language never inspects it; the thread
-            // terminates with a generic message.
-            Builtin::PanicWith => {
-                let _ = self.gen_expr(&args[0])?;
-                let msg = self.const_str("explicit panic (panic_with)");
-                self.call_intrinsic("lang_panic", &[PTR], None, &[msg]);
-                self.emit_unreachable();
-                Ok(None)
-            }
-            Builtin::Exit => {
-                let code = self.gen_expr(&args[0])?.ok_or_else(|| {
-                    CodegenError::new(args[0].span, "exit code has no value")
-                })?;
-                self.call_intrinsic("lang_exit", &[types::I32], None, &[code]);
-                self.emit_unreachable();
-                Ok(None)
-            }
-            Builtin::Abort => {
-                self.call_intrinsic("lang_abort", &[], None, &[]);
-                self.emit_unreachable();
-                Ok(None)
-            }
-        }
     }
 
     /// Emit a cooperative GC safepoint poll (`docs/20`). Placed at loop headers

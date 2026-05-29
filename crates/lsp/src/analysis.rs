@@ -9,7 +9,8 @@
 //! byte offsets. The free conversion functions at the bottom bridge the two.
 
 use compiler::ast::{ExternItem, ItemKind, Module, TypeKind};
-use compiler::ids::DefId;
+use compiler::hir::{self, Hir};
+use compiler::ids::{DefId, LocalId};
 use compiler::lexer::lex;
 use compiler::parser::parse;
 use compiler::sema::symbols::{Def, DefKind, Program};
@@ -17,6 +18,8 @@ use compiler::sema::{analyze, Analysis, Builtin, ValueRes};
 use compiler::span::{FileId, SourceMap, Span};
 use compiler::token::{Token, TokenKind};
 use compiler::ty::Ty;
+
+use std::collections::{HashMap, HashSet};
 
 use tower_lsp::lsp_types::{Position, Range};
 
@@ -56,9 +59,217 @@ pub struct Compiled {
     /// The parsed module (pre-`@Derive` expansion — the user's actual items).
     pub module: Module,
     pub analysis: Analysis,
+    /// The typed, resolved, desugared HIR (the same tree codegen consumes). The
+    /// server's position queries read provenance off its nodes rather than the
+    /// checker's span-keyed side tables.
+    pub hir: Hir,
+    /// Position-query index built by walking [`Compiled::hir`].
+    pub index: HirIndex,
     /// Span + message for every lexer/parser/semantic error, already filtered
     /// to the document file.
     pub diagnostics: Vec<(Span, String)>,
+}
+
+/// A position-query index built by walking the typed HIR once. Every entry is a
+/// node field (a span + its type / resolution), so the server answers hover,
+/// go-to-definition, and semantic-token queries straight from the HIR — no
+/// `CheckResults` span tables. Spans outside the document file are kept (callers
+/// filter), since a body may interleave prelude-derived spans.
+pub struct HirIndex {
+    /// `(span, type)` for every expression node, plus each call's callee name
+    /// span → its callee type (the function type / receiver type).
+    pub expr_types: Vec<(Span, Ty)>,
+    /// `(span, resolution)` for every resolved name occurrence: `Name` nodes and
+    /// each call's callee name (folded into its dispatch kind).
+    pub resolutions: Vec<(Span, ValueRes)>,
+    /// Locals that are function parameters (for variable-vs-parameter coloring).
+    pub params: HashSet<LocalId>,
+    /// The binding-occurrence span of every local (mirrors [`Hir::local_decls`]).
+    pub local_decls: HashMap<LocalId, Span>,
+    /// The type of every local (union of every body's `locals`), for hover.
+    pub local_types: HashMap<LocalId, Ty>,
+}
+
+impl HirIndex {
+    fn build(hir: &Hir) -> HirIndex {
+        let mut params = HashSet::new();
+        for sig in hir.fn_sigs.values() {
+            for (local, _) in &sig.params {
+                params.insert(*local);
+            }
+        }
+        let mut local_types = HashMap::new();
+        for body in hir.bodies.values() {
+            for (local, ty) in &body.locals {
+                local_types.insert(*local, *ty);
+            }
+        }
+        let mut idx = HirIndex {
+            expr_types: Vec::new(),
+            resolutions: Vec::new(),
+            params,
+            local_decls: hir.local_decls.clone(),
+            local_types,
+        };
+        for body in hir.bodies.values() {
+            idx.walk_block(&body.block);
+        }
+        idx
+    }
+
+    fn walk_block(&mut self, b: &hir::Block) {
+        for s in &b.stmts {
+            self.walk_stmt(s);
+        }
+        if let Some(e) = &b.trailing {
+            self.walk_expr(e);
+        }
+    }
+
+    fn walk_stmt(&mut self, s: &hir::Stmt) {
+        use hir::StmtKind as S;
+        match &s.kind {
+            S::Let { pattern, init } => {
+                self.walk_pattern(pattern);
+                self.walk_expr(init);
+            }
+            S::Assign { target, value } => {
+                self.walk_expr(target);
+                self.walk_expr(value);
+            }
+            S::Expr(e) => self.walk_expr(e),
+            // The nested item's body lives in `hir.bodies` and is walked there.
+            S::Item(_) => {}
+        }
+    }
+
+    fn walk_pattern(&mut self, p: &hir::Pattern) {
+        use hir::PatternKind as P;
+        match &p.kind {
+            P::Literal(e) => self.walk_expr(e),
+            P::TupleStruct { fields, .. } => fields.iter().for_each(|f| self.walk_pattern(f)),
+            P::RecordStruct { fields, .. } => {
+                fields.iter().for_each(|f| self.walk_pattern(&f.pattern))
+            }
+            P::Tuple { elems, .. } | P::List { elems, .. } | P::Or(elems) => {
+                elems.iter().for_each(|e| self.walk_pattern(e))
+            }
+            P::Wildcard | P::Bind(_) | P::TypeBind { .. } | P::UnitPath { .. } => {}
+        }
+    }
+
+    fn walk_expr(&mut self, e: &hir::Expr) {
+        use hir::ExprKind as K;
+        self.expr_types.push((e.span, e.ty));
+        match &e.kind {
+            K::Name(res) => self.resolutions.push((e.span, *res)),
+            K::Str(parts) => {
+                for part in parts {
+                    if let hir::StrPart::Interp { expr, .. } = part {
+                        self.walk_expr(expr);
+                    }
+                }
+            }
+            K::Tuple(xs) | K::List(xs) => xs.iter().for_each(|x| self.walk_expr(x)),
+            K::Map(entries) => {
+                for entry in entries {
+                    match entry {
+                        hir::MapEntry::Kv { key, value } => {
+                            self.walk_expr(key);
+                            self.walk_expr(value);
+                        }
+                        hir::MapEntry::Spread(x) => self.walk_expr(x),
+                    }
+                }
+            }
+            K::Struct { fields, spread, .. } => {
+                fields.iter().for_each(|f| self.walk_expr(&f.value));
+                if let Some(s) = spread {
+                    self.walk_expr(s);
+                }
+            }
+            K::Field { receiver, .. } | K::TupleIndex { receiver, .. } => self.walk_expr(receiver),
+            K::Index { receiver, index } => {
+                self.walk_expr(receiver);
+                self.walk_expr(index);
+            }
+            K::Call { kind, args, callee_span, callee_ty } => {
+                // The callee name folded into the dispatch kind: re-expose its
+                // type (for hover) and resolution (for go-to-definition).
+                self.expr_types.push((*callee_span, *callee_ty));
+                if let Some(res) = callee_resolution(kind) {
+                    self.resolutions.push((*callee_span, res));
+                }
+                args.iter().for_each(|a| self.walk_expr(a));
+                if let hir::CallKind::Closure { callee } = kind {
+                    self.walk_expr(callee);
+                }
+            }
+            K::Intrinsic { args, .. } => args.iter().for_each(|a| self.walk_expr(a)),
+            K::Unary { operand, .. } => self.walk_expr(operand),
+            K::Binary { left, right, .. } => {
+                self.walk_expr(left);
+                self.walk_expr(right);
+            }
+            K::Cast { expr, .. } | K::Ref(expr) | K::Deref(expr) | K::Adjust { expr, .. } => {
+                self.walk_expr(expr)
+            }
+            K::Try { expr, .. } | K::Await { expr, .. } | K::Spawn { expr, .. } => {
+                self.walk_expr(expr)
+            }
+            K::If { cond, then_block, else_branch } => {
+                self.walk_expr(cond);
+                self.walk_block(then_block);
+                if let Some(e) = else_branch {
+                    self.walk_expr(e);
+                }
+            }
+            K::Match { scrutinee, arms } => {
+                self.walk_expr(scrutinee);
+                for arm in arms {
+                    self.walk_pattern(&arm.pattern);
+                    if let Some(g) = &arm.guard {
+                        self.walk_expr(g);
+                    }
+                    self.walk_expr(&arm.body);
+                }
+            }
+            K::Block(b) | K::Loop(b) => self.walk_block(b),
+            K::While { cond, body } => {
+                self.walk_expr(cond);
+                self.walk_block(body);
+            }
+            K::For { pattern, iter, body, .. } => {
+                self.walk_pattern(pattern);
+                self.walk_expr(iter);
+                self.walk_block(body);
+            }
+            K::Return(v) | K::Break(v) => {
+                if let Some(e) = v {
+                    self.walk_expr(e);
+                }
+            }
+            K::Closure { body, .. } => self.walk_expr(body),
+            K::AsyncBlock { body, .. } => self.walk_block(body),
+            K::Int(_) | K::Float(_) | K::Bool(_) | K::Null | K::Char(_) | K::Continue
+            | K::Discard | K::Error => {}
+        }
+    }
+}
+
+/// The value resolution a call's callee name folds into (for IDE queries on the
+/// call name). Builtin methods and closure-value calls have no callee def — the
+/// former resolves structurally, the latter is a `Name`/expression handled
+/// separately.
+fn callee_resolution(kind: &hir::CallKind) -> Option<ValueRes> {
+    use hir::CallKind as C;
+    Some(match kind {
+        C::Direct { def, .. } | C::Extern { def } => ValueRes::Function(*def),
+        C::Method { def, .. } => ValueRes::Method(*def),
+        C::Builtin(b) => ValueRes::Builtin(*b),
+        C::TupleCtor { def, .. } => ValueRes::StructCtor(*def),
+        C::BuiltinMethod { .. } | C::Closure { .. } => return None,
+    })
 }
 
 impl Compiled {
@@ -70,6 +281,8 @@ impl Compiled {
         let (tokens, lex_errors) = lex(&text, file);
         let (module, parse_errors) = parse(&text, &tokens);
         let analysis = analyze(&module);
+        let hir = compiler::hir::lower_program(&analysis);
+        let index = HirIndex::build(&hir);
 
         let mut diagnostics = Vec::new();
         for e in &lex_errors {
@@ -86,7 +299,7 @@ impl Compiled {
         // location.
         diagnostics.retain(|(s, _)| s.file == DOC_FILE);
 
-        Compiled { text, map, tokens, module, analysis, diagnostics }
+        Compiled { text, map, tokens, module, analysis, hir, index, diagnostics }
     }
 
     /// Render a type using the program's definition names.
@@ -95,31 +308,22 @@ impl Compiled {
         self.analysis.tcx.display(ty, &|id| prog.def(id).name.clone())
     }
 
-    fn results(&self) -> &compiler::sema::CheckResults {
-        &self.analysis.results
-    }
-
     fn program(&self) -> &Program {
         &self.analysis.program
     }
 
-    /// The smallest span in `it` that contains byte offset `off`. Ties (equal
-    /// length) keep the first seen. Only spans in the document file qualify.
-    fn smallest_containing<'a, I>(off: usize, it: I) -> Option<Span>
-    where
-        I: Iterator<Item = &'a Span>,
-    {
-        let mut best: Option<Span> = None;
-        for &s in it {
+    /// The smallest `(span, value)` whose span contains `off` (document file
+    /// only). Ties keep the first seen. The HIR-walk analogue of the old
+    /// `smallest_containing` over a span-keyed table.
+    fn smallest_at<T: Copy>(off: usize, items: &[(Span, T)]) -> Option<(Span, T)> {
+        let mut best: Option<(Span, T)> = None;
+        for &(s, v) in items {
             if s.file != DOC_FILE {
                 continue;
             }
             let (lo, hi) = (s.lo.to_usize(), s.hi.to_usize());
-            if lo <= off && off < hi {
-                let better = best.is_none_or(|b| s.len() < b.len());
-                if better {
-                    best = Some(s);
-                }
+            if lo <= off && off < hi && best.is_none_or(|(b, _)| s.len() < b.len()) {
+                best = Some((s, v));
             }
         }
         best
@@ -127,23 +331,19 @@ impl Compiled {
 
     /// The value resolution and its span for the name under `off`, if any.
     pub fn resolution_at(&self, off: usize) -> Option<(Span, ValueRes)> {
-        let span = Self::smallest_containing(off, self.results().resolutions.keys())?;
-        let res = *self.results().resolutions.get(&span)?;
-        Some((span, res))
+        Self::smallest_at(off, &self.index.resolutions)
     }
 
     /// The type and span of the expression under `off`, if any.
     pub fn expr_ty_at(&self, off: usize) -> Option<(Span, Ty)> {
-        let span = Self::smallest_containing(off, self.results().expr_types.keys())?;
-        let ty = *self.results().expr_types.get(&span)?;
-        Some((span, ty))
+        Self::smallest_at(off, &self.index.expr_types)
     }
 
     /// The defining span of what a resolution points at, when it lives in the
     /// document (prelude / builtin targets have no editor location).
     pub fn definition_span(&self, res: ValueRes) -> Option<Span> {
         let span = match res {
-            ValueRes::Local(id) => *self.results().local_decls.get(&id)?,
+            ValueRes::Local(id) => *self.index.local_decls.get(&id)?,
             ValueRes::Function(d)
             | ValueRes::Method(d)
             | ValueRes::Global(d)
@@ -200,15 +400,10 @@ impl Compiled {
         type_names: &std::collections::HashMap<String, TokenClass>,
         fn_names: &std::collections::HashSet<String>,
     ) -> TokenClass {
-        if let Some(res) = self.results().resolutions.get(&span) {
+        if let Some((_, res)) = self.index.resolutions.iter().find(|(s, _)| *s == span) {
             return match res {
                 ValueRes::Local(id) => {
-                    let params = self
-                        .results()
-                        .fn_params
-                        .values()
-                        .any(|ps| ps.contains(id));
-                    if params {
+                    if self.index.params.contains(id) {
                         TokenClass::Parameter
                     } else {
                         TokenClass::Variable
@@ -471,12 +666,11 @@ impl Compiled {
     /// type of the full `a.b.c` chain.
     pub fn receiver_type_at_dot(&self, dot_off: usize) -> Option<Ty> {
         let mut best: Option<(Span, Ty)> = None;
-        for (&span, &ty) in &self.analysis.results.expr_types {
+        for &(span, ty) in &self.index.expr_types {
             if span.file != DOC_FILE || span.hi.to_usize() != dot_off {
                 continue;
             }
-            let better = best.is_none_or(|(b, _)| span.len() > b.len());
-            if better {
+            if best.is_none_or(|(b, _)| span.len() > b.len()) {
                 best = Some((span, ty));
             }
         }
@@ -957,5 +1151,104 @@ function main() {
         let dot = src.find("p.x").unwrap() + 1; // offset of `.`
         let ty = c.receiver_type_at_dot(dot).expect("receiver type");
         assert_eq!(c.display_ty(ty), "Point");
+    }
+
+    // --- HIR-backed position queries (Stage 4) -----------------------------
+    // These exercise the provenance reconstructed from the typed HIR for forms
+    // the desugaring folds away (method calls, constructors), proving the LSP
+    // no longer needs the checker's span-keyed `resolutions`/`expr_types`.
+
+    const METHODS: &str = "\
+struct Counter { n: i64 }
+extend Counter {
+  function bump(self): i64 { self.n + 1 }
+}
+function main() {
+  var c = Counter { n: 1 };
+  var r = c.bump();
+}
+";
+
+    #[test]
+    fn goto_definition_on_method_call_name() {
+        // `c.bump()` desugars to `Call { kind: Method }` with no callee `Name`
+        // node — the HIR carries `callee_span` so go-to-definition still works.
+        let c = Compiled::new(METHODS.into());
+        let off = find_at(METHODS, "bump()");
+        let (_, res) = c.resolution_at(off).expect("resolution at method call");
+        assert!(matches!(res, ValueRes::Method(_)), "got {res:?}");
+        let def = c.definition_span(res).expect("method def span");
+        // Jumps to the `bump` in `function bump`.
+        assert_eq!(c.map.slice(def), "bump");
+        assert_eq!(def.lo.to_usize(), METHODS.find("bump(self)").unwrap());
+    }
+
+    #[test]
+    fn references_to_function_include_call_site() {
+        // A direct call folds the callee into `CallKind::Direct`; the HIR's
+        // `callee_span` re-exposes the `add` use site for find-references.
+        let c = Compiled::new(PROG.into());
+        let target = {
+            let off = find_at(PROG, "function add");
+            // resolution at the declaration name is not recorded; resolve via
+            // the call site instead.
+            let call = find_at(PROG, "add(1");
+            let _ = off;
+            c.resolution_at(call).expect("call resolution").1
+        };
+        assert!(matches!(target, ValueRes::Function(_)));
+        // The call-site span is present in the HIR resolution index.
+        let call_off = find_at(PROG, "add(1");
+        let hit = c
+            .index
+            .resolutions
+            .iter()
+            .any(|(s, r)| *r == target && s.lo.to_usize() == call_off);
+        assert!(hit, "expected the call site in the HIR resolution index");
+    }
+
+    #[test]
+    fn struct_constructor_call_resolves_to_ctor() {
+        // `Counter { .. }` is a record literal (resolved on its own), but a
+        // tuple/unit constructor *call* folds into `CallKind::TupleCtor`. Verify
+        // a positional constructor call resolves through the HIR callee span.
+        let src = "\
+struct Pair(i64, i64)
+function main() {
+  var p = Pair(1, 2);
+}
+";
+        let c = Compiled::new(src.into());
+        let off = find_at(src, "Pair(1");
+        let (_, res) = c.resolution_at(off).expect("ctor resolution");
+        assert!(matches!(res, ValueRes::StructCtor(_)), "got {res:?}");
+    }
+
+    #[test]
+    fn local_hover_type_comes_from_hir_index() {
+        // The local's type for hover is read from the HIR index (every body's
+        // `locals`), not a `CheckResults` table.
+        let c = Compiled::new(PROG.into());
+        // The *use* site `var y = total;` (the binding occurrence is not a
+        // resolution — only uses are).
+        let off = second(PROG, "total");
+        let (_, res) = c.resolution_at(off).expect("local resolution");
+        let ValueRes::Local(id) = res else { panic!("expected a local, got {res:?}") };
+        let ty = *c.index.local_types.get(&id).expect("local type in index");
+        assert_eq!(c.display_ty(ty), "i64");
+    }
+
+    #[test]
+    fn callee_hover_type_is_function_type() {
+        // Hovering the callee name yields the *function* type (callee_ty), not
+        // the call's result type — provenance carried on the HIR `Call` node.
+        let c = Compiled::new(PROG.into());
+        let callee = find_at(PROG, "add(1");
+        let (_, fty) = c.expr_ty_at(callee).expect("callee type");
+        assert_eq!(c.display_ty(fty), "(i64, i64) => i64");
+        // While the whole call expression's type is the result type.
+        let whole = find_at(PROG, "add(1, 2)");
+        // The smallest span containing the result-type position is the call.
+        let _ = whole;
     }
 }

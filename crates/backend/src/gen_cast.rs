@@ -30,76 +30,6 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         self.b.inst_results(inst).first().copied()
     }
 
-    /// Lower a string literal to a `str` pointer. Interpolation is not yet
-    /// lowerable; text parts have their escapes processed.
-    pub(crate) fn gen_str_literal(&mut self, s: &StringLit) -> CgResult<Value> {
-        // Interpolation desugars to a chain of `+` (concat) over each part's
-        // `to_str` (`docs/01` §8). Each part becomes one `str` value.
-        let mut parts: Vec<Value> = Vec::new();
-        for part in &s.parts {
-            match part {
-                StringPart::Text { text, .. } => {
-                    let mut bytes = Vec::new();
-                    unescape_into(text, &mut bytes);
-                    parts.push(self.emit_str_bytes(bytes));
-                }
-                StringPart::Ident(id) => {
-                    let ty = self.cx.analysis.results.expr_ty(id.span)
-                        .unwrap_or(self.cx.analysis.tcx.error);
-                    let raw = self.gen_local_use(id.span)?;
-                    // Apply narrowing/widening recorded for this use.
-                    let v = self.apply_adjustment(id.span, raw)?;
-                    parts.push(self.stringify(v, ty, id.span)?);
-                }
-                StringPart::Expr(e) => {
-                    let ty = self.cx.analysis.results.expr_ty(e.span)
-                        .unwrap_or(self.cx.analysis.tcx.error);
-                    let v = self.gen_expr(e)?;
-                    parts.push(self.stringify(v, ty, e.span)?);
-                }
-            }
-        }
-        if parts.is_empty() {
-            return Ok(self.const_str(""));
-        }
-        // Each part is a managed `str` held live across the remaining parts'
-        // allocations and the concat chain; root them all so a collection
-        // mid-build cannot free a part that has not yet been concatenated.
-        for &p in &parts {
-            self.mark_root(p);
-        }
-        let mut acc = parts[0];
-        for &p in &parts[1..] {
-            acc = self
-                .call_intrinsic("lang_str_concat", &[PTR, PTR], Some(PTR), &[acc, p])
-                .expect("concat returns a value");
-            self.mark_root(acc);
-        }
-        Ok(acc)
-    }
-
-    /// Convert an interpolated value to a `str`.
-    pub(crate) fn stringify(&mut self, v: Option<Value>, ty: Ty, span: Span) -> CgResult<Value> {
-        // A user type with a `to_str(self): str` method (e.g. `@Derive(ToStr)`):
-        // call it with the value as the receiver.
-        if let Some(&mdef) = self.cx.analysis.results.stringify_methods.get(&span) {
-            let recv = v.ok_or_else(|| CodegenError::new(span, "interpolated value has no payload"))?;
-            let targs = self.instance_args(span);
-            return self
-                .emit_call(mdef, targs, &[recv], span)?
-                .ok_or_else(|| CodegenError::new(span, "`to_str` returned no value"));
-        }
-        match self.cx.analysis.tcx.kind(ty) {
-            TyKind::Str => v.ok_or_else(|| CodegenError::new(span, "str has no value")),
-            TyKind::Null => Ok(self.const_str("null")),
-            TyKind::Int(_) | TyKind::Float(_) | TyKind::Bool | TyKind::Char => {
-                let v = v.ok_or_else(|| CodegenError::new(span, "value has no payload"))?;
-                self.cast_to_str(v, ty, span)
-            }
-            _ => Err(CodegenError::new(span, "type is not stringifiable")),
-        }
-    }
-
     /// Build a `str` value from raw UTF-8 bytes via a read-only data object.
     pub(crate) fn emit_str_bytes(&mut self, bytes: Vec<u8>) -> Value {
         let len = bytes.len();
@@ -123,40 +53,35 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         self.emit_str_bytes(text.as_bytes().to_vec())
     }
 
-    pub(crate) fn gen_cast(&mut self, inner: &Expr, from: Ty, to: Ty) -> CgResult<Option<Value>> {
+    /// Apply an `as` cast to an already-evaluated operand value.
+    pub(crate) fn emit_cast(&mut self, opv: Option<Value>, from: Ty, to: Ty, span: Span)
+        -> CgResult<Option<Value>>
+    {
         // `*T | null` (NPO) casts are no-ops on the raw pointer (`docs/19` §2):
         // `(*T | null) as *T` reinterprets, and `*T as (*T | null)` is identity.
         if npo_union(self.cx.analysis, from).is_some() || npo_union(self.cx.analysis, to).is_some() {
-            let v = self.gen_expr(inner)?;
-            return Ok(Some(v.unwrap_or_else(|| self.b.ins().iconst(PTR, 0))));
+            return Ok(Some(opv.unwrap_or_else(|| self.b.ins().iconst(PTR, 0))));
         }
         // Narrowing a union/`dynamic`: the operand is a box; check its type id.
         if matches!(self.cx.analysis.tcx.kind(from), TyKind::Union(_) | TyKind::Dynamic) {
-            let ptr = self.gen_expr(inner)?.ok_or_else(|| {
-                CodegenError::new(inner.span, "union operand has no value")
-            })?;
+            let ptr = opv.ok_or_else(|| CodegenError::new(span, "union operand has no value"))?;
             return self.gen_union_narrow(ptr, to);
         }
         // Downcast an interface object to a concrete type: verify the stored
         // type id, then return the data pointer (panic on mismatch).
         if self.is_interface_ty(from) && !self.is_interface_ty(to) {
-            let ptr = self.gen_expr(inner)?.ok_or_else(|| {
-                CodegenError::new(inner.span, "interface operand has no value")
-            })?;
+            let ptr = opv.ok_or_else(|| CodegenError::new(span, "interface operand has no value"))?;
             return self.gen_dyn_downcast(ptr, to);
         }
         // Upcast a concrete value to an interface object (build its vtable box).
         if !self.is_interface_ty(from) && self.is_interface_ty(to) {
-            let v = self.gen_expr(inner)?;
-            return Ok(Some(self.gen_widen_dyn(v, from, to, inner.span)?));
+            return Ok(Some(self.gen_widen_dyn(opv, from, to, span)?));
         }
-        let v = self.gen_expr(inner)?.ok_or_else(|| {
-            CodegenError::new(inner.span, "cast operand has no value")
-        })?;
+        let v = opv.ok_or_else(|| CodegenError::new(span, "cast operand has no value"))?;
         let tcx = &self.cx.analysis.tcx;
         // Casts to `str` go through the runtime stringifiers.
         if matches!(tcx.kind(to), TyKind::Str) {
-            return Ok(Some(self.cast_to_str(v, from, inner.span)?));
+            return Ok(Some(self.cast_to_str(v, from, span)?));
         }
         let from_k = tcx.kind(from).clone();
         let to_k = tcx.kind(to).clone();
@@ -316,14 +241,16 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         Ok(Some(self.b.ins().load(PTR, MemFlags::trusted(), ptr, 8)))
     }
 
-    /// `v is T` — a runtime tag check on a union/`dynamic`, an interface object's
-    /// stored type id, or a static answer for a concrete operand.
-    pub(crate) fn gen_is(&mut self, inner: &Expr, from: Ty, to: Ty) -> CgResult<Option<Value>> {
+    /// Apply an `is` type-test to an already-evaluated operand value: a runtime
+    /// tag check on a union/`dynamic`, an interface object's stored type id, or
+    /// a static answer for a concrete operand.
+    pub(crate) fn emit_is(&mut self, opv: Option<Value>, from: Ty, to: Ty, span: Span)
+        -> CgResult<Option<Value>>
+    {
         // `*T | null` (NPO): the value is a raw pointer, so `is null` is a null
         // test and `is *T` is a non-null test (`docs/19` §2).
         if npo_union(self.cx.analysis, from).is_some() {
-            let v = self.gen_expr(inner)?;
-            let p = v.unwrap_or_else(|| self.b.ins().iconst(PTR, 0));
+            let p = opv.unwrap_or_else(|| self.b.ins().iconst(PTR, 0));
             let zero = self.b.ins().iconst(PTR, 0);
             let cc = if matches!(self.cx.analysis.tcx.kind(to), TyKind::Null) {
                 IntCC::Equal
@@ -333,35 +260,24 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             return Ok(Some(self.b.ins().icmp(cc, p, zero)));
         }
         if matches!(self.cx.analysis.tcx.kind(from), TyKind::Union(_) | TyKind::Dynamic) {
-            let ptr = self.gen_expr(inner)?.ok_or_else(|| {
-                CodegenError::new(inner.span, "`is` operand has no value")
-            })?;
+            let ptr = opv.ok_or_else(|| CodegenError::new(span, "`is` operand has no value"))?;
             let id = self.b.ins().load(types::I64, MemFlags::trusted(), ptr, 0);
             return Ok(Some(self.tag_in_target(id, to)));
         }
         // Interface object: compare the concrete type id stored at offset 16.
         if self.is_interface_ty(from) {
-            let ptr = self.gen_expr(inner)?.ok_or_else(|| {
-                CodegenError::new(inner.span, "`is` operand has no value")
-            })?;
+            let ptr = opv.ok_or_else(|| CodegenError::new(span, "`is` operand has no value"))?;
             let id = self.b.ins().load(types::I64, MemFlags::trusted(), ptr, 16);
             let want = self.type_id_of(to);
             let want_v = self.b.ins().iconst(types::I64, want);
             return Ok(Some(self.b.ins().icmp(IntCC::Equal, id, want_v)));
         }
-        // Concrete operand: the answer is known at compile time.
-        self.gen_expr(inner)?; // evaluate for any side effects
+        // Concrete operand: the answer is known at compile time. (Operand
+        // already evaluated by the caller for any side effects.)
         let answer = self.cx.analysis.tcx.variants(to).contains(&from);
         Ok(Some(self.b.ins().iconst(types::I8, i64::from(answer))))
     }
 
     // -- name resolution helpers --------------------------------------------
-
-    pub(crate) fn resolve_local(&self, span: Span) -> CgResult<LocalId> {
-        match self.cx.analysis.results.resolution(span) {
-            Some(ValueRes::Local(id)) => Ok(id),
-            _ => Err(CodegenError::new(span, "expected a local binding")),
-        }
-    }
 
 }
