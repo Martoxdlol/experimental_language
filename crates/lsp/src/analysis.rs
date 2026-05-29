@@ -8,7 +8,10 @@
 //! Editor positions are UTF-16 (the LSP default); the compiler works in UTF-8
 //! byte offsets. The free conversion functions at the bottom bridge the two.
 
-use compiler::ast::{ExternItem, ItemKind, Module, TypeKind};
+use compiler::ast::{
+    ExternItem, FunctionItem, FunctionSig, GenericParams, Item, ItemKind, Module, ParamKind,
+    StructItem, StructKind, Type, TypeKind,
+};
 use compiler::hir::{self, Hir};
 use compiler::ids::{DefId, LocalId};
 use compiler::lexer::lex;
@@ -449,6 +452,34 @@ impl Compiled {
         ((span.file.0 as usize) < self.map.file_count()).then_some(span)
     }
 
+    /// The name-occurrence span of a (type or value) definition `def`, or `None`
+    /// for a virtual-file definition. Prefers the name token over the whole item.
+    pub fn def_name_span(&self, def: DefId) -> Option<Span> {
+        let d = self.program().def(def);
+        let span = d.item.as_ref().and_then(item_name_span).unwrap_or(d.span);
+        ((span.file.0 as usize) < self.map.file_count()).then_some(span)
+    }
+
+    /// Resolve a type name written at byte offset `off` (in a type annotation) to
+    /// its definition's name span — type-position go-to-definition. Returns the
+    /// def of the innermost type-name token containing `off` (so `Foo<Bar>` jumps
+    /// to `Foo` or `Bar` depending on which the cursor is over).
+    pub fn type_def_span_at(&self, off: usize) -> Option<Span> {
+        let refs = collect_type_refs(&self.module.items);
+        let mut best: Option<(Span, &str)> = None;
+        for (span, name) in &refs {
+            if span.lo.to_usize() <= off
+                && off < span.hi.to_usize()
+                && best.is_none_or(|(b, _)| span.len() < b.len())
+            {
+                best = Some((*span, name.as_str()));
+            }
+        }
+        let (_, name) = best?;
+        let def = self.lookup_type_def(name)?;
+        self.def_name_span(def)
+    }
+
     /// A human-readable definition for `def`, used in hover popups.
     pub fn def_label(&self, def: &Def) -> String {
         format!("{} `{}`", def.kind.describe(), def.name)
@@ -578,6 +609,134 @@ pub fn item_name_span(item: &ItemKind) -> Option<Span> {
         },
         ItemKind::Extend(_) | ItemKind::Import(_) => return None,
     })
+}
+
+/// Collect `(name-span, type-name)` for every type-name occurrence in the
+/// **item-level** type positions of `items` — function / method signatures
+/// (params, returns, generic bounds & defaults), struct/extern-struct fields,
+/// type aliases, `extend`/interface targets and supers, and extern items —
+/// recursing into inline submodules. Powers type-position go-to-definition.
+/// (Function-body annotations `var x: T`, `e as T`, and pattern type names are
+/// a follow-up; the variable/value itself already resolves via the HIR index.)
+pub fn collect_type_refs(items: &[Item]) -> Vec<(Span, String)> {
+    let mut out = Vec::new();
+    for item in items {
+        collect_item_type_refs(&item.kind, &mut out);
+    }
+    out
+}
+
+fn collect_item_type_refs(item: &ItemKind, out: &mut Vec<(Span, String)>) {
+    match item {
+        ItemKind::Function(f) => collect_fn_type_refs(f, out),
+        ItemKind::Var(v) => {
+            if let Some(t) = &v.ty {
+                walk_type(t, out);
+            }
+        }
+        ItemKind::Struct(s) => collect_struct_type_refs(s, out),
+        ItemKind::Interface(i) => {
+            collect_generics(&i.generics, out);
+            i.supers.iter().for_each(|t| walk_type(t, out));
+            for m in &i.members {
+                collect_sig_type_refs(&m.function, out);
+            }
+        }
+        ItemKind::TypeAlias(a) => {
+            collect_generics(&a.generics, out);
+            walk_type(&a.aliased, out);
+        }
+        ItemKind::Extend(e) => {
+            collect_generics(&e.generics, out);
+            walk_type(&e.target, out);
+            e.interfaces.iter().for_each(|t| walk_type(t, out));
+            for m in &e.members {
+                collect_fn_type_refs(&m.function, out);
+            }
+        }
+        ItemKind::Module(m) => {
+            if let ModuleKind::Inline { items, .. } = &m.kind {
+                for it in items {
+                    collect_item_type_refs(&it.kind, out);
+                }
+            }
+        }
+        ItemKind::Extern(ext) => match ext {
+            ExternItem::Function(f) => collect_fn_type_refs(f, out),
+            ExternItem::Struct(s) => collect_struct_type_refs(s, out),
+            ExternItem::Var { ty, .. } => walk_type(ty, out),
+            ExternItem::OpaqueType(_) => {}
+        },
+        ItemKind::Import(_) => {}
+    }
+}
+
+fn collect_generics(g: &Option<GenericParams>, out: &mut Vec<(Span, String)>) {
+    if let Some(g) = g {
+        for p in &g.params {
+            p.bounds.iter().for_each(|t| walk_type(t, out));
+            if let Some(d) = &p.default {
+                walk_type(d, out);
+            }
+        }
+    }
+}
+
+fn collect_fn_type_refs(f: &FunctionItem, out: &mut Vec<(Span, String)>) {
+    collect_generics(&f.generics, out);
+    for p in &f.params {
+        if let ParamKind::Normal { ty, .. } = &p.kind {
+            walk_type(ty, out);
+        }
+    }
+    if let Some(r) = &f.return_type {
+        walk_type(r, out);
+    }
+}
+
+fn collect_sig_type_refs(s: &FunctionSig, out: &mut Vec<(Span, String)>) {
+    collect_generics(&s.generics, out);
+    for p in &s.params {
+        if let ParamKind::Normal { ty, .. } = &p.kind {
+            walk_type(ty, out);
+        }
+    }
+    if let Some(r) = &s.return_type {
+        walk_type(r, out);
+    }
+}
+
+fn collect_struct_type_refs(s: &StructItem, out: &mut Vec<(Span, String)>) {
+    collect_generics(&s.generics, out);
+    match &s.kind {
+        StructKind::Record(fs) => fs.iter().for_each(|f| walk_type(&f.ty, out)),
+        StructKind::Tuple(fs) => fs.iter().for_each(|f| walk_type(&f.ty, out)),
+        StructKind::Unit => {}
+    }
+}
+
+/// Recursively collect the head-name span of every `Named` type within `t`
+/// (including nested generic arguments, tuple/union members, function params,
+/// pointee, array element).
+fn walk_type(t: &Type, out: &mut Vec<(Span, String)>) {
+    match &t.kind {
+        TypeKind::Named { name, generics } => {
+            out.push((name.span, name.name.clone()));
+            generics.iter().for_each(|g| walk_type(g, out));
+        }
+        TypeKind::Tuple(ts) | TypeKind::Union(ts) => ts.iter().for_each(|x| walk_type(x, out)),
+        TypeKind::Function { params, ret } => {
+            params.iter().for_each(|p| walk_type(p, out));
+            walk_type(ret, out);
+        }
+        TypeKind::ExternFunction { params, ret } => {
+            params.iter().for_each(|p| walk_type(&p.ty, out));
+            walk_type(ret, out);
+        }
+        TypeKind::Pointer(b) | TypeKind::Paren(b) => walk_type(b, out),
+        TypeKind::Array { elem, .. } => walk_type(elem, out),
+        TypeKind::SelfType => {}
+    }
 }
 
 /// Is `name` the textual name of a built-in primitive type? Used by semantic-
@@ -1153,6 +1312,28 @@ function main() {
         let sf = c.map.file(def.file);
         assert!(sf.name.ends_with("util.otter"), "got: {}", sf.name);
         assert_eq!(&sf.src[def.lo.to_usize()..def.hi.to_usize()], "double");
+    }
+
+    #[test]
+    fn type_position_goto_resolves_to_struct_def() {
+        // Goto on a type name in an annotation (a param type, a return type, a
+        // field type) jumps to the type's definition — even though type-position
+        // names are not value resolutions in the HIR index.
+        let src = "struct Point { x: i64, y: i64 }\n\
+                   struct Line { from: Point, to: Point }\n\
+                   function mid(a: Point, b: Point): Point { a }\n\
+                   function main() {}";
+        let c = Compiled::new(src.into());
+        assert!(c.diagnostics.is_empty(), "unexpected: {:?}", c.diagnostics);
+        // Cursor on `Point` in the `from: Point` field type.
+        let field_use = src.find("from: Point").unwrap() + "from: ".len();
+        let def = c.type_def_span_at(field_use).expect("type def span (field)");
+        assert_eq!(c.map.slice(def), "Point");
+        assert_eq!(def.lo.to_usize(), src.find("Point").unwrap());
+        // Cursor on `Point` in the `mid` return type also resolves.
+        let ret_use = src.find("): Point").unwrap() + "): ".len();
+        let def2 = c.type_def_span_at(ret_use).expect("type def span (return)");
+        assert_eq!(c.map.slice(def2), "Point");
     }
 
     #[test]

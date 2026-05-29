@@ -276,10 +276,13 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
         let off = offset_at(&c.text, pos.position);
-        let Some((_, res)) = c.resolution_at(off) else {
-            return Ok(None);
-        };
-        let Some(def_span) = c.definition_span(res) else {
+        // A value-position name (function / local / global / ctor / method).
+        let def_span = c
+            .resolution_at(off)
+            .and_then(|(_, res)| c.definition_span(res))
+            // Else a type name written in a type annotation (type-position goto).
+            .or_else(|| c.type_def_span_at(off));
+        let Some(def_span) = def_span else {
             return Ok(None);
         };
         // The definition may live in another file (a loaded submodule); a virtual

@@ -1538,6 +1538,15 @@ The tracing GC is functionally complete for single-threaded programs.
       within a submodule surfaces references in both files). Project-wide
       indexing of files that *import* the open document (reverse references) is
       the remaining follow-up.
+- [x] **Type-position go-to-definition**: goto on a type name written in a type
+      annotation (param / return / field / alias / `extend` target / generic
+      bound) jumps to that type's definition. Type-position names aren't value
+      resolutions in the HIR, so the LSP resolves them from the AST: a recursive
+      `walk_type` over every item-level type position builds `(name-span, name)`
+      refs (`collect_type_refs`), `type_def_span_at(off)` resolves the innermost
+      one to its def's name span (`def_name_span`), and `goto_definition` tries
+      it as a fallback after value resolution. 1 LSP test (param + return + field
+      type names). Follow-up: body `var x: T` / `e as T` / pattern type names.
 - [ ] Manifest dependencies (`pkg:`), sysroot/stdlib, `fmt` (needs
       comment-preserving lexing — ordinary comments are not tokens),
       `lint`/`fix`/`test`/`bench`/`repl` (`test`/`bench` also need a test-
