@@ -357,7 +357,20 @@ impl<'a> Checker<'a> {
             PatternKind::RecordStruct { path, fields, .. } => {
                 let vt = self.struct_pattern_ty(path, sty);
                 let rfs = match self.tcx.kind(vt).clone() {
-                    TyKind::Named { def, args } => self.record_fields(def, &args),
+                    TyKind::Named { def, args } => {
+                        let r = self.record_fields(def, &args);
+                        // A record pattern (`P { x }`) on a non-record struct
+                        // (e.g. a tuple struct `P(i64)`) is a shape error — give
+                        // a clear diagnostic rather than letting field binds fall
+                        // through to `error` and surface a misleading codegen error.
+                        if r.is_none() && matches!(self.prog.def(def).kind, DefKind::Struct | DefKind::ExternStruct) {
+                            self.emit(pattern.span, SemaErrorKind::Message(format!(
+                                "`{}` is not a record struct; use a tuple-struct pattern like `{}(..)`",
+                                self.prog.def(def).name, self.prog.def(def).name
+                            )));
+                        }
+                        r
+                    }
                     _ => None,
                 };
                 for fp in fields {

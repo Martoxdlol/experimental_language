@@ -1,0 +1,10 @@
+//@ kind: compile-error
+//@ description: a record pattern on a tuple struct is a clear shape error, not a misleading codegen error
+//@ stderr: record struct
+import { println } from "std:io";
+struct P(i64)
+function main() {
+  match P(1) {
+    P { x } => println("${x}"),
+  };
+}

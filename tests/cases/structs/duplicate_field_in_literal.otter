@@ -1,0 +1,9 @@
+//@ kind: compile-error
+//@ description: a struct literal that sets the same field twice is a duplicate-field error
+//@ stderr: field
+import { println } from "std:io";
+struct P { x: i64 }
+function main() {
+  var p = P { x: 1, x: 2 };
+  println("${p.x}");
+}

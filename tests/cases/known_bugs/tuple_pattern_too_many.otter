@@ -1,9 +1,0 @@
-//@ kind: compile-error
-//@ known-bug: a tuple pattern with MORE elements than the scrutinee should be a clean compile error, but the checker misses the arity check and the backend panics (index out of bounds in gen_hir.rs)
-//@ description: `var (a,b,c) = (1,2)` — pattern/scrutinee arity mismatch
-//@ stderr: tuple pattern
-import { println } from "std:io";
-function main() {
-  var (a, b, c) = (1, 2);
-  println("${a}");
-}

@@ -1,0 +1,8 @@
+//@ kind: compile-error
+//@ description: a tuple pattern with fewer elements than the value is a shape mismatch
+//@ stderr: tuple pattern
+import { println } from "std:io";
+function main() {
+  var (a, b) = (1, 2, 3);
+  println("${a} ${b}");
+}

@@ -146,7 +146,12 @@ impl<'a> Checker<'a> {
             match declared.iter().find(|(n, _)| *n == fi.name.name) {
                 Some((_, fty)) => {
                     let fty = *fty;
-                    seen.insert(fi.name.name.clone());
+                    if !seen.insert(fi.name.name.clone()) {
+                        self.emit(fi.name.span, SemaErrorKind::Message(format!(
+                            "field `{}` is set more than once in this `{}` literal",
+                            fi.name.name, path.name.name
+                        )));
+                    }
                     match &fi.value {
                         Some(v) => {
                             // Inference already checked the value (with no

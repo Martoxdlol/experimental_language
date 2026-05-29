@@ -883,6 +883,57 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         Ok((func_id, env))
     }
 
+    /// A named function used as a first-class value (`docs/09` §4): wrap it in a
+    /// closure-style environment `[thunk_ptr]`. The thunk is a lifted closure
+    /// `(env, params…) -> ret` whose body simply forwards its parameters to a
+    /// `Direct` call of the function — adapting the function's `(params…) -> ret`
+    /// ABI to the uniform closure-call ABI. Because it reuses the closure path,
+    /// such a value is callable, storable, and passable exactly like a closure.
+    pub(crate) fn emit_fn_value(&mut self, def: DefId, ty: Ty, span: Span) -> CgResult<Value> {
+        use compiler::hir;
+        if !self.cx.analysis.program.def(def).generics.is_empty() {
+            return Err(CodegenError::new(
+                span,
+                "a generic function cannot yet be used as a first-class value; \
+                 call it directly or wrap it in a closure",
+            ));
+        }
+        let fsig = self.cx.analysis.hir.fn_sigs.get(&def).ok_or_else(|| {
+            CodegenError::new(span, "function used as a value has no signature")
+        })?;
+        let params: Vec<(LocalId, Ty)> = fsig.params.clone();
+        let ret = fsig.ret;
+        // Synthetic body: `def(p0, p1, …)` forwarding each parameter local.
+        let args: Vec<hir::Expr> = params
+            .iter()
+            .map(|(local, pty)| hir::Expr {
+                kind: hir::ExprKind::Name(hir::Res::Local(*local)),
+                ty: *pty,
+                span,
+            })
+            .collect();
+        let body = hir::Expr {
+            kind: hir::ExprKind::Call {
+                kind: hir::CallKind::Direct { def, type_args: vec![] },
+                args,
+                callee_span: span,
+                callee_ty: ty,
+            },
+            ty: ret,
+            span,
+        };
+        let info = compiler::sema::results::ClosureInfo { params, captures: vec![], ret };
+        let (func_id, env) = self.emit_closure_value(&info, span)?;
+        self.closures.push(crate::ClosureJob {
+            func_id,
+            info,
+            body,
+            subst: self.subst.clone(),
+            span,
+        });
+        Ok(env)
+    }
+
     /// Call a closure `env` value with already-evaluated arguments: load its
     /// function pointer (offset 0) and call indirectly, passing the env first.
     pub(crate) fn emit_closure_call(&mut self, env: Value, args: &[Value], ret_clty: Option<ClType>) -> Option<Value> {

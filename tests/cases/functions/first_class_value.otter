@@ -1,0 +1,22 @@
+//@ kind: run
+//@ description: a named function used as a first-class value (docs/09 §4) — bound, passed, stored, and as a map argument
+//@ stdout:
+//~ 42
+//~ 40
+//~ 11 20
+//~ 2 3 4
+import { List } from "core:collections";
+import { println } from "std:io";
+function inc(n: i64): i64 { n + 1 }
+function dbl(n: i64): i64 { n * 2 }
+function apply(f: (i64) => i64, x: i64): i64 { f(x) }
+function main() {
+  var f = inc;
+  println("${f(41)}");
+  println("${apply(dbl, 20)}");
+  var fns: List<(i64) => i64> = [inc, dbl];
+  println("${fns[0](10)} ${fns[1](10)}");
+  var xs = [1, 2, 3];
+  var ys = xs.map(inc);
+  println("${ys[0]} ${ys[1]} ${ys[2]}");
+}

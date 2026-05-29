@@ -346,6 +346,8 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 .ok_or_else(|| CodegenError::new(span, "use of unbound local")),
             // A unit struct used as a value carries no data — a null placeholder.
             hir::Res::StructCtor(_) => Ok(Some(self.b.ins().iconst(PTR, 0))),
+            // A named function used as a first-class value (`docs/09` §4).
+            hir::Res::Function(def) => self.emit_fn_value(def, ty, span).map(Some),
             hir::Res::Global(def)
                 if self.cx.analysis.program.def(def).kind == DefKind::ExternVar =>
             {

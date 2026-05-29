@@ -230,8 +230,20 @@ impl<'a> Checker<'a> {
                         }
                         return;
                     }
+                    // Arity mismatch between the tuple pattern and the value.
+                    self.emit(pattern.span, SemaErrorKind::Message(format!(
+                        "tuple pattern has {} element{} but the value is a {}-tuple",
+                        elems.len(),
+                        if elems.len() == 1 { "" } else { "s" },
+                        ts.len(),
+                    )));
+                } else if !matches!(self.tcx.kind(ty), TyKind::Error) {
+                    self.emit(pattern.span, SemaErrorKind::Message(format!(
+                        "tuple pattern cannot match a value of type `{}`",
+                        self.display(ty),
+                    )));
                 }
-                // Shape mismatch: bind names to error to keep going.
+                // Bind names to error to keep going after the diagnostic.
                 for p in elems {
                     self.bind_pattern(p, self.tcx.error);
                 }
@@ -255,7 +267,16 @@ impl<'a> Checker<'a> {
             // `Point { x, y }` / `Point { x: a, .. }` — record destructuring.
             PatternKind::RecordStruct { fields, .. } => {
                 let rfs = match self.tcx.kind(ty).clone() {
-                    TyKind::Named { def, args } => self.record_fields(def, &args),
+                    TyKind::Named { def, args } => {
+                        let r = self.record_fields(def, &args);
+                        if r.is_none() && matches!(self.prog.def(def).kind, DefKind::Struct | DefKind::ExternStruct) {
+                            self.emit(pattern.span, SemaErrorKind::Message(format!(
+                                "`{}` is not a record struct; use a tuple-struct pattern like `{}(..)`",
+                                self.prog.def(def).name, self.prog.def(def).name
+                            )));
+                        }
+                        r
+                    }
                     _ => None,
                 };
                 for fp in fields {
