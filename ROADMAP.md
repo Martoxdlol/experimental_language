@@ -1528,10 +1528,21 @@ The tracing GC is functionally complete for single-threaded programs.
     see the async section); thread-spawning cases still run `serial` to keep
     cross-process CPU contention low. See `tests/README.md`. Runs under
     `cargo test -p cli --test suite`.
-- [ ] Cross-file LSP hover/references, manifest dependencies (`pkg:`),
-      sysroot/stdlib, `fmt` (needs comment-preserving lexing — ordinary comments
-      are not tokens), `lint`/`fix`/`test`/`bench`/`repl`, the rest of the
-      `docs/23` subcommand surface.
+- [x] **Cross-file LSP references + rename**: the HIR index already spans every
+      analyzed module (the open document plus its loaded submodules), so
+      `references` and `rename` now collect use sites across **all** of them and
+      map each span to its own file's URI via a shared `span_to_location` helper
+      (also used by go-to-definition). `rename` groups edits per file into one
+      `WorkspaceEdit`. Hover already reports cross-module symbol types (the type
+      rides on the HIR node). 1 LSP test (a symbol used in the open doc *and*
+      within a submodule surfaces references in both files). Project-wide
+      indexing of files that *import* the open document (reverse references) is
+      the remaining follow-up.
+- [ ] Manifest dependencies (`pkg:`), sysroot/stdlib, `fmt` (needs
+      comment-preserving lexing — ordinary comments are not tokens),
+      `lint`/`fix`/`test`/`bench`/`repl` (`test`/`bench` also need a test-
+      declaration syntax, not yet in the spec), the rest of the `docs/23`
+      subcommand surface.
 
 ## Current vertical-slice target
 Smallest end-to-end program that exercises the full pipeline, expanded each

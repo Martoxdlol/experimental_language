@@ -21,6 +21,23 @@ use crate::analysis::{
 use compiler::sema::symbols::DefKind;
 use compiler::ty::TyKind;
 
+/// Map any analysis [`Span`] to an editor [`Location`]: the open document, a
+/// loaded submodule file (resolved through the `SourceMap`), or `None` for a
+/// virtual file (prelude / synthesized code, beyond the real file count). Shared
+/// by go-to-definition and cross-file references/rename.
+fn span_to_location(c: &Compiled, span: Span, doc_uri: &Url) -> Option<Location> {
+    if span.file == DOC_FILE {
+        return Some(Location { uri: doc_uri.clone(), range: span_to_range(&c.text, span) });
+    }
+    if (span.file.0 as usize) < c.map.file_count() {
+        let sf = c.map.file(span.file);
+        if let Ok(u) = Url::from_file_path(&sf.name) {
+            return Some(Location { uri: u, range: span_to_range(&sf.src, span) });
+        }
+    }
+    None
+}
+
 /// The semantic-token legend, in the exact order of [`TokenClass`]'s numeric
 /// values (the handler emits `class as u32` as the token-type index).
 const TOKEN_TYPES: &[SemanticTokenType] = &[
@@ -265,19 +282,9 @@ impl LanguageServer for Backend {
         let Some(def_span) = c.definition_span(res) else {
             return Ok(None);
         };
-        // The definition may live in another file (a loaded submodule). Map its
-        // span's `FileId` back to that file's URI + text; a virtual file (the
-        // prelude or synthesised code, beyond the real file count) has no editor
-        // location.
-        let loc = if def_span.file == DOC_FILE {
-            Location { uri, range: span_to_range(&c.text, def_span) }
-        } else if (def_span.file.0 as usize) < c.map.file_count() {
-            let sf = c.map.file(def_span.file);
-            match Url::from_file_path(&sf.name) {
-                Ok(u) => Location { uri: u, range: span_to_range(&sf.src, def_span) },
-                Err(()) => return Ok(None),
-            }
-        } else {
+        // The definition may live in another file (a loaded submodule); a virtual
+        // file (prelude / synthesised code) has no editor location.
+        let Some(loc) = span_to_location(&c, def_span, &uri) else {
             return Ok(None);
         };
         Ok(Some(GotoDefinitionResponse::Scalar(loc)))
@@ -295,17 +302,22 @@ impl LanguageServer for Backend {
         };
 
         let include_decl = params.context.include_declaration;
+        // Use sites across *every* analyzed file (the open document plus its
+        // loaded submodules), not just the open one — the HIR index spans them
+        // all. A resolution target (`Function`/`Local`/… by def-id or unique
+        // local-id) is file-independent, so the same `target` matches uses
+        // wherever they occur.
         let mut spans: Vec<Span> = c
             .index
             .resolutions
             .iter()
-            .filter(|(s, r)| *r == target && s.file == DOC_FILE)
+            .filter(|(_, r)| *r == target)
             .map(|(s, _)| *s)
             .collect();
 
         // The declaration span of a local is itself in `resolutions` (bind()
         // records it), so locals are already covered. For def targets, add the
-        // definition's name span if requested and in-file.
+        // definition's name span if requested.
         if include_decl {
             if let Some(dspan) = c.definition_span(target) {
                 if !spans.contains(&dspan) {
@@ -321,11 +333,13 @@ impl LanguageServer for Backend {
             }
         }
 
-        spans.sort_by_key(|s| (s.lo.0, s.hi.0));
+        spans.sort_by_key(|s| (s.file.0, s.lo.0, s.hi.0));
         spans.dedup();
+        // Map each use site to its own file's location (a virtual-file span — a
+        // synthesized node — has no editor location and is dropped).
         let locs = spans
             .into_iter()
-            .map(|s| Location { uri: uri.clone(), range: span_to_range(&c.text, s) })
+            .filter_map(|s| span_to_location(&c, s, &uri))
             .collect();
         Ok(Some(locs))
     }
@@ -341,12 +355,12 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
 
-        // Collect every use site plus the declaration.
+        // Collect every use site plus the declaration, across all analyzed files.
         let mut spans: HashSet<Span> = c
             .index
             .resolutions
             .iter()
-            .filter(|(s, r)| *r == target && s.file == DOC_FILE)
+            .filter(|(_, r)| *r == target)
             .map(|(s, _)| *s)
             .collect();
         if let Some(dspan) = c.definition_span(target) {
@@ -356,15 +370,20 @@ impl LanguageServer for Backend {
             return Ok(None);
         }
 
-        let edits: Vec<TextEdit> = spans
-            .into_iter()
-            .map(|s| TextEdit {
-                range: span_to_range(&c.text, s),
-                new_text: params.new_name.clone(),
-            })
-            .collect();
-        let mut changes = std::collections::HashMap::new();
-        changes.insert(uri, edits);
+        // Group edits by the file (URI) each span belongs to, so a cross-module
+        // rename updates every affected document in one `WorkspaceEdit`.
+        let mut changes: std::collections::HashMap<Url, Vec<TextEdit>> = std::collections::HashMap::new();
+        for s in spans {
+            if let Some(loc) = span_to_location(&c, s, &uri) {
+                changes.entry(loc.uri).or_default().push(TextEdit {
+                    range: loc.range,
+                    new_text: params.new_name.clone(),
+                });
+            }
+        }
+        if changes.is_empty() {
+            return Ok(None);
+        }
         Ok(Some(WorkspaceEdit { changes: Some(changes), ..Default::default() }))
     }
 

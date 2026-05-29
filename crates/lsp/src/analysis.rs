@@ -1156,6 +1156,47 @@ function main() {
     }
 
     #[test]
+    fn cross_file_references_span_multiple_files() {
+        // `double` is defined in util.otter, called in main.otter, and also called
+        // by `quad` *within* util.otter — so "find references" must surface use
+        // sites in BOTH files (the index spans every analyzed module).
+        let main = "mod util;\n\
+                    import { quad } from \"self:util\";\n\
+                    import { double } from \"self:util\";\n\
+                    function main() { var x = double(21) + quad(10); }";
+        let util = "pub function double(x: i64): i64 { x * 2 }\n\
+                    pub function quad(x: i64): i64 { double(double(x)) }";
+        let read = |p: &Path| -> Option<String> {
+            if p.ends_with("util.otter") { Some(util.to_string()) } else { None }
+        };
+        let c = Compiled::new_multi(
+            main.into(),
+            std::path::PathBuf::from("/proj/src"),
+            "main".to_string(),
+            &read,
+        );
+        assert!(c.diagnostics.is_empty(), "unexpected: {:?}", c.diagnostics);
+        // Resolve `double` at its call in main, then mirror the server's
+        // cross-file reference collection.
+        let off = main.find("double(21)").unwrap();
+        let (_, target) = c.resolution_at(off).expect("resolution at call");
+        let files: std::collections::HashSet<u32> = c
+            .index
+            .resolutions
+            .iter()
+            .filter(|(_, r)| *r == target)
+            .map(|(s, _)| s.file.0)
+            .collect();
+        // Uses appear in the open document (main) and the submodule (util).
+        assert!(files.len() >= 2, "references should span ≥2 files, got {files:?}");
+        assert!(files.contains(&DOC_FILE.0), "missing the open-document use site");
+        let util_fid = (0..c.map.file_count() as u32)
+            .find(|&i| c.map.file(FileId(i)).name.ends_with("util.otter"))
+            .expect("util file loaded");
+        assert!(files.contains(&util_fid), "missing the cross-file (util) use sites");
+    }
+
+    #[test]
     fn resolution_and_goto_for_local() {
         let c = Compiled::new(PROG.into());
         let off = second(PROG, "total");
