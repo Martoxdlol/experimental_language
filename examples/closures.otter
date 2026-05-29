@@ -16,6 +16,12 @@ function adder(by: i64): (i64) => i64 {
   (n: i64): i64 => n + by
 }
 
+// A plain named function — usable as a first-class value (`docs/09` §4), passed
+// wherever a `(i64) => i64` is expected, exactly like a closure.
+function triple(n: i64): i64 {
+  n * 3
+}
+
 function main() {
   var inc = (n: i64): i64 => n + 1;
   println("inc(41)        = ${inc(41)}");
@@ -59,4 +65,11 @@ function main() {
   // `each` runs a closure for its side effects.
   var labels: List<str> = ["x", "y", "z"];
   labels.each { println("label: " + it); };
+
+  // A named function is a first-class value: bind it, pass it, map with it.
+  var f = triple;
+  println("triple(7)      = ${f(7)}");                 // 21
+  println("apply_twice    = ${apply_twice(triple, 2)}"); // triple(triple(2)) = 18
+  var tripled = nums.map(triple);
+  println("nums tripled   = ${tripled.fold(0, (a: i64, b: i64): i64 => a + b)}"); // 63
 }
