@@ -834,16 +834,34 @@ The tracing GC is functionally complete for single-threaded programs.
            persisted (~1/3 of stress runs).
       Stack + register capture together are exhaustive for a *statically* live
       root at a stopped point, so the survivor is a **timing race in the
-      stop-the-world root-publication handshake** (e.g. a mutator-registration
-      TOCTOU, or a thread mutating its live set between publishing roots and the
-      collector consuming them), **not a static missed root**. The fix is a
-      rendezvous redesign (a true global safepoint barrier where every mutator
-      re-publishes at a single synchronized instant) or the MMTk move — *not*
-      more root-scanning. All experiments were reverted; the gate stays
-      (memory-safe). An intermittent use-after-free is never shipped.
+      stop-the-world root-publication handshake**, **not a static missed root**.
+      A runtime **invariant assertion** (`collect()` checks no other mutator is
+      `M_RUNNING`) **confirmed this directly** — it fires several times per stress
+      run: the collector marks/sweeps using a snapshot while a thread is running,
+      so it unions that thread's *stale* published roots (from its last park) and
+      sweeps objects the thread has allocated since. Three real fixes were then
+      implemented and verified to *reduce* but not eliminate it:
+        - **`leave_native` `NATIVE→RUNNING` re-check** (Dekker-style: tentatively
+          set `RUNNING`, re-read `STOP` under SeqCst, revert to `NATIVE` if a
+          collection began — having run zero mutator instructions). Closes the
+          native-return race.
+        - **Root gather under the `MUTATORS` lock** (the final quiescence check
+          and the snapshot are now atomic, so a registering thread can't slip in
+          between them).
+        - **Eager `thread_start()`** — a spawned worker registers and parks
+          *before* running program code, so it is never an unaccounted runner.
+      With all three, the assertion *still* fires (residual transitions, e.g.
+      threads in non-bracketed native waits such as the async timer's
+      `std::thread::sleep`). **Definitive conclusion: the snapshot-and-proceed STW
+      model is structurally insufficient; a true barrier rendezvous is required**
+      — every mutator must acknowledge the stop at a safepoint *this cycle* and be
+      unable to enter `RUNNING` until resume, with all blocking native waits
+      bracketed. That is the MMTk-class redesign. All experiments reverted; the
+      gate stays (memory-safe, 0/20 stress mismatches). An intermittent
+      use-after-free is never shipped.
 **Per-thread TLABs** and MMTk/Immix remain the eventual production plan (the
-`gc` interface stays the same). The custom allocator above is the first half of
-the prerequisite; precise cross-thread root capture is the remaining half.
+`gc` interface stays the same). The custom allocator is the first prerequisite;
+a barrier-rendezvous STW (not snapshot-and-proceed) is the remaining one.
 - [x] **Methods via `extend`** (inherent): `self` (by-pointer for structs, so
       mutation is visible to the caller), method args, methods calling methods,
       methods returning `Self`-typed values, same method name on different types
