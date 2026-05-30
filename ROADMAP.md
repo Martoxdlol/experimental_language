@@ -745,11 +745,20 @@ The tracing GC is functionally complete for single-threaded programs.
       `memmove` from freed bytes).
       The single-threaded path is unaffected (one stack, scanned at the exact
       alloc point — verified clean under the same heavy load). Initiating
-      collection only from clean generated safepoints did **not** close it, so the
-      gap is in the published-root union itself and needs the precise
-      root-scanning hardening below (or the MMTk move). Reverted to the safe gate
-      rather than ship corruption; refactored the trigger into `run_collection` +
-      `park_self` helpers and pinned the findings here.
+      collection only from clean generated safepoints did **not** close it.
+      **Root cause (confirmed by a leak-instead-of-free diagnostic): the
+      collector over-collects** — a live object reachable only through a
+      cross-thread root absent from the union of published roots is swept. The
+      miss is intermittent and allocation-volume-amplified (a timing race in the
+      root-publication/scan handshake, not a systematic gap — each individual
+      construct misses < ~1/8 of runs, the combined heavy workload ≈ always).
+      *Diagnostic method for the fix* (re-add behind env flags): make the sweep
+      `survivors.push` instead of `dealloc` ⇒ heavy workload runs clean, proving
+      over-collection; poison swept payloads with `0xEF` + leak ⇒ the wrongly-
+      freed object is read as data (a corrupt `str`/length), so it's a managed
+      data object on a mutator whose published roots missed it. Reverted to the
+      safe gate rather than ship corruption; refactored the trigger into
+      `run_collection` + `park_self` helpers and pinned the findings here.
 **Per-thread TLABs** and MMTk/Immix remain the eventual production plan (the
 `gc` interface stays the same). Closing the concurrent-reclamation root-scan gap
 (or swapping in MMTk) is the next GC milestone.
