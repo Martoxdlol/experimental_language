@@ -1632,7 +1632,11 @@ the **custom GC allocator (MMTk) the prerequisite** for concurrent collection.
       walk (`crates/cli/lint.rs`) collects local reads + def references; diagnostics
       render to stderr, a count to stdout. Purely informational (a clean compile
       with warnings still exits zero; a compile *error* fails). 3 CLI tests
-      (unused / clean / unreachable); 0 false positives across all examples.
+      (unused / clean / unreachable); 0 false positives across all examples. The
+      analysis lives in `compiler::lint` (shared), and the **LSP publishes these
+      as editor `WARNING` diagnostics** for the open document (only when it is
+      otherwise error-free, so the HIR is complete) — squiggles for unused
+      vars/fns and dead code, alongside the existing error diagnostics.
 - [x] **`otter_fusion fix`** (`docs/23`): safe automatic fixes — currently renames
       each unused local variable to `_name` (inserts `_` at the binding, silencing
       the unused-variable lint without removing code; the var is unused so there

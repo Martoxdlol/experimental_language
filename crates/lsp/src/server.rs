@@ -99,7 +99,7 @@ impl Backend {
     /// Recompile and publish diagnostics for `uri`.
     async fn publish(&self, uri: Url, version: Option<i32>) {
         let Some(c) = self.compile(&uri) else { return };
-        let diags = c
+        let mut diags: Vec<Diagnostic> = c
             .diagnostics
             .iter()
             .map(|(span, msg)| Diagnostic {
@@ -110,6 +110,22 @@ impl Backend {
                 ..Default::default()
             })
             .collect();
+        // Lint warnings (unused variables / unused private fns / unreachable
+        // code) — only when the program is error-free, so the HIR is complete,
+        // and only for spans in the open document.
+        if c.diagnostics.is_empty() {
+            for (span, msg) in compiler::lint::collect_lints(&c.analysis, &c.map) {
+                if span.file == DOC_FILE {
+                    diags.push(Diagnostic {
+                        range: span_to_range(&c.text, span),
+                        severity: Some(DiagnosticSeverity::WARNING),
+                        source: Some("otter-fusion".into()),
+                        message: msg,
+                        ..Default::default()
+                    });
+                }
+            }
+        }
         self.client.publish_diagnostics(uri, diags, version).await;
     }
 }

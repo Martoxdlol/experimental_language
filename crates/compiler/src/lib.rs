@@ -7,6 +7,7 @@ pub mod fmt;
 pub mod hir;
 pub mod ids;
 pub mod imports;
+pub mod lint;
 pub mod lexer;
 pub mod parse_diag;
 pub mod parser;

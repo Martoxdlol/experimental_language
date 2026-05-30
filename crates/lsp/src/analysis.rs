@@ -1687,3 +1687,22 @@ mod fmt_integration_tests {
         assert_eq!(compiler::fmt::format_source(&c.text), c.text);
     }
 }
+
+#[cfg(test)]
+mod lint_diag_tests {
+    use super::*;
+
+    #[test]
+    fn lint_warnings_available_for_open_doc() {
+        // The server publishes these (as WARNING diagnostics) when the program
+        // is error-free; here we exercise the underlying analysis.
+        // Self-contained (no imports needed): `dead` is unused, `k` is returned.
+        let c = Compiled::new("function f(): i64 { var dead = 5; var k = 1; k }".into());
+        assert!(c.diagnostics.is_empty(), "program should be error-free: {:?}", c.diagnostics);
+        let warns = compiler::lint::collect_lints(&c.analysis, &c.map);
+        assert!(
+            warns.iter().any(|(_, m)| m.contains("unused variable `dead`")),
+            "expected an unused-variable warning; got: {warns:?}"
+        );
+    }
+}
