@@ -763,16 +763,28 @@ The tracing GC is functionally complete for single-threaded programs.
       *wrong-but-non-crashing* results — but did **not** eliminate the corruption.
       Since a conservative scan only *adds* roots (it cannot itself corrupt), this
       proves the missed live pointer is **not on any scanned stack** — it is
-      register-resident at the stop point, or the bug is a genuine data race in
-      the publish/scan handshake. The fix therefore needs **register-aware
-      scanning** (capture each stopped thread's CPU context, e.g.
-      `thread_get_state`, and scan its registers as roots too) or a redesigned
-      handshake (or the MMTk move) — not more stack scanning. Reverted to the
-      safe gate rather than ship corruption; the `run_collection`/`park_self`
-      refactor and these findings are pinned here for that work.
+      register-resident at the stop point, so the fix needs **register capture**.
+      **Signal-based stop-the-world was then implemented and tried** (`SIGUSR1` +
+      `sigaction`, the handler captures the interrupted thread's `ucontext`
+      registers + SP and parks it, the collector conservatively scans each
+      stopped thread's `[sp, stack_base)` + saved registers; `pthread_sigmask`
+      blocks the signal while a mutator holds a GC lock). It **did not work and
+      introduced hangs** — exposing the *real* architectural blocker: **the GC
+      heap and the runtime's transient `Vec`/`String` allocations both use the
+      system allocator**, so a thread signalled *inside `malloc`/`free` holds the
+      allocator's internal lock*; the collector's `dealloc` during sweep then
+      deadlocks on it. Masking the signal around our own heap lock does not help —
+      the runtime calls `malloc` in many un-maskable places (string concat,
+      `to_string`, …). **Definitive conclusion: concurrent reclamation requires a
+      *custom GC allocator* (so the collector never contends with mutators on the
+      system-`malloc` lock) — i.e. the MMTk/Immix move — not merely a
+      stop-the-world protocol.** Reverted to the safe gate (correct, retains
+      garbage during concurrency); the precise repro, diagnostics, and this
+      blocker are pinned here. The signal-based STW code + `libc` register-capture
+      is the right starting point once the heap is on a custom allocator.
 **Per-thread TLABs** and MMTk/Immix remain the eventual production plan (the
-`gc` interface stays the same). Closing the concurrent-reclamation root-scan gap
-(or swapping in MMTk) is the next GC milestone.
+`gc` interface stays the same). The concurrent-reclamation blocker above makes
+the **custom GC allocator (MMTk) the prerequisite** for concurrent collection.
 - [x] **Methods via `extend`** (inherent): `self` (by-pointer for structs, so
       mutation is visible to the caller), method args, methods calling methods,
       methods returning `Self`-typed values, same method name on different types
