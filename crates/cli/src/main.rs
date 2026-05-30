@@ -22,7 +22,7 @@ use compiler::lexer::lex;
 use compiler::sema::resolve_ctx::normalize;
 use compiler::sema::symbols::Externals;
 use compiler::sema::{analyze_multi_ctx, Analysis, ResolveContext};
-use compiler::span::{SourceMap, Span};
+use compiler::span::{FileId, SourceMap, Span};
 use pkg::loader::{self, LoadDiag};
 use pkg::project::ProjectContext;
 
@@ -111,6 +111,17 @@ enum Command {
         /// Path to a `.otter` file, project directory, or `project.toml`. Omit to
         /// lint the project in the current directory.
         file: Option<PathBuf>,
+    },
+    /// Apply safe automatic fixes (`docs/23`): rename each unused local variable
+    /// to `_name` (silencing the lint without removing code). Rewrites the
+    /// affected source files in place; `--check` reports without writing.
+    Fix {
+        /// Path to a `.otter` file, project directory, or `project.toml`. Omit for
+        /// the project in the current directory.
+        file: Option<PathBuf>,
+        /// Report what would be fixed without modifying any files.
+        #[arg(long)]
+        check: bool,
     },
     /// Build and run the program's `bench "name" { … }` declarations (`docs/23`),
     /// timing repeated executions of each body and reporting nanoseconds/iter.
@@ -264,6 +275,9 @@ fn main() -> ExitCode {
         }
         Command::Lint { file } => {
             run_lint(&Input::Auto(file.unwrap_or_else(|| PathBuf::from("."))))
+        }
+        Command::Fix { file, check } => {
+            run_fix(&Input::Auto(file.unwrap_or_else(|| PathBuf::from("."))), check)
         }
         Command::Add { name, version, path, git } => deps::add(&name, version, path, git),
         Command::Remove { name } => deps::remove(&name),
@@ -835,6 +849,78 @@ fn run_lint(input: &Input) -> ExitCode {
         1 => println!("1 warning"),
         n => println!("{n} warnings"),
     }
+    ExitCode::SUCCESS
+}
+
+/// Run `otter_fusion fix` (`docs/23`): apply safe automatic fixes — currently,
+/// rename each unused local variable to `_name` (inserting `_` at the binding,
+/// which silences the unused-variable lint without removing code; the variable
+/// is unused so there are no read sites to update). Rewrites affected files in
+/// place, or with `check` reports what it would do without writing.
+fn run_fix(input: &Input, check: bool) -> ExitCode {
+    let prepared = match prepare(input) {
+        Ok(p) => p,
+        Err(msg) => {
+            eprintln!("error: {msg}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let map = &prepared.map;
+    let mut had_error = render_load_diags(map, &prepared.diags);
+    if map.file_count() == 0 {
+        eprintln!("\naborting due to previous error(s).");
+        return ExitCode::FAILURE;
+    }
+    let analysis = analyze_multi_ctx(&prepared.root, &prepared.externals, &prepared.ctx);
+    for e in &analysis.errors {
+        render(map, e.span, "error", &e.kind.to_string());
+        had_error = true;
+    }
+    if had_error {
+        eprintln!("\naborting due to previous error(s).");
+        return ExitCode::FAILURE;
+    }
+
+    let lints = lint::analyze(&analysis, map);
+    if lints.unused_locals.is_empty() {
+        println!("nothing to fix");
+        return ExitCode::SUCCESS;
+    }
+    // Group the binding offsets by file (only real files are fixable).
+    let mut by_file: HashMap<u32, Vec<usize>> = HashMap::new();
+    for (span, _name) in &lints.unused_locals {
+        if (span.file.0 as usize) < map.file_count() {
+            by_file.entry(span.file.0).or_default().push(span.lo.0 as usize);
+        }
+    }
+    let mut total = 0usize;
+    let mut files: Vec<u32> = by_file.keys().copied().collect();
+    files.sort_unstable();
+    for fid in files {
+        let sf = map.file(FileId(fid));
+        let mut offsets = by_file.remove(&fid).unwrap();
+        offsets.sort_unstable();
+        offsets.dedup();
+        // Insert `_` at each binding, right-to-left so earlier offsets stay valid.
+        let mut src = sf.src.clone();
+        for &off in offsets.iter().rev() {
+            if off <= src.len() {
+                src.insert(off, '_');
+            }
+        }
+        let n = offsets.len();
+        total += n;
+        if check {
+            println!("would fix {n} unused variable(s) in {}", sf.name);
+        } else if let Err(e) = std::fs::write(&sf.name, &src) {
+            eprintln!("error: could not write `{}`: {e}", sf.name);
+            return ExitCode::FAILURE;
+        } else {
+            println!("fixed {n} unused variable(s) in {}", sf.name);
+        }
+    }
+    let verb = if check { "would fix" } else { "fixed" };
+    println!("{verb} {total} unused variable(s)");
     ExitCode::SUCCESS
 }
 

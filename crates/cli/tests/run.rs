@@ -4418,3 +4418,34 @@ fn lint_clean_program_has_no_warnings() {
     assert!(ok, "out: {out}");
     assert!(out.contains("no lint warnings"), "out: {out}");
 }
+
+#[test]
+fn fix_prefixes_unused_variables() {
+    // `otter_fusion fix` rewrites the file in place, renaming an unused `var` to
+    // `_name`. After the fix the unused-variable lint is silenced.
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!("lang_fix_{}.otter", nonce()));
+    std::fs::write(&path, pre("function main() { var gone = 5; var kept = 1; println(\"${kept}\"); }")).unwrap();
+
+    // --check reports without writing.
+    let check = Command::new(env!("CARGO_BIN_EXE_otter_fusion"))
+        .arg("fix").arg(&path).arg("--check").output().unwrap();
+    assert!(check.status.success());
+    assert!(String::from_utf8_lossy(&check.stdout).contains("would fix 1 unused"));
+    assert!(std::fs::read_to_string(&path).unwrap().contains("var gone ="), "--check must not modify the file");
+
+    // Apply.
+    let fix = Command::new(env!("CARGO_BIN_EXE_otter_fusion"))
+        .arg("fix").arg(&path).output().unwrap();
+    assert!(fix.status.success());
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert!(after.contains("var _gone ="), "expected the unused var renamed; got:\n{after}");
+    assert!(after.contains("var kept ="), "used var untouched");
+
+    // Lint is now clean (no unused-variable warning).
+    let lint = Command::new(env!("CARGO_BIN_EXE_otter_fusion"))
+        .arg("lint").arg(&path).output().unwrap();
+    assert!(!String::from_utf8_lossy(&lint.stderr).contains("unused variable"));
+
+    let _ = std::fs::remove_file(&path);
+}

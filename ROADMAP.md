@@ -1630,9 +1630,16 @@ the **custom GC allocator (MMTk) the prerequisite** for concurrent collection.
       collects local reads + def references; diagnostics render to stderr, a count
       to stdout. Purely informational (a clean compile with warnings still exits
       zero; a compile *error* fails). 2 CLI tests (flags unused / clean program).
+- [x] **`otter_fusion fix`** (`docs/23`): safe automatic fixes — currently renames
+      each unused local variable to `_name` (inserts `_` at the binding, silencing
+      the unused-variable lint without removing code; the var is unused so there
+      are no read sites to update). Reuses `lint::analyze`, groups edits per file,
+      applies them right-to-left so offsets stay valid, and rewrites in place;
+      `--check` reports without writing. 1 CLI test (check → no change; apply →
+      `_`-prefixed, used var untouched, lint then clean).
 - [ ] Manifest dependencies (`pkg:`), sysroot/stdlib, `fmt` (needs
-      comment-preserving lexing — ordinary comments are not tokens),
-      `fix`/`repl`, the rest of the `docs/23` subcommand surface.
+      comment-preserving lexing — ordinary comments are not tokens), `repl`, the
+      rest of the `docs/23` subcommand surface.
 
 ## Current vertical-slice target
 Smallest end-to-end program that exercises the full pipeline, expanded each

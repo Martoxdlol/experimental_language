@@ -19,22 +19,28 @@ struct Uses {
     defs: HashSet<DefId>,
 }
 
-/// Collect every lint warning for `analysis`, as `(span, message)` pairs in a
-/// stable order (by source position). `map` is used to read local names (to
-/// honour the `_name` "intentionally unused" convention).
-pub fn collect_lints(analysis: &Analysis, map: &SourceMap) -> Vec<(Span, String)> {
-    let hir = &analysis.hir;
+/// The structured findings of a lint pass: unused local variables (each as its
+/// binding-name span + name) and unused private functions (name-item span +
+/// name). `fix` consumes the unused-local list; the `lint` command flattens both.
+pub struct Lints {
+    pub unused_locals: Vec<(Span, String)>,
+    pub unused_fns: Vec<(Span, String)>,
+}
 
-    // One pass over every body to gather reads (locals) and references (defs).
+/// Run the lint analysis: one HIR walk to gather local reads + def references,
+/// then collect unused locals and unused private functions. `map` reads local
+/// names (to honour the `_name` "intentionally unused" convention) and filters
+/// out synthesized/prelude spans.
+pub fn analyze(analysis: &Analysis, map: &SourceMap) -> Lints {
+    let hir = &analysis.hir;
     let mut uses = Uses::default();
     for body in hir.bodies.values() {
         walk_block(&body.block, &mut uses);
     }
 
-    let mut out: Vec<(Span, String)> = Vec::new();
-
-    // (1) Unused local variables: a binding that is never read. Skip parameters
-    // (an unused parameter is often intentional) and names starting with `_`.
+    // (1) Unused local variables: a binding never read. Skip parameters (an
+    // unused parameter is often intentional) and names starting with `_`.
+    let mut unused_locals = Vec::new();
     for body in hir.bodies.values() {
         let params: HashSet<LocalId> = body.params.iter().copied().collect();
         for &local in body.locals.keys() {
@@ -42,7 +48,6 @@ pub fn collect_lints(analysis: &Analysis, map: &SourceMap) -> Vec<(Span, String)
                 continue;
             }
             let Some(&decl) = hir.local_decls.get(&local) else { continue };
-            // Only real source files (not synthesized/prelude spans).
             if (decl.file.0 as usize) >= map.file_count() {
                 continue;
             }
@@ -50,27 +55,36 @@ pub fn collect_lints(analysis: &Analysis, map: &SourceMap) -> Vec<(Span, String)
             if name.starts_with('_') || name.is_empty() {
                 continue;
             }
-            out.push((decl, format!("unused variable `{name}`")));
+            unused_locals.push((decl, name.to_string()));
         }
     }
+    unused_locals.sort_by_key(|(s, _)| (s.file.0, s.lo.0));
 
     // (2) Unused private functions: a non-`pub` free function never called or
     // used as a value. Skip `main`, tests/benches, and methods (callable via
     // dynamic dispatch or derive).
+    let mut unused_fns = Vec::new();
     for (i, def) in analysis.program.defs.iter().enumerate() {
         if def.kind != DefKind::Function || def.public || def.name == "main" {
             continue;
         }
-        let id = DefId(i as u32);
-        if uses.defs.contains(&id) {
+        if uses.defs.contains(&DefId(i as u32)) || (def.span.file.0 as usize) >= map.file_count() {
             continue;
         }
-        if (def.span.file.0 as usize) >= map.file_count() {
-            continue;
-        }
-        out.push((def.span, format!("unused function `{}`", def.name)));
+        unused_fns.push((def.span, def.name.clone()));
     }
+    unused_fns.sort_by_key(|(s, _)| (s.file.0, s.lo.0));
 
+    Lints { unused_locals, unused_fns }
+}
+
+/// Collect every lint warning as `(span, message)` pairs in source order — the
+/// flattened view the `lint` command renders.
+pub fn collect_lints(analysis: &Analysis, map: &SourceMap) -> Vec<(Span, String)> {
+    let l = analyze(analysis, map);
+    let mut out: Vec<(Span, String)> = Vec::new();
+    out.extend(l.unused_locals.into_iter().map(|(s, n)| (s, format!("unused variable `{n}`"))));
+    out.extend(l.unused_fns.into_iter().map(|(s, n)| (s, format!("unused function `{n}`"))));
     out.sort_by_key(|(s, _)| (s.file.0, s.lo.0));
     out
 }
