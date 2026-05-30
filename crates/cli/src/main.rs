@@ -107,6 +107,12 @@ enum Command {
         #[arg(long, hide = true)]
         exact: Option<String>,
     },
+    /// Print a long-form explanation of a diagnostic code (`docs/23`), e.g.
+    /// `otter_fusion explain E0006`. Codes appear in `error[E0006]: …` diagnostics.
+    Explain {
+        /// The diagnostic code (case-insensitive), e.g. `E0006` or `e0006`.
+        code: String,
+    },
     /// Start an interactive read-eval-print loop (`docs/23`): enter
     /// declarations, `var` bindings, statements, or expressions line by line.
     Repl,
@@ -290,6 +296,7 @@ fn main() -> ExitCode {
                 None => run_tests(&path, true),
             }
         }
+        Command::Explain { code } => run_explain(&code),
         Command::Repl => repl::run(),
         Command::Fmt { file, check } => {
             run_fmt(&file.unwrap_or_else(|| PathBuf::from(".")), check)
@@ -579,7 +586,7 @@ fn emit(input: &Input, ir: EmitIr) -> ExitCode {
         EmitIr::Hir => {
             let analysis = analyze_multi_ctx(&prepared.root, &prepared.externals, &prepared.ctx);
             for e in &analysis.errors {
-                render(map, e.span, "error", &e.kind.to_string());
+                render_sema(map, e);
             }
             print!(
                 "{}",
@@ -589,7 +596,7 @@ fn emit(input: &Input, ir: EmitIr) -> ExitCode {
         EmitIr::Clif => {
             let analysis = analyze_multi_ctx(&prepared.root, &prepared.externals, &prepared.ctx);
             for e in &analysis.errors {
-                render(map, e.span, "error", &e.kind.to_string());
+                render_sema(map, e);
             }
             // Cranelift IR is only well-formed for an error-free program.
             if analysis.errors.is_empty() {
@@ -628,7 +635,7 @@ fn drive(input: &Input, stage: Stage, release: bool, time: bool) -> ExitCode {
     //    run-mode context governing import-scheme availability.
     let analysis = analyze_multi_ctx(&prepared.root, &prepared.externals, &prepared.ctx);
     for e in &analysis.errors {
-        render(map, e.span, "error", &e.kind.to_string());
+        render_sema(map, e);
         had_error = true;
     }
 
@@ -752,7 +759,7 @@ fn run_tests(path: &Path, bench: bool) -> ExitCode {
     }
     let analysis = analyze_multi_ctx(&prepared.root, &prepared.externals, &prepared.ctx);
     for e in &analysis.errors {
-        render(map, e.span, "error", &e.kind.to_string());
+        render_sema(map, e);
         had_error = true;
     }
     if had_error {
@@ -937,7 +944,7 @@ fn run_lint(input: &Input) -> ExitCode {
     }
     let analysis = analyze_multi_ctx(&prepared.root, &prepared.externals, &prepared.ctx);
     for e in &analysis.errors {
-        render(map, e.span, "error", &e.kind.to_string());
+        render_sema(map, e);
         had_error = true;
     }
     if had_error {
@@ -978,7 +985,7 @@ fn run_fix(input: &Input, check: bool) -> ExitCode {
     }
     let analysis = analyze_multi_ctx(&prepared.root, &prepared.externals, &prepared.ctx);
     for e in &analysis.errors {
-        render(map, e.span, "error", &e.kind.to_string());
+        render_sema(map, e);
         had_error = true;
     }
     if had_error {
@@ -1113,6 +1120,80 @@ fn find_runtime_lib() -> Option<PathBuf> {
         dir.parent().map(|d| d.join("libruntime.a")).unwrap_or_default(),
     ];
     candidates.into_iter().find(|p| p.exists())
+}
+
+/// Diagnostic codes and their long-form explanations, keyed by the codes
+/// [`compiler::sema::SemaErrorKind::code`] assigns. Each entry is `(code, title,
+/// explanation)`.
+const EXPLANATIONS: &[(&str, &str, &str)] = &[
+    ("E0001", "duplicate definition",
+     "Two items share a name in the same namespace and module. Each type and each\n\
+      value must have a unique name within its module; rename one, or move it to a\n\
+      different module."),
+    ("E0002", "unknown type",
+     "A name used in type position does not resolve to any type in scope. Check the\n\
+      spelling, and ensure the type is declared or `import`ed (the prelude is\n\
+      near-empty: even `List`/`Map` must be imported — see `docs/17`)."),
+    ("E0003", "unknown value",
+     "A name used in value position does not resolve to any binding, function, or\n\
+      import in scope. Check the spelling, declare it with `var`, or `import` it."),
+    ("E0004", "wrong number of generic arguments",
+     "A generic type was applied with the wrong number of type arguments — e.g.\n\
+      `Map<i64>` when `Map<K, V>` takes two. Supply exactly the declared count."),
+    ("E0005", "recursive type alias",
+     "A `type` alias refers to itself without an intervening indirection, so it has\n\
+      no finite expansion. Break the cycle (e.g. via a struct/pointer), per\n\
+      `docs/03` §3."),
+    ("E0006", "type mismatch",
+     "A value of one type was used where another is required. Otter Fusion has no\n\
+      implicit conversions: convert explicitly with `as`, adjust the value, or fix\n\
+      the annotation so the types agree."),
+    ("E0007", "operator not supported for this type",
+     "An operator was applied to operand type(s) that do not support it (e.g. `<` on\n\
+      a type without `Ord`). Use a type that implements the operator's interface,\n\
+      or implement it via `extend`."),
+    ("E0008", "non-boolean condition",
+     "A condition (`if`/`while`/…) must be exactly `bool` — there is no implicit\n\
+      truthiness (`docs/07` §2). Compare explicitly, e.g. `if n != 0` instead of\n\
+      `if n`."),
+    ("E0009", "expression is not callable",
+     "A call `e(...)` was applied to something that is not a function, closure, or\n\
+      constructor. Check that `e` names a callable value."),
+    ("E0010", "wrong number of arguments",
+     "A call passed the wrong number of arguments for the callee's parameter list.\n\
+      Pass exactly the declared count (trailing closures count as the final arg)."),
+    ("E0011", "`return` outside a function",
+     "`return` appears where there is no enclosing function to return from. (Normally\n\
+      unreachable after parsing.)"),
+    ("E0012", "invalid cast",
+     "An `as` cast was requested between two types with no defined conversion\n\
+      (`docs/12` §2). Only the documented numeric/`str`/pointer/interface\n\
+      conversions are permitted."),
+];
+
+/// Run `otter_fusion explain <code>` (`docs/23`): print the long-form explanation
+/// for a diagnostic code. Unknown codes list the available ones.
+fn run_explain(code: &str) -> ExitCode {
+    let want = code.trim().to_ascii_uppercase();
+    if let Some((c, title, body)) = EXPLANATIONS.iter().find(|(c, ..)| *c == want) {
+        println!("{c}: {title}\n\n{body}");
+        ExitCode::SUCCESS
+    } else {
+        eprintln!("error: unknown diagnostic code `{code}`");
+        let codes: Vec<&str> = EXPLANATIONS.iter().map(|(c, ..)| *c).collect();
+        eprintln!("available codes: {}", codes.join(", "));
+        ExitCode::FAILURE
+    }
+}
+
+/// Render a semantic error, tagging its stable code (`error[E0006]: …`) when it
+/// has one so `otter_fusion explain <code>` can elaborate.
+fn render_sema(map: &SourceMap, e: &compiler::sema::SemaError) {
+    let severity = match e.code() {
+        Some(code) => format!("error[{code}]"),
+        None => "error".to_string(),
+    };
+    render(map, e.span, &severity, &e.kind.to_string());
 }
 
 /// Render one diagnostic with a source excerpt and caret underline.

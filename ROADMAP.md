@@ -1667,9 +1667,17 @@ the **custom GC allocator (MMTk) the prerequisite** for concurrent collection.
       stays valid. `:help`/`:reset`/`:quit`; missing `;` is added for terse input.
       State persistence + function definitions + error recovery verified by a
       stdin-piped CLI test.
+- [x] **`otter_fusion explain` + diagnostic codes** (`docs/23`): the structured
+      semantic-error kinds carry stable codes `E0001`–`E0012`
+      (`SemaErrorKind::code`), surfaced in diagnostics as `error[E0006]: …`.
+      `otter_fusion explain <code>` (case-insensitive) prints a long-form
+      explanation; an unknown code lists the available ones. Free-form `Message`
+      errors stay uncoded (a future refactor would promote common ones to coded
+      kinds). 1 CLI test (coded diagnostic + explain + unknown).
 - [ ] Manifest dependencies (`pkg:`) live registry network round-trips,
-      sysroot/stdlib, `explain`/`expand`, concurrent-GC reclamation (custom
-      allocator / MMTk — see GC §), and the remaining `docs/23` surface.
+      sysroot/stdlib, `expand` (needs an AST source-printer), promoting `Message`
+      errors to coded kinds, concurrent-GC reclamation (custom allocator / MMTk —
+      see GC §), and the remaining `docs/23` surface.
 
 ## Current vertical-slice target
 Smallest end-to-end program that exercises the full pipeline, expanded each

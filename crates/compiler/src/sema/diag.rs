@@ -48,6 +48,35 @@ impl SemaError {
     pub fn message(span: Span, msg: impl Into<String>) -> Self {
         Self { kind: SemaErrorKind::Message(msg.into()), span }
     }
+
+    /// The stable diagnostic code (e.g. `E0007`) for this error, if it has a
+    /// dedicated kind. Free-form [`SemaErrorKind::Message`] errors have none.
+    /// `otter_fusion explain <code>` prints a long-form explanation.
+    pub fn code(&self) -> Option<&'static str> {
+        self.kind.code()
+    }
+}
+
+impl SemaErrorKind {
+    /// The stable code for a structured error kind (see [`SemaError::code`]).
+    pub fn code(&self) -> Option<&'static str> {
+        use SemaErrorKind::*;
+        Some(match self {
+            DuplicateDefinition { .. } => "E0001",
+            UnknownType { .. } => "E0002",
+            UnknownValue { .. } => "E0003",
+            GenericArity { .. } => "E0004",
+            RecursiveAlias { .. } => "E0005",
+            TypeMismatch { .. } => "E0006",
+            InvalidOperator { .. } => "E0007",
+            NonBoolCondition { .. } => "E0008",
+            NotCallable { .. } => "E0009",
+            ArgCount { .. } => "E0010",
+            ReturnOutsideFunction => "E0011",
+            InvalidCast { .. } => "E0012",
+            Message(_) => return None,
+        })
+    }
 }
 
 impl fmt::Display for SemaErrorKind {

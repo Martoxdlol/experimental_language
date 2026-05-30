@@ -4513,3 +4513,23 @@ fn lint_flags_unreachable_code() {
     assert!(ok, "lint is informational; err: {err}");
     assert!(err.matches("unreachable code").count() >= 2, "err: {err}");
 }
+
+#[test]
+fn explain_prints_code_explanation_and_diagnostics_carry_codes() {
+    // A type mismatch is reported with its code, and `explain` elaborates it.
+    let (_o, err, ok) = lang("check", "function f(): i64 { \"x\" }\nfunction main() {}");
+    assert!(!ok);
+    assert!(err.contains("error[E0006]"), "diagnostic should carry its code; err: {err}");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_otter_fusion"))
+        .arg("explain").arg("e0006").output().unwrap(); // case-insensitive
+    assert!(out.status.success());
+    let s = String::from_utf8_lossy(&out.stdout);
+    assert!(s.contains("E0006") && s.contains("type mismatch"), "stdout: {s}");
+
+    // Unknown code fails and lists the available codes.
+    let bad = Command::new(env!("CARGO_BIN_EXE_otter_fusion"))
+        .arg("explain").arg("E9999").output().unwrap();
+    assert!(!bad.status.success());
+    assert!(String::from_utf8_lossy(&bad.stderr).contains("available codes"));
+}
