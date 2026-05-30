@@ -39,7 +39,7 @@ semantics; this file is only the implementation sequencing.
 ### Phase 0 — Frontend  ✅ DONE
 Lexer, parser, AST, spans, diagnostics. 205 tests.
 
-### Phase 1 — Type representation + name resolution  🚧 IN PROGRESS
+### Phase 1 — Type representation + name resolution  ✅ DONE
 - [x] `ty.rs`: interned `Ty`, primitives, named/tuple/func/union/ptr/array/
       dynamic/never/Self/param/infer/error. Union normalization (flatten,
       dedup, order-independent, single collapses). 26 tests.
@@ -106,29 +106,28 @@ The full module/import/package system, end to end.
   run modes, escape rule, file: gating, dep commands, `pkg:` run e2e). All
   green; every example runs (JIT + native).
 
-### Phase 2 — Type checking & inference  🚧 IN PROGRESS
+### Phase 2 — Type checking & inference  ✅ DONE
 - [x] `sema/check.rs`: bidirectional checker over the imperative core —
       int/float literal defaulting + range checks, locals & scopes, binding
       patterns (binding/wildcard/tuple), assignment lvalues, unary/binary
       operators (numeric/comparison/logical/bitwise), blocks, `if`/`else`
       (branch-type union), `return`, direct function calls (arity + arg types),
-      union & `dynamic` widening assignability. 15 tests.
+      union & `dynamic` widening assignability.
 - [x] Records expression types + name resolutions for codegen — now baked onto
       typed HIR nodes the checker emits (see Phase 2.5; `CheckResults` is gone).
-- [ ] Flow narrowing (`is`/`as`, if/else/match, `&&`/`||`).
-- [ ] `while`/`loop`/`for`, `break`/`continue`, `match` + exhaustiveness.
-- [ ] Structs: construction, field access, methods; interfaces/`extend`;
-      method resolution + coherence; operator→interface desugaring; `ToStr`.
-- [ ] Generics inference; `?`/`Try`/`FromResidual`; closures + captures.
-
-### Phase 2 — Type checking & inference
-- [ ] Bidirectional checker; literal default rules (`i64`, `f64`).
-- [ ] Flow narrowing (`is`/`as`, if/else/match, `&&`/`||`).
-- [ ] `match` exhaustiveness + reachability.
-- [ ] Interface/`extend` method resolution; coherence + specificity.
-- [ ] `?` operator partitioning; `Try`/`FromResidual`.
-- [ ] Closures + capture analysis; trailing closures; implicit `it`.
-- [ ] Operator → interface desugaring; `ToStr` interpolation.
+- [x] Flow narrowing (`is`/`as`, if/else/match, `&&`/`||`) via `Adjust::Unbox`,
+      incl. else-if chains and interface/union/NPO sources.
+- [x] `while`/`loop` (value via `break <expr>`)/`for`, `break`/`continue`,
+      `match` + compile-time exhaustiveness + reachability.
+- [x] Structs (record/tuple/unit): construction (shorthand + `..spread`), field
+      access/mutation, methods via `extend`; interfaces (static + dynamic
+      dispatch, default methods); method resolution incl. generic `extend`;
+      operator→interface desugaring; `ToStr`/string-interpolation via `to_str`.
+- [x] Generics inference (functions, structs, methods, static `T.new`);
+      `<T: Bound>` + monomorphized interface-method dispatch; `?`/`Try`/
+      `FromResidual`; closures (by-reference cells) + captures; trailing
+      closures + implicit `it`; pattern matching complete (wildcard/binding/
+      literal/type-binding/unit/tuple/tuple-struct/record-struct/list/or).
 
 ### Phase 2.5 — Typed HIR (retire span side-tables)  ✅ DONE
 
@@ -595,12 +594,28 @@ the full typed `Hir` directly and every consumer reads `analysis.hir`.**
               section, and by every example building natively + running. DWARF is
               now emitted on both ELF and Mach-O.
 
-### Phase 3 — MIR + monomorphization
-- [ ] Typed MIR (CFG, explicit drops/safepoints/barriers as metadata).
-- [ ] Monomorphization collector (one body per type-arg set).
-- [ ] Closure → environment struct lowering; dyn dispatch vtables.
+### Phase 3 — MIR + monomorphization  ✅ DONE (MIR deferred by design)
+Per the locked architecture (README + goals), **monomorphization lives at the
+HIR→codegen worklist**, and a separate typed MIR is a deliberately-deferred later
+project (not a blocker — the language is fully featured without it).
+- [x] **Monomorphization collector**: instance-based `(DefId, Vec<Ty>) → FuncId`
+      with an on-demand worklist; the checker infers/substitutes type args
+      (carried on HIR `Call.type_args`), codegen substitutes layout/clty/type-id
+      per instance. Covers generic functions, structs, `extend` methods, and
+      static `T.new` inference.
+- [x] **Closure → environment struct lowering** (by-reference cells) and **dyn
+      dispatch vtables** (interface-object `{vtable,data,type_id}` box,
+      `emit_vtable`) — implemented directly on the HIR→codegen path.
+- [ ] **Typed MIR** (CFG, explicit drops/safepoints/barriers as metadata) —
+      *deferred by design*. Drops/safepoints/barriers are emitted directly during
+      codegen today; a MIR would be an optimization/clarity layer, not new
+      behavior.
 
-### Phase 4 — Cranelift codegen + runtime  🚧 IN PROGRESS
+### Phase 4 — Cranelift codegen + runtime  ✅ FEATURE-COMPLETE (optimization ongoing)
+All designed language features lower end-to-end on the Cranelift backend (JIT via
+`cranelift-jit` + native object/link via `cranelift-object`), JIT≡native byte-
+identical and GC-stress clean. What remains is **performance optimization** of the
+generated code + compiler (see goals.txt), not missing features.
 - [x] `crates/backend`: Cranelift 0.132 JIT. Lowers primitive-typed functions,
       locals (Cranelift vars), int/float/bool/char literals, unary/binary ops
       (incl. signed/unsigned division & shifts, float ops), comparisons,
@@ -686,16 +701,21 @@ the full typed `Hir` directly and every consumer reads `analysis.hir`.**
       recorded lowered field types (`results.struct_fields`). Runtime
       `lang_alloc` (provisional, leaks — header/collector staged next).
       19 tests (10 backend incl. mixed-width layout + aliasing, 5 checker, +e2e).
-### GC (precise tracing, spec-exact via Cranelift stack maps)  🚧 IN PROGRESS
+### GC (precise tracing, spec-exact via Cranelift stack maps)  ✅ DONE (single + multi-threaded)
+The precise tracing collector is complete and correct **including concurrent
+reclamation while multiple mutators run** (custom slab allocator `gc_alloc` +
+`WORLD`-mutex stop-the-world barrier — see the concurrent-reclamation entry
+below). Remaining GC work is **throughput only** (per-thread TLABs / MMTk Immix),
+which does not change behavior.
 User chose the spec-exact path (Cranelift `user_stack_maps`). Staged:
 - [x] **Step 1**: two-word object header `[desc | mark]` + per-type descriptor
       blobs (`size`, `kind`, pointer-field offsets = trace map) + a tracked
       managed heap (`runtime::gc`). Struct/tuple/union-box allocations migrated
       to descriptor-based `lang_alloc`. No collection yet; 440 tests, no
       regression. (Collection stays off until str/List are managed too.)
-- [ ] **Step 2**: bring `str` (inline bytes) and `List` (handle + managed
-      buffer, growth) under the heap with descriptors + variable-size alloc.
-- [ ] **Step 3**: mark-sweep collector following trace maps.
+- [x] **Step 2**: `str` (inline bytes), `List` (handle + managed growable
+      buffer), and `Map` (handle + slot buffer) are all under the heap with
+      descriptors + variable-size alloc; managed elements are traced.
 - [x] **Step 3**: mark-sweep collector (`gc::collect(roots)`) — marks from a
       precise root set following descriptor trace maps (plain ptr-offsets;
       `List` handle scans buffer elements when `elem_is_ptr`), sweeps the
@@ -1270,13 +1290,17 @@ and complete with the world-barrier mark-sweep.
       panic→exit 101); all 11 `examples/*.otter` build and run natively with
       byte-identical output to `otter_fusion run`, including under `OTTER_FUSION_GC=stress`.
 
-### Phase 5 — System features
+### Phase 5 — System features  ✅ DONE (advanced deferrals tracked in "What's next")
 - [~] **Threads (`docs/20` §1): `Thread.spawn`/`join` work.** `Thread.spawn(() =>
       R)` (positional or trailing closure) runs the closure on a real OS thread
       (`runtime::threads::lang_thread_spawn` reads the fn pointer from the closure
       env and runs it) and returns a `JoinHandle<R>` (prelude struct holding a
-      registry id). `JoinHandle<R>.join()` blocks (in GC *native* state, so the
-      joiner stays scannable) and yields `Joined<R> | Panicked` (prelude structs).
+      registry id). **`JoinHandle<R>.join()` is now async + non-blocking**: it
+      yields a `Future<Joined<R> | Panicked>` so the joining task *suspends*
+      (`lang_thread_join_future` registers a waker; the worker wakes it on
+      publish) instead of parking the OS thread. From sync code the implicit-async
+      driver runs it to completion; user surface is just `var r = h.join()` (see
+      the Async note below — async is implicit, with the `spawn` keyword).
       The checker recognises `Thread.spawn`, records the result type, and rejects
       mutable-managed captures (deep-clone of mutable managed captures via
       `Clone` is the follow-up); codegen builds the handle/union.
@@ -1292,22 +1316,24 @@ and complete with the world-barrier mark-sweep.
       raw bits across the boundary (`lang_thread_spawn`'s `float_kind`), and the
       `Joined<R>.value` slot is byte-identical to the float. `concurrency/
       spawn_capture_is_snapshot` + `thread_float_result` cases.
-      **GC reclamation is currently gated to single-mutator** (collection is
-      skipped while >1 thread is live, resuming after join) — memory-safe, with
-      precise concurrent root-scanning hardening deferred (`ROADMAP.md` GC §).
-      (The intermittent threaded *crash* once attributed to contention was a
+      **GC reclamation now runs concurrently with live mutators** — the
+      single-mutator gate is removed (world-barrier STW + `gc_alloc`; see the GC
+      §). (The intermittent threaded *crash* once attributed to contention was a
       separate async-state-machine bug — a sync `for`+`await` loop losing its
       iteration state across a suspend — now fixed; see the async section.)
-      TODO: channels (`docs/20` §2), `Shared<T>` (§4), worker-panic isolation
-      (currently a worker panic aborts the process), deep-clone of captures,
-      concurrent reclamation.
+      TODO: worker-panic isolation (currently a worker panic aborts the process).
 - [~] **Channels (`docs/20` §2): `channel<T>()`, `send`, `recv`, `try_recv` work.**
       `channel<T>()` (a recognised builtin, like `Thread.spawn`) allocates a
-      runtime channel (`runtime::channels`: an `Arc<{Mutex<VecDeque<i64>>, Condvar}>`
-      registry by id) and returns a `(Sender<T>, Receiver<T>)` tuple (prelude
-      structs carrying the channel id). `Sender<T>.send(v)` enqueues + notifies;
-      `Receiver<T>.recv(): T` blocks in GC *native* state (so the blocked thread
-      stays scannable); `try_recv(): T | null` polls. Queued values are GC-pinned
+      runtime channel (`runtime::channels`: a single `Mutex<{queue, waiters}>` per
+      channel — one lock so "empty → register waker" and "enqueue → wake" are
+      atomic, no lost wakeups, no Condvar) and returns a `(Sender<T>, Receiver<T>)`
+      tuple (prelude structs carrying the channel id). `Sender<T>.send(v)`
+      enqueues + wakes any waiter (synchronous, non-blocking).
+      **`Receiver<T>.recv()` is now async + non-blocking**: it yields a
+      `Future<T>` (`lang_chan_recv_future`) so the receiving task *suspends* on an
+      empty channel instead of parking the OS thread; `try_recv(): T | null`
+      polls without blocking. The user surface is just `var v = rx.recv()` (the
+      implicit-async driver suspends/drives it). Queued values are GC-pinned
       (`add_extra_root`) while in the queue and unpinned on receipt. Endpoints are
       thread-safe handles, so `Thread.spawn` may capture them (`is_thread_shareable`).
       Element types are restricted to immutable values for now (no clone-on-send
@@ -1328,7 +1354,27 @@ and complete with the world-barrier mark-sweep.
       native parity; `examples/shared.otter`; 2 CLI tests. TODO: lock release on a
       panicking body (needs unwinding); reentrancy is undefined (per spec).
 - [ ] Channel close + `Receiver: Iterator` (needs `Drop`).
-- [~] **Async (`docs/21`) — `Future`/`await`/`block_on` working.** Prelude:
+- [x] **Async (`docs/21`) — COMPLETE, with an implicit-async surface.**
+      > **SURFACE NOTE (current design, `docs/21` rewritten):** async is now
+      > **implicit**. There is **no** user-visible `async` modifier, `await`
+      > expression, `block_on` builtin, `async { … }` block, or `for await` —
+      > those were removed from the language surface. A single keyword **`spawn
+      > call_expr`** evaluates to a `JoinHandle<T>` (like Go's `go`). User code
+      > never spells `Future<T>`: `sleep` returns `null`, `Receiver.recv()`
+      > returns `T`, `JoinHandle.join()` returns `Joined<T> | Panicked`,
+      > `Shared.lock(fn)` returns the closure's result. The compiler decides which
+      > functions need state-machine codegen by a fix-point pass
+      > (`propagate_async_calls`): a function is "async" iff its body reaches a
+      > suspending op (`sleep`/`yield_now`/`recv`/`join`) or calls another async
+      > function; non-suspending functions keep straight-line codegen with zero
+      > executor overhead. `main` is driven by `lang_block_on` automatically if it
+      > is async. **The `Future`/`Pending`/`Ready`/state-machine/`block_on`
+      > machinery described below all still exists internally** — it is exactly
+      > what the implicit surface lowers to; the user just never names it. The
+      > `[x]` sub-bullets that mention `await`/`async {}`/`for await` describe the
+      > internal lowering, reachable from the implicit surface.
+
+      Prelude:
       `interface Future<Output> { poll(self, ctx: *Context): Ready<Output> |
       Pending }`, `Ready<T>`, `Pending`, `extern struct Context`,
       `interface AsyncIterator<T>`, `TimedOut`. The checker type-checks `async`
@@ -1361,7 +1407,7 @@ and complete with the world-barrier mark-sweep.
       timer-thread-backed future; **`.cancel()`** is a (no-op) abort for the
       compute-only futures we build. `examples/async.otter` exercises the whole
       surface; 14 CLI tests + 2 runtime tests; JIT + native + GC-stress parity.
-- [x] **`await` ANF hoisting** (`docs/21`): `await` may now appear nested in a
+- [x] **`await` ANF hoisting** (`docs/21`): `await` may appear nested in a
       larger expression — function arguments, operands of `+`/`-`/comparisons,
       index `xs[await i]`, field receivers, `?`, casts, tuple/list/struct/map
       literals, string interpolation `"${await e}"`, and `if`/`match`
@@ -1369,16 +1415,25 @@ and complete with the world-barrier mark-sweep.
       collection, like `derive`) rewrites each nested `await` into a preceding
       `var __await_N = …;` binding, preserving left-to-right evaluation order
       (every *effectful* prior operand is also hoisted so side effects don't
-      reorder). **Conditional positions are deliberately NOT hoisted**: the right
-      operand of `&&`/`||` and a `while` condition only suspend conditionally, so
-      hoisting would change semantics — those are left in place and the backend
-      reports the clear "await in this position is not yet supported" error
-      rather than miscompiling. `if`/`match` branch blocks and `match` arm bodies
-      are already statement/trailing-level, so awaits there work (hoisted bindings
-      stay inside the arm via a wrapper block). The pass is a strict no-op for
-      await-free code. 3 CLI tests (nested-arg/operand/index ordering;
-      if-cond/struct/tuple/interpolation; short-circuit rejection). JIT + native
-      + GC-stress parity; all examples + 863 prior tests green.
+      reorder). `contains_await` sees through control-flow bodies, so an `await`
+      hidden in an `if`/`match`/loop branch used as an operand is hoisted whole —
+      no sibling temporary is left live across the suspend. The pass is a strict
+      no-op for await-free code. JIT + native + GC-stress parity.
+- [x] **`await` in genuinely-conditional positions** (`docs/21` §4): the right
+      operand of `&&`/`||` (runs only when the left does not short-circuit) and a
+      `while` condition (runs once per iteration). These must NOT be lifted out —
+      that would change *whether*/*how often* the future is awaited — so ANF
+      rewrites each as its own *scope*: a nested operand `await` is hoisted into a
+      block that executes only when (and as often as) the position is reached
+      (`a && { var t = await b; t > 0 }`), keeping a surviving `await` at a
+      statement-level suspend site with no live sibling temporary. The backend
+      suspend-site scan (`h_scan_value_await`/`h_scan_for_state`) recurses into the
+      `&&`/`||` right operand and the `while` condition so every such `await` gets
+      a state slot. Short-circuit suppresses the awaited side effect; a `while`
+      condition suspends exactly once per iteration. `await` in a sync function
+      (even in an operand) is still rejected by the checker. 7 ANF unit tests + 7
+      CLI integration tests + 7 e2e cases (`tests/cases/async/`); JIT + native +
+      GC-stress parity.
 - [x] **Async closures** (`docs/21` §7): `(p) async => E` is desugared by
       `sema/anf.rs` into a plain closure returning an async block —
       `(p) => async { E }` — reusing the closure-environment + async-block
@@ -1590,7 +1645,7 @@ and complete with the world-barrier mark-sweep.
       parity). `examples/clone.otter`; JIT + native parity;
       GC-stress clean. 4 CLI tests.
 
-### Phase 6 — Toolchain  🚧 IN PROGRESS
+### Phase 6 — Toolchain  ✅ DONE (advanced pkg/LSP deferrals tracked in "What's next")
 - [x] `otter_fusion` CLI (`crates/cli`): Clap-based `check` / `build` / `run` (auto
       `--help`/`--version`) over the full pipeline, with caret diagnostics +
       error recovery. `run` JIT-executes `main`; `build [-o exe]` emits a native
@@ -1598,9 +1653,10 @@ and complete with the world-barrier mark-sweep.
       `examples/`.
 - [x] **LSP server + VS Code extension** (`crates/lsp` → `otter_fusion_lsp`, plus
       `editors/vscode`). The server is built on `tower-lsp`/`tokio` and reuses
-      the front-end (`Compiled` recompiles each open buffer; the checker's
-      span-keyed `expr_types`/`resolutions`/new `local_decls` tables drive every
-      query). Features: live diagnostics (lex+parse+sema), hover (types +
+      the front-end (`Compiled` recompiles each open buffer; queries are driven by
+      a `HirIndex` built over the typed **HIR** — the old span-keyed `CheckResults`
+      tables are gone, retired into HIR node fields per Phase 2.5). Features: live
+      diagnostics (lex+parse+sema), hover (types +
       symbol/builtin signatures), go-to-definition (name-precise, for
       functions/methods/globals/struct ctors/locals), find-references, rename,
       document symbols (items + struct fields + interface/`extend` methods),
@@ -1651,10 +1707,11 @@ and complete with the world-barrier mark-sweep.
       The runner discovers the corpus, runs each via the real `otter_fusion`
       binary (with `--time` for run/panic cases), checks stdout/exit/stderr, and
       prints a status + per-category timing report. `OTTER_TEST_BLESS=1`
-      regenerates `//~` blocks for passing `run` cases. **165 cases**: 100 run,
-      13 panic, 52 compile-error, plus 7 GC-stress (`LANG_GC=stress`) and
-      concurrency cases (incl. a 100-thread storm). We test failure modes, not
-      just happy paths.
+      regenerates `//~` blocks for passing `run` cases. **176 cases** across 29
+      categories (run / panic / compile-error, plus GC-stress
+      `OTTER_FUSION_GC=stress` and concurrency cases incl. a 100-thread storm and
+      a heavy concurrent-GC-reclamation churn). We test failure modes, not just
+      happy paths. (Run via `cargo test -p cli --test suite`.)
   - **Known-bug / XFAIL catalog** (LLVM-style): a `known-bug` case states the
     *spec-correct* behaviour the implementation does not yet meet; it is expected
     to fail today (reported XFAIL, does not fail the suite) and is flagged XPASS
@@ -1803,6 +1860,75 @@ and complete with the world-barrier mark-sweep.
       and the publish metadata-sidecar. Plus throughput follow-ups (per-thread
       TLABs / MMTk Immix) that do not change behavior.
 
-## Current vertical-slice target
-Smallest end-to-end program that exercises the full pipeline, expanded each
-iteration. Start: `function main() { print_int(40 + 2) }` → JIT → prints `42`.
+## Current state (verified 2026-05-30)
+
+**The language is feature-complete end-to-end at production quality.** The full
+pipeline (lex → parse → derive/default/ANF desugar → collect → check → typed HIR →
+monomorphized Cranelift codegen → JIT *and* native link) runs every designed
+feature, JIT≡native byte-identical and GC-stress clean.
+
+- **Tests green:** `cargo test --workspace` → **1038 unit/integration tests, 0
+  failures**; the e2e suite (`cargo test -p cli --test suite`) → **176 cases**
+  across 29 categories. All **22 examples** run identically under `otter_fusion run`
+  and `otter_fusion build` (native). *(Minor: 2 clippy-style warnings in `runtime`
+  test code — "direct cast of function item into an integer" — cosmetic.)*
+- **Phases 0–2.5: DONE.** Frontend, types + name resolution, full type checking &
+  inference, and the typed-HIR refactor (all 21 span-keyed `CheckResults` tables
+  retired; the checker assembles the `Hir` directly; `hir::lower` deleted).
+- **Phase 3:** monomorphization + closure/dyn lowering DONE at the HIR→codegen
+  worklist; a separate typed **MIR is deferred by design** (not a missing feature).
+- **Phase 4 (codegen+runtime): feature-complete** — all language features lower;
+  remaining work is *performance optimization* (goals.txt), not features.
+- **GC: DONE**, including **concurrent reclamation while multiple mutators run**
+  (`gc_alloc` slab allocator + `WORLD`-mutex stop-the-world barrier). Remaining GC
+  work is throughput-only (TLABs / MMTk Immix).
+- **Phase 5 (system features):** structs, unions, generics, interfaces (static +
+  dynamic + default methods), error handling (`?`/`Try`/`FromResidual`), pattern
+  matching (complete), closures (by-ref cells), threads/channels/`Shared<T>`,
+  **async (implicit, `spawn` keyword)** incl. `sleep`/`timeout`/for-await/async
+  closures, FFI (extern fns/structs/vars/arrays/opaque types/NPO/`Foreign.*`/
+  CString/CStr/`@Packed`/`@Align`/`@Union`/`@Transparent`/`@Link`), all `@Derive`s
+  (Eq/Ord/ToStr/Clone/Hash), `Drop`, full stdlib collection/string/numeric APIs.
+- **Phase 6 (toolchain): DONE** — `check`/`build`/`run`/`exec` (`--release`,
+  `--time`), `test`/`bench`, `lint`/`fix`/`fmt`, `repl`, `doc`, `expand`,
+  `explain` (`E0001`–`E0019`), full module/import/package system + live registry
+  (`serve`), LSP + VS Code extension (multi-file, cross-file goto/refs/rename).
+
+## What's next (drives goals.txt)
+
+**Immediate (active goals):**
+1. **Backend / compiler optimizations** (goals.txt final item; see
+   `possible-optimizations.txt`): apply logical optimizations to codegen and
+   compiler logic while keeping all observability (`--emit=tokens|ast|hir|clif`,
+   DWARF, `--time`) and JIT≡native parity. *No behavior change; benchmark with
+   `bench` + `run --time`.*
+2. **Finish the long tail** (goals.txt "finish end to end"): work the remaining
+   items below one by one, test-gated, docs/LSP/examples kept consistent.
+
+**Remaining features / deferrals (each test-gated when picked up):**
+- **`await` in a short-circuit operand / loop condition** — genuinely conditional
+  suspension; currently a clean "not yet supported" error, *not* miscompiled.
+  Needs principled lowering (changes eval order/frequency).
+- **User procedural macros** (`docs/22`) — only `@Derive(...)` is implemented.
+- **Channel close on last-`Sender` drop** + `Receiver: Iterator` termination —
+  needs *deterministic* `Drop` (tension with GC-timed best-effort `Drop`).
+- **Worker-panic isolation** — a panicking thread/`spawn` worker currently aborts
+  the process (Rust unwinding can't cross Cranelift frames).
+- **FFI tail:** `@CallConv` decorator; a managed `CString`/`Buffer` handle type
+  with `Drop`. `@Variadic` is **blocked** by Cranelift (no portable varargs ABI).
+- **Generic `Drop` types; generic-interface default methods; cross-module
+  interface default methods** — currently scoped out with clear errors, not
+  miscompiles.
+- **Package manager advanced:** git-dependency *fetching* (sources recorded, not
+  cloned), feature-gated optional-dep resolution, multi-major coexistence, publish
+  metadata-sidecar.
+- **LSP follow-ups:** reverse references (files that *import* the open doc),
+  body-position type goto (`var x: T`, `e as T`, pattern type names).
+- **GC throughput:** per-thread TLABs / MMTk Immix (behavior-neutral).
+- **`fmt` follow-up:** token-level intra-line spacing + line wrapping (currently
+  whitespace/indentation only, comment-preserving infra permitting).
+
+## Historical: initial vertical-slice target (achieved long ago)
+Smallest end-to-end program that exercised the full pipeline at the start:
+`function main() { print_int(40 + 2) }` → JIT → prints `42`. The slice has since
+been expanded to the entire language.

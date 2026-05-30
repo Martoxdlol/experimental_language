@@ -241,12 +241,16 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             let actx = self.async_ctx.as_ref().ok_or_else(|| {
                 CodegenError::new(await_span, "`await` outside an async body")
             })?;
+            // Every `await` reachable here is registered as a suspend site by the
+            // scan (`h_scan_value_await`) after `sema::anf` has normalised it to a
+            // statement-level / conditional-scope position. A miss is an internal
+            // invariant violation (the ANF pass and the scan have diverged), not a
+            // user-facing limitation.
             let &(state_n, poll_block, _resume) = actx.awaits.get(&await_span).ok_or_else(|| {
                 CodegenError::new(
                     await_span,
-                    "`await` in this position is not yet supported — use it as a \
-                     statement (`var x = await e;` or `await e;`), a trailing \
-                     expression, or a `return` operand",
+                    "internal error: `await` at an unregistered suspend site \
+                     (sema::anf normalisation and the backend await scan disagree)",
                 )
             })?;
             (state_n, poll_block, actx.inner_off, actx.self_val, actx.ctx_val,

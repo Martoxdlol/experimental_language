@@ -1,0 +1,21 @@
+//@ kind: run
+//@ description: an `await` in a `while` condition is re-polled once per iteration — the condition future runs afresh every time the loop tests it (docs/21 §4)
+//@ stdout:
+//~ cccc
+//~ i=3
+import { println, print } from "std:io";
+import { Future } from "core:prelude";
+import { yield_now } from "std:async";
+function probe(i: i64): Future<i64> async {
+  await yield_now();
+  print("c");
+  i
+}
+function main(): Future<null> async {
+  var i = 0;
+  while (await probe(i)) < 3 {
+    i = i + 1;
+  }
+  println("");
+  println("i=${i}");
+}

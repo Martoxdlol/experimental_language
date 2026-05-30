@@ -1,0 +1,19 @@
+//@ kind: run
+//@ description: an `await` nested inside (not equal to) the `&&` right operand is hoisted into a block that only runs when the operand is reached; it never becomes unconditional (docs/21 §4)
+//@ stdout:
+//~ Y
+//~ x=false y=true
+import { println, print } from "std:io";
+import { Future } from "core:prelude";
+import { yield_now } from "std:async";
+function n(tag: str, v: i64): Future<i64> async {
+  await yield_now();
+  print(tag);
+  v
+}
+function main(): Future<null> async {
+  var x = false && ((await n("X", 3)) + 1 == 4);
+  var y = true && ((await n("Y", 3)) + 1 == 4);
+  println("");
+  println("x=${x} y=${y}");
+}

@@ -89,6 +89,26 @@ function tick(n: i64): Future<i64> async {
   sum
 }
 
+// `await` is a prefix operator that may appear in any expression position
+// inside an async body — including genuinely-conditional ones. In a `while`
+// condition the awaited future is polled once per iteration; in the right
+// operand of `&&`/`||` it is awaited only when the left side does not
+// short-circuit (docs/21 §4). The compiler keeps the suspend point inside the
+// conditional scope, so it never runs more (or less) often than the source says.
+function below(limit: i64, i: i64): Future<bool> async {
+  var _ = await yield_now();
+  i < limit
+}
+
+function count_to(limit: i64): Future<i64> async {
+  var i: i64 = 0;
+  // The condition suspends each iteration until `below` resolves.
+  while await below(limit, i) {
+    i = i + 1;
+  }
+  i
+}
+
 // The program entry is itself an async function — the runtime starts the
 // executor and drives this future to completion. No `block_on` in user code.
 function main(): Future<null> async {
@@ -137,4 +157,13 @@ function main(): Future<null> async {
     i64 v    => println("timeout = ${v}"),
     TimedOut => println("timeout = timed out"),
   }
+
+  // `await` in a `while` condition — polled once per iteration → 3.
+  var counted: i64 = await count_to(3);
+  println("counted = ${counted}");
+
+  // `await` in a short-circuit operand — the left is `false`, so the awaiting
+  // right operand is never evaluated and never suspends; `gate` stays false.
+  var gate: bool = false && await below(1, 0);
+  println("gate = ${gate}");
 }

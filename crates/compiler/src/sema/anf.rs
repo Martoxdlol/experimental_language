@@ -26,15 +26,27 @@
 //! var y = f(__await_0, __await_1) + 1;
 //! ```
 //!
-//! **Correctness — conditional positions are NOT hoisted.** Hoisting an `await`
-//! out of the right operand of `&&`/`||`, or out of a `while` condition, would
-//! change *when* (or whether) the future is awaited. Those cases are left
-//! untouched: if they truly contain an `await` in a non-statement position the
-//! backend reports a clear "await in this position is not yet supported" error
-//! rather than miscompiling. `if`/`match` *branches* and `match` *arm bodies*
-//! are blocks, so an `await` there is already statement/trailing-level and works
-//! — this pass simply recurses into them. The transformation never reorders
-//! observable side effects and never lifts an `await` past a conditional guard.
+//! **Correctness — conditional positions are scoped, never lifted out.** An
+//! `await` must never be hoisted *out of* a genuinely-conditional position — the
+//! right operand of `&&`/`||` (runs only when the left does not short-circuit)
+//! or a `while` condition (runs once per iteration) — because that would change
+//! *whether* or *how often* the future is awaited. Instead those sub-expressions
+//! are rewritten as their own *scope*: a nested operand `await` is hoisted into a
+//! block that executes only when (and as often as) the original position would,
+//!
+//! ```text
+//! while is_open() && (await poll_next()) > 0 { … }
+//! // the `&&` right operand becomes its own scope; the `await` stays inside it
+//! while is_open() && { var __await_0 = await poll_next(); __await_0 > 0 } { … }
+//! ```
+//!
+//! so a surviving `await` always sits at a statement-level position the state
+//! machine can suspend at, with no sibling temporary live across the suspend, and
+//! the suspension only happens when the conditional position is actually reached.
+//! `if`/`match` *branches* and arm bodies are blocks, so an `await` there is
+//! already statement/trailing-level — this pass simply recurses into them. The
+//! transformation never reorders observable side effects and never lifts an
+//! `await` past a conditional guard.
 
 use crate::ast::*;
 use crate::span::{BytePos, FileId, Span};
@@ -230,14 +242,20 @@ fn rewrite(e: Expr, pre: &mut Vec<Stmt>) -> Expr {
 
         ExprKind::Binary { op, op_span, left, right } => {
             if matches!(op, BinaryOp::And | BinaryOp::Or) {
-                // Short-circuit: the left operand is unconditional (atomize it);
-                // the right runs only conditionally, so it must NOT be hoisted
-                // out. Recurse into the right in isolation — if that would hoist
-                // anything (a conditional `await`), keep the original so the
-                // backend reports the unsupported position rather than us
-                // changing semantics.
+                // Short-circuit: the left operand is unconditional, so atomize it
+                // (any `await` it carries is hoisted into the enclosing `pre`).
+                // The right operand runs *only* when the left does not
+                // short-circuit, so its `await`s must NOT be lifted out — that
+                // would change *whether* the future is awaited. Instead rewrite
+                // the right as its own scope: nested operand `await`s are hoisted
+                // into a block that executes only when the right is reached
+                // (`{ var t = await b; pred(t) }`), keeping any surviving `await`
+                // at a statement-level position the async state machine can
+                // suspend at. A bare `a && await b` stays exactly that — no
+                // wrapper. This preserves both evaluation order and the
+                // short-circuit suspension frequency (`docs/21` §4).
                 let left = atomize(*left, pre);
-                let right = rewrite_isolated(*right);
+                let right = rewrite_scope(*right);
                 ExprKind::Binary { op, op_span, left: Box::new(left), right: Box::new(right) }
             } else {
                 let mut ops = atomize_seq(vec![*left, *right], pre);
@@ -389,8 +407,15 @@ fn rewrite(e: Expr, pre: &mut Vec<Stmt>) -> Expr {
             ExprKind::Loop(b)
         }
         ExprKind::While { cond, mut body } => {
-            // The condition runs every iteration, so an `await` there cannot be
-            // hoisted out — leave it (the backend rejects it). Recurse the body.
+            // The condition is re-evaluated on every iteration, so an `await`
+            // there must NOT be hoisted out of the loop — that would change both
+            // *when* and *how often* the future is awaited. Rewrite the condition
+            // as its own scope instead: nested operand `await`s are hoisted into
+            // a block that runs each iteration (`while { var t = await b; p(t) }`),
+            // so a surviving `await` sits at a statement-level position the state
+            // machine can suspend at, suspending exactly once per iteration. A
+            // bare `while await c { … }` stays exactly that (`docs/21` §4).
+            let cond = Box::new(rewrite_scope(*cond));
             process_block(&mut body);
             ExprKind::While { cond, body }
         }
@@ -495,21 +520,6 @@ fn rewrite_scope(body: Expr) -> Expr {
     let mut pre = Vec::new();
     let body = rewrite(body, &mut pre);
     wrap_with_pre(body, pre)
-}
-
-/// Process an expression that must NOT lift `await`s into the enclosing `pre`
-/// (a conditional position: `&&`/`||` right operand). If rewriting it would
-/// hoist anything, keep the original so the backend reports the unsupported
-/// nested-`await` position instead of us changing evaluation semantics.
-fn rewrite_isolated(e: Expr) -> Expr {
-    let orig = e.clone();
-    let mut pre = Vec::new();
-    let rewritten = rewrite(e, &mut pre);
-    if pre.is_empty() {
-        rewritten
-    } else {
-        orig
-    }
 }
 
 /// If `pre` is non-empty, wrap `value` in a block `{ pre…; value }` so the
@@ -649,15 +659,162 @@ fn contains_await(e: &Expr) -> bool {
         }),
         ExprKind::Return(v) | ExprKind::Break(v) => v.as_ref().is_some_and(|e| contains_await(e)),
 
-        // Control-flow blocks/conditions: only the unconditional condition /
-        // scrutinee is relevant to *this* node's operand decisions; branch
-        // bodies are handled by recursing into them during rewriting. We report
-        // `true` if the condition itself awaits so the node is processed.
-        ExprKind::If { cond, .. } => contains_await(cond),
-        ExprKind::Match { scrutinee, .. } => contains_await(scrutinee),
-        ExprKind::While { cond, .. } => contains_await(cond),
-        ExprKind::For { .. }
-        | ExprKind::Loop(_)
-        | ExprKind::Block(_) => false,
+        // Control-flow expressions used as *operands* carry their inner `await`s
+        // with them. `contains_await` drives the atomization of unconditional
+        // operands (call args, arithmetic operands, …), so it must see an `await`
+        // anywhere a same-scope state machine would suspend — including inside a
+        // branch, arm, or loop body. Detecting it lets the operand be hoisted to
+        // a preceding statement-level `var`, which keeps every `await` at a
+        // position with no sibling temporary live across the suspend. (Whether to
+        // hoist *out of* a conditional position is decided structurally in
+        // `rewrite`, never here — so reporting `true` is always safe.) A
+        // `for await` loop suspends each iteration with no explicit `await` node,
+        // so it counts too.
+        ExprKind::If { cond, then_block, else_branch } => {
+            contains_await(cond)
+                || block_contains_await(then_block)
+                || else_branch.as_ref().is_some_and(else_contains_await)
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            contains_await(scrutinee)
+                || arms.iter().any(|a| {
+                    a.guard.as_ref().is_some_and(contains_await) || contains_await(&a.body)
+                })
+        }
+        ExprKind::While { cond, body } => contains_await(cond) || block_contains_await(body),
+        ExprKind::Loop(b) | ExprKind::Block(b) => block_contains_await(b),
+        ExprKind::For { in_async, iter, body, .. } => {
+            *in_async || contains_await(iter) || block_contains_await(body)
+        }
+    }
+}
+
+/// Whether any statement or the trailing expression of `block` contains a
+/// same-scope `await` (stopping at nested closures / `async {}` blocks, like
+/// [`contains_await`]). Nested `Item`s are independent definitions, not part of
+/// this state machine.
+fn block_contains_await(block: &Block) -> bool {
+    block.stmts.iter().any(|s| match &s.kind {
+        StmtKind::Var(v) => contains_await(&v.init),
+        StmtKind::Assign { target, value } => contains_await(target) || contains_await(value),
+        StmtKind::Expr(e) => contains_await(e),
+        StmtKind::Item(_) => false,
+    }) || block.trailing.as_ref().is_some_and(|t| contains_await(t))
+}
+
+/// Whether an `else` branch (a chained `else if` or an `else { … }` block)
+/// contains a same-scope `await`.
+fn else_contains_await(e: &ElseBranch) -> bool {
+    match e {
+        ElseBranch::If(inner) => contains_await(inner),
+        ElseBranch::Block(b) => block_contains_await(b),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{lex, parse, FileId};
+
+    /// Parse `src`, run `hoist_awaits`, and return the printed AST.
+    fn hoisted(src: &str) -> String {
+        let (tokens, lex_errs) = lex(src, FileId(0));
+        assert!(lex_errs.is_empty(), "lex errors: {lex_errs:?}");
+        let (mut module, parse_errs) = parse(src, &tokens);
+        assert!(parse_errs.is_empty(), "parse errors: {parse_errs:?}");
+        hoist_awaits(&mut module);
+        crate::ast_print::print_module(&module)
+    }
+
+    /// A bare `await` directly in the right operand of `&&` is the canonical
+    /// statement-level form once codegen reaches it — it is preserved verbatim,
+    /// neither hoisted out (which would make it unconditional) nor wrapped.
+    #[test]
+    fn and_rhs_direct_await_is_preserved() {
+        let out = hoisted(
+            "function f(): Future<bool> async { var r = cond() && await g(); r }",
+        );
+        assert!(out.contains("cond() && (await g())"), "got:\n{out}");
+        // No hoist temporary was introduced.
+        assert!(!out.contains("__await_"), "should not hoist a direct rhs await:\n{out}");
+    }
+
+    /// An `await` *nested inside* the right operand is hoisted into a block that
+    /// only runs when the operand is reached — the `await` stays inside the
+    /// short-circuit, never lifted before the `&&`.
+    #[test]
+    fn and_rhs_nested_await_is_wrapped_in_a_block() {
+        let out = hoisted(
+            "function f(): Future<bool> async { var r = cond() && ((await g()) == 5); r }",
+        );
+        // The hoist binding lives *after* the `&&`, inside a block on the rhs.
+        let and_pos = out.find("&&").expect("has &&");
+        let hoist_pos = out.find("= (await g())").expect("hoisted await");
+        assert!(hoist_pos > and_pos, "await must be hoisted *inside* the rhs, not before it:\n{out}");
+        assert!(out.contains("&& {"), "rhs should be a block:\n{out}");
+        assert!(out.contains("__await_"), "a temporary was introduced:\n{out}");
+    }
+
+    /// The left operand of `&&` is unconditional, so its `await` IS hoisted out
+    /// to a preceding statement (it always runs when the `&&` is evaluated).
+    #[test]
+    fn and_left_await_is_hoisted_out() {
+        let out = hoisted(
+            "function f(): Future<bool> async { var r = (await a()) && b(); r }",
+        );
+        let hoist_pos = out.find("= (await a())").expect("hoisted await");
+        let r_pos = out.find("var r =").expect("var r");
+        assert!(hoist_pos < r_pos, "left await must be hoisted before `var r`:\n{out}");
+        // The left operand is replaced by a reference to the temporary.
+        assert!(out.contains("__await_") && out.contains("&& b()"), "left becomes the temporary:\n{out}");
+    }
+
+    /// `||` behaves symmetrically: the right operand is scoped.
+    #[test]
+    fn or_rhs_nested_await_is_wrapped_in_a_block() {
+        let out = hoisted(
+            "function f(): Future<bool> async { var r = cond() || ((await g()) == 5); r }",
+        );
+        assert!(out.contains("|| {"), "rhs should be a block:\n{out}");
+        assert!(out.contains("= (await g())"), "got:\n{out}");
+    }
+
+    /// A bare `await` as a whole `while` condition is preserved verbatim.
+    #[test]
+    fn while_cond_direct_await_is_preserved() {
+        let out = hoisted(
+            "function f(): Future<null> async { while await c() { work(); } }",
+        );
+        assert!(out.contains("while await c()"), "got:\n{out}");
+        assert!(!out.contains("__await_"), "should not hoist a direct cond await:\n{out}");
+    }
+
+    /// An `await` nested inside a `while` condition is hoisted into a block that
+    /// is re-evaluated each iteration — never lifted out of the loop.
+    #[test]
+    fn while_cond_nested_await_is_wrapped_in_a_block() {
+        let out = hoisted(
+            "function f(): Future<null> async { while (await c()) < 3 { work(); } }",
+        );
+        assert!(out.contains("while {"), "cond should become a block:\n{out}");
+        // The hoisted binding is *inside* the loop's condition scope.
+        let while_pos = out.find("while {").expect("while block");
+        let hoist_pos = out.find("= (await c())").expect("hoisted await");
+        assert!(hoist_pos > while_pos, "await must stay inside the cond block:\n{out}");
+    }
+
+    /// `contains_await` sees through control-flow bodies, so an `await` hidden in
+    /// an `if` branch used as a call argument is hoisted to a statement-level
+    /// temporary (no sibling temporary is then live across the suspend).
+    #[test]
+    fn await_in_if_branch_operand_is_hoisted() {
+        let out = hoisted(
+            "function f(): Future<null> async { use(g(), if cond() { await a() } else { 0 }); }",
+        );
+        // The whole `if` is hoisted into a temporary before the call.
+        assert!(out.contains("__await_"), "if-branch await operand should be hoisted:\n{out}");
+        let hoist_pos = out.find("__await_").expect("hoist");
+        let call_pos = out.find("use(").expect("call");
+        assert!(hoist_pos < call_pos, "the if operand must be hoisted before the call:\n{out}");
     }
 }

@@ -1,0 +1,19 @@
+//@ kind: run
+//@ description: an `await` in the right operand of `||` runs only when the left operand is false — short-circuiting suppresses the awaited side effect (docs/21 §4)
+//@ stdout:
+//~ D
+//~ c=true d=true
+import { println, print } from "std:io";
+import { Future } from "core:prelude";
+import { yield_now } from "std:async";
+function side(tag: str, b: bool): Future<bool> async {
+  await yield_now();
+  print(tag);
+  b
+}
+function main(): Future<null> async {
+  var c = true || await side("C", true);
+  var d = false || await side("D", true);
+  println("");
+  println("c=${c} d=${d}");
+}

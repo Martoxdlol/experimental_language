@@ -2650,8 +2650,22 @@ fn h_scan_value_await(e: &hir::Expr, out: &mut Vec<Span>) {
         K::Adjust { expr, .. } | K::Return(Some(expr)) | K::Break(Some(expr)) => {
             h_scan_value_await(expr, out)
         }
+        // Short-circuit `&&`/`||`: the left operand is unconditional and ANF has
+        // already hoisted any `await` it carried out to a preceding statement, so
+        // it is `await`-free here. The right operand runs only conditionally and
+        // keeps its `await` (directly, or inside an ANF-introduced block) — that
+        // `await` is a genuine suspend site, so recurse into it (`docs/21` §4).
+        K::Binary { op: hir::BinaryOp::And | hir::BinaryOp::Or, right, .. } => {
+            h_scan_value_await(right, out)
+        }
         K::Block(b) | K::Loop(b) => h_scan_stmt_awaits(b, out),
-        K::While { body, .. } => h_scan_stmt_awaits(body, out),
+        // A `while` condition is re-evaluated each iteration; an `await` there
+        // suspends once per iteration. ANF rewrote the condition as its own scope,
+        // so its `await` sits at a statement-level position — register it too.
+        K::While { cond, body } => {
+            h_scan_value_await(cond, out);
+            h_scan_stmt_awaits(body, out);
+        }
         K::For { in_async, iter, body, .. } => {
             if *in_async {
                 out.push(iter.span);
@@ -2704,7 +2718,16 @@ fn h_scan_for_state_expr(e: &hir::Expr, out: &mut Vec<Span>) {
             h_scan_for_state(body, out);
         }
         K::Block(b) | K::Loop(b) => h_scan_for_state(b, out),
-        K::While { body, .. } => h_scan_for_state(body, out),
+        // The condition is its own scope after ANF and may host a sync `for` loop
+        // whose body awaits (its iteration state must survive the suspend), so
+        // scan it as well as the body.
+        K::While { cond, body } => {
+            h_scan_for_state_expr(cond, out);
+            h_scan_for_state(body, out);
+        }
+        K::Binary { op: hir::BinaryOp::And | hir::BinaryOp::Or, right, .. } => {
+            h_scan_for_state_expr(right, out)
+        }
         K::Adjust { expr, .. } | K::Return(Some(expr)) | K::Break(Some(expr)) => {
             h_scan_for_state_expr(expr, out)
         }

@@ -2862,19 +2862,160 @@ fn async_closure_as_higher_order_argument() {
 }
 
 #[test]
-fn async_await_in_short_circuit_operand_is_rejected() {
-    // An `await` in the *right* operand of `&&`/`||` is conditional; hoisting it
-    // would change evaluation. It is left in place and reported clearly rather
-    // than miscompiled.
-    let src = "function tf(): Future<bool> async { true }\n\
-               function compute(): Future<bool> async {\n\
-                 var r = true && await tf();\n\
-                 r\n\
+fn async_await_in_and_right_operand_short_circuits() {
+    // `await` in the *right* operand of `&&` is a genuine suspend point that runs
+    // only when the left operand is `true` (`docs/21` §4). The future — and the
+    // side effect inside it — must NOT run when the left short-circuits.
+    let src = "function side(tag: str, b: bool): Future<bool> async {\n\
+                 await yield_now();\n\
+                 print(tag);\n\
+                 b\n\
                }\n\
+               function main(): Future<null> async {\n\
+                 var a = false && await side(\"A\", true);\n\
+                 var b = true && await side(\"B\", true);\n\
+                 println(\"|${a}|${b}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    // Only "B" prints (A short-circuits); the operator results are false / true.
+    assert_eq!(nat, "B|false|true\n");
+}
+
+#[test]
+fn async_await_in_or_right_operand_short_circuits() {
+    // `await` in the right operand of `||` runs only when the left is `false`.
+    let src = "function side(tag: str, b: bool): Future<bool> async {\n\
+                 await yield_now();\n\
+                 print(tag);\n\
+                 b\n\
+               }\n\
+               function main(): Future<null> async {\n\
+                 var c = true || await side(\"C\", true);\n\
+                 var d = false || await side(\"D\", true);\n\
+                 println(\"|${c}|${d}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    // Only "D" prints (C short-circuits); results are true / true.
+    assert_eq!(nat, "D|true|true\n");
+}
+
+#[test]
+fn async_nested_await_in_short_circuit_operand_is_scoped() {
+    // An `await` nested *inside* the right operand (not the whole operand) is
+    // hoisted into a block that only runs when the operand is reached — it never
+    // becomes unconditional.
+    let src = "function n(tag: str, v: i64): Future<i64> async {\n\
+                 await yield_now();\n\
+                 print(tag);\n\
+                 v\n\
+               }\n\
+               function main(): Future<null> async {\n\
+                 var x = false && ((await n(\"X\", 3)) + 1 == 4);\n\
+                 var y = true && ((await n(\"Y\", 3)) + 1 == 4);\n\
+                 println(\"|${x}|${y}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    // Only "Y" prints; x is false (short-circuit), y is true.
+    assert_eq!(nat, "Y|false|true\n");
+}
+
+#[test]
+fn async_await_in_while_condition_suspends_each_iteration() {
+    // An `await` in a `while` condition suspends once per iteration: the
+    // condition future is polled afresh every time the loop tests it (`docs/21`).
+    let src = "function probe(i: i64): Future<i64> async {\n\
+                 await yield_now();\n\
+                 print(\"c\");\n\
+                 i\n\
+               }\n\
+               function main(): Future<null> async {\n\
+                 var i = 0;\n\
+                 while (await probe(i)) < 3 {\n\
+                   i = i + 1;\n\
+                 }\n\
+                 println(\"|i=${i}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    // The condition runs for i = 0,1,2,3 (four polls), then exits at i = 3.
+    assert_eq!(nat, "cccc|i=3\n");
+}
+
+#[test]
+fn async_await_in_while_condition_short_circuit_and_body_await() {
+    // A `while` condition mixing short-circuit `&&` with a nested `await`, plus a
+    // body that also awaits: the condition await only runs when the left is true.
+    let src = "function probe(tag: str, i: i64): Future<i64> async {\n\
+                 await yield_now();\n\
+                 print(tag);\n\
+                 i\n\
+               }\n\
+               function main(): Future<null> async {\n\
+                 var i = 0;\n\
+                 var sum = 0;\n\
+                 while (i < 3) && ((await probe(\"c\", i)) >= 0) {\n\
+                   sum = sum + (await probe(\"b\", i));\n\
+                   i = i + 1;\n\
+                 }\n\
+                 println(\"|sum=${sum}|i=${i}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    // i=0,1,2: "cb" each; i=3: `i < 3` is false so the cond await never runs.
+    assert_eq!(nat, "cbcbcb|sum=3|i=3\n");
+}
+
+#[test]
+fn async_await_in_short_circuit_operand_under_unary() {
+    // The block ANF introduces for a nested-`await` operand can sit under another
+    // operator (`!`); the suspend site is still discovered and saved correctly.
+    let src = "function n(v: i64): Future<i64> async {\n\
+                 await yield_now();\n\
+                 v\n\
+               }\n\
+               function main(): Future<null> async {\n\
+                 var z = !(true && ((await n(5)) > 0));\n\
+                 println(\"${z}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    assert_eq!(nat, "false\n");
+}
+
+#[test]
+fn async_await_in_sync_function_still_rejected() {
+    // `await` is still only legal inside an async body — a short-circuit operand
+    // does not change that.
+    let src = "function tf(): Future<bool> async { true }\n\
+               function compute(): bool { true && await tf() }\n\
                function main(): Future<null> async { var _ = await compute(); }";
     let (_out, err, ok) = lang("run", src);
     assert!(!ok);
-    assert!(err.contains("`await` in this position is not yet supported"), "got: {err}");
+    assert!(
+        err.contains("`await` is only allowed inside an `async`"),
+        "got: {err}"
+    );
 }
 
 #[test]
