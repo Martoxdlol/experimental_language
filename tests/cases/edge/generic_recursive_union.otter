@@ -1,0 +1,18 @@
+//@ kind: run
+//@ description: a recursive generic struct in a union (Node<T> | null) summed by recursion + match — exercises monomorphization of a self-referential generic type
+//@ stdout:
+//~ 6
+import { println } from "std:io";
+struct Node<T> { value: T, next: Node<T> | null }
+function sum(n: Node<i64> | null): i64 {
+  match n {
+    Node<i64> node => node.value + sum(node.next),
+    null => 0,
+  }
+}
+function main() {
+  var c = Node { value: 3, next: null };
+  var b = Node { value: 2, next: c };
+  var a = Node { value: 1, next: b };
+  println("${sum(a)}");
+}
