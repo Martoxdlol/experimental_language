@@ -15,8 +15,8 @@ use tower_lsp::{Client, LanguageServer};
 use crate::analysis::{
     builtin_signature, dot_completion_context, float_instance_methods, float_static_methods,
     int_instance_methods, keyword_texts, list_intrinsic_methods, map_intrinsic_methods,
-    offset_at, primitive_static_methods, span_to_range, str_intrinsic_methods, Compiled,
-    LineIndex, TokenClass, DOC_FILE,
+    offset_at, position_at, primitive_static_methods, span_to_range, str_intrinsic_methods,
+    Compiled, LineIndex, TokenClass, DOC_FILE,
 };
 use compiler::sema::symbols::DefKind;
 use compiler::ty::TyKind;
@@ -135,6 +135,7 @@ impl LanguageServer for Backend {
                 references_provider: Some(OneOf::Left(true)),
                 document_symbol_provider: Some(OneOf::Left(true)),
                 rename_provider: Some(OneOf::Left(true)),
+                document_formatting_provider: Some(OneOf::Left(true)),
                 completion_provider: Some(CompletionOptions {
                     trigger_characters: Some(vec![".".into()]),
                     ..Default::default()
@@ -409,6 +410,30 @@ impl LanguageServer for Backend {
         };
         let symbols = document_symbols(&c);
         Ok(Some(DocumentSymbolResponse::Nested(symbols)))
+    }
+
+    async fn formatting(
+        &self,
+        params: DocumentFormattingParams,
+    ) -> Result<Option<Vec<TextEdit>>> {
+        let Some(c) = self.compile(&params.text_document.uri) else {
+            return Ok(None);
+        };
+        let formatted = compiler::fmt::format_source(&c.text);
+        if formatted == c.text {
+            return Ok(Some(Vec::new())); // already formatted — no edits
+        }
+        // Safety: a reformat may only change whitespace, never code. If the token
+        // stream would differ, decline to format rather than risk corruption.
+        if !compiler::fmt::token_stream_preserved(&c.text, &formatted) {
+            return Ok(None);
+        }
+        // Replace the whole document in one edit.
+        let end = position_at(&c.text, c.text.len());
+        Ok(Some(vec![TextEdit {
+            range: Range { start: Position::new(0, 0), end },
+            new_text: formatted,
+        }]))
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {

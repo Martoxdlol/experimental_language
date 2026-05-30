@@ -3,6 +3,7 @@
 
 pub mod ast;
 pub mod diag;
+pub mod fmt;
 pub mod hir;
 pub mod ids;
 pub mod imports;

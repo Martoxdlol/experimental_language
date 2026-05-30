@@ -1657,3 +1657,33 @@ function main() {
         let _ = whole;
     }
 }
+
+#[cfg(test)]
+mod fmt_integration_tests {
+    use super::*;
+
+    #[test]
+    fn formatting_reindents_and_is_token_safe() {
+        // The LSP formatting handler formats the open buffer via `compiler::fmt`
+        // and returns a whole-document edit. Exercise that path's pieces.
+        let src = "function main() {\nvar x = 1;\n  if x > 0 {\nx = 2;\n}\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function main() {\n  var x = 1;\n  if x > 0 {\n    x = 2;\n  }\n}\n"
+        );
+        // The reformat must be token-preserving (the handler declines otherwise).
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+        // The whole-document edit end position is the text's end.
+        let end = position_at(&c.text, c.text.len());
+        assert_eq!(end.line, 6); // six newlines → line index 6 at EOF
+    }
+
+    #[test]
+    fn formatting_already_formatted_is_noop() {
+        let src = "function main() {\n  var x = 1;\n}\n";
+        let c = Compiled::new(src.into());
+        assert_eq!(compiler::fmt::format_source(&c.text), c.text);
+    }
+}

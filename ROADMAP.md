@@ -1654,7 +1654,12 @@ the **custom GC allocator (MMTk) the prerequisite** for concurrent collection.
       skipping hidden/`target`); `--check` lists unformatted files and exits
       non-zero (CI gate). Idempotent; verified across all 22 examples (0 token-
       stream violations; formatted output runs identically). 5 unit + 1 CLI test.
-      Follow-up: token-level intra-line spacing + line wrapping.
+      Follow-up: token-level intra-line spacing + line wrapping. The formatter
+      lives in `compiler::fmt` (shared), and the **LSP exposes it as a
+      `document_formatting` provider** (format-on-save in the editor): the handler
+      formats the open buffer, verifies the token-preservation invariant, and
+      returns a whole-document edit (declining if it would change tokens). 2 LSP
+      tests; the VS Code extension picks the capability up automatically.
 - [x] **`otter_fusion repl`** (`docs/23`): a line-oriented read-eval-print loop
       (`crates/cli/repl.rs`). Each line is classified — a **declaration**
       (`function`/`struct`/…/`test`/`bench`) accumulates as a top-level item; a
