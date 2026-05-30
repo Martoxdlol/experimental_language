@@ -147,10 +147,10 @@ impl<'a> Checker<'a> {
                 Some((_, fty)) => {
                     let fty = *fty;
                     if !seen.insert(fi.name.name.clone()) {
-                        self.emit(fi.name.span, SemaErrorKind::Message(format!(
-                            "field `{}` is set more than once in this `{}` literal",
-                            fi.name.name, path.name.name
-                        )));
+                        self.emit(fi.name.span, SemaErrorKind::DuplicateField {
+                            struct_name: path.name.name.clone(),
+                            name: fi.name.name.clone(),
+                        });
                     }
                     match &fi.value {
                         Some(v) => {
@@ -179,9 +179,10 @@ impl<'a> Checker<'a> {
                         }
                     }
                 }
-                None => self.emit(fi.span, SemaErrorKind::Message(format!(
-                    "struct `{}` has no field `{}`", path.name.name, fi.name.name
-                ))),
+                None => self.emit(fi.span, SemaErrorKind::UnknownStructField {
+                    struct_name: path.name.name.clone(),
+                    name: fi.name.name.clone(),
+                }),
             }
         }
 
@@ -211,9 +212,10 @@ impl<'a> Checker<'a> {
                 } else {
                     for (n, _) in &declared {
                         if !seen.contains(n) {
-                            self.emit(span, SemaErrorKind::Message(format!(
-                                "missing field `{}` in `{}`", n, path.name.name
-                            )));
+                            self.emit(span, SemaErrorKind::MissingField {
+                                struct_name: path.name.name.clone(),
+                                name: n.clone(),
+                            });
                         }
                     }
                 }
@@ -313,9 +315,10 @@ impl<'a> Checker<'a> {
                 }
             }
         }
-        self.emit(name.span, SemaErrorKind::Message(format!(
-            "no field `{}` on type `{}`", name.name, self.display(rty)
-        )));
+        self.emit(name.span, SemaErrorKind::NoField {
+            ty: self.display(rty),
+            name: name.name.clone(),
+        });
         self.tcx.error
     }
 

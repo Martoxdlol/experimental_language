@@ -1693,20 +1693,27 @@ the **custom GC allocator (MMTk) the prerequisite** for concurrent collection.
       State persistence + function definitions + error recovery verified by a
       stdin-piped CLI test.
 - [x] **`otter_fusion explain` + diagnostic codes** (`docs/23`): the structured
-      semantic-error kinds carry stable codes `E0001`–`E0012`
+      semantic-error kinds carry stable codes `E0001`–`E0019`
       (`SemaErrorKind::code`), surfaced in diagnostics as `error[E0006]: …`.
       `otter_fusion explain <code>` (case-insensitive) prints a long-form
-      explanation; an unknown code lists the available ones. Free-form `Message`
-      errors stay uncoded (a future refactor would promote common ones to coded
-      kinds). 1 CLI test (coded diagnostic + explain + unknown).
+      explanation; an unknown code lists the available ones. The recurring
+      free-form `Message` categories were **promoted to coded kinds**
+      (`E0013`–`E0019`): no-such-method, no-such-field, unknown/missing/duplicate
+      struct-literal field, non-exhaustive match, and `break`/`continue` outside
+      a loop — each a structured `SemaErrorKind` variant reproducing the exact
+      prior message text, with an `explain` entry. Truly one-off diagnostics
+      stay free-form `Message` (idiomatic — not every diagnostic needs a stable
+      index, cf. Rust). 2 CLI tests (E0006 + the 7 promoted codes round-tripped
+      through `check` and `explain`) + 4 checker unit tests assert the kinds.
 - [x] **`otter_fusion expand`** (`docs/23`): parse the entry file and print it
       back through the AST source-printer (`compiler::ast_print`, above).
       Best-effort on parse errors; output re-parses to the same AST and
       type-checks identically (certified across all 22 examples). 3 e2e tests.
+- [x] **Promote recurring `Message` errors to coded kinds** — done (see the
+      `explain` entry above; `E0013`–`E0019`).
 - [ ] Remaining: manifest dependencies (`pkg:`) live registry network
-      round-trips and sysroot/stdlib; promoting free-form `Message` errors to
-      coded kinds (widening `explain` coverage); concurrent-GC reclamation
-      (custom allocator / MMTk — see GC §); and the remaining `docs/23` surface.
+      round-trips and sysroot/stdlib; concurrent-GC reclamation (custom
+      allocator / MMTk — see GC §); and the remaining `docs/23` surface.
 
 ## Current vertical-slice target
 Smallest end-to-end program that exercises the full pipeline, expanded each

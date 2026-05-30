@@ -93,9 +93,10 @@ impl<'a> Checker<'a> {
             for a in args {
                 self.check_expr(a, None);
             }
-            self.emit(name.span, SemaErrorKind::Message(format!(
-                "no method `{}` on type `{}`", name.name, self.display(rty)
-            )));
+            self.emit(name.span, SemaErrorKind::NoMethod {
+                ty: self.display(rty),
+                name: name.name.clone(),
+            });
             return self.tcx.error;
         };
         self.record_res(callee.span, ValueRes::Method(method_def), self.tcx.error);

@@ -4581,3 +4581,35 @@ fn explain_prints_code_explanation_and_diagnostics_carry_codes() {
     assert!(!bad.status.success());
     assert!(String::from_utf8_lossy(&bad.stderr).contains("available codes"));
 }
+
+#[test]
+fn promoted_member_diagnostics_carry_codes() {
+    // The "no such member" family (method/field/struct-literal) now carries
+    // stable codes, and each has an `explain` entry.
+    let cases = [
+        // (source, expected diagnostic code)
+        ("struct P { x: i64 }\nfunction main() { var p = P { x: 1 }; p.nope(); }", "E0013"),
+        ("struct P { x: i64 }\nfunction main() { var p = P { x: 1 }; var y = p.y; }", "E0014"),
+        ("struct P { x: i64 }\nfunction main() { var p = P { x: 1, z: 2 }; }", "E0015"),
+        ("struct P { x: i64, y: i64 }\nfunction main() { var p = P { x: 1 }; }", "E0016"),
+        ("struct P { x: i64 }\nfunction main() { var p = P { x: 1, x: 2 }; }", "E0017"),
+        ("function f(v: i64 | str): i64 { match v { i64 n => n } }\nfunction main() {}", "E0018"),
+        ("function main() { break; }", "E0019"),
+    ];
+    for (src, code) in cases {
+        let (_o, err, ok) = lang("check", src);
+        assert!(!ok, "expected `{code}` source to fail:\n{src}");
+        assert!(
+            err.contains(&format!("error[{code}]")),
+            "diagnostic should carry {code}; got:\n{err}"
+        );
+        // `explain <code>` succeeds and echoes the code.
+        let out = Command::new(env!("CARGO_BIN_EXE_otter_fusion"))
+            .arg("explain").arg(code).output().unwrap();
+        assert!(out.status.success(), "explain {code} failed");
+        assert!(
+            String::from_utf8_lossy(&out.stdout).contains(code),
+            "explain {code} should echo the code"
+        );
+    }
+}

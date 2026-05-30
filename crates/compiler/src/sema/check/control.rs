@@ -508,14 +508,14 @@ impl<'a> Checker<'a> {
                 variants.iter().copied().filter(|v| !covered.contains(v)).collect();
             if !missing.is_empty() {
                 let names: Vec<String> = missing.iter().map(|v| self.display(*v)).collect();
-                self.emit(span, SemaErrorKind::Message(format!(
-                    "non-exhaustive match: missing {}", names.join(", ")
-                )));
+                self.emit(span, SemaErrorKind::NonExhaustiveMatch {
+                    detail: format!("missing {}", names.join(", ")),
+                });
             }
         } else {
-            self.emit(span, SemaErrorKind::Message(
-                "non-exhaustive match: add a `_` arm".into(),
-            ));
+            self.emit(span, SemaErrorKind::NonExhaustiveMatch {
+                detail: "add a `_` arm".into(),
+            });
         }
     }
 

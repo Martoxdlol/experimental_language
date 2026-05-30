@@ -199,7 +199,7 @@
     #[test]
     fn match_non_exhaustive_union_errors() {
         let errs = check("function f(x: i64 | str | bool): i64 { match x { i64 n => n, str s => 0 } }");
-        assert!(errs.iter().any(|e| matches!(&e.kind, SemaErrorKind::Message(m) if m.contains("non-exhaustive"))));
+        assert!(errs.iter().any(|e| matches!(e.kind, SemaErrorKind::NonExhaustiveMatch { .. })));
     }
 
     #[test]
@@ -265,7 +265,7 @@
             "struct P { x: i64 }\n\
              function f() { var p = P { x: 1 }; p.nope(); }",
         );
-        assert!(errs.iter().any(|e| matches!(&e.kind, SemaErrorKind::Message(m) if m.contains("no method"))));
+        assert!(errs.iter().any(|e| matches!(e.kind, SemaErrorKind::NoMethod { .. })));
     }
 
     #[test]
@@ -285,13 +285,13 @@
     #[test]
     fn struct_missing_field_errors() {
         let errs = check("struct P { x: i64, y: i64 }\nfunction f() { var p = P { x: 1 }; }");
-        assert!(errs.iter().any(|e| matches!(&e.kind, SemaErrorKind::Message(m) if m.contains("missing field"))));
+        assert!(errs.iter().any(|e| matches!(e.kind, SemaErrorKind::MissingField { .. })));
     }
 
     #[test]
     fn struct_unknown_field_errors() {
         let errs = check("struct P { x: i64 }\nfunction f() { var p = P { x: 1, z: 2 }; }");
-        assert!(errs.iter().any(|e| matches!(&e.kind, SemaErrorKind::Message(m) if m.contains("no field"))));
+        assert!(errs.iter().any(|e| matches!(e.kind, SemaErrorKind::UnknownStructField { .. })));
     }
 
     #[test]

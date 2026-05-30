@@ -1104,9 +1104,9 @@ impl<'a> Checker<'a> {
                     None => self.tcx.null,
                 };
                 match self.loops.last_mut() {
-                    None => self.emit(expr.span, SemaErrorKind::Message(
-                        "`break` outside of a loop".into(),
-                    )),
+                    None => self.emit(expr.span, SemaErrorKind::LoopControlOutsideLoop {
+                        kw: "break",
+                    }),
                     Some(frame) => {
                         if value.is_some() && !frame.is_loop {
                             self.emit(expr.span, SemaErrorKind::Message(
@@ -1121,9 +1121,9 @@ impl<'a> Checker<'a> {
             }
             ExprKind::Continue => {
                 if self.loops.is_empty() {
-                    self.emit(expr.span, SemaErrorKind::Message(
-                        "`continue` outside of a loop".into(),
-                    ));
+                    self.emit(expr.span, SemaErrorKind::LoopControlOutsideLoop {
+                        kw: "continue",
+                    });
                 }
                 self.tcx.never
             }

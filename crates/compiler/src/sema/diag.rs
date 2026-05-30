@@ -30,6 +30,21 @@ pub enum SemaErrorKind {
     ReturnOutsideFunction,
     /// An `as` cast between types with no defined conversion (`docs/12` §2).
     InvalidCast { from: String, to: String },
+    /// A method call whose name resolves to nothing on the receiver type.
+    NoMethod { ty: String, name: String },
+    /// A field access whose name is not a field of the receiver type.
+    NoField { ty: String, name: String },
+    /// A struct literal that names a field the struct does not declare.
+    UnknownStructField { struct_name: String, name: String },
+    /// A struct literal that omits a required field.
+    MissingField { struct_name: String, name: String },
+    /// A field initialized more than once in a single struct literal.
+    DuplicateField { struct_name: String, name: String },
+    /// A `match` that does not cover every possible value (`docs/08` §4).
+    /// `detail` is the human hint (e.g. `missing A, B` or ``add a `_` arm``).
+    NonExhaustiveMatch { detail: String },
+    /// `break` or `continue` used outside of any enclosing loop.
+    LoopControlOutsideLoop { kw: &'static str },
     /// Generic, free-form message for cases without a dedicated kind yet.
     Message(String),
 }
@@ -74,6 +89,13 @@ impl SemaErrorKind {
             ArgCount { .. } => "E0010",
             ReturnOutsideFunction => "E0011",
             InvalidCast { .. } => "E0012",
+            NoMethod { .. } => "E0013",
+            NoField { .. } => "E0014",
+            UnknownStructField { .. } => "E0015",
+            MissingField { .. } => "E0016",
+            DuplicateField { .. } => "E0017",
+            NonExhaustiveMatch { .. } => "E0018",
+            LoopControlOutsideLoop { .. } => "E0019",
             Message(_) => return None,
         })
     }
@@ -112,6 +134,20 @@ impl fmt::Display for SemaErrorKind {
             InvalidCast { from, to } => {
                 write!(f, "cannot cast `{from}` to `{to}`")
             }
+            NoMethod { ty, name } => write!(f, "no method `{name}` on type `{ty}`"),
+            NoField { ty, name } => write!(f, "no field `{name}` on type `{ty}`"),
+            UnknownStructField { struct_name, name } => {
+                write!(f, "struct `{struct_name}` has no field `{name}`")
+            }
+            MissingField { struct_name, name } => {
+                write!(f, "missing field `{name}` in `{struct_name}`")
+            }
+            DuplicateField { struct_name, name } => write!(
+                f,
+                "field `{name}` is set more than once in this `{struct_name}` literal"
+            ),
+            NonExhaustiveMatch { detail } => write!(f, "non-exhaustive match: {detail}"),
+            LoopControlOutsideLoop { kw } => write!(f, "`{kw}` outside of a loop"),
             Message(m) => f.write_str(m),
         }
     }

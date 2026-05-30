@@ -1199,6 +1199,32 @@ const EXPLANATIONS: &[(&str, &str, &str)] = &[
      "An `as` cast was requested between two types with no defined conversion\n\
       (`docs/12` §2). Only the documented numeric/`str`/pointer/interface\n\
       conversions are permitted."),
+    ("E0013", "no such method",
+     "A method call `recv.name(...)` named a method that the receiver's type does\n\
+      not have (directly, via `extend`, or through an interface bound). Check the\n\
+      spelling, ensure the relevant `extend`/`import` is in scope, and confirm the\n\
+      receiver's type is what you expect."),
+    ("E0014", "no such field",
+     "A field access `recv.name` named a field the receiver's type does not\n\
+      declare. Check the spelling and the receiver's type; only `struct` record\n\
+      fields (and tuple positions via `.0`/`.1`) are accessible this way."),
+    ("E0015", "unknown field in struct literal",
+     "A struct literal `T { ... }` set a field that `T` does not declare. Remove\n\
+      the field or fix its name; the literal may only mention declared fields."),
+    ("E0016", "missing field in struct literal",
+     "A struct literal `T { ... }` omitted a field that `T` requires. Record\n\
+      structs must initialize every field (a `..base` spread can supply the rest);\n\
+      supply the missing field's value."),
+    ("E0017", "duplicate field in struct literal",
+     "A struct literal set the same field more than once. Each field may be\n\
+      initialized at most once; remove the redundant assignment."),
+    ("E0018", "non-exhaustive match",
+     "A `match` does not cover every possible value of the scrutinee (`docs/08`\n\
+      §4). Add arms for the missing cases, or a `_` wildcard arm to catch the\n\
+      rest. There is no implicit fall-through."),
+    ("E0019", "`break`/`continue` outside a loop",
+     "`break` or `continue` was used where there is no enclosing `loop`, `while`,\n\
+      or `for`. Move it inside a loop, or remove it."),
 ];
 
 /// Run `otter_fusion explain <code>` (`docs/23`): print the long-form explanation
