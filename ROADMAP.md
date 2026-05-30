@@ -756,9 +756,20 @@ The tracing GC is functionally complete for single-threaded programs.
       `survivors.push` instead of `dealloc` ⇒ heavy workload runs clean, proving
       over-collection; poison swept payloads with `0xEF` + leak ⇒ the wrongly-
       freed object is read as data (a corrupt `str`/length), so it's a managed
-      data object on a mutator whose published roots missed it. Reverted to the
-      safe gate rather than ship corruption; refactored the trigger into
-      `run_collection` + `park_self` helpers and pinned the findings here.
+      data object on a mutator whose published roots missed it. **Conservative
+      cross-thread stack scanning** (read *every* word of each stopped thread's
+      frame-chain region, a strict superset of the precise safepoint slots) was
+      also tried: it *reduced* hard crashes and turned most failures into
+      *wrong-but-non-crashing* results — but did **not** eliminate the corruption.
+      Since a conservative scan only *adds* roots (it cannot itself corrupt), this
+      proves the missed live pointer is **not on any scanned stack** — it is
+      register-resident at the stop point, or the bug is a genuine data race in
+      the publish/scan handshake. The fix therefore needs **register-aware
+      scanning** (capture each stopped thread's CPU context, e.g.
+      `thread_get_state`, and scan its registers as roots too) or a redesigned
+      handshake (or the MMTk move) — not more stack scanning. Reverted to the
+      safe gate rather than ship corruption; the `run_collection`/`park_self`
+      refactor and these findings are pinned here for that work.
 **Per-thread TLABs** and MMTk/Immix remain the eventual production plan (the
 `gc` interface stays the same). Closing the concurrent-reclamation root-scan gap
 (or swapping in MMTk) is the next GC milestone.
