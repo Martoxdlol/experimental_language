@@ -28,6 +28,7 @@ use pkg::project::ProjectContext;
 
 mod fmt;
 mod lint;
+mod repl;
 
 /// The Otter Fusion toolchain.
 #[derive(Parser)]
@@ -106,6 +107,9 @@ enum Command {
         #[arg(long, hide = true)]
         exact: Option<String>,
     },
+    /// Start an interactive read-eval-print loop (`docs/23`): enter
+    /// declarations, `var` bindings, statements, or expressions line by line.
+    Repl,
     /// Format `.otter` source (`docs/23`): normalize indentation and whitespace.
     /// Conservative — only whitespace changes (verified by re-lexing). Rewrites
     /// files in place; `--check` reports unformatted files and exits non-zero.
@@ -286,6 +290,7 @@ fn main() -> ExitCode {
                 None => run_tests(&path, true),
             }
         }
+        Command::Repl => repl::run(),
         Command::Fmt { file, check } => {
             run_fmt(&file.unwrap_or_else(|| PathBuf::from(".")), check)
         }

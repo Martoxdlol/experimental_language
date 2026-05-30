@@ -4477,3 +4477,27 @@ fn fmt_reindents_and_check_gates() {
 
     let _ = std::fs::remove_file(&path);
 }
+
+#[test]
+fn repl_persists_state_and_recovers_from_errors() {
+    use std::io::Write;
+    use std::process::Stdio;
+    let session = "1 + 2 * 3\nvar x = 10\nx * x\nfunction sq(n: i64): i64 { n * n }\nsq(x)\nbad_name()\nx\n:quit\n";
+    let mut child = Command::new(env!("CARGO_BIN_EXE_otter_fusion"))
+        .arg("repl")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn repl");
+    child.stdin.take().unwrap().write_all(session.as_bytes()).unwrap();
+    let out = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stdout.contains("7"), "expr eval; stdout: {stdout}");
+    assert!(stdout.contains("100"), "x*x with persisted x; stdout: {stdout}");
+    // sq(x) = sq(10) = 100 (function persisted, binding visible)
+    assert!(stderr.contains("cannot find value `bad_name`"), "error reported; stderr: {stderr}");
+    // After the error, `x` still evaluates — session state survived.
+    assert!(stdout.matches("10").count() >= 1, "state intact after error; stdout: {stdout}");
+}

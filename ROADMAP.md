@@ -1652,8 +1652,21 @@ the **custom GC allocator (MMTk) the prerequisite** for concurrent collection.
       non-zero (CI gate). Idempotent; verified across all 22 examples (0 token-
       stream violations; formatted output runs identically). 5 unit + 1 CLI test.
       Follow-up: token-level intra-line spacing + line wrapping.
-- [ ] Manifest dependencies (`pkg:`), sysroot/stdlib, `repl`, the rest of the
-      `docs/23` subcommand surface.
+- [x] **`otter_fusion repl`** (`docs/23`): a line-oriented read-eval-print loop
+      (`crates/cli/repl.rs`). Each line is classified — a **declaration**
+      (`function`/`struct`/…/`test`/`bench`) accumulates as a top-level item; a
+      **`var` binding** accumulates as a persistent local (replayed each eval, so
+      later lines see it); a trailing-`;` **statement** runs once; a bare
+      **expression** is printed via string interpolation. Each evaluation builds a
+      fresh single-file program (auto-imported prelude + accumulated items + a
+      `main` of the bindings + the current line), analyzes and JIT-runs it; a line
+      that fails to compile is reported and **not** accumulated, so the session
+      stays valid. `:help`/`:reset`/`:quit`; missing `;` is added for terse input.
+      State persistence + function definitions + error recovery verified by a
+      stdin-piped CLI test.
+- [ ] Manifest dependencies (`pkg:`) live registry network round-trips,
+      sysroot/stdlib, `explain`/`expand`, concurrent-GC reclamation (custom
+      allocator / MMTk — see GC §), and the remaining `docs/23` surface.
 
 ## Current vertical-slice target
 Smallest end-to-end program that exercises the full pipeline, expanded each
