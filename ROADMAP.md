@@ -1624,12 +1624,15 @@ the **custom GC allocator (MMTk) the prerequisite** for concurrent collection.
       `bench`es. 1 CLI test (timing + separation). `examples/tests.otter`.
 - [x] **`otter_fusion lint`** (`docs/23`): lightweight static lints over the typed
       HIR (no extra inference) — **unused local variables** (a `var` binding never
-      read; parameters and `_`-prefixed names exempt) and **unused private
-      functions** (a non-`pub` free function never called or used as a value;
-      `main`/tests/benches/methods exempt). A single HIR walk (`crates/cli/lint.rs`)
-      collects local reads + def references; diagnostics render to stderr, a count
-      to stdout. Purely informational (a clean compile with warnings still exits
-      zero; a compile *error* fails). 2 CLI tests (flags unused / clean program).
+      read; parameters and `_`-prefixed names exempt), **unused private functions**
+      (a non-`pub` free function never called or used as a value;
+      `main`/tests/benches/methods exempt), and **unreachable code** (a statement
+      after a diverging one — `return`/`break`/`continue` or any `never`-typed
+      expression like `panic`/`exit`, recursing into nested blocks). A single HIR
+      walk (`crates/cli/lint.rs`) collects local reads + def references; diagnostics
+      render to stderr, a count to stdout. Purely informational (a clean compile
+      with warnings still exits zero; a compile *error* fails). 3 CLI tests
+      (unused / clean / unreachable); 0 false positives across all examples.
 - [x] **`otter_fusion fix`** (`docs/23`): safe automatic fixes — currently renames
       each unused local variable to `_name` (inserts `_` at the binding, silencing
       the unused-variable lint without removing code; the var is unused so there

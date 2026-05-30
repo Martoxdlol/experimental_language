@@ -4501,3 +4501,15 @@ fn repl_persists_state_and_recovers_from_errors() {
     // After the error, `x` still evaluates — session state survived.
     assert!(stdout.matches("10").count() >= 1, "state intact after error; stdout: {stdout}");
 }
+
+#[test]
+fn lint_flags_unreachable_code() {
+    // A statement after `return` and after a `panic` (type `never`) is dead.
+    let src = "\
+        function f(): i64 { return 1; var dead = 2; dead }\n\
+        function g() { panic(\"x\"); println(\"never\"); }\n\
+        function main() { println(\"${f()}\"); g(); }\n";
+    let (_out, err, ok) = lang("lint", src);
+    assert!(ok, "lint is informational; err: {err}");
+    assert!(err.matches("unreachable code").count() >= 2, "err: {err}");
+}
