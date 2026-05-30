@@ -763,9 +763,15 @@ The tracing GC is functionally complete for single-threaded programs.
       can safely read fields), moved to a finalize queue, and — after the world
       resumes but still under the GC turn — their `drop` runs, then they are
       freed. Best-effort / unreachability-triggered / unordered, per the spec (no
-      scope-exit hook). JIT + native parity; `examples/drop.otter`; 1 CLI test;
-      564 tests. TODO: generic `Drop` types; channel-close-on-sender-drop +
-      `Receiver: Iterator`; `Shared` lock release on a panicking body.
+      scope-exit hook for *general* managed objects). JIT + native parity;
+      `examples/drop.otter`; 1 CLI test; 564 tests.
+      **Deterministic endpoint release (`docs/16` §8 carve-out) — DONE for channel
+      endpoints:** general `Drop` stays best-effort, but `Sender`/`Receiver` are
+      reference-counted runtime handles released *deterministically* at worker
+      scope exit, so a channel closes on the last-sender drop without a collection
+      — see the Channels entry below (`recv` → `ChannelClosed`, `Receiver:
+      Iterator` terminates). TODO: generic `Drop` types; `Shared` lock release on a
+      panicking body; the general opt-in `@RefCounted` object kind (goals.txt).
 - [~] **Concurrent reclamation — attempted, gated (memory-safe).** Collection is
       still skipped while >1 mutator is live (`maybe_collect`): garbage is retained
       during concurrency and reclaimed after threads join — never freeing a live
@@ -1322,25 +1328,46 @@ and complete with the world-barrier mark-sweep.
       separate async-state-machine bug — a sync `for`+`await` loop losing its
       iteration state across a suspend — now fixed; see the async section.)
       TODO: worker-panic isolation (currently a worker panic aborts the process).
-- [~] **Channels (`docs/20` §2): `channel<T>()`, `send`, `recv`, `try_recv` work.**
+- [x] **Channels (`docs/20` §2): `channel<T>()`, `send`, `recv`, `try_recv`, and
+      deterministic close-on-last-sender-drop + `Receiver: Iterator`.**
       `channel<T>()` (a recognised builtin, like `Thread.spawn`) allocates a
-      runtime channel (`runtime::channels`: a single `Mutex<{queue, waiters}>` per
-      channel — one lock so "empty → register waker" and "enqueue → wake" are
-      atomic, no lost wakeups, no Condvar) and returns a `(Sender<T>, Receiver<T>)`
-      tuple (prelude structs carrying the channel id). `Sender<T>.send(v)`
-      enqueues + wakes any waiter (synchronous, non-blocking).
-      **`Receiver<T>.recv()` is now async + non-blocking**: it yields a
-      `Future<T>` (`lang_chan_recv_future`) so the receiving task *suspends* on an
-      empty channel instead of parking the OS thread; `try_recv(): T | null`
-      polls without blocking. The user surface is just `var v = rx.recv()` (the
-      implicit-async driver suspends/drives it). Queued values are GC-pinned
-      (`add_extra_root`) while in the queue and unpinned on receipt. Endpoints are
-      thread-safe handles, so `Thread.spawn` may capture them (`is_thread_shareable`).
-      Element types are restricted to immutable values for now (no clone-on-send
-      yet). JIT + native parity; `examples/channels.otter`; 2 CLI tests incl. GC
-      stress. TODO: channel close on last-sender-drop (needs `Drop`) so `recv`
-      returns `ChannelClosed` and `Receiver: Iterator` terminates; `channel_mpmc`;
-      bounded channels; move/clone-on-send for non-immutable `T`.
+      runtime channel (`runtime::channels`: a single `Mutex<{queue, waiters,
+      senders, receivers}>` + a `Condvar` for the blocking iterator — one lock so
+      "empty → register waker", "enqueue → wake", and the endpoint-count
+      transitions are all atomic) and returns a `(Sender<T>, Receiver<T>)` tuple
+      (prelude structs carrying the channel id). `Sender<T>.send(v)` enqueues +
+      wakes any waiter (non-blocking) and returns **`null | ChannelClosed`**
+      (`ChannelClosed` once every receiver is dropped). **`Receiver<T>.recv()` is
+      async + non-blocking**: it yields a `Future<T | ChannelClosed>`
+      (`lang_chan_recv_future`, carrying the `T`- and `ChannelClosed`-variant tids
+      so the runtime can box the resolved union) so the task *suspends* on an
+      empty channel instead of parking the OS thread; `try_recv(): T | null` polls
+      without blocking.
+      **Deterministic close (`docs/16` §8 carve-out):** the channel tracks live
+      *sender* and *receiver* reference counts. `channel<T>()` starts each at 1;
+      `Sender.clone()` emits `lang_chan_sender_acquire` (another producer); a
+      `Thread.spawn` worker that captured an endpoint emits a *scope-bound*
+      `lang_chan_sender_release` / `lang_chan_receiver_release` when it returns
+      (wired through `FnGen.endpoint_releases`, drained on every `emit_return`
+      path; populated for `by_value` spawn-closure captures via
+      `channel_endpoint_kind`). When the last sender is released the channel
+      closes — *immediately, no GC needed* — waking the recv-future waiters and
+      the blocking condvar; a drained `recv()` then resolves to `ChannelClosed`.
+      **`Receiver: Iterator`**: `for x in rx` lowers to `ForDriver::Channel`
+      (checker `receiver_elem`), codegen `h_for_channel` blocking-recvs via
+      `lang_chan_recv_blocking(id, *got)` and terminates (`Done`) on close+drain.
+      Queued values are GC-pinned (`add_extra_root`) while in the queue and
+      unpinned on receipt. Element types are restricted to immutable values for
+      now (no deep clone-on-send yet). JIT + native parity; `examples/channels.otter`
+      (`for sq in rx`); **7 CLI tests** (iterator-close, recv→ChannelClosed,
+      multi-sender clone, send-after-receiver-drop, managed-element GC-stress,
+      native parity, try_recv) + runtime unit tests + e2e cases
+      (`channel_iterator_close`, `channel_multi_sender_close`, `channel_send_recv`).
+      The deterministic-release facility is the seed for a future opt-in
+      `@RefCounted` object kind (see goals.txt). TODO: `channel_mpmc`; bounded
+      channels; move/deep-clone-on-send for non-immutable `T`; heap-escaping
+      endpoints (stored in a long-lived struct) still rely on the best-effort GC
+      backstop rather than scope release.
 - [x] **`Shared<T>` (`docs/20` §4): an explicit mutex.** `Shared.new(value)`
       (recognised builtin) creates a runtime mutex cell (`runtime::shared`: a
       logical `locked` flag + value guarded by a short-held `Mutex`/`Condvar`,

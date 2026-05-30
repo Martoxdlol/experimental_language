@@ -1063,18 +1063,53 @@ fn shared_try_lock_returns_value_or_lock_busy() {
 }
 
 #[test]
-fn channel_cross_thread_producer_consumer() {
-    // `docs/20` §2: a worker thread sends over a channel; main consumes
-    // asynchronously. `recv()` is a `Future<T>` — `await`ing it suspends the
-    // task (an async main here) instead of blocking the thread. The `Sender`
-    // is captured into the spawned closure (a thread-safe handle).
+fn channel_iterator_terminates_on_last_sender_drop() {
+    // `docs/20` §2 / `docs/16` §8 — the headline: a worker thread sends, then
+    // its captured `Sender` is *deterministically released* when the worker
+    // returns, closing the channel. The consumer's `for n in rx` (a synchronous
+    // `Receiver: Iterator`) drains the queue and then **terminates** on close —
+    // no GC collection required for the close to happen.
     let src = "function produce(tx: Sender<i64>) {\n\
                  var i: i64 = 1;\n\
                  while i <= 5 { tx.send(i * 10); i = i + 1; }\n\
                }\n\
+               function consume(rx: Receiver<i64>): i64 {\n\
+                 var total: i64 = 0;\n\
+                 for n in rx { total = total + n; }\n\
+                 total\n\
+               }\n\
+               function main() {\n\
+                 var pair: (Sender<i64>, Receiver<i64>) = channel<i64>();\n\
+                 var tx: Sender<i64> = pair.0;\n\
+                 var rx: Receiver<i64> = pair.1;\n\
+                 var h: JoinHandle<i64> = Thread.spawn(() => { produce(tx); 0 });\n\
+                 var total: i64 = consume(rx);\n\
+                 println(total as str);\n\
+               }";
+    let (out1, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out1, "150\n"); // 10+20+30+40+50, then Done
+    let (out2, _, ok2) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
+    assert!(ok2);
+    assert_eq!(out1, out2, "GC stress changed the channel result");
+}
+
+#[test]
+fn channel_recv_surfaces_channel_closed() {
+    // `docs/20` §2: `recv()` resolves to `T | ChannelClosed`. After the worker
+    // sends two values and drops its sender, an async consumer awaits recv in a
+    // loop, matching the closed variant to stop. Drains *then* sees closed.
+    let src = "function produce(tx: Sender<i64>) { tx.send(11); tx.send(22); }\n\
                function consume(rx: Receiver<i64>): Future<i64> async {\n\
-                 var total: i64 = 0; var n: i64 = 0;\n\
-                 while n < 5 { var m: i64 = await rx.recv(); total = total + m; n = n + 1; }\n\
+                 var total: i64 = 0;\n\
+                 var run: bool = true;\n\
+                 while run {\n\
+                   var m: i64 | ChannelClosed = await rx.recv();\n\
+                   match m {\n\
+                     i64 v => { total = total + v; },\n\
+                     ChannelClosed c => { run = false; },\n\
+                   }\n\
+                 }\n\
                  total\n\
                }\n\
                function main(): Future<null> async {\n\
@@ -1083,39 +1118,90 @@ fn channel_cross_thread_producer_consumer() {
                  var rx: Receiver<i64> = pair.1;\n\
                  var h: JoinHandle<i64> = Thread.spawn(() => { produce(tx); 0 });\n\
                  var total: i64 = await consume(rx);\n\
-                 var r: Joined<i64> | Panicked = await h.join();\n\
+                 println(total as str);\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "33\n"); // 11 + 22, then ChannelClosed
+}
+
+#[test]
+fn channel_multiple_senders_close_after_all_dropped() {
+    // `docs/20` §2: a cloned `Sender` is another producer. The channel closes
+    // only once *every* sender (the original captured into one worker, the
+    // clone into another) has been released. The iterator drains all messages
+    // from both workers before terminating.
+    let src = "function produce(tx: Sender<i64>, base: i64) {\n\
+                 var i: i64 = 0;\n\
+                 while i < 3 { tx.send(base + i); i = i + 1; }\n\
+               }\n\
+               function main() {\n\
+                 var pair: (Sender<i64>, Receiver<i64>) = channel<i64>();\n\
+                 var tx: Sender<i64> = pair.0;\n\
+                 var rx: Receiver<i64> = pair.1;\n\
+                 var tx2: Sender<i64> = tx.clone();\n\
+                 var h1: JoinHandle<i64> = Thread.spawn(() => { produce(tx, 100); 0 });\n\
+                 var h2: JoinHandle<i64> = Thread.spawn(() => { produce(tx2, 200); 0 });\n\
+                 var count: i64 = 0;\n\
+                 var total: i64 = 0;\n\
+                 for n in rx { count = count + 1; total = total + n; }\n\
+                 println(count as str);\n\
                  println(total as str);\n\
                }";
     let (out1, err, ok) = lang("run", src);
     assert!(ok, "stderr: {err}");
-    assert_eq!(out1, "150\n"); // 10+20+30+40+50
+    // 6 messages total: 100,101,102 + 200,201,202 = 906.
+    assert_eq!(out1, "6\n906\n");
     let (out2, _, ok2) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
     assert!(ok2);
-    assert_eq!(out1, out2, "GC stress changed the channel result");
+    assert_eq!(out1, out2, "GC stress changed the multi-sender result");
 }
 
 #[test]
-fn channel_async_recv_of_managed_element_survives_gc_stress() {
-    // `docs/20` §2: an async `recv()` of a *managed* element (`str`). The
-    // message rides the channel queue (pinned as a GC root) and is moved into
-    // the future's `Ready<str>` traced value slot when polled — so a collection
-    // anywhere in the hand-off must not free it. The consumer awaits each recv.
+fn channel_send_after_receiver_dropped_is_channel_closed() {
+    // `docs/20` §2: when the receiver is released, the channel is closed for
+    // sending; `send` returns `ChannelClosed`. The receiver is captured into a
+    // worker that drops it immediately; once it has, the main sender observes
+    // closed. We retry until the worker has released the receiver.
+    let src = "function drain(rx: Receiver<i64>): i64 { 0 }\n\
+               function main(): Future<null> async {\n\
+                 var pair: (Sender<i64>, Receiver<i64>) = channel<i64>();\n\
+                 var tx: Sender<i64> = pair.0;\n\
+                 var rx: Receiver<i64> = pair.1;\n\
+                 var h: JoinHandle<i64> = Thread.spawn(() => { drain(rx); 0 });\n\
+                 var r: Joined<i64> | Panicked = await h.join();\n\
+                 var closed: bool = false;\n\
+                 match tx.send(7) {\n\
+                   null => { println(\"open\"); },\n\
+                   ChannelClosed c => { closed = true; },\n\
+                 }\n\
+                 if closed { println(\"closed\"); }\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "closed\n");
+}
+
+#[test]
+fn channel_recv_of_managed_element_survives_gc_stress() {
+    // `docs/20` §2: a managed element (`str`) flows over the channel; the
+    // `for s in rx` iterator drains it. The message rides the queue (pinned as
+    // a GC root) and is unpinned into the result on recv — a collection in the
+    // hand-off must not free it. The worker drops the sender → iterator ends.
     let src = "function produce(tx: Sender<str>) {\n\
                  tx.send(\"a\"); tx.send(\"b\"); tx.send(\"c\");\n\
                }\n\
-               function consume(rx: Receiver<str>): Future<str> async {\n\
-                 var acc: str = \"\"; var n: i64 = 0;\n\
-                 while n < 3 { var m: str = await rx.recv(); acc = acc + m; n = n + 1; }\n\
+               function consume(rx: Receiver<str>): str {\n\
+                 var acc: str = \"\";\n\
+                 for s in rx { acc = acc + s; }\n\
                  acc\n\
                }\n\
-               function main(): Future<null> async {\n\
+               function main() {\n\
                  var pair: (Sender<str>, Receiver<str>) = channel<str>();\n\
                  var tx: Sender<str> = pair.0;\n\
                  var rx: Receiver<str> = pair.1;\n\
                  var h: JoinHandle<i64> = Thread.spawn(() => { produce(tx); 0 });\n\
-                 var acc: str = await consume(rx);\n\
-                 var r: Joined<i64> | Panicked = await h.join();\n\
-                 println(acc);\n\
+                 println(consume(rx));\n\
                }";
     let (out1, err, ok) = lang("run", src);
     assert!(ok, "stderr: {err}");
@@ -1123,6 +1209,30 @@ fn channel_async_recv_of_managed_element_survives_gc_stress() {
     let (out2, _, ok2) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
     assert!(ok2);
     assert_eq!(out1, out2, "GC stress changed the channel result");
+}
+
+#[test]
+fn channel_iterator_native_build_matches_jit() {
+    // The deterministic close + `Receiver: Iterator` must behave identically
+    // under `otter_fusion build` (native object + linked runtime) and the JIT.
+    let src = "function produce(tx: Sender<i64>) {\n\
+                 var i: i64 = 1; while i <= 4 { tx.send(i); i = i + 1; }\n\
+               }\n\
+               function main() {\n\
+                 var pair: (Sender<i64>, Receiver<i64>) = channel<i64>();\n\
+                 var tx: Sender<i64> = pair.0;\n\
+                 var rx: Receiver<i64> = pair.1;\n\
+                 var h: JoinHandle<i64> = Thread.spawn(() => { produce(tx); 0 });\n\
+                 var total: i64 = 0;\n\
+                 for n in rx { total = total + n; }\n\
+                 println(total as str);\n\
+               }";
+    let (jit_out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(jit_out, "10\n"); // 1+2+3+4
+    let (native_out, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(jit_out, native_out, "native build diverged from JIT");
 }
 
 #[test]

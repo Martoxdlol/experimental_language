@@ -291,34 +291,57 @@ pub struct Panicked  { pub message: str }</code></pre>
 }
 
 extend&lt;T&gt; Receiver&lt;T&gt; {
-  function recv(self): Future&lt;T&gt;            // async — await it
-  function try_recv(self): T | null         // non-blocking poll
+  function recv(self): Future&lt;T | ChannelClosed&gt;   // async — await it
+  function try_recv(self): T | null                // non-blocking poll
+}
+
+extend&lt;T&gt; Receiver&lt;T&gt;: Iterator&lt;T&gt; {            // `for x in rx` drains it
+  function next(self): Item&lt;T&gt; | Done             // blocks; Done on close
 }
 
 pub struct ChannelClosed;</code></pre>
 
 <div class="callout good">
-  <strong>Channels are async and non-blocking.</strong>
+  <strong>Channels are async, non-blocking, and deterministically closeable.</strong>
   <code>send</code> enqueues onto an unbounded queue and returns at once — it
-  never blocks. <code>recv()</code> does <em>not</em> park the calling OS thread:
-  it returns a <code>Future&lt;T&gt;</code> (see <a href="21-async.html">async</a>)
-  that you <code>await</code>. Polling the future pops the next message if one is
-  ready; otherwise it registers the executor's waker and reports
-  <code>Pending</code>, so the <em>task</em> suspends and the thread is free to
-  run other work. A later <code>send</code> wakes the waiter, which re-polls. This
-  is what lets channels compose with the async runtime.
+  never blocks (it returns <code>null</code>, or <code>ChannelClosed</code> once
+  every receiver is gone). <code>recv()</code> does <em>not</em> park the calling
+  OS thread: it returns a <code>Future&lt;T | ChannelClosed&gt;</code> (see
+  <a href="21-async.html">async</a>) that you <code>await</code>. Polling the
+  future pops the next message if one is ready, resolves to
+  <code>ChannelClosed</code> once the queue is drained <em>and</em> every sender
+  has been dropped, otherwise registers the executor's waker and reports
+  <code>Pending</code> so the <em>task</em> suspends and the thread is free to run
+  other work. A later <code>send</code> — or the release of the last sender —
+  wakes the waiter, which re-polls.
+</div>
+
+<div class="callout">
+  <strong>Closed when the last sender is dropped.</strong>
+  A channel closes the instant its final <code>Sender</code> is released. Channel
+  endpoints are reference-counted runtime handles whose drop is
+  <em>deterministic and scope-bound</em> (<a href="16-memory.html#drop">16-memory
+  §8</a>), <em>not</em> a GC-timed finalizer: a <code>Sender</code> captured into a
+  <code>Thread.spawn</code> worker is released the moment that worker returns, and
+  <code>Sender.clone()</code> registers another producer that must also be
+  released. So a producer that finishes its work promptly closes the channel,
+  terminating the consumer — no garbage collection required.
 </div>
 
 <pre><code>function consume(rx: Receiver&lt;T&gt;): Future&lt;null&gt; async {
-  var msg: T = await rx.recv();   // suspends until a message arrives
-  process(msg)
+  var msg: T | ChannelClosed = await rx.recv();   // suspends until a message arrives
+  match msg {
+    T m            =&gt; process(m),
+    ChannelClosed _ =&gt; return null,                // drained and closed
+  }
 }</code></pre>
 
 <p><code>try_recv</code> is the synchronous escape hatch: it polls the queue once
 without a future, returning <code>T | null</code> (<code>null</code> when empty).
 Bounded variants apply back-pressure by making <code>send</code> async too.
-<code>Receiver&lt;T&gt;</code> will implement <code>AsyncIterator&lt;T&gt;</code> so a
-<code>for await msg in rx</code> loop drains it.</p>
+<code>Receiver&lt;T&gt;</code> implements <code>Iterator&lt;T&gt;</code>, so a synchronous
+<code>for x in rx</code> loop drains it — each step blocks for the next message and
+the loop terminates (<code>Done</code>) once the channel is closed and drained.</p>
 
 <!-- =========================================================== -->
 <h2 id="zerocopy">3. Zero-copy on send</h2>

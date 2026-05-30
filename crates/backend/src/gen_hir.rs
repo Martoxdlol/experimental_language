@@ -785,7 +785,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                     .ok_or_else(|| CodegenError::new(recv_span, "channel receiver has no value"))?;
                 let chan = self.emit_channel_id(ptr, rty, recv_span)?;
                 let v = self.h_expr(&args[1])?;
-                return self.emit_channel_send(chan, elem, v, recv_span);
+                return self.emit_channel_send(chan, elem, v, ty, recv_span);
             }
             if def == p.receiver_def && p.receiver_def != DefId(0) {
                 let ptr = self
@@ -1585,7 +1585,62 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             hir::ForDriver::ListFast { elem } => self.h_for_list(pattern, iter, body, *elem),
             hir::ForDriver::AsyncIter(info) => self.h_for_async(pattern, iter, body, info),
             hir::ForDriver::StrChars => self.h_for_str_chars(pattern, iter, body),
+            hir::ForDriver::Channel { elem } => self.h_for_channel(pattern, iter, body, *elem),
         }
+    }
+
+    /// `for n in rx` over a `Receiver<T>` (`docs/20` §2): blocking-recv each
+    /// message, binding it and running the body, until the channel is closed
+    /// and drained — at which point `lang_chan_recv_blocking` reports "no value"
+    /// (`got == 0`, the iterator's `Done`) and the loop exits. This is the
+    /// synchronous `Receiver: Iterator` drainer; the recv parks the OS thread
+    /// (cooperating with the GC) while waiting, so a closed sender promptly
+    /// terminates it.
+    fn h_for_channel(&mut self, pattern: &hir::Pattern, iter: &hir::Expr, body: &hir::Block, elem: Ty)
+        -> CgResult<Option<Value>>
+    {
+        let rty = iter.ty;
+        let rxv = self
+            .h_expr(iter)?
+            .ok_or_else(|| CodegenError::new(iter.span, "receiver has no value"))?;
+        self.mark_root(rxv);
+        let chan = self.emit_channel_id(rxv, rty, iter.span)?;
+        let got_slot = self.b.create_sized_stack_slot(StackSlotData::new(
+            StackSlotKind::ExplicitSlot, 8, 3,
+        ));
+        let header = self.b.create_block();
+        let body_bb = self.b.create_block();
+        let exit = self.b.create_block();
+        self.b.ins().jump(header, &[]);
+        self.term = true;
+        self.switch(header);
+        self.emit_safepoint();
+        let got_ptr = self.b.ins().stack_addr(PTR, got_slot, 0);
+        let raw = self
+            .call_intrinsic("lang_chan_recv_blocking", &[types::I64, PTR], Some(types::I64), &[chan, got_ptr])
+            .expect("blocking recv");
+        let got = self.b.ins().load(types::I64, MemFlags::trusted(), got_ptr, 0);
+        let zero = self.b.ins().iconst(types::I64, 0);
+        let have = self.b.ins().icmp(IntCC::NotEqual, got, zero);
+        self.b.ins().brif(have, body_bb, &[], exit, &[]);
+        self.term = true;
+        self.switch(body_bb);
+        let elem_val = self.i64_to_elem(raw, elem, iter.span)?;
+        if is_managed_ptr(self.cx.analysis, resolve_shallow(self.cx.analysis, elem, &self.subst)) {
+            if let Some(v) = elem_val {
+                self.mark_root(v);
+            }
+        }
+        self.h_bind_pattern(pattern, elem_val, elem)?;
+        self.loops.push(LoopCg { continue_block: header, break_block: exit, has_value: false });
+        self.h_block(body)?;
+        if !self.term {
+            self.b.ins().jump(header, &[]);
+            self.term = true;
+        }
+        self.loops.pop();
+        self.switch(exit);
+        Ok(None)
     }
 
     /// `for ch in s` over a `str` (`docs/18` §4): snapshot the Unicode scalars

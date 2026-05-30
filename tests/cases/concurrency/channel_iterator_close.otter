@@ -1,0 +1,30 @@
+//@ kind: run
+//@ serial
+//@ description: Receiver:Iterator (`for n in rx`) drains then terminates when the last Sender is dropped (deterministic close, docs/20 §2 / docs/16 §8)
+//@ stdout:
+//~ count=5
+//~ sum=150
+import { println } from "std:io";
+import { Thread, JoinHandle } from "std:thread";
+import { Sender, Receiver } from "std:sync";
+import { channel } from "std:sync";
+function produce(tx: Sender<i64>) {
+  var i = 1;
+  while i <= 5 { tx.send(i * 10); i = i + 1; }
+}
+function main() {
+  var ends = channel<i64>();
+  var tx = ends.0;
+  var rx = ends.1;
+  // The worker drops its captured sender on return → channel closes → the
+  // iterator terminates after draining. No GC collection is required.
+  var worker: JoinHandle<i64> = Thread.spawn(() => { produce(tx); 0 });
+  var count = 0;
+  var sum = 0;
+  for n in rx {
+    count = count + 1;
+    sum = sum + n;
+  }
+  println("count=${count}");
+  println("sum=${sum}");
+}

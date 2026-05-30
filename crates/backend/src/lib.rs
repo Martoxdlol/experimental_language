@@ -83,6 +83,11 @@ fn register_runtime_symbols(b: &mut JITBuilder) {
     b.symbol("lang_chan_send", runtime::channels::lang_chan_send as *const u8);
     b.symbol("lang_chan_recv_future", runtime::channels::lang_chan_recv_future as *const u8);
     b.symbol("lang_chan_try_recv", runtime::channels::lang_chan_try_recv as *const u8);
+    b.symbol("lang_chan_recv_blocking", runtime::channels::lang_chan_recv_blocking as *const u8);
+    b.symbol("lang_chan_sender_acquire", runtime::channels::lang_chan_sender_acquire as *const u8);
+    b.symbol("lang_chan_sender_release", runtime::channels::lang_chan_sender_release as *const u8);
+    b.symbol("lang_chan_receiver_acquire", runtime::channels::lang_chan_receiver_acquire as *const u8);
+    b.symbol("lang_chan_receiver_release", runtime::channels::lang_chan_receiver_release as *const u8);
     b.symbol("lang_shared_new", runtime::shared::lang_shared_new as *const u8);
     b.symbol("lang_shared_lock", runtime::shared::lang_shared_lock as *const u8);
     b.symbol("lang_shared_unlock", runtime::shared::lang_shared_unlock as *const u8);
@@ -941,6 +946,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     ret_ty,
                     async_out: None,
                     async_ctx: None,
+                    endpoint_releases: Vec::new(),
                 };
                 for (i, local) in param_locals.iter().enumerate() {
                     let ty = fg.cx.analysis.hir.local_ty(*local).unwrap();
@@ -1018,6 +1024,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     ret_ty,
                     async_out: None,
                     async_ctx: None,
+                    endpoint_releases: Vec::new(),
                 };
                 let env = block_params[0];
                 // Captures live in the env after the function pointer (offset 8).
@@ -1032,6 +1039,15 @@ impl<'a, M: Module> Codegen<'a, M> {
                     if by_value {
                         let val = fg.b.ins().load(ct, MemFlags::trusted(), env, off);
                         fg.bind_local(*local, ct, val);
+                        // A `Thread.spawn` worker that captured a channel endpoint
+                        // OWNS that endpoint for the worker's lifetime; releasing
+                        // it when the worker returns is the deterministic
+                        // last-sender drop that closes the channel (`docs/20` §2,
+                        // `docs/16` §8). Record the chan id to release on exit.
+                        if let Some(is_sender) = fg.channel_endpoint_kind(*ty) {
+                            let chan = fg.emit_channel_id(val, *ty, span)?;
+                            fg.endpoint_releases.push((chan, is_sender));
+                        }
                     } else {
                         let cell_ptr = fg.b.ins().load(PTR, MemFlags::trusted(), env, off);
                         fg.bind_local_cell(*local, ct, cell_ptr);
@@ -1165,6 +1181,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     ret_ty: out,
                     async_out: Some(out),
                     async_ctx: None,
+                    endpoint_releases: Vec::new(),
                 };
                 // The state struct holds GC roots and must stay live across the
                 // body's allocations.
@@ -1219,6 +1236,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     ret_ty: out,
                     async_out: None,
                     async_ctx: None,
+                    endpoint_releases: Vec::new(),
                 };
                 // Managed arguments must survive the state allocation (a
                 // safepoint) before they are stored.
@@ -1312,6 +1330,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     ret_ty: out,
                     async_out: Some(out),
                     async_ctx: None,
+                    endpoint_releases: Vec::new(),
                 };
                 fg.mark_root(self_val);
                 for (l, _off, ct) in live {
@@ -1446,6 +1465,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     ret_ty: out,
                     async_out: None,
                     async_ctx: None,
+                    endpoint_releases: Vec::new(),
                 };
                 // Managed arguments must survive the state allocation.
                 for (i, v) in pvals.iter().enumerate() {
@@ -1529,6 +1549,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     ret_ty: out,
                     async_out: Some(out),
                     async_ctx: None,
+                    endpoint_releases: Vec::new(),
                 };
                 fg.mark_root(self_val);
                 // Captures live in the state struct after the state word (@8).
@@ -1613,6 +1634,12 @@ struct FnGen<'a, 'b, 'f, M: Module> {
     /// When this is an async `poll` body whose source contains `await`, the
     /// state-machine context driving suspension/resumption.
     async_ctx: Option<AsyncCtx>,
+    /// Channel endpoints this body deterministically releases on exit
+    /// (`docs/16` §8 / `docs/20` §2): `(chan_id, is_sender)`. Populated for a
+    /// `Thread.spawn` worker body that captured `Sender`/`Receiver` handles —
+    /// releasing them when the worker returns is what closes the channel on the
+    /// last-sender drop. `emit_return` drains this on every return path.
+    endpoint_releases: Vec<(Value, bool)>,
 }
 
 /// Cranelift blocks for an enclosing loop.
@@ -1763,6 +1790,22 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     pub(crate) fn emit_return(&mut self, val: Option<Value>) -> CgResult<()> {
         if self.term {
             return Ok(());
+        }
+        // Deterministic channel-endpoint release (`docs/16` §8 / `docs/20` §2):
+        // a worker body that captured `Sender`/`Receiver` handles releases them
+        // here, on every return path, so the channel closes the instant the
+        // last sender is dropped. Emitted before the terminator; the chan-id
+        // values were computed at capture-bind time and dominate every return.
+        if !self.endpoint_releases.is_empty() {
+            let releases = self.endpoint_releases.clone();
+            for (chan, is_sender) in releases {
+                let name = if is_sender {
+                    "lang_chan_sender_release"
+                } else {
+                    "lang_chan_receiver_release"
+                };
+                self.call_intrinsic(name, &[cranelift_codegen::ir::types::I64], None, &[chan]);
+            }
         }
         // In an async `poll` body, a return value is the future's `Output`; wrap
         // it in `Ready<Output>` and box into the `Ready<Output> | Pending` union

@@ -355,7 +355,22 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         -> CgResult<Option<Value>>
     {
         Ok(match kind {
-            CloneKind::Identity => Some(v),
+            CloneKind::Identity => {
+                // Cloning a channel endpoint registers another live handle so
+                // the deterministic close stays balanced (`docs/20` §2): a
+                // `Sender.clone()` is a new producer. The clone shares the same
+                // handle object (same `chan` id); only the count changes.
+                if let Some(is_sender) = self.channel_endpoint_kind(rty) {
+                    let chan = self.emit_channel_id(v, rty, span)?;
+                    let name = if is_sender {
+                        "lang_chan_sender_acquire"
+                    } else {
+                        "lang_chan_receiver_acquire"
+                    };
+                    self.call_intrinsic(name, &[types::I64], None, &[chan]);
+                }
+                Some(v)
+            }
             CloneKind::List => self.call_intrinsic("lang_list_clone", &[PTR], Some(PTR), &[v]),
             CloneKind::Map => self.call_intrinsic("lang_map_clone", &[PTR], Some(PTR), &[v]),
             CloneKind::ListDeep => {
@@ -387,7 +402,19 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         }
         let prog = &self.cx.analysis.program;
         if let TyKind::Named { def, .. } = self.cx.analysis.tcx.kind(ty).clone() {
-            if def == prog.shared_def || def == prog.sender_def || def == prog.receiver_def {
+            if def == prog.shared_def {
+                return Ok(v);
+            }
+            // Channel endpoints clone to another live handle for the same
+            // channel; bump the matching endpoint count (`docs/20` §2).
+            if let Some(is_sender) = self.channel_endpoint_kind(ty) {
+                let chan = self.emit_channel_id(v, ty, span)?;
+                let name = if is_sender {
+                    "lang_chan_sender_acquire"
+                } else {
+                    "lang_chan_receiver_acquire"
+                };
+                self.call_intrinsic(name, &[types::I64], None, &[chan]);
                 return Ok(v);
             }
         }
@@ -679,13 +706,69 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         Ok(p)
     }
 
-    /// `Sender<T>.send(v)` over an already-read channel id and value. Shared.
-    pub(crate) fn emit_channel_send(&mut self, chan: Value, elem: Ty, v: Option<Value>, span: Span)
-        -> CgResult<Option<Value>>
-    {
+    /// `Sender<T>.send(v)` over an already-read channel id and value. Returns
+    /// `null | ChannelClosed` (`docs/20` §2): the runtime reports `1` when every
+    /// receiver has been dropped (the message is not enqueued), `0` otherwise.
+    /// `result_ty` is the `null | ChannelClosed` union the call evaluates to.
+    pub(crate) fn emit_channel_send(
+        &mut self,
+        chan: Value,
+        elem: Ty,
+        v: Option<Value>,
+        result_ty: Ty,
+        span: Span,
+    ) -> CgResult<Option<Value>> {
         let raw = self.elem_to_i64(v, elem, span)?;
-        self.call_intrinsic("lang_chan_send", &[types::I64, types::I64], None, &[chan, raw]);
-        Ok(None)
+        let status = self
+            .call_intrinsic("lang_chan_send", &[types::I64, types::I64], Some(types::I64), &[chan, raw])
+            .expect("send status");
+        // Identify the `ChannelClosed` variant of the result union to box on a
+        // closed send; the success case is `null`.
+        let closed_ty = self.union_variant_ty(result_ty, |a, ty| {
+            matches!(a.tcx.kind(ty), TyKind::Named { def, .. }
+                if *def == a.program.channel_closed_def)
+        });
+        let zero = self.b.ins().iconst(types::I64, 0);
+        let is_closed = self.b.ins().icmp(IntCC::NotEqual, status, zero);
+        let ok_bb = self.b.create_block();
+        let closed_bb = self.b.create_block();
+        let merge = self.b.create_block();
+        self.b.append_block_param(merge, PTR);
+        self.b.ins().brif(is_closed, closed_bb, &[], ok_bb, &[]);
+        self.term = true;
+        // Success: `null` boxed into the union (a tagged box, not a raw null —
+        // so `match`/`is` dispatch works), mirroring `try_recv`'s null branch.
+        self.switch(ok_bb);
+        let null_ty = self.cx.analysis.tcx.null;
+        let ok_box = self.box_value(None, null_ty);
+        self.b.ins().jump(merge, &[ok_box.into()]);
+        self.term = true;
+        // Closed: `ChannelClosed` (a unit struct) boxed into the union.
+        self.switch(closed_bb);
+        let closed_box = self.box_value(None, closed_ty);
+        self.b.ins().jump(merge, &[closed_box.into()]);
+        self.term = true;
+        self.switch(merge);
+        Ok(Some(self.b.block_params(merge)[0]))
+    }
+
+    /// Find the union variant of `ty` matching `pred`, or `ty` itself if it is
+    /// not a union (single-variant). Used to recover a specific variant type for
+    /// boxing a runtime-produced value into a union.
+    fn union_variant_ty(
+        &self,
+        ty: Ty,
+        pred: impl Fn(&Analysis, Ty) -> bool,
+    ) -> Ty {
+        let resolved = resolve_shallow(self.cx.analysis, ty, &self.subst);
+        if let TyKind::Union(vs) = self.cx.analysis.tcx.kind(resolved).clone() {
+            for v in vs {
+                if pred(self.cx.analysis, v) {
+                    return v;
+                }
+            }
+        }
+        ty
     }
 
     /// `Receiver<T>.recv()`/`.try_recv()` over an already-read channel id. Shared.
@@ -693,22 +776,29 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         -> CgResult<Option<Value>>
     {
         if method == "recv" {
-            // Async recv: build a `Future<T>` interface-object box. The runtime
-            // future's `poll` pops a message (→ `Ready<T>`) or registers the
-            // executor waker and reports `Pending` (`docs/20` §2 / `docs/21`).
+            // Async recv: build a `Future<T | ChannelClosed>` interface-object
+            // box. The runtime future's `poll` pops a message (→ `Ready<T>`
+            // variant), reports `ChannelClosed` once drained + all senders gone,
+            // or registers the executor waker and reports `Pending` (`docs/20`
+            // §2 / `docs/21`). It needs the `Ready`/`Pending` tids plus the tids
+            // tagging the resolved union's `T` and `ChannelClosed` variants.
             let prog = &self.cx.analysis.program;
             let ready_tid = 1000 + prog.ready_def.index() as i64;
             let pending_tid = 1000 + prog.pending_def.index() as i64;
+            let closed_tid = 1000 + prog.channel_closed_def.index() as i64;
             let rt = self.b.ins().iconst(types::I64, ready_tid);
             let pt = self.b.ins().iconst(types::I64, pending_tid);
             let resolved = resolve_shallow(self.cx.analysis, elem, &self.subst);
             let is_ptr = is_managed_ptr(self.cx.analysis, resolved) as i64;
             let ip = self.b.ins().iconst(types::I64, is_ptr);
+            let value_tid = self.type_id_of(elem);
+            let vt = self.b.ins().iconst(types::I64, value_tid);
+            let ct = self.b.ins().iconst(types::I64, closed_tid);
             let fut = self.call_intrinsic(
                 "lang_chan_recv_future",
-                &[types::I64, types::I64, types::I64, types::I64],
+                &[types::I64, types::I64, types::I64, types::I64, types::I64, types::I64],
                 Some(PTR),
-                &[chan, rt, pt, ip],
+                &[chan, rt, pt, ip, vt, ct],
             ).expect("recv future");
             return Ok(Some(fut));
         }
@@ -747,6 +837,26 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         self.term = true;
         self.switch(merge);
         Ok(Some(self.b.block_params(merge)[0]))
+    }
+
+    /// Classify a type as a channel endpoint handle: `Some(true)` for a
+    /// `Sender<T>`, `Some(false)` for a `Receiver<T>`, `None` otherwise. Used to
+    /// emit deterministic acquire/release of the channel's endpoint reference
+    /// counts (`docs/16` §8 / `docs/20` §2).
+    pub(crate) fn channel_endpoint_kind(&self, ty: Ty) -> Option<bool> {
+        let prog = &self.cx.analysis.program;
+        let resolved = resolve_shallow(self.cx.analysis, ty, &self.subst);
+        match self.cx.analysis.tcx.kind(resolved) {
+            TyKind::Named { def, .. } if *def == prog.sender_def && prog.sender_def != DefId(0) => {
+                Some(true)
+            }
+            TyKind::Named { def, .. }
+                if *def == prog.receiver_def && prog.receiver_def != DefId(0) =>
+            {
+                Some(false)
+            }
+            _ => None,
+        }
     }
 
     /// Read the `chan` id field from an already-evaluated `Sender`/`Receiver`

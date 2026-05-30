@@ -20,6 +20,21 @@ impl<'a> Checker<'a> {
         self.tcx.mk_named(def, vec![elem])
     }
 
+    /// The element type `T` of a `Receiver<T>` — drives `for n in rx`
+    /// (`Receiver: Iterator`, `docs/20` §2).
+    pub(crate) fn receiver_elem(&self, ty: Ty) -> Option<Ty> {
+        match self.tcx.kind(ty) {
+            TyKind::Named { def, args }
+                if *def == self.prog.receiver_def
+                    && self.prog.receiver_def != crate::ids::DefId(0)
+                    && args.len() == 1 =>
+            {
+                Some(args[0])
+            }
+            _ => None,
+        }
+    }
+
     pub(crate) fn check_list_lit(&mut self, elems: &[Expr], expected: Option<Ty>, span: Span) -> Ty {
         let exp_elem = expected.and_then(|e| self.list_elem(e));
         if elems.is_empty() {
@@ -904,22 +919,30 @@ impl<'a> Checker<'a> {
         let is_sender = def == self.prog.sender_def;
         match (is_sender, name.name.as_str()) {
             (true, "send") => {
+                // `send` is non-blocking and returns `null | ChannelClosed`
+                // (`docs/20` §2): `ChannelClosed` once every receiver is dropped,
+                // since the message could never be observed.
                 if args.len() != 1 {
                     self.emit(span, SemaErrorKind::ArgCount { expected: 1, found: args.len() });
                 } else {
                     let at = self.check_expr(&args[0], Some(elem));
                     self.expect(at, elem, args[0].span);
                 }
-                self.tcx.null
+                let closed = self.tcx.mk_named(self.prog.channel_closed_def, vec![]);
+                self.tcx.mk_union([self.tcx.null, closed])
             }
             (false, "recv") => {
                 // Async + non-blocking (`docs/20` §2 / `docs/21`): `recv()` builds
-                // a `Future<T>` you `await` (or drive with `block_on`) rather than
-                // parking the calling thread.
+                // a `Future<T | ChannelClosed>` you `await` (or drive implicitly)
+                // rather than parking the calling thread. It resolves to the next
+                // message, or to `ChannelClosed` once the channel is drained and
+                // every sender has been dropped.
                 if !args.is_empty() {
                     self.emit(span, SemaErrorKind::ArgCount { expected: 0, found: args.len() });
                 }
-                self.tcx.mk_named(self.prog.future_def, vec![elem])
+                let closed = self.tcx.mk_named(self.prog.channel_closed_def, vec![]);
+                let out = self.tcx.mk_union([elem, closed]);
+                self.tcx.mk_named(self.prog.future_def, vec![out])
             }
             (false, "try_recv") => {
                 if !args.is_empty() {

@@ -1057,6 +1057,12 @@ impl<'a> Checker<'a> {
                         // `for ch in s` ≡ `for ch in s.chars()` (docs/18 §4).
                         (self.tcx.char, Some(crate::hir::ForDriver::StrChars))
                     }
+                    None if self.receiver_elem(ity).is_some() => {
+                        // `for n in rx` over a `Receiver<T>` (`docs/20` §2):
+                        // blocking-recv each message until the channel closes.
+                        let elem = self.receiver_elem(ity).unwrap();
+                        (elem, Some(crate::hir::ForDriver::Channel { elem }))
+                    }
                     None => match self.iterator_elem(ity) {
                         Some((elem, next, next_targs, item_ty, done_ty)) => {
                             let info = crate::sema::results::ForIter {

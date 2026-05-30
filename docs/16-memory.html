@@ -462,9 +462,27 @@ enqueued to the finalizer queue. A dedicated finalizer thread pops the queue and
   Programs that need deterministic finalization (file flushing, transaction commit, lock release)
   must release resources <strong>explicitly</strong> by calling the relevant method
   (<code>file.close()</code>, <code>lock.release()</code>, <code>tx.commit()</code>) before the
-  binding goes out of scope. There is no language-level scope-exit hook — like JavaScript,
-  Python without <code>with</code>, or Java without try-with-resources, cleanup is a manual
-  responsibility.
+  binding goes out of scope. There is no <em>general</em> language-level scope-exit hook — like
+  JavaScript, Python without <code>with</code>, or Java without try-with-resources, cleanup of
+  ordinary managed objects is a manual responsibility.
+</div>
+
+<div class="callout good">
+  <strong>Exception — runtime endpoint handles release deterministically</strong>
+  A small set of <em>runtime handle types</em> carry a stronger guarantee than best-effort
+  <code>Drop</code>: <strong>channel endpoints</strong> (<code>Sender&lt;T&gt;</code> /
+  <code>Receiver&lt;T&gt;</code>, see <a href="20-concurrency.html">20-concurrency §2</a>). Each
+  channel keeps a reference count of its live senders and receivers; the compiler emits a
+  <em>deterministic, scope-bound release</em> of an endpoint when the worker that owns it
+  returns (a <code>Sender</code> captured into a <code>Thread.spawn</code> worker is released
+  the instant that worker finishes, and <code>Sender.clone()</code> registers another producer).
+  When the last sender is released the channel <strong>closes</strong> immediately — without
+  waiting for a collection — so a drained <code>recv()</code> resolves to <code>ChannelClosed</code>
+  and a <code>for x in rx</code> loop terminates. This is a runtime/library mechanism layered on
+  top of the collector (the GC still reclaims the underlying queue once both ends are
+  unreachable); it does <em>not</em> introduce a general user-facing destructor. A future
+  opt-in <code>@RefCounted</code> object kind will generalize this deterministic-drop facility to
+  user types, with the tracing GC as the cycle-collector backstop.
 </div>
 
 <!-- =========================================================== -->

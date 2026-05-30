@@ -3,61 +3,62 @@
 //@ description: example program — channels (self-contained, real imports)
 //@ stdout:
 //~ sum of squares 1..5 = 55
-//~ channel empty, as expected
+//~ channel drained and closed
 
-// Channels (docs/20 §2) are async and non-blocking. `channel<T>()` returns a
-// `(Sender<T>, Receiver<T>)` pair; `send` enqueues without blocking (the queue
-// is unbounded), and `recv()` returns a `Future<T>` you `await`. Awaiting a
-// recv *suspends the task* rather than parking the OS thread, so channels
-// compose with the async runtime (docs/21). Endpoints are thread-safe
-// handles, so a `Sender` can be captured into a spawned worker.
+// Channels (docs/20 §2) are async, non-blocking, and *deterministically
+// closeable*. `channel<T>()` returns a `(Sender<T>, Receiver<T>)` pair; `send`
+// enqueues without blocking and returns `null | ChannelClosed`.
+//
+// The channel CLOSES when its last `Sender` is dropped. For these runtime
+// endpoint handles that drop is *deterministic and scope-bound* (docs/16 §8):
+// a `Sender` captured into a worker is released the instant the worker returns,
+// without waiting for a garbage collection. Once closed and drained, `recv()`
+// resolves to `ChannelClosed` and the synchronous `Receiver: Iterator`
+// (`for x in rx`) terminates. Endpoints are thread-safe, so a `Sender` can be
+// captured into a spawned worker; cloning one makes another producer.
 
 import { println } from "std:io";
-import { Future } from "core:prelude";
-import { JoinHandle, Joined, Panicked } from "std:thread";
-import { Sender, Receiver } from "std:sync";
-
+import { JoinHandle } from "std:thread";
+import { Sender, Receiver, ChannelClosed } from "std:sync";
 import { channel } from "std:sync";
 import { Thread } from "std:thread";
+
+// A producer sends the squares 1, 4, 9, ... then returns. The `Sender` it
+// captured is released on return — when the last sender goes, the channel
+// closes and the consumer's loop ends.
 function produce(tx: Sender<i64>, n: i64) {
   var i: i64 = 1;
   while i <= n {
-    tx.send(i * i);   // send the squares 1, 4, 9, ... (never blocks)
+    tx.send(i * i);   // non-blocking; returns `null | ChannelClosed`
     i = i + 1;
   }
 }
 
-// An async consumer: each `await rx.recv()` suspends until a message arrives.
-function consume(rx: Receiver<i64>, n: i64): Future<i64> async {
+// A consumer drains with `for sq in rx`: the loop blocks for each message and
+// terminates (Done) once the channel is closed and drained — no GC needed.
+function consume(rx: Receiver<i64>): i64 {
   var total: i64 = 0;
-  var got: i64 = 0;
-  while got < n {
-    var m: i64 = await rx.recv();
-    total = total + m;
-    got = got + 1;
+  for sq in rx {
+    total = total + sq;
   }
   total
 }
 
-// An async `main`: the runtime drives the root future automatically.
-function main(): Future<null> async {
+function main() {
   var pair: (Sender<i64>, Receiver<i64>) = channel<i64>();
   var tx: Sender<i64> = pair.0;
   var rx: Receiver<i64> = pair.1;
 
-  // A worker thread produces; the main task consumes asynchronously. The
-  // consumer suspends on each empty recv and is woken by the worker's `send`.
+  // The worker produces on its own thread; capturing `tx` moves the producer
+  // role into the worker, which releases it on return (closing the channel).
   var worker: JoinHandle<i64> = Thread.spawn(() => { produce(tx, 5); 0 });
 
-  var total: i64 = await consume(rx, 5);
-  // `worker.join()` is also async — `await` it (the calling task suspends
-  // instead of parking the OS thread).
-  var r: Joined<i64> | Panicked = await worker.join();
-  println("sum of squares 1..5 = " + (total as str));   // 1+4+9+16+25 = 55
+  var total: i64 = consume(rx);                          // blocks until closed
+  println("sum of squares 1..5 = " + (total as str));    // 1+4+9+16+25 = 55
 
-  // `try_recv` polls without blocking and without a future: `T | null`.
+  // The channel is now drained and closed; a non-blocking poll sees nothing.
   match rx.try_recv() {
     i64 n => println("unexpected: " + (n as str)),
-    null => println("channel empty, as expected"),
+    null => println("channel drained and closed"),
   }
 }

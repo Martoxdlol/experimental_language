@@ -430,6 +430,7 @@ fn driver_str(d: &ForDriver) -> &'static str {
         ForDriver::Map { .. } => "/map",
         ForDriver::AsyncIter(_) => "/async-iter",
         ForDriver::StrChars => "/str-chars",
+        ForDriver::Channel { .. } => "/channel",
     }
 }
 

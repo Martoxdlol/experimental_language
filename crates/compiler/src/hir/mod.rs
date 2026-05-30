@@ -796,6 +796,10 @@ pub enum ForDriver {
     /// `for ch in s` over a `str` — desugars to iterating `s.chars()`
     /// (`docs/18` §4); codegen snapshots the scalars and index-loops them.
     StrChars,
+    /// `for n in rx` over a `Receiver<T>` (`docs/20` §2): blocking-recv each
+    /// message, terminating (`Done`) once the channel is closed and drained.
+    /// `elem` is `T`.
+    Channel { elem: Ty },
 }
 
 /// One arm of a `match`.

@@ -1,0 +1,25 @@
+//@ kind: run
+//@ serial
+//@ description: a cloned Sender is another producer; the channel closes only after EVERY sender is dropped (docs/20 §2)
+//@ stdout:
+//~ count=6
+import { println } from "std:io";
+import { Thread, JoinHandle } from "std:thread";
+import { Sender, Receiver } from "std:sync";
+import { channel } from "std:sync";
+function produce(tx: Sender<i64>, base: i64) {
+  var i = 0;
+  while i < 3 { tx.send(base + i); i = i + 1; }
+}
+function main() {
+  var ends = channel<i64>();
+  var tx = ends.0;
+  var rx = ends.1;
+  var tx2 = tx.clone();   // a second producer — the channel now has two senders
+  var h1: JoinHandle<i64> = Thread.spawn(() => { produce(tx, 100); 0 });
+  var h2: JoinHandle<i64> = Thread.spawn(() => { produce(tx2, 200); 0 });
+  // The iterator only terminates after BOTH workers have dropped their sender.
+  var count = 0;
+  for n in rx { count = count + 1; }
+  println("count=${count}");
+}
