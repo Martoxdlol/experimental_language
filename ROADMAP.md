@@ -816,16 +816,31 @@ The tracing GC is functionally complete for single-threaded programs.
       set `LANG_GC=stress` but the runtime reads `OTTER_FUSION_GC` (stale from the
       binary rename); fixed across the 7 cases + the framework docs, so the churn
       suites now genuinely collect on every alloc (~26× slower, as expected).
-- [~] **Concurrent reclamation still gated — re-validated with the allocator.**
-      With `gc_alloc` in place (deadlock prerequisite closed), the gate was lifted
-      again and the heavy 8-worker churn stress (`/tmp` repro: lists+strings in a
-      loop under `OTTER_FUSION_GC=stress`) **SIGSEGVs every run** — confirming the
-      *second*, independent blocker: the missed cross-thread root (register-
-      resident / not-yet-published) is swept regardless of the allocator. Reverted;
-      the gate stays (memory-safe). **Remaining work = precise cross-thread root
-      publication (register capture at the stop point) or the MMTk move** — the one
-      genuinely-hard subsystem, correctly deferred rather than shipped with an
-      intermittent use-after-free.
+- [~] **Concurrent reclamation still gated — root cause narrowed to a STW
+      publication race.** With `gc_alloc` in place (deadlock prerequisite closed),
+      the gate was lifted and the heavy churn stress (`/tmp` repro: 4–8 workers
+      building lists/strings in a loop under `OTTER_FUSION_GC=stress`) was used to
+      isolate the remaining blocker, with a definitive sequence of experiments:
+        1. **It is over-collection.** Sweep-leaks-instead-of-frees ⇒ 0 failures;
+           real free ⇒ corruption. A *live* object is being reclaimed.
+        2. **The missed root is not on any stack.** Added conservative scanning of
+           each stopped thread's whole `[sp, top]` region (a superset of the
+           precise safepoint slots, filtered by `is_obj`) ⇒ hard crashes dropped
+           but *wrong-but-non-crashing* results remained. A conservative scan only
+           *adds* roots, so this proves the live pointer is not stack-resident.
+        3. **It is not in callee-saved registers either.** Added explicit
+           callee-saved register capture (`x19–x28` / `rbx,r12–r15`) at every
+           park/native/collect point, unioned into the roots ⇒ corruption *still*
+           persisted (~1/3 of stress runs).
+      Stack + register capture together are exhaustive for a *statically* live
+      root at a stopped point, so the survivor is a **timing race in the
+      stop-the-world root-publication handshake** (e.g. a mutator-registration
+      TOCTOU, or a thread mutating its live set between publishing roots and the
+      collector consuming them), **not a static missed root**. The fix is a
+      rendezvous redesign (a true global safepoint barrier where every mutator
+      re-publishes at a single synchronized instant) or the MMTk move — *not*
+      more root-scanning. All experiments were reverted; the gate stays
+      (memory-safe). An intermittent use-after-free is never shipped.
 **Per-thread TLABs** and MMTk/Immix remain the eventual production plan (the
 `gc` interface stays the same). The custom allocator above is the first half of
 the prerequisite; precise cross-thread root capture is the remaining half.
