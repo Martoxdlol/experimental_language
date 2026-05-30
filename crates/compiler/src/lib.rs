@@ -2,6 +2,7 @@
 //! span / token / diagnostic types.
 
 pub mod ast;
+pub mod ast_print;
 pub mod diag;
 pub mod fmt;
 pub mod hir;

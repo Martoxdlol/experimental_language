@@ -165,6 +165,14 @@ enum Command {
         /// Path to the `.otter` source file.
         file: PathBuf,
     },
+    /// Parse the program and print it back as normalized source (`docs/23`):
+    /// the AST the rest of the compiler sees, rendered through the source-printer
+    /// with canonical indentation and conservative parentheses. Useful for
+    /// inspecting how the surface syntax parses. Output re-parses to the same AST.
+    Expand {
+        /// Path to the `.otter` source file.
+        file: PathBuf,
+    },
     /// Add a dependency to `project.toml` (`docs/23` §3).
     Add {
         /// The dependency name (the `pkg:<name>` import name).
@@ -279,6 +287,7 @@ fn main() -> ExitCode {
         }
         Command::Exec { file, release, time } => drive(&Input::Exec(file), Stage::Run, release, time),
         Command::Emit { ir, file } => emit(&Input::Auto(file), ir),
+        Command::Expand { file } => run_expand(&Input::Auto(file)),
         Command::Doc { file } => gen_doc(&Input::Auto(file)),
         Command::Test { file, exact } => {
             let path = file.clone().unwrap_or_else(|| PathBuf::from("."));
@@ -607,6 +616,27 @@ fn emit(input: &Input, ir: EmitIr) -> ExitCode {
             }
         }
     }
+    ExitCode::SUCCESS
+}
+
+/// `otter_fusion expand` — parse the entry file and print it back through the
+/// AST source-printer. Parse diagnostics go to stderr (parsing recovers, so a
+/// partially broken program still prints best-effort); the rendered source goes
+/// to stdout and is guaranteed to re-parse to the same AST.
+fn run_expand(input: &Input) -> ExitCode {
+    let prepared = match prepare(input) {
+        Ok(p) => p,
+        Err(msg) => {
+            eprintln!("error: {msg}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let map = &prepared.map;
+    render_load_diags(map, &prepared.diags);
+    if map.file_count() == 0 {
+        return ExitCode::FAILURE;
+    }
+    print!("{}", compiler::ast_print::print_module(&prepared.root));
     ExitCode::SUCCESS
 }
 

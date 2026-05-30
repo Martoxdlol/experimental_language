@@ -298,6 +298,54 @@ fn emit_clif_is_deterministic() {
     assert_eq!(a, b, "emit clif must be byte-for-byte deterministic");
 }
 
+/// Run `otter_fusion expand <file>` with `src` in a temp file, returning the
+/// rendered source on stdout (and stderr / success).
+fn expand_src(src: &str) -> (String, String, bool) {
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!("lang_expand_{}.otter", nonce()));
+    std::fs::write(&path, src).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_otter_fusion"))
+        .arg("expand")
+        .arg(&path)
+        .output()
+        .expect("run expand");
+    let _ = std::fs::remove_file(&path);
+    (
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+        out.status.success(),
+    )
+}
+
+#[test]
+fn expand_renders_normalized_source() {
+    let (out, err, ok) = expand_src("function   main(  ) {var x=1+2;println(x as str)}");
+    assert!(ok, "stderr: {err}");
+    // Normalized: canonical spacing/indentation, one statement per line.
+    assert!(out.contains("function main() {"), "got:\n{out}");
+    assert!(out.contains("var x = 1 + 2;"), "got:\n{out}");
+}
+
+#[test]
+fn expand_is_idempotent() {
+    // Printing the printer's own output must be a fixed point.
+    let src = "struct P{x:i64,y:i64}\n\
+               function main():i64{var p=P{x:1,y:2};if p.x>0{p.x}else{p.y}}";
+    let first = expand_src(src).0;
+    let second = expand_src(&first).0;
+    assert_eq!(first, second, "expand is not idempotent");
+}
+
+#[test]
+fn expand_output_reparses_and_runs() {
+    // The rendered source is real source: it compiles and runs identically.
+    let src = "function main(){var xs=[1,2,3];var t=0;for n in xs{t=t+n;};println(t as str)}";
+    let expanded = expand_src(src).0;
+    let (out, err, ok) = lang("run", &expanded);
+    assert!(ok, "expanded source failed to run; stderr: {err}\n--- expanded ---\n{expanded}");
+    assert_eq!(out, "6\n");
+}
+
 #[test]
 fn hello_world() {
     let (out, err, ok) = lang("run", "function main() { println(\"hello, world\") }");

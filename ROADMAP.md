@@ -536,8 +536,21 @@ the full typed `Hir` directly and every consumer reads `analysis.hir`.**
         name with its resolution, every call with its dispatch kind). 4 tests.
   - [x] CLI `otter_fusion emit tokens|ast|hir <file>` — deterministic IR dumps
         to stdout. `tokens` (kind + span per line) and `hir` (the printer above)
-        have purpose-built printers; `ast` uses a deterministic pretty-`Debug`
-        (bespoke AST printer is a follow-up). 4 e2e tests.
+        have purpose-built printers; `ast` uses a deterministic pretty-`Debug`.
+        4 e2e tests.
+  - [x] **AST source-printer** (`compiler::ast_print`) — renders any
+        `ast::Module`/`Expr`/`Item` back to *correct* Otter Fusion source:
+        canonical four-space indentation, one statement per line, and
+        conservative parentheses around operator sub-expressions so precedence
+        never changes meaning. Covers every node (all `ExprKind`/`PatternKind`/
+        `TypeKind`/`ItemKind`/`StmtKind`, doc comments, attributes, trailing
+        closures with the implicit `it` binding, generics with bounds/defaults).
+        Guaranteed idempotent on its own output and verified by 13 round-trip
+        unit tests (`parse → print → parse` re-parses with zero errors and
+        prints identically). Wired into `otter_fusion expand <file>`, which
+        parses the entry file and prints it back; output re-parses to the same
+        AST *and* type-checks identically (certified across all 22 examples).
+        3 e2e tests.
   - [x] `emit clif` — `otter_fusion emit clif <file>` dumps every function's
         generated Cranelift IR (post-codegen, pre-machine-code), with a source-
         symbol header per function, in code-generation order. Backed by
@@ -1686,10 +1699,14 @@ the **custom GC allocator (MMTk) the prerequisite** for concurrent collection.
       explanation; an unknown code lists the available ones. Free-form `Message`
       errors stay uncoded (a future refactor would promote common ones to coded
       kinds). 1 CLI test (coded diagnostic + explain + unknown).
-- [ ] Manifest dependencies (`pkg:`) live registry network round-trips,
-      sysroot/stdlib, `expand` (needs an AST source-printer), promoting `Message`
-      errors to coded kinds, concurrent-GC reclamation (custom allocator / MMTk —
-      see GC §), and the remaining `docs/23` surface.
+- [x] **`otter_fusion expand`** (`docs/23`): parse the entry file and print it
+      back through the AST source-printer (`compiler::ast_print`, above).
+      Best-effort on parse errors; output re-parses to the same AST and
+      type-checks identically (certified across all 22 examples). 3 e2e tests.
+- [ ] Remaining: manifest dependencies (`pkg:`) live registry network
+      round-trips and sysroot/stdlib; promoting free-form `Message` errors to
+      coded kinds (widening `explain` coverage); concurrent-GC reclamation
+      (custom allocator / MMTk — see GC §); and the remaining `docs/23` surface.
 
 ## Current vertical-slice target
 Smallest end-to-end program that exercises the full pipeline, expanded each
