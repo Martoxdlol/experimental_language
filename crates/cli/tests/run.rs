@@ -4365,3 +4365,25 @@ fn test_keyword_does_not_reserve_identifier() {
     assert!(ok, "out: {out}");
     assert_eq!(out.trim(), "42");
 }
+
+#[test]
+fn bench_runner_times_and_separates_from_tests() {
+    // `bench` runs only `bench` declarations (timing them); `test` runs only
+    // `test` declarations. A `bench`-mode run reports ns/iter and exits zero.
+    let src = "\
+        function fib(n: i64): i64 { if n < 2 { n } else { fib(n - 1) + fib(n - 2) } }\n\
+        bench \"fib(10)\" { var r = fib(10); if r != 55 { panic(\"wrong\"); } }\n\
+        test \"correctness\" { if fib(7) != 13 { panic(\"wrong\"); } }\n";
+    let (out, _err, ok) = lang("bench", src);
+    assert!(ok, "bench run should succeed; out: {out}");
+    assert!(out.contains("running 1 bench(s)"), "out: {out}");
+    assert!(out.contains("bench fib(10) ... ") && out.contains("ns/iter"), "out: {out}");
+    // The `test` declaration is NOT run by `bench`.
+    assert!(!out.contains("correctness"), "bench must not run tests; out: {out}");
+
+    // And `test` runs only the test, not the bench.
+    let (tout, _e, tok) = lang("test", src);
+    assert!(tok, "out: {tout}");
+    assert!(tout.contains("test correctness ... ok"), "out: {tout}");
+    assert!(!tout.contains("fib(10)"), "test must not run benches; out: {tout}");
+}

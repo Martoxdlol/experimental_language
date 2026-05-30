@@ -103,6 +103,16 @@ enum Command {
         #[arg(long, hide = true)]
         exact: Option<String>,
     },
+    /// Build and run the program's `bench "name" { … }` declarations (`docs/23`),
+    /// timing repeated executions of each body and reporting nanoseconds/iter.
+    Bench {
+        /// Path to a `.otter` file, project directory, or `project.toml`. Omit to
+        /// benchmark the project in the current directory.
+        file: Option<PathBuf>,
+        /// Internal: time exactly this one bench body (by symbol) in this process.
+        #[arg(long, hide = true)]
+        exact: Option<String>,
+    },
     /// Pretty-print an intermediate representation to stdout (observability).
     /// Output is stable and deterministic, so it is safe to snapshot-test.
     Emit {
@@ -204,6 +214,9 @@ enum Stage {
     /// Run exactly one `test` body by its internal symbol (a `otter_fusion test`
     /// child process; `docs/23`). The body panics → process exit 101 = failure.
     Test { symbol: String },
+    /// Time one `bench` body by its symbol (a `otter_fusion bench` child): run an
+    /// adaptive number of iterations and print `ns/iter (<n> iters)` to stdout.
+    Bench { symbol: String },
 }
 
 fn main() -> ExitCode {
@@ -230,7 +243,14 @@ fn main() -> ExitCode {
                 // Child process: run exactly one test body in this process.
                 Some(symbol) => drive(&Input::Auto(path), Stage::Test { symbol }, false, false),
                 // Runner: list the tests and run each in its own child process.
-                None => run_tests(&path),
+                None => run_tests(&path, false),
+            }
+        }
+        Command::Bench { file, exact } => {
+            let path = file.clone().unwrap_or_else(|| PathBuf::from("."));
+            match exact {
+                Some(symbol) => drive(&Input::Auto(path), Stage::Bench { symbol }, false, false),
+                None => run_tests(&path, true),
             }
         }
         Command::Add { name, version, path, git } => deps::add(&name, version, path, git),
@@ -610,6 +630,34 @@ fn drive(input: &Input, stage: Stage, release: bool, time: bool) -> ExitCode {
         };
     }
 
+    // 4'''. Bench child: time one bench body over an adaptive iteration count
+    // (warm up, then grow until the measured window is ≥ ~50ms or capped), and
+    // print the per-iteration nanoseconds + iteration count to stdout.
+    if let Stage::Bench { symbol } = &stage {
+        backend::set_gc_enabled(true);
+        if jit.func_ptr(symbol).is_none() {
+            eprintln!("error: no bench `{symbol}`");
+            return ExitCode::FAILURE;
+        }
+        // Warm up once (also validates the body runs without panicking).
+        unsafe { jit.run_void(symbol) };
+        let mut iters: u64 = 1;
+        loop {
+            let start = std::time::Instant::now();
+            for _ in 0..iters {
+                unsafe { jit.run_void(symbol) };
+            }
+            let elapsed = start.elapsed();
+            // Grow until a stable measurement window, then report ns/iter.
+            if elapsed.as_millis() >= 50 || iters >= 1_000_000_000 {
+                let per = elapsed.as_nanos() / iters as u128;
+                println!("{per} {iters}");
+                return ExitCode::SUCCESS;
+            }
+            iters = iters.saturating_mul(4);
+        }
+    }
+
     // 5. Run `main`, with the tracing GC enabled (programs are single-threaded).
     // `run_main` handles both sync and `async function main` (`docs/21` §6):
     // for the latter, the constructed root future is driven by the runtime
@@ -632,10 +680,12 @@ fn drive(input: &Input, stage: Stage, release: bool, time: bool) -> ExitCode {
     }
 }
 
-/// Run every `test "name" { … }` declaration (`docs/23`), each in its own child
-/// process (`otter_fusion test <path> --exact <symbol>`) so a panicking test fails
-/// only itself. Prints each outcome and a summary; exits non-zero if any failed.
-fn run_tests(path: &Path) -> ExitCode {
+/// Run every `test`/`bench` declaration (`docs/23`), each in its own child
+/// process (`otter_fusion <test|bench> <path> --exact <symbol>`) so a panic fails
+/// only that one. For tests: prints ok/FAILED + a pass/fail summary and exits
+/// non-zero if any failed. For benches (`bench = true`): prints the measured
+/// nanoseconds-per-iteration for each. `bench` selects which declarations to run.
+fn run_tests(path: &Path, bench: bool) -> ExitCode {
     use compiler::ast::ItemKind;
     use compiler::sema::symbols::DefKind;
 
@@ -663,42 +713,53 @@ fn run_tests(path: &Path) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    // (display name, internal symbol) for each test, in declaration order.
-    let tests: Vec<(String, String)> = analysis
+    let kind = if bench { "bench" } else { "test" };
+    // (display name, internal symbol) for each matching declaration, in order.
+    let items: Vec<(String, String)> = analysis
         .program
         .defs
         .iter()
         .filter(|d| d.kind == DefKind::Test)
         .filter_map(|d| match &d.item {
-            Some(ItemKind::Test(t)) => Some((t.name.clone(), d.name.clone())),
+            Some(ItemKind::Test(t)) if t.is_bench == bench => {
+                Some((t.name.clone(), d.name.clone()))
+            }
             _ => None,
         })
         .collect();
 
-    if tests.is_empty() {
-        println!("no tests found");
+    if items.is_empty() {
+        println!("no {kind}es found", kind = if bench { "bench" } else { "test" });
         return ExitCode::SUCCESS;
     }
 
     let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("otter_fusion"));
     let mut passed = 0usize;
     let mut failed = 0usize;
-    println!("running {} test(s)\n", tests.len());
-    for (display, symbol) in &tests {
+    println!("running {} {kind}(s)\n", items.len());
+    for (display, symbol) in &items {
         let out = std::process::Command::new(&exe)
-            .arg("test")
+            .arg(kind)
             .arg(path)
             .arg("--exact")
             .arg(symbol)
             .output();
         match out {
             Ok(o) if o.status.success() => {
-                println!("test {display} ... ok");
+                if bench {
+                    // The child prints "<ns_per_iter> <iters>" to stdout.
+                    let s = String::from_utf8_lossy(&o.stdout);
+                    let mut parts = s.split_whitespace();
+                    let ns = parts.next().unwrap_or("?");
+                    let iters = parts.next().unwrap_or("?");
+                    println!("bench {display} ... {ns} ns/iter ({iters} iters)");
+                } else {
+                    println!("test {display} ... ok");
+                }
                 passed += 1;
             }
             Ok(o) => {
-                println!("test {display} ... FAILED");
-                // Surface the child's panic message / output to explain the failure.
+                println!("{kind} {display} ... FAILED");
                 for stream in [&o.stdout, &o.stderr] {
                     if let Ok(s) = std::str::from_utf8(stream) {
                         for line in s.lines().filter(|l| !l.trim().is_empty()).take(4) {
@@ -709,12 +770,16 @@ fn run_tests(path: &Path) -> ExitCode {
                 failed += 1;
             }
             Err(e) => {
-                println!("test {display} ... FAILED (could not spawn: {e})");
+                println!("{kind} {display} ... FAILED (could not spawn: {e})");
                 failed += 1;
             }
         }
     }
-    println!("\ntest result: {passed} passed; {failed} failed");
+    if bench {
+        println!("\n{passed} {kind}(s) completed; {failed} failed");
+    } else {
+        println!("\ntest result: {passed} passed; {failed} failed");
+    }
     if failed == 0 {
         ExitCode::SUCCESS
     } else {

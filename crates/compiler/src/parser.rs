@@ -289,14 +289,16 @@ impl<'src> Parser<'src> {
             TokenKind::Kw(Keyword::Extend) => ItemKind::Extend(self.parse_extend_item()?),
             TokenKind::Kw(Keyword::Extern) => ItemKind::Extern(self.parse_extern_item()?),
             TokenKind::Kw(Keyword::Import) => ItemKind::Import(self.parse_import_item()?),
-            // `test "name" { … }` — a contextual keyword (not reserved): the bare
-            // identifier `test` immediately followed by a string literal at item
-            // position is a test declaration (`docs/23`).
+            // `test "name" { … }` / `bench "name" { … }` — contextual keywords
+            // (not reserved): a bare `test`/`bench` identifier immediately
+            // followed by a string literal at item position is a test/benchmark
+            // declaration (`docs/23`).
             TokenKind::Ident
-                if self.slice(self.peek_span()) == "test"
+                if matches!(self.slice(self.peek_span()), "test" | "bench")
                     && matches!(self.peek_kind_at(1), TokenKind::StrStart) =>
             {
-                ItemKind::Test(self.parse_test_item()?)
+                let is_bench = self.slice(self.peek_span()) == "bench";
+                ItemKind::Test(self.parse_test_item(is_bench)?)
             }
             _ => {
                 let span = self.peek_span();
@@ -2523,9 +2525,10 @@ impl<'src> Parser<'src> {
 
     // ---- test declaration --------------------------------------------------
 
-    /// Parse `test "name" { … }` (the leading `test` ident is the current token).
-    fn parse_test_item(&mut self) -> Option<TestItem> {
-        self.bump(); // the contextual `test` keyword
+    /// Parse `test "name" { … }` / `bench "name" { … }` (the leading contextual
+    /// keyword is the current token).
+    fn parse_test_item(&mut self, is_bench: bool) -> Option<TestItem> {
+        self.bump(); // the contextual `test`/`bench` keyword
         let lit = self.parse_string_literal();
         let name_span = lit.span;
         // The name must be a plain (non-interpolated) string literal.
@@ -2546,7 +2549,7 @@ impl<'src> Parser<'src> {
             ));
         }
         let body = self.parse_block();
-        Some(TestItem { name, name_span, body })
+        Some(TestItem { name, name_span, is_bench, body })
     }
 
     // ---- string literal parsing -------------------------------------------

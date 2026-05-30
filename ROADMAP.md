@@ -1613,11 +1613,18 @@ the **custom GC allocator (MMTk) the prerequisite** for concurrent collection.
       <symbol>`, a hidden flag) so a panicking test fails only itself; it prints
       each outcome + a summary and exits non-zero if any failed (surfacing the
       panic message on failure). `examples/tests.otter`; 3 CLI tests
-      (pass/fail/all-pass + identifier-still-works) + 2 parser tests. `bench` is
-      the same shape with timing (follow-up).
+      (pass/fail/all-pass + identifier-still-works) + 2 parser tests.
+- [x] **`otter_fusion bench` + the `bench` keyword** (`docs/23`): `bench "name" {
+      … }` — the same contextual-keyword + `DefKind::Test` machinery as `test`
+      (an `is_bench` flag on `TestItem` distinguishes them), so it shares all of
+      the checking/codegen. `otter_fusion bench [path]` runs each `bench` body in
+      its own child (`bench <path> --exact <symbol>`) that warms up then times an
+      **adaptive** iteration count (grows ×4 until the window is ≥ ~50ms) and
+      prints `ns/iter (<n> iters)`. `test` runs only `test`s, `bench` only
+      `bench`es. 1 CLI test (timing + separation). `examples/tests.otter`.
 - [ ] Manifest dependencies (`pkg:`), sysroot/stdlib, `fmt` (needs
       comment-preserving lexing — ordinary comments are not tokens),
-      `lint`/`fix`/`bench`/`repl`, the rest of the `docs/23` subcommand surface.
+      `lint`/`fix`/`repl`, the rest of the `docs/23` subcommand surface.
 
 ## Current vertical-slice target
 Smallest end-to-end program that exercises the full pipeline, expanded each

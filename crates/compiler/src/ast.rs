@@ -106,19 +106,25 @@ pub enum ItemKind {
     /// `extern function`, `extern struct`, `extern type`, `extern var`
     Extern(ExternItem),
     Import(ImportItem),
-    /// `test "name" { … }` — a named unit test (`docs/23`). Runs via `otter_fusion
-    /// test`; passes if its body completes without panicking.
+    /// `test "name" { … }` (or `bench "name" { … }`) — a named unit test or
+    /// benchmark (`docs/23`). A test runs via `otter_fusion test` and passes if its
+    /// body completes without panicking; a benchmark runs via `otter_fusion bench`,
+    /// which times repeated executions of its body.
     Test(TestItem),
 }
 
-// ---- test -------------------------------------------------------------------
+// ---- test / bench -----------------------------------------------------------
 
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct TestItem {
-    /// The test's display name (the string literal after `test`).
+    /// The test/benchmark display name (the string literal after the keyword).
     pub name: String,
     /// Span of the name literal, for diagnostics and a stable identity.
     pub name_span: Span,
+    /// `true` for `bench "…" { }` (timed by `otter_fusion bench`), `false` for
+    /// `test "…" { }` (run by `otter_fusion test`). Both are unit bodies and share
+    /// the same checking/codegen path.
+    pub is_bench: bool,
     pub body: Block,
 }
 
