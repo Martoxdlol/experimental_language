@@ -4324,3 +4324,44 @@ fn publish_rejects_a_binary_package() {
     assert!(e.contains("only library packages can be published"), "stderr: {e}");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+// -- `otter_fusion test` (the test framework, `docs/23`) ----------------------
+
+#[test]
+fn test_runner_reports_pass_and_fail() {
+    // Three tests: two pass, one panics. The runner runs each in its own process,
+    // reports per-test status + a summary, and exits non-zero because one failed.
+    let src = "\
+        function add(a: i64, b: i64): i64 { a + b }\n\
+        test \"addition\" { if add(2, 3) != 5 { panic(\"bad\"); } }\n\
+        test \"commutative\" { if add(1, 2) != add(2, 1) { panic(\"bad\"); } }\n\
+        test \"deliberately broken\" { if add(2, 2) != 5 { panic(\"2+2 is not 5\"); } }\n";
+    let (out, _err, ok) = lang("test", src);
+    assert!(!ok, "suite with a failing test must exit non-zero; out: {out}");
+    assert!(out.contains("test addition ... ok"), "out: {out}");
+    assert!(out.contains("test commutative ... ok"), "out: {out}");
+    assert!(out.contains("test deliberately broken ... FAILED"), "out: {out}");
+    assert!(out.contains("2 passed; 1 failed"), "out: {out}");
+    // The failing test's panic message is surfaced.
+    assert!(out.contains("2+2 is not 5"), "out: {out}");
+}
+
+#[test]
+fn test_runner_all_pass_exits_zero() {
+    let src = "\
+        function sq(n: i64): i64 { n * n }\n\
+        test \"squares\" { if sq(4) != 16 { panic(\"bad\"); } }\n\
+        test \"zero\" { if sq(0) != 0 { panic(\"bad\"); } }\n";
+    let (out, _err, ok) = lang("test", src);
+    assert!(ok, "all-passing suite must exit zero; out: {out}");
+    assert!(out.contains("2 passed; 0 failed"), "out: {out}");
+}
+
+#[test]
+fn test_keyword_does_not_reserve_identifier() {
+    // `test` is a contextual keyword: it is only special as `test "..." { }` at
+    // item position, so `test` remains usable as an ordinary identifier.
+    let (out, _err, ok) = lang("run", "function main() { var test = 42; println(\"${test}\"); }");
+    assert!(ok, "out: {out}");
+    assert_eq!(out.trim(), "42");
+}

@@ -106,6 +106,20 @@ pub enum ItemKind {
     /// `extern function`, `extern struct`, `extern type`, `extern var`
     Extern(ExternItem),
     Import(ImportItem),
+    /// `test "name" { … }` — a named unit test (`docs/23`). Runs via `otter_fusion
+    /// test`; passes if its body completes without panicking.
+    Test(TestItem),
+}
+
+// ---- test -------------------------------------------------------------------
+
+#[derive(Clone, Eq, PartialEq, Debug)]
+pub struct TestItem {
+    /// The test's display name (the string literal after `test`).
+    pub name: String,
+    /// Span of the name literal, for diagnostics and a stable identity.
+    pub name_span: Span,
+    pub body: Block,
 }
 
 // ---- var --------------------------------------------------------------------

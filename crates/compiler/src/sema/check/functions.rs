@@ -5,6 +5,33 @@ use super::*;
 impl<'a> Checker<'a> {
     // -- functions -----------------------------------------------------------
 
+    /// Check a `test "name" { … }` body (`docs/23`): a zero-argument, unit-typed,
+    /// non-async body. Emits a zero-param HIR signature and the body block so
+    /// codegen compiles it as a callable function `otter_fusion test` runs.
+    pub fn check_test(&mut self, def: DefId) {
+        let Some(ItemKind::Test(t)) = self.prog.def(def).item.clone() else {
+            return;
+        };
+        self.cur_module = self.prog.def(def).module;
+        self.cur_generics.clear();
+        self.cur_self_ty = None;
+        self.in_async = false;
+        self.ret_ty = self.tcx.null;
+        self.scopes.clear();
+        self.self_local = None;
+        self.push_scope();
+        self.hir.fn_sigs.insert(
+            def,
+            crate::hir::FnSig { params: Vec::new(), ret: self.tcx.null, async_output: None },
+        );
+        // The body's trailing value (if any) is discarded — a test reports
+        // pass/fail by completing vs. panicking, not by a return value.
+        self.check_block(&t.body, None);
+        let block = self.build_block(&t.body);
+        self.fn_bodies.insert(def, block);
+        self.pop_scope();
+    }
+
     pub fn check_function(&mut self, def: DefId) {
         let Some(ItemKind::Function(f)) = self.prog.def(def).item.clone() else {
             return;

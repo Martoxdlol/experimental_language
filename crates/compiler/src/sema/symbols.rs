@@ -99,6 +99,9 @@ pub enum DefKind {
     ExternStruct,
     ExternType,
     ExternVar,
+    /// A `test "name" { … }` declaration (`docs/23`): a zero-argument unit body
+    /// run by `otter_fusion test`.
+    Test,
 }
 
 impl DefKind {
@@ -120,6 +123,7 @@ impl DefKind {
             ExternStruct => "extern struct",
             ExternType => "extern type",
             ExternVar => "extern variable",
+            Test => "test",
         }
     }
 
@@ -1342,6 +1346,16 @@ impl Program {
             ItemKind::Extern(ext) => self.collect_extern(module, item, ext, public),
             ItemKind::Import(imp) => {
                 self.modules[module.index()].imports.push(imp.clone());
+            }
+            ItemKind::Test(t) => {
+                // A test is a zero-arg unit body run by `otter_fusion test`. It is
+                // not referenceable by name, so it gets a unique internal symbol
+                // (its display name lives on the `Test` item); registered only as
+                // a def so the checker/codegen process it and the runner finds it.
+                let sym = format!("test#{}", self.defs.len());
+                let def = self.add_def(DefKind::Test, sym, module, None, false, item.span);
+                self.attach_item(def, item, &None, None);
+                let _ = t;
             }
         }
     }

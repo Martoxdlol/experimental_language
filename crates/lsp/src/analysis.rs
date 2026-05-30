@@ -614,7 +614,7 @@ pub fn item_name_span(item: &ItemKind) -> Option<Span> {
             ExternItem::OpaqueType(n) => n.span,
             ExternItem::Var { name, .. } => name.span,
         },
-        ItemKind::Extend(_) | ItemKind::Import(_) => return None,
+        ItemKind::Extend(_) | ItemKind::Import(_) | ItemKind::Test(_) => return None,
     })
 }
 
@@ -674,7 +674,8 @@ fn collect_item_type_refs(item: &ItemKind, out: &mut Vec<(Span, String)>) {
             ExternItem::Var { ty, .. } => walk_type(ty, out),
             ExternItem::OpaqueType(_) => {}
         },
-        ItemKind::Import(_) => {}
+        // A test body has no item-level type annotations to index.
+        ItemKind::Import(_) | ItemKind::Test(_) => {}
     }
 }
 

@@ -1603,11 +1603,21 @@ the **custom GC allocator (MMTk) the prerequisite** for concurrent collection.
       one to its def's name span (`def_name_span`), and `goto_definition` tries
       it as a fallback after value resolution. 1 LSP test (param + return + field
       type names). Follow-up: body `var x: T` / `e as T` / pattern type names.
+- [x] **`otter_fusion test` + the `test` keyword** (`docs/23`): named tests
+      `test "name" { … }` — a *contextual* keyword (special only as `test "…" {`
+      at item position, so `test` stays usable as an identifier). Each is a
+      zero-arg unit body (`DefKind::Test`) checked like a function and compiled by
+      the same seed/codegen path; a test passes if its body completes and fails if
+      it panics (assertions via `panic`). `otter_fusion test [path]` enumerates the
+      tests and runs **each in its own child process** (`test <path> --exact
+      <symbol>`, a hidden flag) so a panicking test fails only itself; it prints
+      each outcome + a summary and exits non-zero if any failed (surfacing the
+      panic message on failure). `examples/tests.otter`; 3 CLI tests
+      (pass/fail/all-pass + identifier-still-works) + 2 parser tests. `bench` is
+      the same shape with timing (follow-up).
 - [ ] Manifest dependencies (`pkg:`), sysroot/stdlib, `fmt` (needs
       comment-preserving lexing — ordinary comments are not tokens),
-      `lint`/`fix`/`test`/`bench`/`repl` (`test`/`bench` also need a test-
-      declaration syntax, not yet in the spec), the rest of the `docs/23`
-      subcommand surface.
+      `lint`/`fix`/`bench`/`repl`, the rest of the `docs/23` subcommand surface.
 
 ## Current vertical-slice target
 Smallest end-to-end program that exercises the full pipeline, expanded each

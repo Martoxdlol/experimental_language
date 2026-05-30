@@ -695,6 +695,16 @@ fn document_symbols(c: &Compiled) -> Vec<DocumentSymbol> {
                 };
                 out.push(mk(name, None, kind, item.span, sel, vec![]));
             }
+            ItemKind::Test(t) => {
+                out.push(mk(
+                    format!("test {:?}", t.name),
+                    Some("test".to_string()),
+                    SymbolKind::FUNCTION,
+                    item.span,
+                    t.name_span,
+                    vec![],
+                ));
+            }
             ItemKind::Import(_) => {}
         }
     }

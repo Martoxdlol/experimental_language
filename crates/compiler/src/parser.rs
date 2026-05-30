@@ -289,6 +289,15 @@ impl<'src> Parser<'src> {
             TokenKind::Kw(Keyword::Extend) => ItemKind::Extend(self.parse_extend_item()?),
             TokenKind::Kw(Keyword::Extern) => ItemKind::Extern(self.parse_extern_item()?),
             TokenKind::Kw(Keyword::Import) => ItemKind::Import(self.parse_import_item()?),
+            // `test "name" { … }` — a contextual keyword (not reserved): the bare
+            // identifier `test` immediately followed by a string literal at item
+            // position is a test declaration (`docs/23`).
+            TokenKind::Ident
+                if self.slice(self.peek_span()) == "test"
+                    && matches!(self.peek_kind_at(1), TokenKind::StrStart) =>
+            {
+                ItemKind::Test(self.parse_test_item()?)
+            }
             _ => {
                 let span = self.peek_span();
                 self.error(ParseError::new(
@@ -2510,6 +2519,34 @@ impl<'src> Parser<'src> {
             kind: ExprKind::StructLit { path, fields, spread },
             span,
         }
+    }
+
+    // ---- test declaration --------------------------------------------------
+
+    /// Parse `test "name" { … }` (the leading `test` ident is the current token).
+    fn parse_test_item(&mut self) -> Option<TestItem> {
+        self.bump(); // the contextual `test` keyword
+        let lit = self.parse_string_literal();
+        let name_span = lit.span;
+        // The name must be a plain (non-interpolated) string literal.
+        let mut name = String::new();
+        let mut plain = true;
+        for part in &lit.parts {
+            match part {
+                StringPart::Text { text, .. } => name.push_str(text),
+                _ => plain = false,
+            }
+        }
+        if !plain {
+            self.error(ParseError::new(
+                ParseErrorKind::Message(
+                    "a test name must be a plain string literal (no interpolation)".into(),
+                ),
+                name_span,
+            ));
+        }
+        let body = self.parse_block();
+        Some(TestItem { name, name_span, body })
     }
 
     // ---- string literal parsing -------------------------------------------

@@ -2388,3 +2388,28 @@ pub function main() {
     let (_, errs, _) = parse_src(src);
     assert!(errs.is_empty(), "errors:\n{errs:#?}");
 }
+
+// ---------------------------------------------------------------------------
+// `test "name" { … }` declarations (contextual keyword, docs/23)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn parses_test_declaration() {
+    let m = parse_ok("test \"adds numbers\" { var x = 1 + 2; }");
+    assert_eq!(m.items.len(), 1);
+    match &m.items[0].kind {
+        ItemKind::Test(t) => {
+            assert_eq!(t.name, "adds numbers");
+            assert_eq!(t.body.stmts.len(), 1);
+        }
+        other => panic!("expected a test item, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_is_a_contextual_keyword() {
+    // `test` used as an ordinary identifier (a variable) still parses.
+    let m = parse_ok("function f() { var test = 5; }");
+    assert_eq!(m.items.len(), 1);
+    assert!(matches!(m.items[0].kind, ItemKind::Function(_)));
+}

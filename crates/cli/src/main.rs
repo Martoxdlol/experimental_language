@@ -91,6 +91,18 @@ enum Command {
         /// Path to the `.otter` source file, project directory, or `project.toml`.
         file: PathBuf,
     },
+    /// Build and run the program's `test "name" { … }` declarations (`docs/23`),
+    /// each in its own process so a panic fails only that test. Reports each
+    /// test's outcome and a summary; exits non-zero if any test fails.
+    Test {
+        /// Path to a `.otter` file, project directory, or `project.toml`. Omit to
+        /// test the project in the current directory.
+        file: Option<PathBuf>,
+        /// Internal: run exactly this one test body (by symbol) in this process.
+        /// Used by the runner to isolate each test; not for direct use.
+        #[arg(long, hide = true)]
+        exact: Option<String>,
+    },
     /// Pretty-print an intermediate representation to stdout (observability).
     /// Output is stable and deterministic, so it is safe to snapshot-test.
     Emit {
@@ -189,6 +201,9 @@ enum Stage {
     Check,
     Build { output: Option<PathBuf> },
     Run,
+    /// Run exactly one `test` body by its internal symbol (a `otter_fusion test`
+    /// child process; `docs/23`). The body panics → process exit 101 = failure.
+    Test { symbol: String },
 }
 
 fn main() -> ExitCode {
@@ -209,6 +224,15 @@ fn main() -> ExitCode {
         Command::Exec { file, release, time } => drive(&Input::Exec(file), Stage::Run, release, time),
         Command::Emit { ir, file } => emit(&Input::Auto(file), ir),
         Command::Doc { file } => gen_doc(&Input::Auto(file)),
+        Command::Test { file, exact } => {
+            let path = file.clone().unwrap_or_else(|| PathBuf::from("."));
+            match exact {
+                // Child process: run exactly one test body in this process.
+                Some(symbol) => drive(&Input::Auto(path), Stage::Test { symbol }, false, false),
+                // Runner: list the tests and run each in its own child process.
+                None => run_tests(&path),
+            }
+        }
         Command::Add { name, version, path, git } => deps::add(&name, version, path, git),
         Command::Remove { name } => deps::remove(&name),
         Command::Lock { check } => deps::lock(check),
@@ -573,6 +597,19 @@ fn drive(input: &Input, stage: Stage, release: bool, time: bool) -> ExitCode {
         }
     };
 
+    // 4''. Test child: run exactly one test body. It panics → process exit 101,
+    // which the runner reads as a failure.
+    if let Stage::Test { symbol } = &stage {
+        backend::set_gc_enabled(true);
+        let ran = unsafe { jit.run_void(symbol) };
+        return if ran {
+            ExitCode::SUCCESS
+        } else {
+            eprintln!("error: no test `{symbol}`");
+            ExitCode::FAILURE
+        };
+    }
+
     // 5. Run `main`, with the tracing GC enabled (programs are single-threaded).
     // `run_main` handles both sync and `async function main` (`docs/21` §6):
     // for the latter, the constructed root future is driven by the runtime
@@ -591,6 +628,96 @@ fn drive(input: &Input, stage: Stage, release: bool, time: bool) -> ExitCode {
         ExitCode::SUCCESS
     } else {
         eprintln!("error: no `main` function to run");
+        ExitCode::FAILURE
+    }
+}
+
+/// Run every `test "name" { … }` declaration (`docs/23`), each in its own child
+/// process (`otter_fusion test <path> --exact <symbol>`) so a panicking test fails
+/// only itself. Prints each outcome and a summary; exits non-zero if any failed.
+fn run_tests(path: &Path) -> ExitCode {
+    use compiler::ast::ItemKind;
+    use compiler::sema::symbols::DefKind;
+
+    let input = Input::Auto(path.to_path_buf());
+    let prepared = match prepare(&input) {
+        Ok(p) => p,
+        Err(msg) => {
+            eprintln!("error: {msg}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let map = &prepared.map;
+    let mut had_error = render_load_diags(map, &prepared.diags);
+    if map.file_count() == 0 {
+        eprintln!("\naborting due to previous error(s).");
+        return ExitCode::FAILURE;
+    }
+    let analysis = analyze_multi_ctx(&prepared.root, &prepared.externals, &prepared.ctx);
+    for e in &analysis.errors {
+        render(map, e.span, "error", &e.kind.to_string());
+        had_error = true;
+    }
+    if had_error {
+        eprintln!("\naborting due to previous error(s).");
+        return ExitCode::FAILURE;
+    }
+
+    // (display name, internal symbol) for each test, in declaration order.
+    let tests: Vec<(String, String)> = analysis
+        .program
+        .defs
+        .iter()
+        .filter(|d| d.kind == DefKind::Test)
+        .filter_map(|d| match &d.item {
+            Some(ItemKind::Test(t)) => Some((t.name.clone(), d.name.clone())),
+            _ => None,
+        })
+        .collect();
+
+    if tests.is_empty() {
+        println!("no tests found");
+        return ExitCode::SUCCESS;
+    }
+
+    let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("otter_fusion"));
+    let mut passed = 0usize;
+    let mut failed = 0usize;
+    println!("running {} test(s)\n", tests.len());
+    for (display, symbol) in &tests {
+        let out = std::process::Command::new(&exe)
+            .arg("test")
+            .arg(path)
+            .arg("--exact")
+            .arg(symbol)
+            .output();
+        match out {
+            Ok(o) if o.status.success() => {
+                println!("test {display} ... ok");
+                passed += 1;
+            }
+            Ok(o) => {
+                println!("test {display} ... FAILED");
+                // Surface the child's panic message / output to explain the failure.
+                for stream in [&o.stdout, &o.stderr] {
+                    if let Ok(s) = std::str::from_utf8(stream) {
+                        for line in s.lines().filter(|l| !l.trim().is_empty()).take(4) {
+                            println!("    {line}");
+                        }
+                    }
+                }
+                failed += 1;
+            }
+            Err(e) => {
+                println!("test {display} ... FAILED (could not spawn: {e})");
+                failed += 1;
+            }
+        }
+    }
+    println!("\ntest result: {passed} passed; {failed} failed");
+    if failed == 0 {
+        ExitCode::SUCCESS
+    } else {
         ExitCode::FAILURE
     }
 }

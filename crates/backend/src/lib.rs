@@ -224,6 +224,20 @@ impl Jit {
         true
     }
 
+    /// Run a zero-argument, no-result function by its symbol — used by
+    /// `otter_fusion test` to invoke a `test "name" { … }` body. Returns false if
+    /// the symbol is missing. A failing test panics (process exit 101); the
+    /// runner runs each test in a subprocess and reads the exit code.
+    ///
+    /// # Safety
+    /// The named function must exist and take no arguments / return nothing.
+    pub unsafe fn run_void(&self, name: &str) -> bool {
+        let Some(ptr) = self.func_ptr(name) else { return false };
+        let f: extern "C" fn() = unsafe { std::mem::transmute(ptr) };
+        f();
+        true
+    }
+
     /// Call a zero-argument function returning `i64` (test/`main` convenience).
     ///
     /// # Safety
@@ -789,6 +803,18 @@ impl<'a, M: Module> Codegen<'a, M> {
 
     fn seed(&mut self) -> CgResult<()> {
         for (i, def) in self.analysis.program.defs.iter().enumerate() {
+            // `test "name" { … }` bodies are zero-arg unit functions compiled like
+            // any non-generic function so `otter_fusion test` can call them.
+            if def.kind == DefKind::Test {
+                let did = DefId(i as u32);
+                if let Some(fid) = declare_instance(
+                    self.module, &mut self.funcs, &mut self.worklist,
+                    self.analysis, did, Vec::new(),
+                )? {
+                    self.by_name.entry(def.name.clone()).or_insert(fid);
+                }
+                continue;
+            }
             if !matches!(def.kind, DefKind::Function | DefKind::ExtendMethod)
                 || !def.generics.is_empty()
             {
@@ -854,26 +880,29 @@ impl<'a, M: Module> Codegen<'a, M> {
     fn define_instance(&mut self, inst: Instance) -> CgResult<()> {
         let (def, args) = inst;
         let func_id = self.funcs[&(def, args.clone())];
-        let Some(ItemKind::Function(f)) = self.analysis.program.def(def).item.clone() else {
-            return Ok(());
+        // A free/extend function (with a body) or a `test` body (always present);
+        // anything else (extern, struct, …) has no instance to define.
+        let item = self.analysis.program.def(def).item.clone();
+        let body_present = match &item {
+            Some(ItemKind::Function(f)) => f.body.is_some(),
+            Some(ItemKind::Test(_)) => true,
+            _ => return Ok(()),
         };
         // An async function's body yields the future `Output`, not a `Future`;
         // it lowers to a `Future` state machine (`docs/21`): the function named
         // `func_id` becomes a *constructor* that allocates the machine, and a
-        // separate `poll` function runs the body.
+        // separate `poll` function runs the body. (Tests are never async.)
         if let Some(out) = self.hir.fn_sigs.get(&def).and_then(|s| s.async_output) {
-            if f.body.is_none() {
+            if !body_present {
                 return Ok(());
             }
-            // An async function lowers to a `Future` state machine driven from
-            // its typed HIR body (`docs/21`).
             let hir = self.hir;
             let hb = hir.bodies.get(&def).ok_or_else(|| {
                 CodegenError::new(self.analysis.program.def(def).span, "async function has no HIR body")
             })?;
             return self.define_async_fn(def, args, func_id, BodyView(&hb.block), out);
         }
-        if f.body.is_none() {
+        if !body_present {
             return Ok(());
         }
 

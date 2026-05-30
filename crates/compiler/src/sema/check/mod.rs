@@ -187,6 +187,8 @@ impl<'a> Checker<'a> {
                 // Free functions and `extend` methods share the function checker;
                 // methods additionally bind `self` and the extend's generics.
                 DefKind::Function | DefKind::ExtendMethod => self.check_function(def),
+                // A `test "name" { … }` body: a zero-arg unit body (`docs/23`).
+                DefKind::Test => self.check_test(def),
                 // Record each extern function's C-ABI signature for codegen.
                 DefKind::ExternFunction => self.record_extern_sig(def),
                 _ => {}
@@ -212,12 +214,18 @@ impl<'a> Checker<'a> {
         for id in 0..self.prog.defs.len() {
             let def = DefId(id as u32);
             let d = self.prog.def(def);
-            if !matches!(d.kind, DefKind::Function | DefKind::ExtendMethod) {
+            if !matches!(d.kind, DefKind::Function | DefKind::ExtendMethod | DefKind::Test) {
                 continue;
             }
-            let Some(ItemKind::Function(f)) = &d.item else { continue };
-            let Some(body) = &f.body else { continue };
-            let span = body.span;
+            // The body span comes from the function body or the test block.
+            let span = match &d.item {
+                Some(ItemKind::Function(f)) => match &f.body {
+                    Some(b) => b.span,
+                    None => continue,
+                },
+                Some(ItemKind::Test(t)) => t.body.span,
+                _ => continue,
+            };
             let (params, ret, async_output) = match self.hir.fn_sigs.get(&def) {
                 Some(s) => (
                     s.params.iter().map(|(l, _)| *l).collect::<Vec<_>>(),

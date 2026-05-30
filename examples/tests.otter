@@ -1,0 +1,35 @@
+// Named tests (docs/23): `test "name" { … }` declarations run by `otter_fusion
+// test`. A test passes if its body completes without panicking, and fails if it
+// panics — so assertions are written with `panic`. `test` is a *contextual*
+// keyword: it is only special as `test "..." { }` at item position, so it stays
+// usable as an ordinary identifier elsewhere.
+//
+//   otter_fusion test examples/tests.otter
+//
+// Each test runs in its own process, so one failing (panicking) test does not
+// stop the others; the runner prints each outcome and a summary.
+
+import { panic } from "core:prelude";
+
+function add(a: i64, b: i64): i64 {
+  a + b
+}
+
+function factorial(n: i64): i64 {
+  if n <= 1 { 1 } else { n * factorial(n - 1) }
+}
+
+test "addition" {
+  if add(2, 3) != 5 { panic("2 + 3 should be 5"); }
+}
+
+test "addition is commutative" {
+  if add(7, 11) != add(11, 7) { panic("addition should commute"); }
+}
+
+test "factorial of 5 is 120" {
+  if factorial(5) != 120 { panic("5! should be 120"); }
+}
+
+// `main` is optional in a test file, but a file can have both.
+function main() {}
