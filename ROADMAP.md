@@ -1622,9 +1622,17 @@ the **custom GC allocator (MMTk) the prerequisite** for concurrent collection.
       **adaptive** iteration count (grows ×4 until the window is ≥ ~50ms) and
       prints `ns/iter (<n> iters)`. `test` runs only `test`s, `bench` only
       `bench`es. 1 CLI test (timing + separation). `examples/tests.otter`.
+- [x] **`otter_fusion lint`** (`docs/23`): lightweight static lints over the typed
+      HIR (no extra inference) — **unused local variables** (a `var` binding never
+      read; parameters and `_`-prefixed names exempt) and **unused private
+      functions** (a non-`pub` free function never called or used as a value;
+      `main`/tests/benches/methods exempt). A single HIR walk (`crates/cli/lint.rs`)
+      collects local reads + def references; diagnostics render to stderr, a count
+      to stdout. Purely informational (a clean compile with warnings still exits
+      zero; a compile *error* fails). 2 CLI tests (flags unused / clean program).
 - [ ] Manifest dependencies (`pkg:`), sysroot/stdlib, `fmt` (needs
       comment-preserving lexing — ordinary comments are not tokens),
-      `lint`/`fix`/`repl`, the rest of the `docs/23` subcommand surface.
+      `fix`/`repl`, the rest of the `docs/23` subcommand surface.
 
 ## Current vertical-slice target
 Smallest end-to-end program that exercises the full pipeline, expanded each

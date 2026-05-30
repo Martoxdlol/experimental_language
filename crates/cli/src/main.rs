@@ -26,6 +26,8 @@ use compiler::span::{SourceMap, Span};
 use pkg::loader::{self, LoadDiag};
 use pkg::project::ProjectContext;
 
+mod lint;
+
 /// The Otter Fusion toolchain.
 #[derive(Parser)]
 #[command(name = "otter_fusion", version, about, long_about = None)]
@@ -102,6 +104,13 @@ enum Command {
         /// Used by the runner to isolate each test; not for direct use.
         #[arg(long, hide = true)]
         exact: Option<String>,
+    },
+    /// Report lint warnings (`docs/23`): unused local variables and unused
+    /// private functions. Informational — exits zero even when warnings are found.
+    Lint {
+        /// Path to a `.otter` file, project directory, or `project.toml`. Omit to
+        /// lint the project in the current directory.
+        file: Option<PathBuf>,
     },
     /// Build and run the program's `bench "name" { … }` declarations (`docs/23`),
     /// timing repeated executions of each body and reporting nanoseconds/iter.
@@ -252,6 +261,9 @@ fn main() -> ExitCode {
                 Some(symbol) => drive(&Input::Auto(path), Stage::Bench { symbol }, false, false),
                 None => run_tests(&path, true),
             }
+        }
+        Command::Lint { file } => {
+            run_lint(&Input::Auto(file.unwrap_or_else(|| PathBuf::from("."))))
         }
         Command::Add { name, version, path, git } => deps::add(&name, version, path, git),
         Command::Remove { name } => deps::remove(&name),
@@ -785,6 +797,45 @@ fn run_tests(path: &Path, bench: bool) -> ExitCode {
     } else {
         ExitCode::FAILURE
     }
+}
+
+/// Run `otter_fusion lint` (`docs/23`): analyze the program and print lint
+/// warnings (unused locals / unused private functions). Purely informational —
+/// a clean compile with warnings still exits zero; a compile *error* fails.
+fn run_lint(input: &Input) -> ExitCode {
+    let prepared = match prepare(input) {
+        Ok(p) => p,
+        Err(msg) => {
+            eprintln!("error: {msg}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let map = &prepared.map;
+    let mut had_error = render_load_diags(map, &prepared.diags);
+    if map.file_count() == 0 {
+        eprintln!("\naborting due to previous error(s).");
+        return ExitCode::FAILURE;
+    }
+    let analysis = analyze_multi_ctx(&prepared.root, &prepared.externals, &prepared.ctx);
+    for e in &analysis.errors {
+        render(map, e.span, "error", &e.kind.to_string());
+        had_error = true;
+    }
+    if had_error {
+        eprintln!("\naborting due to previous error(s).");
+        return ExitCode::FAILURE;
+    }
+
+    let warnings = lint::collect_lints(&analysis, map);
+    for (span, msg) in &warnings {
+        render(map, *span, "warning", msg);
+    }
+    match warnings.len() {
+        0 => println!("ok: no lint warnings"),
+        1 => println!("1 warning"),
+        n => println!("{n} warnings"),
+    }
+    ExitCode::SUCCESS
 }
 
 /// Print a program's execution time to stderr in a stable, human-readable and

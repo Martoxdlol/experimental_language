@@ -4387,3 +4387,34 @@ fn bench_runner_times_and_separates_from_tests() {
     assert!(tout.contains("test correctness ... ok"), "out: {tout}");
     assert!(!tout.contains("fib(10)"), "test must not run benches; out: {tout}");
 }
+
+#[test]
+fn lint_flags_unused_local_and_function() {
+    // `never_called` (private, uncalled) and `dead` (bound, unread) are flagged;
+    // `_ignored`, `kept` (read), `used` (called), and `main` are not.
+    let src = "\
+        function used() { println(\"hi\"); }\n\
+        function never_called(): i64 { 42 }\n\
+        function main() {\n\
+          var dead = 5;\n\
+          var kept = 10;\n\
+          var _ignored = 99;\n\
+          used();\n\
+          println(\"${kept}\");\n\
+        }\n";
+    let (out, err, ok) = lang("lint", src);
+    assert!(ok, "lint is informational and must exit zero; out: {out} err: {err}");
+    // Diagnostics render to stderr; the count summary goes to stdout.
+    assert!(err.contains("unused function `never_called`"), "err: {err}");
+    assert!(err.contains("unused variable `dead`"), "err: {err}");
+    assert!(!err.contains("`_ignored`"), "underscore vars are exempt; err: {err}");
+    assert!(!err.contains("`kept`") && !err.contains("`used`"), "err: {err}");
+    assert!(out.contains("2 warnings"), "out: {out}");
+}
+
+#[test]
+fn lint_clean_program_has_no_warnings() {
+    let (out, _e, ok) = lang("lint", "function main() { var x = 5; println(\"${x}\"); }");
+    assert!(ok, "out: {out}");
+    assert!(out.contains("no lint warnings"), "out: {out}");
+}
