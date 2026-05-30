@@ -512,6 +512,21 @@ static MUTATORS: Mutex<Vec<Arc<Mutator>>> = Mutex::new(Vec::new());
 /// Set while a collection is in progress; mutators that observe it park.
 static STOP: AtomicBool = AtomicBool::new(false);
 
+/// The **world barrier**. The collector holds this across the entire
+/// stop→mark→sweep→resume, and every transition *into* `M_RUNNING` (resuming
+/// from a park, returning from a native call, or a freshly-spawned thread
+/// starting) must acquire it and re-check `STOP` first. This is what makes the
+/// stop-the-world sound: a snapshot-and-proceed scheme alone cannot prevent a
+/// mutator from re-entering `RUNNING` after the collector's quiescence check and
+/// mutating the heap concurrently with marking (dropping a freshly-stored
+/// pointer the collector has already scanned past — a use-after-free no
+/// stack/register scan can recover). Holding this lock across the collection
+/// gives true mutual exclusion: no mutator executes program code while the
+/// collector runs. Because a parking thread does **not** take this lock (only a
+/// *resuming* one does), the collector's quiescence wait never deadlocks against
+/// it.
+static WORLD: Mutex<()> = Mutex::new(());
+
 /// Globally-pinned GC roots: field-block pointers kept alive regardless of any
 /// thread's stack. A spawned thread's closure environment and (eventual) result
 /// live here so they survive collection even during the cross-thread handoff
@@ -620,7 +635,20 @@ fn park_self(fp: usize) {
         *h.0.roots.lock().unwrap() = roots;
         h.0.state.store(M_PARKED, Ordering::SeqCst);
         wait_for_resume();
-        h.0.state.store(M_RUNNING, Ordering::SeqCst);
+        // Resume only through the world barrier: take `WORLD` and re-check
+        // `STOP`, so we cannot re-enter `RUNNING` while a (new) collection holds
+        // the barrier. Parking itself never takes `WORLD`, so this cannot
+        // deadlock the collector's quiescence wait.
+        loop {
+            let _world = WORLD.lock().unwrap();
+            if STOP.load(Ordering::SeqCst) {
+                drop(_world);
+                wait_for_resume();
+                continue;
+            }
+            h.0.state.store(M_RUNNING, Ordering::SeqCst);
+            break;
+        }
     });
 }
 
@@ -650,9 +678,16 @@ fn run_collection() {
     if !still_over {
         return;
     }
-    let roots = stop_the_world();
-    unsafe { collect(&roots) };
-    resume_the_world();
+    {
+        // Hold the world barrier across the whole stop→collect→resume: no mutator
+        // can enter `RUNNING` (and run program code) until we clear `STOP` and
+        // release this. Combined with the quiescence wait, this guarantees the
+        // collector marks/sweeps with the world truly stopped.
+        let _world = WORLD.lock().unwrap();
+        let roots = stop_the_world();
+        unsafe { collect(&roots) };
+        resume_the_world();
+    }
     // Run finalizers with the world resumed (so `drop` bodies are ordinary code)
     // but still under the GC turn (so no nested collection runs).
     run_finalizers();
@@ -668,6 +703,35 @@ pub extern "C" fn lang_gc_safepoint() {
         return;
     }
     park_self(current_fp());
+}
+
+/// Register a freshly-spawned worker as a mutator and gate its start on the
+/// world barrier, so it cannot begin running program code while a collection is
+/// in progress. Call once at the very top of a spawned thread, before any
+/// managed code. Its only live managed state here (the closure environment) is
+/// pinned by the spawner, so blocking on the barrier is safe even though no
+/// generated frame yet exists to scan.
+pub fn thread_start() {
+    ME.with(|h| {
+        // Present as parked (not running) while we contend for the barrier, so a
+        // collection in progress does not wait on us — we hold no scannable roots
+        // yet, and our env is pinned by the spawner. (Were we to wait on `WORLD`
+        // while `M_RUNNING`, the collector — which holds `WORLD` — would spin in
+        // its quiescence wait waiting for us: deadlock.)
+        h.0.state.store(M_PARKED, Ordering::SeqCst);
+        loop {
+            if STOP.load(Ordering::SeqCst) {
+                wait_for_resume();
+            }
+            let _world = WORLD.lock().unwrap();
+            if STOP.load(Ordering::SeqCst) {
+                drop(_world);
+                continue;
+            }
+            h.0.state.store(M_RUNNING, Ordering::SeqCst);
+            break;
+        }
+    });
 }
 
 /// Mark the current thread as entering a blocking runtime call (channel recv,
@@ -699,17 +763,32 @@ pub fn enter_native() {
 /// before resuming mutation (our stack was already scanned in native state).
 pub fn leave_native() {
     ME.with(|h| {
-        if STOP.load(Ordering::Acquire) {
-            wait_for_resume();
+        // Resume through the world barrier (see [`WORLD`]). While a collection
+        // holds it, we stay in native (our published roots remain valid) and
+        // wait; we run no program code until we hold the barrier with `STOP`
+        // clear, so we can never mutate the heap concurrently with marking.
+        loop {
+            if STOP.load(Ordering::SeqCst) {
+                wait_for_resume();
+            }
+            let _world = WORLD.lock().unwrap();
+            if STOP.load(Ordering::SeqCst) {
+                drop(_world);
+                continue;
+            }
+            h.0.state.store(M_RUNNING, Ordering::SeqCst);
+            break;
         }
-        h.0.state.store(M_RUNNING, Ordering::SeqCst);
     });
 }
 
 /// Stop every other mutator and gather the precise roots of all threads. Caller
 /// must hold [`GC_TURN`]. Returns once the world is stopped.
 fn stop_the_world() -> Vec<usize> {
-    STOP.store(true, Ordering::Release);
+    // SeqCst pairs with the SeqCst `STOP` re-checks in the `→ RUNNING`
+    // transitions (all performed while holding `WORLD`, which this collector
+    // also holds) — together they make the barrier handoff race-free.
+    STOP.store(true, Ordering::SeqCst);
     let me_ptr = ME.with(|h| Arc::as_ptr(&h.0));
     // Wait for every other mutator to reach a safepoint or native state.
     loop {
@@ -778,24 +857,15 @@ fn maybe_collect() {
     if PAUSE_DEPTH.load(Ordering::SeqCst) != 0 {
         return;
     }
-    // Concurrent *reclamation* remains gated: while more than one mutator is live
-    // we do not collect (garbage retention grows, reclaimed once the spawned
-    // threads join). This is memory-safe — a live object is never freed.
-    //
-    // The custom slab allocator (`gc_alloc`) removed the *deadlock* prerequisite:
-    // a stop-the-world sweep now reclaims into the GC's own free lists and never
-    // contends with a mutator parked inside the system `malloc`. But that is only
-    // one of the two blockers. Lifting this gate was re-validated after the
-    // allocator landed: a dedicated heavy-allocation stress (8 workers churning
-    // lists/strings under `OTTER_FUSION_GC=stress`) still SIGSEGVs — a live object
-    // reachable only through a cross-thread root not yet published to a scanned
-    // stack is swept. Precise cross-thread root publication (or MMTk) is the
-    // remaining production path (`docs/16`/`docs/20`/`ROADMAP.md`); until then the
-    // gate stays, because an intermittent use-after-free is never acceptable.
-    if MUTATORS.lock().unwrap().len() > 1 {
-        return;
-    }
-    if STOP.load(Ordering::Acquire) {
+    // Concurrent reclamation is ENABLED. Two prerequisites are in place:
+    // (1) the custom slab allocator (`gc_alloc`) means the sweep reclaims into
+    // our own free lists and never deadlocks against a mutator parked inside the
+    // system `malloc`; (2) the world barrier (`WORLD`) gives the collector true
+    // mutual exclusion — held across the whole stop→mark→sweep→resume, with every
+    // `→ RUNNING` transition (park-resume, native-return, thread-start) gated on
+    // it — so no mutator ever runs program code, and thus never mutates the heap,
+    // while the collector marks/sweeps (`docs/16`/`docs/20`).
+    if STOP.load(Ordering::SeqCst) {
         // A collection by the (sole) prior collector is wrapping up; cooperate.
         park_self(current_fp());
         return;

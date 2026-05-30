@@ -816,11 +816,26 @@ The tracing GC is functionally complete for single-threaded programs.
       set `LANG_GC=stress` but the runtime reads `OTTER_FUSION_GC` (stale from the
       binary rename); fixed across the 7 cases + the framework docs, so the churn
       suites now genuinely collect on every alloc (~26× slower, as expected).
-- [~] **Concurrent reclamation still gated — root cause narrowed to a STW
-      publication race.** With `gc_alloc` in place (deadlock prerequisite closed),
-      the gate was lifted and the heavy churn stress (`/tmp` repro: 4–8 workers
-      building lists/strings in a loop under `OTTER_FUSION_GC=stress`) was used to
-      isolate the remaining blocker, with a definitive sequence of experiments:
+- [x] **Concurrent reclamation — DONE (world-barrier stop-the-world).** The
+      collector now runs even while multiple mutators are live; the gate is
+      removed. Two prerequisites made it sound: the custom slab allocator
+      (`gc_alloc`, no system-`malloc` contention during sweep) and a **world
+      barrier** (`WORLD: Mutex<()>`). The collector holds `WORLD` across the
+      entire stop→mark→sweep→resume, and **every transition into `M_RUNNING`** —
+      a thread resuming from a park, returning from a native call (`leave_native`),
+      or a freshly-spawned worker starting (`gc::thread_start`, called at the top
+      of both spawn paths) — must acquire `WORLD` and re-check `STOP` first, while
+      presenting as non-running so the collector's quiescence wait never deadlocks
+      on it. This gives true mutual exclusion: **no mutator executes program code
+      (and so never mutates the heap) while the collector marks/sweeps**, which is
+      exactly the invariant a snapshot-and-proceed scheme could not hold. Verified
+      against the deterministic repro that previously SIGSEGV'd every run: the
+      heavy 8-worker churn passes **130/130** under `OTTER_FUSION_GC=stress`
+      (0 crashes, 0 hangs, exact result), the light repro **30/30**, and a new
+      regression case `concurrency/concurrent_gc_reclamation.otter` (6 workers,
+      heavy alloc, exact schedule-independent total) is in the suite. Full
+      workspace green (1038) + 176 e2e cases. The earlier diagnostic journey
+      (kept for the record):
         1. **It is over-collection.** Sweep-leaks-instead-of-frees ⇒ 0 failures;
            real free ⇒ corruption. A *live* object is being reclaimed.
         2. **The missed root is not on any stack.** Added conservative scanning of
@@ -850,18 +865,14 @@ The tracing GC is functionally complete for single-threaded programs.
           between them).
         - **Eager `thread_start()`** — a spawned worker registers and parks
           *before* running program code, so it is never an unaccounted runner.
-      With all three, the assertion *still* fires (residual transitions, e.g.
-      threads in non-bracketed native waits such as the async timer's
-      `std::thread::sleep`). **Definitive conclusion: the snapshot-and-proceed STW
-      model is structurally insufficient; a true barrier rendezvous is required**
-      — every mutator must acknowledge the stop at a safepoint *this cycle* and be
-      unable to enter `RUNNING` until resume, with all blocking native waits
-      bracketed. That is the MMTk-class redesign. All experiments reverted; the
-      gate stays (memory-safe, 0/20 stress mismatches). An intermittent
-      use-after-free is never shipped.
-**Per-thread TLABs** and MMTk/Immix remain the eventual production plan (the
-`gc` interface stays the same). The custom allocator is the first prerequisite;
-a barrier-rendezvous STW (not snapshot-and-proceed) is the remaining one.
+      With all three, the assertion *still* fired (snapshot-and-proceed cannot, on
+      its own, stop a thread from re-entering `RUNNING` after the quiescence
+      check). **That is what the world barrier above resolves** — by making the
+      `→ RUNNING` transitions themselves block on the lock the collector holds,
+      rather than trying to detect them after the fact.
+**Per-thread TLABs** and MMTk/Immix remain a future *throughput* optimization
+(the `gc` interface stays the same), but concurrent reclamation is now correct
+and complete with the world-barrier mark-sweep.
 - [x] **Methods via `extend`** (inherent): `self` (by-pointer for structs, so
       mutation is visible to the caller), method args, methods calling methods,
       methods returning `Self`-typed values, same method name on different types
@@ -1780,16 +1791,17 @@ a barrier-rendezvous STW (not snapshot-and-proceed) is the remaining one.
       the full protocol, and `crates/pkg/tests/live_registry.rs` round-trips the
       `HttpRegistry` client against it over real TCP (publish/index/download/
       verify/search/yank).
-- [x] **Custom GC allocator** (`gc_alloc`) — done; closes the deadlock half of
-      the concurrent-reclamation prerequisite and makes the GC-stress suite
-      actually stress (see GC §).
-- [ ] Remaining: **concurrent-GC reclamation** — the last hard piece. The
-      allocator half is done; what remains is precise cross-thread root capture
-      (register-resident roots at the stop point) or the MMTk move. Re-validated
-      this session: lifting the gate still SIGSEGVs under heavy concurrent
-      allocation, so it stays gated (memory-safe). Plus the few advanced
-      deferrals noted inline (git fetching, optional-dep features, multi-major
-      coexistence, publish metadata-sidecar).
+- [x] **Custom GC allocator** (`gc_alloc`) — done; no system-`malloc` contention
+      during sweep, and the GC-stress suite actually stresses (see GC §).
+- [x] **Concurrent-GC reclamation** — DONE via the world-barrier stop-the-world
+      (see GC §): the collector runs while multiple mutators are live, the gate is
+      removed, and the deterministic heavy-churn repro that previously SIGSEGV'd
+      every run is clean 130/130 under stress, with a regression case in the
+      suite.
+- [ ] Remaining: only the advanced deferrals noted inline — git dependency
+      *fetching*, feature-gated optional-dep resolution, multi-major coexistence,
+      and the publish metadata-sidecar. Plus throughput follow-ups (per-thread
+      TLABs / MMTk Immix) that do not change behavior.
 
 ## Current vertical-slice target
 Smallest end-to-end program that exercises the full pipeline, expanded each

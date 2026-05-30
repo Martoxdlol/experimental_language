@@ -123,6 +123,9 @@ pub unsafe extern "C" fn lang_thread_spawn(env: *mut u8, float_kind: i64) -> u64
 
     let worker = ctl.clone();
     let os = std::thread::spawn(move || {
+        // Register as a mutator and gate on the world barrier before touching
+        // managed memory, so the collector always accounts for this thread.
+        gc::thread_start();
         let fn_ptr = unsafe { (env_addr as *const usize).read() };
         let result = match float_kind {
             8 => {
@@ -167,6 +170,7 @@ pub unsafe extern "C" fn lang_async_spawn(fut: *mut u8, pending_tid: i64) -> u64
 
     let worker = ctl.clone();
     let os = std::thread::spawn(move || {
+        gc::thread_start();
         let result = unsafe { crate::async_rt::lang_block_on(fut_addr as *mut u8, pending_tid) };
         gc::add_extra_root(result as usize); // pin the result for the joiner
         gc::remove_extra_root(fut_addr);
