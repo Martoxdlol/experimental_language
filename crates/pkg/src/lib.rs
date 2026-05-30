@@ -19,6 +19,7 @@ pub mod package;
 pub mod project;
 pub mod registry;
 pub mod resolve;
+pub mod server;
 pub mod store;
 pub mod version;
 

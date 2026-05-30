@@ -242,6 +242,22 @@ enum Command {
     },
     /// Check resolved dependencies against the registry's advisory database.
     Audit,
+    /// Host a private package registry (`docs/23` §7): serve the sparse-HTTP
+    /// index, tarball downloads, and the publish/yank/search API from a local
+    /// directory. Runs in the foreground until terminated.
+    Serve {
+        /// The registry store directory (sparse index + tarballs; created if
+        /// absent). Mirrors the layout `otter_fusion publish` uploads into.
+        #[arg(long, default_value = "registry")]
+        dir: PathBuf,
+        /// Address to bind, `host:port`.
+        #[arg(long, default_value = "127.0.0.1:8080")]
+        bind: String,
+        /// Require this bearer token for writes (`publish`/`yank`); reads stay
+        /// open. Omit to allow anonymous writes (development only).
+        #[arg(long)]
+        token: Option<String>,
+    },
 }
 
 /// The intermediate representations `otter_fusion emit` can print.
@@ -329,6 +345,28 @@ fn main() -> ExitCode {
         Command::Publish { dry_run } => deps::publish(dry_run),
         Command::Yank { version } => deps::yank(version),
         Command::Audit => deps::audit(),
+        Command::Serve { dir, bind, token } => run_serve(dir, &bind, token),
+    }
+}
+
+/// `otter_fusion serve` — host a private registry from `dir` on `bind`.
+fn run_serve(dir: PathBuf, bind: &str, token: Option<String>) -> ExitCode {
+    match pkg::server::serve_on(bind, dir.clone(), token.clone()) {
+        Ok(handle) => {
+            println!("registry serving `{}` at {}", dir.display(), handle.base_url());
+            if token.is_some() {
+                println!("writes require the configured bearer token; reads are open");
+            } else {
+                println!("anonymous writes allowed (development only)");
+            }
+            println!("press Ctrl-C to stop");
+            handle.wait();
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("error: cannot bind `{bind}`: {e}");
+            ExitCode::FAILURE
+        }
     }
 }
 

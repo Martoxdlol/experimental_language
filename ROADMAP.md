@@ -86,15 +86,21 @@ The full module/import/package system, end to end.
 - **Package manager** (`crates/pkg`): `project.toml` manifest, `project.lock`
   lockfile (+ sha256 verify), semver resolution (unify compatible ranges),
   content-addressed store, sparse-HTTP registry protocol (behind a `Registry`
-  trait: real `HttpRegistry` + `LocalRegistry` fixture), transitive resolver
-  (path + registry deps). `pkg:` binding compiles dependency libraries and
-  exposes their `pub` API. CLI: `add`/`remove`/`update`/`lock`(+`--check`)/
-  `tree`/`why`/`vendor`/`login`/`logout`/`search`/`publish`/`yank`/`audit`.
+  trait: real `HttpRegistry` + `LocalRegistry` fixture) **and a matching
+  server** (`server.rs`, dependency-free HTTP/1.1 on `TcpListener`), transitive
+  resolver (path + registry deps). `pkg:` binding compiles dependency libraries
+  and exposes their `pub` API. CLI: `add`/`remove`/`update`/`lock`(+`--check`)/
+  `tree`/`why`/`vendor`/`login`/`logout`/`search`/`publish`/`yank`/`audit`, plus
+  `serve` (host a private registry). **Live registry network round-trips are now
+  exercised end-to-end**: `crates/pkg/tests/live_registry.rs` boots the server on
+  an ephemeral localhost port and round-trips `HttpRegistry` connect → publish
+  (auth-gated) → index → download → checksum-verify → search (yank-aware) → yank
+  over real TCP (3 tests). The offline `LocalRegistry` still proves resolution.
   Deferred (advanced): git dependency *fetching* (sources recorded, not cloned),
   feature-gated optional-dep resolution (`[features]` parsed; optional deps
-  skipped), multi-major coexistence (incompatible majors error), and live
-  registry network round-trips for publish/yank/search/audit (implemented; only
-  the offline-testable parts are exercised — no live server in tests).
+  skipped), multi-major coexistence (incompatible majors error), and the
+  metadata-sidecar on publish (the server records empty `deps` for uploaded
+  versions — sufficient to host/resolve; dependency edges are written directly).
 - **Tests**: `imports` 11, `pkg` 80+ (manifest/loader/lockfile/store/semver/
   registry/resolve/commands/credentials/package), `cli` e2e (every scheme,
   run modes, escape rule, file: gating, dep commands, `pkg:` run e2e). All
@@ -1711,9 +1717,15 @@ the **custom GC allocator (MMTk) the prerequisite** for concurrent collection.
       type-checks identically (certified across all 22 examples). 3 e2e tests.
 - [x] **Promote recurring `Message` errors to coded kinds** — done (see the
       `explain` entry above; `E0013`–`E0019`).
-- [ ] Remaining: manifest dependencies (`pkg:`) live registry network
-      round-trips and sysroot/stdlib; concurrent-GC reclamation (custom
-      allocator / MMTk — see GC §); and the remaining `docs/23` surface.
+- [x] **`pkg:` live registry network round-trips** — done: a dependency-free
+      sparse-HTTP registry server (`pkg::server`, CLI `otter_fusion serve`) hosts
+      the full protocol, and `crates/pkg/tests/live_registry.rs` round-trips the
+      `HttpRegistry` client against it over real TCP (publish/index/download/
+      verify/search/yank).
+- [ ] Remaining: **concurrent-GC reclamation** (custom allocator / MMTk — see
+      GC §; the one piece needing a major allocator subsystem) and the few
+      advanced deferrals noted inline (git fetching, optional-dep features,
+      multi-major coexistence, publish metadata-sidecar).
 
 ## Current vertical-slice target
 Smallest end-to-end program that exercises the full pipeline, expanded each
