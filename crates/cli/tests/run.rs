@@ -4449,3 +4449,31 @@ fn fix_prefixes_unused_variables() {
 
     let _ = std::fs::remove_file(&path);
 }
+
+#[test]
+fn fmt_reindents_and_check_gates() {
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!("lang_fmt_{}.otter", nonce()));
+    // Deliberately mis-indented (no prelude needed — fmt is text-only).
+    std::fs::write(&path, "function main() {\nvar x = 1;\n  if x > 0 {\nx = 2;\n}\n}\n").unwrap();
+
+    // --check: reports it needs formatting and exits non-zero, without writing.
+    let chk = Command::new(env!("CARGO_BIN_EXE_otter_fusion"))
+        .arg("fmt").arg(&path).arg("--check").output().unwrap();
+    assert!(!chk.status.success(), "check must fail on unformatted input");
+    assert!(String::from_utf8_lossy(&chk.stdout).contains("need formatting"));
+    assert!(std::fs::read_to_string(&path).unwrap().contains("\nvar x = 1;"), "check must not modify");
+
+    // Apply: reindents to two spaces per level.
+    let fix = Command::new(env!("CARGO_BIN_EXE_otter_fusion")).arg("fmt").arg(&path).output().unwrap();
+    assert!(fix.status.success());
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(after, "function main() {\n  var x = 1;\n  if x > 0 {\n    x = 2;\n  }\n}\n", "got:\n{after}");
+
+    // --check now passes (idempotent / already formatted).
+    let chk2 = Command::new(env!("CARGO_BIN_EXE_otter_fusion"))
+        .arg("fmt").arg(&path).arg("--check").output().unwrap();
+    assert!(chk2.status.success(), "formatted file must pass --check");
+
+    let _ = std::fs::remove_file(&path);
+}

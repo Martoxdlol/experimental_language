@@ -26,6 +26,7 @@ use compiler::span::{FileId, SourceMap, Span};
 use pkg::loader::{self, LoadDiag};
 use pkg::project::ProjectContext;
 
+mod fmt;
 mod lint;
 
 /// The Otter Fusion toolchain.
@@ -104,6 +105,18 @@ enum Command {
         /// Used by the runner to isolate each test; not for direct use.
         #[arg(long, hide = true)]
         exact: Option<String>,
+    },
+    /// Format `.otter` source (`docs/23`): normalize indentation and whitespace.
+    /// Conservative — only whitespace changes (verified by re-lexing). Rewrites
+    /// files in place; `--check` reports unformatted files and exits non-zero.
+    Fmt {
+        /// A `.otter` file or a directory (formatted recursively). Omit for the
+        /// current directory.
+        file: Option<PathBuf>,
+        /// Do not write; list files that are not formatted and exit non-zero if
+        /// any differ (the CI gate).
+        #[arg(long)]
+        check: bool,
     },
     /// Report lint warnings (`docs/23`): unused local variables and unused
     /// private functions. Informational — exits zero even when warnings are found.
@@ -272,6 +285,9 @@ fn main() -> ExitCode {
                 Some(symbol) => drive(&Input::Auto(path), Stage::Bench { symbol }, false, false),
                 None => run_tests(&path, true),
             }
+        }
+        Command::Fmt { file, check } => {
+            run_fmt(&file.unwrap_or_else(|| PathBuf::from(".")), check)
         }
         Command::Lint { file } => {
             run_lint(&Input::Auto(file.unwrap_or_else(|| PathBuf::from("."))))
@@ -810,6 +826,90 @@ fn run_tests(path: &Path, bench: bool) -> ExitCode {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
+    }
+}
+
+/// Run `otter_fusion fmt` (`docs/23`): format a `.otter` file or every `.otter`
+/// file under a directory. Each file is reformatted and the result is verified
+/// to preserve the token stream (only whitespace may change) before it is
+/// written. With `check`, nothing is written: unformatted files are listed and
+/// the command exits non-zero (the CI gate).
+fn run_fmt(path: &Path, check: bool) -> ExitCode {
+    let mut files = Vec::new();
+    collect_otter_files(path, &mut files);
+    if files.is_empty() {
+        eprintln!("error: no `.otter` files found at `{}`", path.display());
+        return ExitCode::FAILURE;
+    }
+    files.sort();
+    let mut changed = 0usize;
+    let mut unchanged = 0usize;
+    for file in &files {
+        let src = match std::fs::read_to_string(file) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("error: cannot read `{}`: {e}", file.display());
+                return ExitCode::FAILURE;
+            }
+        };
+        let formatted = fmt::format_source(&src);
+        // Safety net: a reformat must never change code, only whitespace.
+        if !fmt::token_stream_preserved(&src, &formatted) {
+            eprintln!(
+                "error: refusing to format `{}` — the reformat would change tokens \
+                 (please report this as a `fmt` bug)",
+                file.display()
+            );
+            return ExitCode::FAILURE;
+        }
+        if formatted == src {
+            unchanged += 1;
+            continue;
+        }
+        changed += 1;
+        if check {
+            println!("would format {}", file.display());
+        } else if let Err(e) = std::fs::write(file, &formatted) {
+            eprintln!("error: cannot write `{}`: {e}", file.display());
+            return ExitCode::FAILURE;
+        } else {
+            println!("formatted {}", file.display());
+        }
+    }
+    if check {
+        if changed == 0 {
+            println!("all {unchanged} file(s) already formatted");
+            ExitCode::SUCCESS
+        } else {
+            println!("{changed} file(s) need formatting");
+            ExitCode::FAILURE
+        }
+    } else {
+        println!("formatted {changed}, unchanged {unchanged}");
+        ExitCode::SUCCESS
+    }
+}
+
+/// Collect `.otter` files: `path` itself if it is one, else every `.otter` file
+/// under it (recursively, skipping hidden directories and a `target` build dir).
+fn collect_otter_files(path: &Path, out: &mut Vec<PathBuf>) {
+    if path.is_file() {
+        if path.extension().is_some_and(|e| e == "otter") {
+            out.push(path.to_path_buf());
+        }
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(path) else { return };
+    for entry in entries.flatten() {
+        let p = entry.path();
+        let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if p.is_dir() {
+            if !name.starts_with('.') && name != "target" {
+                collect_otter_files(&p, out);
+            }
+        } else if p.extension().is_some_and(|e| e == "otter") {
+            out.push(p);
+        }
     }
 }
 

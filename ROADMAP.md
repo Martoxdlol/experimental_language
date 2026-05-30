@@ -1637,9 +1637,23 @@ the **custom GC allocator (MMTk) the prerequisite** for concurrent collection.
       applies them right-to-left so offsets stay valid, and rewrites in place;
       `--check` reports without writing. 1 CLI test (check → no change; apply →
       `_`-prefixed, used var untouched, lint then clean).
-- [ ] Manifest dependencies (`pkg:`), sysroot/stdlib, `fmt` (needs
-      comment-preserving lexing — ordinary comments are not tokens), `repl`, the
-      rest of the `docs/23` subcommand surface.
+- [x] **`otter_fusion fmt`** (`docs/23`): a conservative source formatter
+      (`crates/cli/fmt.rs`). Normalizes **indentation** (two spaces per bracket
+      level, closer-leading lines dedented), strips trailing whitespace, collapses
+      blank-line runs, and ensures a single trailing newline. A string/comment-
+      aware single scan computes each line's bracket depth (brackets inside
+      strings / `//` / nested `/* */` are ignored; block-comment interiors are left
+      verbatim). It deliberately does **not** rewrap or re-space within a line, so
+      no token ever crosses a line boundary — and every reformat is verified by
+      **re-lexing the output and requiring an identical token stream** (same
+      kinds + text), so `fmt` can only change whitespace, never code (it refuses
+      to write otherwise). `fmt <file|dir>` formats in place (recurses dirs,
+      skipping hidden/`target`); `--check` lists unformatted files and exits
+      non-zero (CI gate). Idempotent; verified across all 22 examples (0 token-
+      stream violations; formatted output runs identically). 5 unit + 1 CLI test.
+      Follow-up: token-level intra-line spacing + line wrapping.
+- [ ] Manifest dependencies (`pkg:`), sysroot/stdlib, `repl`, the rest of the
+      `docs/23` subcommand surface.
 
 ## Current vertical-slice target
 Smallest end-to-end program that exercises the full pipeline, expanded each
