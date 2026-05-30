@@ -1636,7 +1636,10 @@ the **custom GC allocator (MMTk) the prerequisite** for concurrent collection.
       analysis lives in `compiler::lint` (shared), and the **LSP publishes these
       as editor `WARNING` diagnostics** for the open document (only when it is
       otherwise error-free, so the HIR is complete) — squiggles for unused
-      vars/fns and dead code, alongside the existing error diagnostics.
+      vars/fns and dead code, alongside the existing error diagnostics. The LSP
+      also offers a **code-action quick-fix** ("Prefix `_` to silence unused
+      `name`") for each unused-variable binding overlapping the request range —
+      the in-editor counterpart of `otter_fusion fix`.
 - [x] **`otter_fusion fix`** (`docs/23`): safe automatic fixes — currently renames
       each unused local variable to `_name` (inserts `_` at the binding, silencing
       the unused-variable lint without removing code; the var is unused so there

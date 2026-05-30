@@ -1706,3 +1706,22 @@ mod lint_diag_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod code_action_tests {
+    use super::*;
+
+    #[test]
+    fn unused_var_quickfix_targets_the_binding() {
+        // The "prefix `_`" code action inserts at the binding's start; here we
+        // confirm the lint reports the binding span the action would edit.
+        let c = Compiled::new("function f(): i64 { var unused = 5; var k = 1; k }".into());
+        let l = compiler::lint::analyze(&c.analysis, &c.map);
+        let (span, name) = l.unused_locals.iter().find(|(_, n)| n == "unused").expect("unused var");
+        assert_eq!(c.map.slice(*span), "unused");
+        // The insertion point is the binding's start column.
+        let at = span_to_range(&c.text, *span).start;
+        assert_eq!(c.text.lines().nth(at.line as usize).unwrap().as_bytes()[at.character as usize], b'u');
+        let _ = name;
+    }
+}

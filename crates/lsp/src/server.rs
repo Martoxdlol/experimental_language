@@ -152,6 +152,7 @@ impl LanguageServer for Backend {
                 document_symbol_provider: Some(OneOf::Left(true)),
                 rename_provider: Some(OneOf::Left(true)),
                 document_formatting_provider: Some(OneOf::Left(true)),
+                code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
                 completion_provider: Some(CompletionOptions {
                     trigger_characters: Some(vec![".".into()]),
                     ..Default::default()
@@ -426,6 +427,39 @@ impl LanguageServer for Backend {
         };
         let symbols = document_symbols(&c);
         Ok(Some(DocumentSymbolResponse::Nested(symbols)))
+    }
+
+    async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
+        let uri = params.text_document.uri.clone();
+        let Some(c) = self.compile(&uri) else {
+            return Ok(None);
+        };
+        // Quick-fix: rename an unused local to `_name` (silences the lint without
+        // removing code). Offered for any unused-variable binding overlapping the
+        // requested range.
+        let req = &params.range;
+        let mut actions: Vec<CodeActionOrCommand> = Vec::new();
+        for (span, name) in compiler::lint::analyze(&c.analysis, &c.map).unused_locals {
+            if span.file != DOC_FILE {
+                continue;
+            }
+            let range = span_to_range(&c.text, span);
+            // Overlap test against the requested range (line-level is enough).
+            if range.end.line < req.start.line || range.start.line > req.end.line {
+                continue;
+            }
+            // A zero-width insert of `_` at the binding's start.
+            let at = Range { start: range.start, end: range.start };
+            let mut changes = std::collections::HashMap::new();
+            changes.insert(uri.clone(), vec![TextEdit { range: at, new_text: "_".into() }]);
+            actions.push(CodeActionOrCommand::CodeAction(CodeAction {
+                title: format!("Prefix `_` to silence unused `{name}`"),
+                kind: Some(CodeActionKind::QUICKFIX),
+                edit: Some(WorkspaceEdit { changes: Some(changes), ..Default::default() }),
+                ..Default::default()
+            }));
+        }
+        Ok(Some(actions))
     }
 
     async fn formatting(
