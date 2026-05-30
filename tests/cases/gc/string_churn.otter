@@ -1,5 +1,5 @@
 //@ kind: run
-//@ env: LANG_GC=stress
+//@ env: OTTER_FUSION_GC=stress
 //@ description: string interpolation/concat churn under GC stress (temps must be rooted)
 //@ stdout:
 //~ tail=acc-99

@@ -1,5 +1,5 @@
 //@ kind: run
-//@ env: LANG_GC=stress
+//@ env: OTTER_FUSION_GC=stress
 //@ description: heavy List allocation churn under aggressive GC (collect on every alloc)
 //@ stdout:
 //~ done 50

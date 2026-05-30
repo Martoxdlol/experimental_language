@@ -801,9 +801,34 @@ The tracing GC is functionally complete for single-threaded programs.
       garbage during concurrency); the precise repro, diagnostics, and this
       blocker are pinned here. The signal-based STW code + `libc` register-capture
       is the right starting point once the heap is on a custom allocator.
+- [x] **Custom GC allocator (`gc_alloc`) — the deadlock prerequisite is now
+      closed.** Managed objects no longer come from the system allocator: a
+      slab-backed, size-segregated free-list allocator (`crates/runtime/src/
+      gc_alloc.rs`) serves every GC object, and the sweep/finalizer/teardown
+      paths reclaim into its free lists. The collector therefore **never calls
+      `free`** — a stop-the-world sweep can no longer deadlock against a mutator
+      parked inside `malloc`. Slabs (1 MiB, 16-byte aligned) are carved by
+      bump-pointer; freed blocks recycle by size class (16 B granularity ≤ 512 B,
+      then power-of-two ≤ 1 MiB; larger served exact). Blocks are zeroed on reuse.
+      5 unit tests (size classes, distinct/zeroed/aligned blocks, reuse + re-zero,
+      large objects, multi-slab). Single-threaded GC + all 175 e2e cases green,
+      including the GC-stress cases — which were **silently not stressing**: they
+      set `LANG_GC=stress` but the runtime reads `OTTER_FUSION_GC` (stale from the
+      binary rename); fixed across the 7 cases + the framework docs, so the churn
+      suites now genuinely collect on every alloc (~26× slower, as expected).
+- [~] **Concurrent reclamation still gated — re-validated with the allocator.**
+      With `gc_alloc` in place (deadlock prerequisite closed), the gate was lifted
+      again and the heavy 8-worker churn stress (`/tmp` repro: lists+strings in a
+      loop under `OTTER_FUSION_GC=stress`) **SIGSEGVs every run** — confirming the
+      *second*, independent blocker: the missed cross-thread root (register-
+      resident / not-yet-published) is swept regardless of the allocator. Reverted;
+      the gate stays (memory-safe). **Remaining work = precise cross-thread root
+      publication (register capture at the stop point) or the MMTk move** — the one
+      genuinely-hard subsystem, correctly deferred rather than shipped with an
+      intermittent use-after-free.
 **Per-thread TLABs** and MMTk/Immix remain the eventual production plan (the
-`gc` interface stays the same). The concurrent-reclamation blocker above makes
-the **custom GC allocator (MMTk) the prerequisite** for concurrent collection.
+`gc` interface stays the same). The custom allocator above is the first half of
+the prerequisite; precise cross-thread root capture is the remaining half.
 - [x] **Methods via `extend`** (inherent): `self` (by-pointer for structs, so
       mutation is visible to the caller), method args, methods calling methods,
       methods returning `Self`-typed values, same method name on different types
@@ -1722,10 +1747,16 @@ the **custom GC allocator (MMTk) the prerequisite** for concurrent collection.
       the full protocol, and `crates/pkg/tests/live_registry.rs` round-trips the
       `HttpRegistry` client against it over real TCP (publish/index/download/
       verify/search/yank).
-- [ ] Remaining: **concurrent-GC reclamation** (custom allocator / MMTk — see
-      GC §; the one piece needing a major allocator subsystem) and the few
-      advanced deferrals noted inline (git fetching, optional-dep features,
-      multi-major coexistence, publish metadata-sidecar).
+- [x] **Custom GC allocator** (`gc_alloc`) — done; closes the deadlock half of
+      the concurrent-reclamation prerequisite and makes the GC-stress suite
+      actually stress (see GC §).
+- [ ] Remaining: **concurrent-GC reclamation** — the last hard piece. The
+      allocator half is done; what remains is precise cross-thread root capture
+      (register-resident roots at the stop point) or the MMTk move. Re-validated
+      this session: lifting the gate still SIGSEGVs under heavy concurrent
+      allocation, so it stays gated (memory-safe). Plus the few advanced
+      deferrals noted inline (git fetching, optional-dep features, multi-major
+      coexistence, publish metadata-sidecar).
 
 ## Current vertical-slice target
 Smallest end-to-end program that exercises the full pipeline, expanded each

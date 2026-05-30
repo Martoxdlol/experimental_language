@@ -22,7 +22,7 @@ extend Resource: Drop {
 
 function main() {
   // Each `r` becomes unreachable at the end of its iteration; the collector
-  // finalizes it (run with LANG_GC=stress to see this happen promptly).
+  // finalizes it (run with OTTER_FUSION_GC=stress to see this happen promptly).
   var i: i64 = 0;
   while i < 5 {
     var r: Resource = Resource { id: i };

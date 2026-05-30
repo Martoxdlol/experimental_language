@@ -1,5 +1,5 @@
 //@ kind: run
-//@ env: LANG_GC=stress
+//@ env: OTTER_FUSION_GC=stress
 //@ description: Map allocation + insertion churn under GC stress
 //@ stdout:
 //~ done

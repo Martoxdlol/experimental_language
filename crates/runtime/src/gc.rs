@@ -25,7 +25,8 @@
 //! This module currently owns allocation and a registry of live objects; the
 //! mark-sweep collector and precise-root scan build on it (see `ROADMAP.md`).
 
-use std::alloc::{alloc_zeroed, dealloc, Layout};
+// Managed objects are allocated from `gc_alloc` (the GC's own slab allocator),
+// not the system allocator — see that module for the rationale.
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
@@ -143,11 +144,10 @@ pub fn map_buf_desc() -> *const u8 {
 
 unsafe fn alloc_raw(desc: *const u8, size: usize) -> *mut u8 {
     let total = HEADER + size;
-    let layout = Layout::from_size_align(total.max(1), 8).expect("valid layout");
-    let base = unsafe { alloc_zeroed(layout) };
-    if base.is_null() {
-        std::process::abort();
-    }
+    // Managed objects come from the GC's own slab allocator, never the system
+    // allocator — so a stop-the-world sweep (which frees back into it) can never
+    // contend with a mutator parked inside `malloc` (`gc_alloc`).
+    let base = crate::gc_alloc::alloc(total);
     // header.desc at +0; header.mark at +8 (already zero).
     unsafe { (base as *mut *const u8).write(desc) };
 
@@ -247,8 +247,7 @@ pub unsafe fn collect(roots: &[usize]) -> usize {
             unsafe { *mark = 0 }; // clear for next cycle
             survivors.push((base, total));
         } else {
-            let layout = Layout::from_size_align(total, 8).unwrap();
-            unsafe { dealloc(base as *mut u8, layout) };
+            crate::gc_alloc::free(base, total);
             freed += total;
         }
     }
@@ -356,8 +355,7 @@ fn run_finalizers() {
         if let Some(f) = f {
             f((base + HEADER) as *mut u8); // user `drop(self)`
         }
-        let layout = Layout::from_size_align(total, 8).unwrap();
-        unsafe { dealloc(base as *mut u8, layout) };
+        crate::gc_alloc::free(base, total);
     }
 }
 
@@ -782,14 +780,18 @@ fn maybe_collect() {
     }
     // Concurrent *reclamation* remains gated: while more than one mutator is live
     // we do not collect (garbage retention grows, reclaimed once the spawned
-    // threads join). This is memory-safe — a live object is never freed. Enabling
-    // collection under concurrency was attempted (the stop-the-world machinery,
-    // exercised by `stop_the_world_coordinates_mutator_threads`, is correct for
-    // light workloads and all the concurrency e2e cases pass under it), but a
-    // use-after-free surfaces under *heavy* concurrent allocation (a live object
-    // reachable only through a not-yet-published cross-thread root is swept). The
-    // precise root-scanning hardening that closes this — or the move to MMTk — is
-    // the production path (`docs/16`/`docs/20`/`ROADMAP.md`).
+    // threads join). This is memory-safe — a live object is never freed.
+    //
+    // The custom slab allocator (`gc_alloc`) removed the *deadlock* prerequisite:
+    // a stop-the-world sweep now reclaims into the GC's own free lists and never
+    // contends with a mutator parked inside the system `malloc`. But that is only
+    // one of the two blockers. Lifting this gate was re-validated after the
+    // allocator landed: a dedicated heavy-allocation stress (8 workers churning
+    // lists/strings under `OTTER_FUSION_GC=stress`) still SIGSEGVs — a live object
+    // reachable only through a cross-thread root not yet published to a scanned
+    // stack is swept. Precise cross-thread root publication (or MMTk) is the
+    // remaining production path (`docs/16`/`docs/20`/`ROADMAP.md`); until then the
+    // gate stays, because an intermittent use-after-free is never acceptable.
     if MUTATORS.lock().unwrap().len() > 1 {
         return;
     }
@@ -815,8 +817,7 @@ fn maybe_collect() {
 pub unsafe fn free_all() {
     let mut heap = HEAP.lock().unwrap();
     for (base, total) in heap.objects.drain(..) {
-        let layout = Layout::from_size_align(total, 8).unwrap();
-        unsafe { dealloc(base as *mut u8, layout) };
+        crate::gc_alloc::free(base, total);
     }
     heap.bytes_since_gc = 0;
 }

@@ -1,6 +1,6 @@
 //@ kind: run
 //@ serial
-//@ env: LANG_GC=stress
+//@ env: OTTER_FUSION_GC=stress
 //@ description: Thread.spawn/join while the GC runs aggressively
 //@ stdout:
 //~ 30

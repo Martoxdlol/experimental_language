@@ -1,5 +1,5 @@
 //@ kind: run
-//@ env: LANG_GC=stress
+//@ env: OTTER_FUSION_GC=stress
 //@ description: closures capturing heap values, churned under GC stress
 //@ stdout:
 //~ 4950

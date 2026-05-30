@@ -30,7 +30,7 @@
 //!                                              cross-process CPU contention.
 //!   * `env: KEY=VALUE`                        — set an environment variable for
 //!                                              the run (repeatable; e.g.
-//!                                              `LANG_GC=stress` to hammer the GC).
+//!                                              `OTTER_FUSION_GC=stress` to hammer the GC).
 //!   * `known-bug: <note>`                     — this case states the *desired*
 //!                                              (spec-correct) behaviour, which
 //!                                              the implementation does NOT yet
@@ -106,7 +106,7 @@ pub struct Case {
     /// a real but load-dependent issue; serial execution keeps these cases
     /// deterministic. See `tests/README.md`.
     pub serial: bool,
-    /// Environment variables to set for the run (e.g. `LANG_GC=stress`).
+    /// Environment variables to set for the run (e.g. `OTTER_FUSION_GC=stress`).
     pub env: Vec<(String, String)>,
     /// If set, this case documents *desired* (spec-correct) behaviour that the
     /// implementation does **not** yet satisfy — a known bug or unimplemented

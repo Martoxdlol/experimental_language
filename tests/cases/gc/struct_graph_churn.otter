@@ -1,5 +1,5 @@
 //@ kind: run
-//@ env: LANG_GC=stress
+//@ env: OTTER_FUSION_GC=stress
 //@ description: building and dropping a linked structure repeatedly under GC stress
 //@ stdout:
 //~ len=20
