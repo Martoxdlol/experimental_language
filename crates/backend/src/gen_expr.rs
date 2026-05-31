@@ -103,6 +103,15 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         if managed {
             if let Some(val) = v {
                 self.mark_root(val);
+                // A `@RefCounted` payload boxed into a union/`dynamic` is a
+                // strong reference held by the (GC-managed) box. Retain it so it
+                // is not deterministically freed while the box references it; the
+                // GC backstop reclaims it when the box becomes unreachable
+                // (GC-timed drop — the union/`dynamic` determinism boundary,
+                // `docs/16` §8.1).
+                if is_refcounted_ty(self.cx.analysis, resolved) {
+                    self.emit_rc_retain(val);
+                }
             }
         }
         let ptr_offsets: &[u32] = if managed { &[8] } else { &[] };

@@ -1,0 +1,18 @@
+//@ kind: run
+//@ description: a function returning a @RefCounted value hands the caller an owned +1; one drop
+//@ stdout:
+//~ got 7
+//~ drop 7
+import { println } from "std:io";
+import { Drop } from "core:prelude";
+
+@RefCounted
+struct Res { id: i64 }
+extend Res: Drop { function drop(self) { println("drop ${self.id}"); } }
+
+function make(n: i64): Res { Res { id: n } }
+
+function main() {
+  var r: Res = make(7);
+  println("got ${r.id}");
+}

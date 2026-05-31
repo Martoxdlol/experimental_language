@@ -1,0 +1,20 @@
+//@ kind: run
+//@ description: passing a @RefCounted value as an argument borrows it — the caller keeps ownership, no drop at the call
+//@ stdout:
+//~ id 5
+//~ still 5
+//~ drop 5
+import { println } from "std:io";
+import { Drop } from "core:prelude";
+
+@RefCounted
+struct R { id: i64 }
+extend R: Drop { function drop(self) { println("drop ${self.id}"); } }
+
+function inspect(r: R): i64 { r.id }
+
+function main() {
+  var a: R = R { id: 5 };
+  println("id ${inspect(a)}");   // borrow — does not consume `a`
+  println("still ${a.id}");
+}

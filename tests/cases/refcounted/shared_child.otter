@@ -1,0 +1,21 @@
+//@ kind: run
+//@ description: two @RefCounted owners share a child; the child drops once, after the last owner
+//@ stdout:
+//~ built
+//~ drop parent 2
+//~ drop parent 1
+//~ drop child
+import { println } from "std:io";
+import { Drop } from "core:prelude";
+@RefCounted
+struct Child { id: i64 }
+extend Child: Drop { function drop(self) { println("drop child"); } }
+@RefCounted
+struct Parent { id: i64, child: Child }
+extend Parent: Drop { function drop(self) { println("drop parent ${self.id}"); } }
+function main() {
+  var c: Child = Child { id: 0 };
+  var p1: Parent = Parent { id: 1, child: c };
+  var p2: Parent = Parent { id: 2, child: c };
+  println("built");
+}

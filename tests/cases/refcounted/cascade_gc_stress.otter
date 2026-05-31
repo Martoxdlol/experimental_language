@@ -1,0 +1,23 @@
+//@ kind: run
+//@ env: OTTER_FUSION_GC=stress
+//@ description: deterministic cascade is identical under aggressive GC (collect on every alloc)
+//@ stdout:
+//~ built
+//~ drop parent
+//~ drop child 1
+import { println } from "std:io";
+import { Drop } from "core:prelude";
+
+@RefCounted
+struct Child { id: i64 }
+extend Child: Drop { function drop(self) { println("drop child ${self.id}"); } }
+
+@RefCounted
+struct Parent { child: Child }
+extend Parent: Drop { function drop(self) { println("drop parent"); } }
+
+function main() {
+  var c: Child = Child { id: 1 };
+  var p: Parent = Parent { child: c };
+  println("built");
+}

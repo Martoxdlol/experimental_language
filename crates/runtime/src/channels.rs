@@ -209,9 +209,11 @@ pub unsafe extern "C" fn lang_chan_send(id: u64, value: i64) -> i64 {
 // gone, or registers the executor waker and reports `Pending`.
 
 /// Build (once) and leak a descriptor blob:
-/// `[size][kind=plain][type_id=0][n_ptrs][offsets…]` (`docs/16`).
+/// `[size][kind=plain][type_id=0][n_ptrs][offsets…][n_rc=0]` (`docs/16`). The
+/// mandatory trailing `n_rc` word (here `0` — these boxes own no `@RefCounted`
+/// fields) is read by the collector for every object it reclaims.
 fn make_desc(size: u64, ptr_offsets: &[u32]) -> *const u8 {
-    let mut bytes = Vec::with_capacity(32 + ptr_offsets.len() * 4);
+    let mut bytes = Vec::with_capacity(36 + ptr_offsets.len() * 4);
     bytes.extend_from_slice(&size.to_le_bytes());
     bytes.extend_from_slice(&0u64.to_le_bytes()); // kind = plain
     bytes.extend_from_slice(&0u64.to_le_bytes()); // type_id
@@ -219,6 +221,7 @@ fn make_desc(size: u64, ptr_offsets: &[u32]) -> *const u8 {
     for o in ptr_offsets {
         bytes.extend_from_slice(&o.to_le_bytes());
     }
+    bytes.extend_from_slice(&0u32.to_le_bytes()); // n_rc = 0 (no refcounted fields)
     Box::leak(bytes.into_boxed_slice()).as_ptr()
 }
 

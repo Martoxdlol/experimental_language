@@ -1,0 +1,20 @@
+//@ kind: run
+//@ description: .clone() on a @RefCounted value is an independent deep copy (own count), not an alias
+//@ stdout:
+//~ a=1 b=99
+//~ drop 99
+//~ drop 1
+import { println } from "std:io";
+import { Drop, Clone } from "core:prelude";
+
+@RefCounted
+@Derive(Clone)
+struct Res { id: i64 }
+extend Res: Drop { function drop(self) { println("drop ${self.id}"); } }
+
+function main() {
+  var a: Res = Res { id: 1 };
+  var b: Res = a.clone();   // independent object, strong count 1
+  b.id = 99;                // mutating the copy does not affect the original
+  println("a=${a.id} b=${b.id}");
+}

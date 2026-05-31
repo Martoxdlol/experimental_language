@@ -28,9 +28,20 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             .expect("list_new returns a pointer")
     }
 
-    /// Widen an element to the list's 8-byte slot (`i64`).
+    /// Widen an element to the list's 8-byte slot (`i64`). This is the central
+    /// choke point for storing a value into a runtime container slot (`List`,
+    /// `Map`, `Set`, `Shared`, channel queue). A `@RefCounted` element is
+    /// **retained** here: these containers are GC-traced but do not carry the
+    /// per-slot refcounted-child trailer that structs/tuples do, so the stored
+    /// strong reference is balanced by the GC backstop reclaiming the element
+    /// when the container becomes unreachable — i.e. a refcounted value placed
+    /// in a collection forfeits *deterministic* drop for GC-timed drop, but is
+    /// never freed while the container still references it (`docs/16` §8.1).
     pub(crate) fn elem_to_i64(&mut self, v: Option<Value>, elem: Ty, span: Span) -> CgResult<Value> {
         let v = v.ok_or_else(|| CodegenError::new(span, "list element has no value"))?;
+        if self.is_rc_ty(elem) {
+            self.emit_rc_retain(v);
+        }
         match self.cx_clty(elem) {
             Some(c) if c == types::I64 => Ok(v),
             Some(c) if c.is_int() => Ok(self.b.ins().uextend(types::I64, v)),

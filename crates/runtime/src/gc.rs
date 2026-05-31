@@ -13,14 +13,22 @@
 //! generator emits once per managed type. Its layout (little-endian):
 //!
 //! ```text
-//!   [ size: u64 ][ kind: u64 ][ n_ptrs: u64 ][ off_0: u32 ] … [ off_{n-1}: u32 ]
+//!   [ size: u64 ][ kind: u64 ][ type_id: u64 ][ n_ptrs: u64 ][ off_0: u32 ] … [ off_{n-1}: u32 ]
+//!   [ n_rc: u32 ][ rcoff_0: u32 ] … [ rcoff_{m-1}: u32 ]            ← optional trailer
 //! ```
 //!
-//! * `size`   — field-block size in bytes.
-//! * `kind`   — 0 = plain (scan the listed pointer-field offsets), 1 = `str`,
-//!   2 = `List` (scan handled specially by the collector).
+//! * `size`    — field-block size in bytes.
+//! * `kind`    — 0 = plain, 1 = `str`, 2 = `List`, 3 = `Map`, 4 = `@RefCounted`
+//!   (scan handled specially by the collector; see [`KIND_REFCOUNTED`]).
+//! * `type_id` — `0`, or the type's id used to find a registered `Drop`/finalizer.
 //! * `n_ptrs` / `off_i` — byte offsets, within the field block, of fields that
-//!   hold managed pointers (for `kind == 0`).
+//!   hold managed pointers (the GC trace map, for `kind == 0`/`4`).
+//! * `n_rc` / `rcoff_j` — *trailer* listing the offsets of the fields that hold
+//!   `@RefCounted` pointers (always a subset of `off_i`). When such an object is
+//!   destroyed — by `lang_rc_release` reaching zero, or swept by the GC — these
+//!   stored strong references are released so the count cascade reaches the whole
+//!   owned graph. The GC mark reader stops after the `off_i` block, so the
+//!   trailer is invisible to it (older descriptors simply omit it).
 //!
 //! This module currently owns allocation and a registry of live objects; the
 //! mark-sweep collector and precise-root scan build on it (see `ROADMAP.md`).
@@ -28,7 +36,7 @@
 // Managed objects are allocated from `gc_alloc` (the GC's own slab allocator),
 // not the system allocator — see that module for the rationale.
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
 /// Size of the object header in bytes: `[desc ptr][mark word]`.
@@ -39,6 +47,14 @@ pub const KIND_PLAIN: u64 = 0;
 pub const KIND_STR: u64 = 1;
 pub const KIND_LIST: u64 = 2;
 pub const KIND_MAP: u64 = 3;
+/// A `@RefCounted` object (`docs/16` §8.1): laid out exactly like a plain object
+/// for GC tracing, but carrying a hidden **atomic strong-count** word at
+/// field-block offset 0 (user fields shift up by 8). The compiler emits
+/// retain/release (`lang_rc_retain`/`lang_rc_release`) around every binding; the
+/// count reaching zero runs the type's `Drop` synchronously and frees the object
+/// without waiting for a collection. The tracing GC is retained only as the
+/// **cycle-collector backstop** (refcounting alone leaks reference cycles).
+pub const KIND_REFCOUNTED: u64 = 4;
 
 #[inline]
 unsafe fn read_u64(p: *const u8, byte_off: usize) -> u64 {
@@ -81,15 +97,45 @@ unsafe fn desc_ptr_offset(desc: *const u8, i: usize) -> usize {
     unsafe { (desc.add(32 + i * 4) as *const u32).read_unaligned() as usize }
 }
 
+/// The byte offset where the optional `@RefCounted`-child trailer begins (right
+/// after the `n_ptrs` pointer-offset entries).
+#[inline]
+unsafe fn desc_rc_trailer_off(desc: *const u8) -> usize {
+    32 + unsafe { desc_n_ptrs(desc) } * 4
+}
+
+/// The offsets of the fields holding `@RefCounted` strong references, read from
+/// the descriptor trailer. Empty for the vast majority of types (`n_rc == 0`).
+///
+/// Every descriptor — both the compiler-emitted blobs and the static builtin
+/// [`StaticDesc`]s — carries an `n_rc` word at `32 + n_ptrs*4`, so this read is
+/// always in-bounds. The builtins set it to `0` (their `rc_trailer` field).
+#[inline]
+unsafe fn desc_rc_offsets(desc: *const u8) -> Vec<usize> {
+    let base = unsafe { desc_rc_trailer_off(desc) };
+    let n = unsafe { (desc.add(base) as *const u32).read_unaligned() as usize };
+    (0..n)
+        .map(|j| unsafe { (desc.add(base + 4 + j * 4) as *const u32).read_unaligned() as usize })
+        .collect()
+}
+
 /// The registry of live managed objects (base address + total byte size,
 /// including the header). The collector sweeps this list.
 struct Heap {
-    objects: Vec<(usize, usize)>,
+    /// Live managed objects: base address → total byte size (including header).
+    /// A map (not a vector) so `lang_rc_release` can remove a deterministically
+    /// freed object in O(1) without a linear scan.
+    objects: HashMap<usize, usize>,
     /// Bytes allocated since the last collection (drives the GC trigger).
     bytes_since_gc: usize,
 }
 
-static HEAP: Mutex<Heap> = Mutex::new(Heap { objects: Vec::new(), bytes_since_gc: 0 });
+/// The live-object registry. Behind a `OnceLock` because `HashMap::new` is not
+/// `const`; initialized empty on first allocation.
+fn heap() -> &'static Mutex<Heap> {
+    static H: OnceLock<Mutex<Heap>> = OnceLock::new();
+    H.get_or_init(|| Mutex::new(Heap { objects: HashMap::new(), bytes_since_gc: 0 }))
+}
 
 /// A statically-allocated descriptor (its blob layout matches what the
 /// collector reads: `[size][kind][type_id][n_ptrs]`). Builtin descriptors carry
@@ -100,26 +146,31 @@ pub struct StaticDesc {
     pub kind: u64,
     pub type_id: u64,
     pub n_ptrs: u64,
+    /// The `n_rc` trailer word (always `0` for builtins — they own no
+    /// `@RefCounted` fields directly). Sits at byte offset `32` = `32 + 0*4`
+    /// since every builtin has `n_ptrs == 0`, so [`desc_rc_offsets`] reads it
+    /// in-bounds and returns an empty list. See the module-level descriptor doc.
+    pub rc_trailer: u64,
 }
 
 /// Shared descriptor for `str` objects (variable size; bytes inline, leaf).
-pub static STR_DESC: StaticDesc = StaticDesc { size: 0, kind: KIND_STR, type_id: 0, n_ptrs: 0 };
+pub static STR_DESC: StaticDesc = StaticDesc { size: 0, kind: KIND_STR, type_id: 0, n_ptrs: 0, rc_trailer: 0 };
 /// Shared descriptor for a `List` handle: `[len][cap][buf][elem_is_ptr]`.
 /// The collector special-cases `kind == LIST` to trace the buffer's elements.
-pub static LIST_HANDLE_DESC: StaticDesc = StaticDesc { size: 32, kind: KIND_LIST, type_id: 0, n_ptrs: 0 };
+pub static LIST_HANDLE_DESC: StaticDesc = StaticDesc { size: 32, kind: KIND_LIST, type_id: 0, n_ptrs: 0, rc_trailer: 0 };
 /// Shared descriptor for a `List` element buffer (variable size, leaf — it is
 /// traced via its owning `List` handle, which knows the length/elem-kind).
-pub static LIST_BUF_DESC: StaticDesc = StaticDesc { size: 0, kind: KIND_PLAIN, type_id: 0, n_ptrs: 0 };
+pub static LIST_BUF_DESC: StaticDesc = StaticDesc { size: 0, kind: KIND_PLAIN, type_id: 0, n_ptrs: 0, rc_trailer: 0 };
 /// Shared descriptor for a `Map` handle:
 /// `[len][cap][buf][key_is_ptr][val_is_ptr][hash_fn][eq_fn]` (56 B). The
 /// `hash_fn`/`eq_fn` slots are nullable function pointers; when non-null, the
 /// runtime calls through them (used for user-typed keys implementing
 /// `Eq + Hash`, `docs/15` §7). The collector special-cases `kind == MAP` to
 /// trace each occupied slot's key/value as needed.
-pub static MAP_HANDLE_DESC: StaticDesc = StaticDesc { size: 56, kind: KIND_MAP, type_id: 0, n_ptrs: 0 };
+pub static MAP_HANDLE_DESC: StaticDesc = StaticDesc { size: 56, kind: KIND_MAP, type_id: 0, n_ptrs: 0, rc_trailer: 0 };
 /// Shared descriptor for a `Map` slot buffer (variable size, leaf — traced via
 /// its owning handle, which knows the capacity and key/value pointer-ness).
-pub static MAP_BUF_DESC: StaticDesc = StaticDesc { size: 0, kind: KIND_PLAIN, type_id: 0, n_ptrs: 0 };
+pub static MAP_BUF_DESC: StaticDesc = StaticDesc { size: 0, kind: KIND_PLAIN, type_id: 0, n_ptrs: 0, rc_trailer: 0 };
 
 #[inline]
 pub fn str_desc() -> *const u8 {
@@ -151,8 +202,8 @@ unsafe fn alloc_raw(desc: *const u8, size: usize) -> *mut u8 {
     // header.desc at +0; header.mark at +8 (already zero).
     unsafe { (base as *mut *const u8).write(desc) };
 
-    let mut heap = HEAP.lock().unwrap();
-    heap.objects.push((base as usize, total));
+    let mut heap = heap().lock().unwrap();
+    heap.objects.insert(base as usize, total);
     heap.bytes_since_gc += total;
     drop(heap);
 
@@ -189,12 +240,12 @@ pub unsafe fn alloc_var(desc: *const u8, size: usize) -> *mut u8 {
 /// (the caller — the stack-map root scan — guarantees this). Stray non-pointer
 /// values are tolerated: only addresses of registered objects are followed.
 pub unsafe fn collect(roots: &[usize]) -> usize {
-    let mut heap = HEAP.lock().unwrap();
+    let mut heap = heap().lock().unwrap();
 
     // Objects awaiting finalization are kept alive (and their referents kept
     // alive) until their `drop` runs — include them so marking traverses them.
     let pending: Vec<(usize, usize, u64)> = FINALIZE_PENDING.lock().unwrap().clone();
-    let mut bases: HashSet<usize> = heap.objects.iter().map(|&(b, _)| b).collect();
+    let mut bases: HashSet<usize> = heap.objects.keys().copied().collect();
     for &(b, _, _) in &pending {
         bases.insert(b);
     }
@@ -216,7 +267,7 @@ pub unsafe fn collect(roots: &[usize]) -> usize {
     let mut newly: Vec<(usize, usize, u64)> = Vec::new();
     if any_finalizers() {
         let dfs = drop_fns().lock().unwrap();
-        for &(base, total) in &heap.objects {
+        for (&base, &total) in &heap.objects {
             if unsafe { *((base + 8) as *const u64) } == 0 {
                 let desc = unsafe { (base as *const *const u8).read() };
                 let tid = unsafe { desc_type_id(desc) };
@@ -231,25 +282,49 @@ pub unsafe fn collect(roots: &[usize]) -> usize {
             unsafe { mark_reachable(&bases, work2) };
         }
     }
-    let _newly_set: HashSet<usize> = newly.iter().map(|&(b, _, _)| b).collect();
+    let newly_set: HashSet<usize> = newly.iter().map(|&(b, _, _)| b).collect();
 
     // --- sweep ------------------------------------------------------------
-    let mut freed = 0usize;
-    let mut survivors = Vec::with_capacity(heap.objects.len());
+    // Classify first; we need the full set of dying bases before adjusting any
+    // `@RefCounted` counts, so an edge *into* the dying set is never decremented
+    // (that object is reclaimed regardless), while an edge into a survivor is.
+    let objects = std::mem::take(&mut heap.objects);
+    let mut survivors: HashMap<usize, usize> = HashMap::new();
     let mut new_pending: Vec<(usize, usize, u64)> = Vec::new();
-    for (base, total) in heap.objects.drain(..) {
+    let mut to_free: Vec<(usize, usize)> = Vec::new();
+    for (base, total) in objects {
         let mark = (base + 8) as *mut u64;
-        if let Some(&(_, _, tid)) = newly.iter().find(|&&(b, _, _)| b == base) {
-            // Unreachable but finalizable: hand off to the finalizer queue.
+        if newly_set.contains(&base) {
+            // Unreachable but finalizable: hand off to the finalizer queue. Its
+            // owned `@RefCounted` edges are released when `run_finalizers` frees it.
             unsafe { *mark = 0 };
+            let tid = newly.iter().find(|&&(b, _, _)| b == base).unwrap().2;
             new_pending.push((base, total, tid));
         } else if unsafe { *mark } != 0 {
             unsafe { *mark = 0 }; // clear for next cycle
-            survivors.push((base, total));
+            survivors.insert(base, total);
         } else {
-            crate::gc_alloc::free(base, total);
-            freed += total;
+            to_free.push((base, total));
         }
+    }
+    // An object that owned `@RefCounted` strong references and is now being
+    // reclaimed loses those edges; decrement the strong count of any *surviving*
+    // referent so the refcount stays exact (CPython-style cyclic adjustment).
+    // Never frees here — survivors are reachable, so a correct count stays ≥ 1.
+    let dying: HashSet<usize> = to_free.iter().map(|&(b, _)| b).collect();
+    for &(base, _) in &to_free {
+        let desc = unsafe { (base as *const *const u8).read() };
+        for off in unsafe { desc_rc_offsets(desc) } {
+            let child = unsafe { ((base + HEADER + off) as *const usize).read() };
+            if child >= HEADER && !dying.contains(&(child - HEADER)) {
+                unsafe { rc_dec_no_free(child) };
+            }
+        }
+    }
+    let mut freed = 0usize;
+    for (base, total) in &to_free {
+        crate::gc_alloc::free(*base, *total);
+        freed += *total;
     }
     let kept = survivors.len();
     heap.objects = survivors;
@@ -279,7 +354,10 @@ unsafe fn mark_reachable(bases: &HashSet<usize>, mut work: Vec<usize>) {
 
         let desc = unsafe { (base as *const *const u8).read() };
         match unsafe { desc_kind(desc) } {
-            KIND_PLAIN => {
+            // A `@RefCounted` object traces exactly like a plain object — its
+            // hidden strong-count word at offset 0 is not a pointer and is never
+            // listed in the trace map; only the user pointer fields are scanned.
+            KIND_PLAIN | KIND_REFCOUNTED => {
                 let n = unsafe { desc_n_ptrs(desc) };
                 for i in 0..n {
                     let off = unsafe { desc_ptr_offset(desc, i) };
@@ -355,13 +433,27 @@ fn run_finalizers() {
         if let Some(f) = f {
             f((base + HEADER) as *mut u8); // user `drop(self)`
         }
+        // Release any `@RefCounted` strong references this object owned, to
+        // referents that are still live (a survivor, or another not-yet-run
+        // finalizable). Counts stay exact even when a GC reclaims an object that
+        // held the only counted reference to a surviving refcounted value.
+        let desc = unsafe { (base as *const *const u8).read() };
+        for off in unsafe { desc_rc_offsets(desc) } {
+            let child = unsafe { ((base + HEADER + off) as *const usize).read() };
+            if child >= HEADER {
+                let live = { heap().lock().unwrap().objects.contains_key(&(child - HEADER)) };
+                if live {
+                    unsafe { rc_dec_no_free(child) };
+                }
+            }
+        }
         crate::gc_alloc::free(base, total);
     }
 }
 
 /// Number of live objects (for tests / introspection).
 pub fn live_count() -> usize {
-    HEAP.lock().unwrap().objects.len()
+    heap().lock().unwrap().objects.len()
 }
 
 // --- precise roots via Cranelift stack maps --------------------------------
@@ -560,6 +652,121 @@ fn any_finalizers() -> bool {
     !drop_fns().lock().unwrap().is_empty()
 }
 
+// --- `@RefCounted` deterministic ARC (`docs/16` §8.1) ----------------------
+//
+// A `@RefCounted` object carries a hidden **atomic** strong-count word at
+// field-block offset 0. The compiler emits balanced [`lang_rc_retain`] /
+// [`lang_rc_release`] around every binding (bind/copy/param/return/capture +
+// heap stores). When the count reaches zero the object is destroyed *now*: its
+// `Drop` (if any) runs synchronously, its owned refcounted children are
+// released (cascading the destruction through the owned graph), and its memory
+// is reclaimed — no wait for a collection. Reference cycles keep their counts
+// above zero and are left to the tracing GC backstop (`collect`).
+
+/// View a refcounted object's hidden strong-count word (field-block offset 0).
+///
+/// # Safety
+/// `obj` must be a live `@RefCounted` field-block pointer.
+#[inline]
+unsafe fn rc_count(obj: usize) -> &'static AtomicU64 {
+    unsafe { &*(obj as *const AtomicU64) }
+}
+
+/// The initial strong count stamped into a fresh `@RefCounted` object by the
+/// allocator path (the creating binding owns the one reference).
+pub const RC_INITIAL: u64 = 1;
+
+/// Increment a `@RefCounted` object's strong count (retain). A null pointer
+/// (e.g. an absent union member) is ignored.
+///
+/// # Safety
+/// `obj` is null or a live `@RefCounted` field-block pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lang_rc_retain(obj: *mut u8) {
+    if obj.is_null() {
+        return;
+    }
+    debug_assert_eq!(
+        unsafe { desc_kind((((obj as usize) - HEADER) as *const *const u8).read()) },
+        KIND_REFCOUNTED,
+        "lang_rc_retain on a non-@RefCounted object",
+    );
+    unsafe { rc_count(obj as usize) }.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Decrement a `@RefCounted` object's strong count (release); at zero, finalize
+/// and free it. A null pointer is ignored.
+///
+/// # Safety
+/// `obj` is null or a live `@RefCounted` field-block pointer that the caller
+/// will not use again unless it holds another (retained) reference.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lang_rc_release(obj: *mut u8) {
+    if obj.is_null() {
+        return;
+    }
+    let obj = obj as usize;
+    // `Release` so all prior writes through this reference happen-before the
+    // destructor; the `Acquire` fence on the final decrement pairs with it.
+    let prev = unsafe { rc_count(obj) }.fetch_sub(1, Ordering::Release);
+    debug_assert!(prev != 0, "lang_rc_release strong-count underflow");
+    if prev == 1 {
+        std::sync::atomic::fence(Ordering::Acquire);
+        unsafe { rc_finalize(obj) };
+    }
+}
+
+/// Decrement a strong count *without* the zero-transition free. Used by the GC
+/// (sweep / finalizer) to keep a surviving referent's count exact after the
+/// object that held the edge is reclaimed; the survivor is reachable, so a
+/// correct count never reaches zero here.
+///
+/// # Safety
+/// `obj` must be a live `@RefCounted` field-block pointer.
+#[inline]
+unsafe fn rc_dec_no_free(obj: usize) {
+    let c = unsafe { rc_count(obj) };
+    // Only adjust genuine refcounted objects (the offset list is built from the
+    // descriptor, so this always holds; guarded for robustness under a debug GC).
+    if c.load(Ordering::Relaxed) > 0 {
+        c.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// Destroy a refcounted object whose count just hit zero: run its `Drop`,
+/// release the strong references it owned, then reclaim its memory.
+///
+/// # Safety
+/// `obj` is a live `@RefCounted` field-block pointer with strong count `0`.
+unsafe fn rc_finalize(obj: usize) {
+    let base = obj - HEADER;
+    let desc = unsafe { (base as *const *const u8).read() };
+    // Pin `self` (and thus its whole graph) for the duration of `drop` + child
+    // release, so a nested collection triggered by `drop` cannot reclaim it.
+    add_extra_root(obj);
+    let tid = unsafe { desc_type_id(desc) };
+    if tid != 0 {
+        let f = drop_fns().lock().unwrap().get(&tid).copied();
+        if let Some(f) = f {
+            f(obj as *mut u8); // user `drop(self)`, run synchronously
+        }
+    }
+    // Release the refcounted strong references this object owned (cascade).
+    for off in unsafe { desc_rc_offsets(desc) } {
+        let child = unsafe { ((obj + off) as *const usize).read() };
+        if child != 0 {
+            unsafe { lang_rc_release(child as *mut u8) };
+        }
+    }
+    // Reclaim. Remove from the live set first so a (now impossible) concurrent
+    // sweep never double-frees; then unpin and free.
+    let total = heap().lock().unwrap().objects.remove(&base);
+    remove_extra_root(obj);
+    if let Some(total) = total {
+        crate::gc_alloc::free(base, total);
+    }
+}
+
 /// Pin `p` as a global root until [`remove_extra_root`].
 pub fn add_extra_root(p: usize) {
     EXTRA_ROOTS.lock().unwrap().push(p);
@@ -672,7 +879,7 @@ fn run_collection() {
         }
     };
     let still_over = {
-        let heap = HEAP.lock().unwrap();
+        let heap = heap().lock().unwrap();
         heap.bytes_since_gc >= gc_threshold()
     };
     if !still_over {
@@ -871,7 +1078,7 @@ fn maybe_collect() {
         return;
     }
     let over = {
-        let heap = HEAP.lock().unwrap();
+        let heap = heap().lock().unwrap();
         heap.bytes_since_gc >= gc_threshold()
     };
     if over {
@@ -885,8 +1092,8 @@ fn maybe_collect() {
 /// # Safety
 /// No managed pointers may be used after this call.
 pub unsafe fn free_all() {
-    let mut heap = HEAP.lock().unwrap();
-    for (base, total) in heap.objects.drain(..) {
+    let mut heap = heap().lock().unwrap();
+    for (base, total) in heap.objects.drain() {
         crate::gc_alloc::free(base, total);
     }
     heap.bytes_since_gc = 0;
@@ -909,7 +1116,197 @@ mod tests {
         for o in ptrs {
             b.extend_from_slice(&o.to_le_bytes());
         }
+        b.extend_from_slice(&0u32.to_le_bytes()); // n_rc trailer (no refcounted fields)
         b
+    }
+
+    // -- `@RefCounted` ARC primitives ------------------------------------
+
+    /// Build a `@RefCounted` descriptor blob: hidden count word at offset 0,
+    /// `ptrs` the GC trace map, `rc_offs` the owned-refcounted-children trailer.
+    fn rc_desc(size: u64, ptrs: &[u32], rc_offs: &[u32], type_id: u64) -> Vec<u8> {
+        let mut b = Vec::new();
+        b.extend_from_slice(&size.to_le_bytes());
+        b.extend_from_slice(&KIND_REFCOUNTED.to_le_bytes());
+        b.extend_from_slice(&type_id.to_le_bytes());
+        b.extend_from_slice(&(ptrs.len() as u64).to_le_bytes());
+        for o in ptrs {
+            b.extend_from_slice(&o.to_le_bytes());
+        }
+        b.extend_from_slice(&(rc_offs.len() as u32).to_le_bytes());
+        for o in rc_offs {
+            b.extend_from_slice(&o.to_le_bytes());
+        }
+        b
+    }
+
+    /// Drops record the object's first user field (a `u64` id at offset 8) so a
+    /// test can assert deterministic drop ordering.
+    fn dropped() -> &'static Mutex<Vec<u64>> {
+        static D: OnceLock<Mutex<Vec<u64>>> = OnceLock::new();
+        D.get_or_init(|| Mutex::new(Vec::new()))
+    }
+    extern "C" fn record_drop(obj: *mut u8) {
+        let id = unsafe { ((obj as usize + 8) as *const u64).read() };
+        dropped().lock().unwrap().push(id);
+    }
+
+    /// Allocate a refcounted object, stamp its initial strong count + id field.
+    unsafe fn rc_alloc(desc: &[u8], id: u64) -> usize {
+        let p = unsafe { alloc(desc.as_ptr()) } as usize;
+        unsafe { rc_count(p) }.store(RC_INITIAL, Ordering::Relaxed);
+        unsafe { ((p + 8) as *mut u64).write(id) };
+        p
+    }
+
+    #[test]
+    fn rc_retain_release_balance_and_deterministic_drop() {
+        let _g = TEST_LOCK.lock().unwrap();
+        unsafe { free_all() };
+        dropped().lock().unwrap().clear();
+        let tid = 90_001u64;
+        unsafe { lang_gc_register_drop(tid, record_drop) };
+        let desc = rc_desc(16, &[], &[], tid);
+        unsafe {
+            let p = rc_alloc(&desc, 42);
+            assert_eq!(live_count(), 1);
+            lang_rc_retain(p as *mut u8); // count 2
+            lang_rc_release(p as *mut u8); // count 1 — still live, no drop
+            assert_eq!(live_count(), 1);
+            assert!(dropped().lock().unwrap().is_empty(), "no drop while count > 0");
+            lang_rc_release(p as *mut u8); // count 0 — drop runs synchronously, freed
+            assert_eq!(dropped().lock().unwrap().as_slice(), &[42]);
+            assert_eq!(live_count(), 0, "freed at count zero without a collection");
+        }
+    }
+
+    #[test]
+    fn rc_release_cascades_through_owned_children() {
+        let _g = TEST_LOCK.lock().unwrap();
+        unsafe { free_all() };
+        dropped().lock().unwrap().clear();
+        let tid = 90_002u64;
+        unsafe { lang_gc_register_drop(tid, record_drop) };
+        let child_desc = rc_desc(16, &[], &[], tid); // [count][id]
+        let parent_desc = rc_desc(24, &[16], &[16], tid); // [count][id][child]
+        unsafe {
+            let child = rc_alloc(&child_desc, 1);
+            let parent = rc_alloc(&parent_desc, 2);
+            // parent owns child: store + retain (the heap-store ARC discipline).
+            ((parent + 16) as *mut usize).write(child);
+            lang_rc_retain(child as *mut u8); // child count 2
+            lang_rc_release(child as *mut u8); // drop the local ref → count 1
+            assert_eq!(live_count(), 2);
+            assert!(dropped().lock().unwrap().is_empty());
+            // Last reference to the root dies → parent freed, then its owned
+            // child released to zero and freed too. Owner drops before owned.
+            lang_rc_release(parent as *mut u8);
+            assert_eq!(dropped().lock().unwrap().as_slice(), &[2, 1]);
+            assert_eq!(live_count(), 0);
+        }
+    }
+
+    #[test]
+    fn rc_shared_child_survives_until_last_owner() {
+        let _g = TEST_LOCK.lock().unwrap();
+        unsafe { free_all() };
+        dropped().lock().unwrap().clear();
+        let tid = 90_003u64;
+        unsafe { lang_gc_register_drop(tid, record_drop) };
+        let child_desc = rc_desc(16, &[], &[], tid);
+        let parent_desc = rc_desc(24, &[16], &[16], tid);
+        unsafe {
+            let child = rc_alloc(&child_desc, 1);
+            let p1 = rc_alloc(&parent_desc, 2);
+            let p2 = rc_alloc(&parent_desc, 3);
+            // Both parents own the child.
+            ((p1 + 16) as *mut usize).write(child);
+            lang_rc_retain(child as *mut u8);
+            ((p2 + 16) as *mut usize).write(child);
+            lang_rc_retain(child as *mut u8);
+            lang_rc_release(child as *mut u8); // drop local → child count 2 (p1, p2)
+            // Free p1 → child still held by p2, not dropped.
+            lang_rc_release(p1 as *mut u8);
+            assert_eq!(dropped().lock().unwrap().as_slice(), &[2]);
+            assert_eq!(live_count(), 2, "child + p2 remain");
+            // Free p2 → child finally drops.
+            lang_rc_release(p2 as *mut u8);
+            assert_eq!(dropped().lock().unwrap().as_slice(), &[2, 3, 1]);
+            assert_eq!(live_count(), 0);
+        }
+    }
+
+    #[test]
+    fn rc_cycle_is_reclaimed_by_gc_backstop() {
+        let _g = TEST_LOCK.lock().unwrap();
+        unsafe { free_all() };
+        dropped().lock().unwrap().clear();
+        let tid = 90_004u64;
+        unsafe { lang_gc_register_drop(tid, record_drop) };
+        let desc = rc_desc(24, &[16], &[16], tid); // [count][id][peer]
+        unsafe {
+            let a = rc_alloc(&desc, 10);
+            let b = rc_alloc(&desc, 11);
+            // a <-> b cycle; each owns the other (store + retain).
+            ((a + 16) as *mut usize).write(b);
+            lang_rc_retain(b as *mut u8);
+            ((b + 16) as *mut usize).write(a);
+            lang_rc_retain(a as *mut u8);
+            // Drop both external references; counts stay at 1 (the cycle edges).
+            lang_rc_release(a as *mut u8);
+            lang_rc_release(b as *mut u8);
+            assert_eq!(live_count(), 2, "refcounting alone leaks the cycle");
+            assert!(dropped().lock().unwrap().is_empty());
+            // The tracing GC backstop reclaims the unreachable cycle.
+            collect(&[]);
+            run_finalizers();
+            assert_eq!(live_count(), 0, "GC reclaimed the cycle");
+            let mut got = dropped().lock().unwrap().clone();
+            got.sort();
+            assert_eq!(got, vec![10, 11], "both cycle members dropped");
+        }
+    }
+
+    #[test]
+    fn rc_cross_thread_retain_release_is_atomic() {
+        let _g = TEST_LOCK.lock().unwrap();
+        unsafe { free_all() };
+        dropped().lock().unwrap().clear();
+        let tid = 90_005u64;
+        unsafe { lang_gc_register_drop(tid, record_drop) };
+        let desc = rc_desc(16, &[], &[], tid);
+        unsafe {
+            let p = rc_alloc(&desc, 7);
+            // Hand N extra references to N threads; each retains then releases
+            // many times, net zero, then releases its handed-in reference.
+            let n = 8usize;
+            let iters = 5000usize;
+            for _ in 0..n {
+                lang_rc_retain(p as *mut u8);
+            }
+            assert_eq!(unsafe { rc_count(p) }.load(Ordering::Relaxed), 1 + n as u64);
+            let addr = p;
+            let mut handles = Vec::new();
+            for _ in 0..n {
+                handles.push(std::thread::spawn(move || {
+                    let q = addr as *mut u8;
+                    for _ in 0..iters {
+                        lang_rc_retain(q);
+                        lang_rc_release(q);
+                    }
+                    lang_rc_release(q); // release the handed-in reference
+                }));
+            }
+            for h in handles {
+                h.join().unwrap();
+            }
+            // The original reference remains.
+            assert_eq!(unsafe { rc_count(p) }.load(Ordering::Relaxed), 1);
+            assert!(dropped().lock().unwrap().is_empty());
+            lang_rc_release(p as *mut u8);
+            assert_eq!(dropped().lock().unwrap().as_slice(), &[7]);
+            assert_eq!(live_count(), 0);
+        }
     }
 
     #[test]

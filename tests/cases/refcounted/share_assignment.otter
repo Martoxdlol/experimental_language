@@ -1,0 +1,17 @@
+//@ kind: run
+//@ description: assignment shares a @RefCounted value (retain); the object drops once
+//@ stdout:
+//~ shared
+//~ drop 10
+import { println } from "std:io";
+import { Drop } from "core:prelude";
+
+@RefCounted
+struct Res { id: i64 }
+extend Res: Drop { function drop(self) { println("drop ${self.id}"); } }
+
+function main() {
+  var a: Res = Res { id: 10 };
+  var b: Res = a;          // shared: retain — two bindings, one object
+  println("shared");
+}

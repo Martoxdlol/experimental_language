@@ -1,0 +1,20 @@
+//@ kind: run
+//@ description: reassigning a @RefCounted local releases the old value immediately
+//@ stdout:
+//~ before
+//~ drop 1
+//~ after
+//~ drop 2
+import { println } from "std:io";
+import { Drop } from "core:prelude";
+
+@RefCounted
+struct Res { id: i64 }
+extend Res: Drop { function drop(self) { println("drop ${self.id}"); } }
+
+function main() {
+  var r: Res = Res { id: 1 };
+  println("before");
+  r = Res { id: 2 };        // old (1) released here, deterministically
+  println("after");
+}

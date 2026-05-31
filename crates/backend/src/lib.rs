@@ -60,6 +60,11 @@ pub(crate) const PTR: ClType = types::I64;
 /// Mirrors `runtime::gc::KIND_PLAIN`.
 pub(crate) const GC_KIND_PLAIN: u64 = 0;
 
+/// Descriptor `kind` for a `@RefCounted` object (`docs/16` §8.1): a hidden
+/// atomic strong-count word at offset 0; traced like a plain object.
+/// Mirrors `runtime::gc::KIND_REFCOUNTED`.
+pub(crate) const GC_KIND_REFCOUNTED: u64 = 4;
+
 /// Monotonic counter for unique anonymous data-object names (string literals).
 static DATA_CTR: AtomicU64 = AtomicU64::new(0);
 
@@ -88,6 +93,8 @@ fn register_runtime_symbols(b: &mut JITBuilder) {
     b.symbol("lang_chan_sender_release", runtime::channels::lang_chan_sender_release as *const u8);
     b.symbol("lang_chan_receiver_acquire", runtime::channels::lang_chan_receiver_acquire as *const u8);
     b.symbol("lang_chan_receiver_release", runtime::channels::lang_chan_receiver_release as *const u8);
+    b.symbol("lang_rc_retain", runtime::gc::lang_rc_retain as *const u8);
+    b.symbol("lang_rc_release", runtime::gc::lang_rc_release as *const u8);
     b.symbol("lang_shared_new", runtime::shared::lang_shared_new as *const u8);
     b.symbol("lang_shared_lock", runtime::shared::lang_shared_lock as *const u8);
     b.symbol("lang_shared_unlock", runtime::shared::lang_shared_unlock as *const u8);
@@ -947,6 +954,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     async_out: None,
                     async_ctx: None,
                     endpoint_releases: Vec::new(),
+                    rc_owned: Vec::new(),
                 };
                 for (i, local) in param_locals.iter().enumerate() {
                     let ty = fg.cx.analysis.hir.local_ty(*local).unwrap();
@@ -963,6 +971,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     )
                 })?;
                 let val = fg.h_block(&hb.block)?;
+                let val = fg.rc_return_value(hb.block.trailing.as_deref(), val);
                 fg.emit_return(val)?;
             }
             b.seal_all_blocks();
@@ -1025,6 +1034,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     async_out: None,
                     async_ctx: None,
                     endpoint_releases: Vec::new(),
+                    rc_owned: Vec::new(),
                 };
                 let env = block_params[0];
                 // Captures live in the env after the function pointer (offset 8).
@@ -1058,6 +1068,15 @@ impl<'a, M: Module> Codegen<'a, M> {
                     fg.bind_local(*local, ct, block_params[i + 1]);
                 }
                 let val = fg.h_expr(&body)?;
+                // A closure returning a borrowed `@RefCounted` value must hand the
+                // caller an owned `+1` that survives `emit_return`'s release of the
+                // closure's owned locals (`docs/16` §8.1) — same `+1`-return
+                // convention as a top-level function.
+                let ret_expr = match &body.kind {
+                    compiler::hir::ExprKind::Block(blk) => blk.trailing.as_deref(),
+                    _ => Some(&body),
+                };
+                let val = fg.rc_return_value(ret_expr, val);
                 fg.emit_return(val)?;
             }
             b.seal_all_blocks();
@@ -1182,6 +1201,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     async_out: Some(out),
                     async_ctx: None,
                     endpoint_releases: Vec::new(),
+                    rc_owned: Vec::new(),
                 };
                 // The state struct holds GC roots and must stay live across the
                 // body's allocations.
@@ -1195,6 +1215,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     }
                 }
                 let val = fg.gen_body_view(&body)?;
+                let val = fg.rc_return_value(body.0.trailing.as_deref(), val);
                 fg.emit_return(val)?;
             }
             b.seal_all_blocks();
@@ -1237,6 +1258,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     async_out: None,
                     async_ctx: None,
                     endpoint_releases: Vec::new(),
+                    rc_owned: Vec::new(),
                 };
                 // Managed arguments must survive the state allocation (a
                 // safepoint) before they are stored.
@@ -1331,6 +1353,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     async_out: Some(out),
                     async_ctx: None,
                     endpoint_releases: Vec::new(),
+                    rc_owned: Vec::new(),
                 };
                 fg.mark_root(self_val);
                 for (l, _off, ct) in live {
@@ -1367,6 +1390,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     for_slots: for_slots.clone(),
                 });
                 let val = fg.gen_body_view(&body)?;
+                let val = fg.rc_return_value(body.0.trailing.as_deref(), val);
                 fg.emit_return(val)?;
 
                 // Resume blocks: reload every local, jump to the await's poll.
@@ -1466,6 +1490,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     async_out: None,
                     async_ctx: None,
                     endpoint_releases: Vec::new(),
+                    rc_owned: Vec::new(),
                 };
                 // Managed arguments must survive the state allocation.
                 for (i, v) in pvals.iter().enumerate() {
@@ -1550,6 +1575,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     async_out: Some(out),
                     async_ctx: None,
                     endpoint_releases: Vec::new(),
+                    rc_owned: Vec::new(),
                 };
                 fg.mark_root(self_val);
                 // Captures live in the state struct after the state word (@8).
@@ -1569,6 +1595,11 @@ impl<'a, M: Module> Codegen<'a, M> {
                     }
                 }
                 let val = fg.h_expr(&body)?;
+                let ret_expr = match &body.kind {
+                    compiler::hir::ExprKind::Block(blk) => blk.trailing.as_deref(),
+                    _ => Some(&body),
+                };
+                let val = fg.rc_return_value(ret_expr, val);
                 fg.emit_return(val)?;
             }
             b.seal_all_blocks();
@@ -1640,6 +1671,13 @@ struct FnGen<'a, 'b, 'f, M: Module> {
     /// releasing them when the worker returns is what closes the channel on the
     /// last-sender drop. `emit_return` drains this on every return path.
     endpoint_releases: Vec<(Value, bool)>,
+    /// Owned `@RefCounted` locals (`docs/16` §8.1), in binding order: non-captured,
+    /// `let`-bound locals whose type is a `@RefCounted` struct. Each holds one
+    /// strong reference (`+1`); `emit_return` releases them on every return path
+    /// (reverse order), and re-binding/assigning one releases its prior value
+    /// first. The last release of an object runs its `Drop` synchronously and
+    /// frees it — deterministic finalization without waiting for a collection.
+    rc_owned: Vec<LocalId>,
 }
 
 /// Cranelift blocks for an enclosing loop.
@@ -1790,6 +1828,15 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     pub(crate) fn emit_return(&mut self, val: Option<Value>) -> CgResult<()> {
         if self.term {
             return Ok(());
+        }
+        // Deterministic `@RefCounted` release (`docs/16` §8.1): every owned
+        // refcounted local drops its strong reference on this return path. The
+        // return value itself is unaffected — a borrowed return was retained at
+        // the `return` site (a `+1` handed to the caller), and an owned return is
+        // a temporary not in this list. Locals not bound on the running path read
+        // back null and release is a no-op, so this is safe across conditionals.
+        if !self.rc_owned.is_empty() {
+            self.rc_release_owned_locals();
         }
         // Deterministic channel-endpoint release (`docs/16` §8 / `docs/20` §2):
         // a worker body that captured `Sender`/`Receiver` handles releases them

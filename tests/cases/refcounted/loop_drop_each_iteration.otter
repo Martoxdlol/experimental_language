@@ -1,0 +1,25 @@
+//@ kind: run
+//@ env: OTTER_FUSION_GC=stress
+//@ description: a @RefCounted local re-bound each loop iteration drops the previous value deterministically
+//@ stdout:
+//~ iter 0
+//~ drop 0
+//~ iter 1
+//~ drop 1
+//~ iter 2
+//~ done
+//~ drop 2
+import { println } from "std:io";
+import { Drop } from "core:prelude";
+@RefCounted
+struct Res { id: i64 }
+extend Res: Drop { function drop(self) { println("drop ${self.id}"); } }
+function main() {
+  var i: i64 = 0;
+  while i < 3 {
+    var r: Res = Res { id: i };
+    println("iter ${i}");
+    i = i + 1;
+  }
+  println("done");
+}

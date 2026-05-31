@@ -1,0 +1,20 @@
+//@ kind: run
+//@ env: OTTER_FUSION_GC=stress
+//@ description: @RefCounted without a Drop impl gives deterministic free (no crash) under GC stress
+//@ stdout:
+//~ sum 4950
+import { println } from "std:io";
+
+@RefCounted
+struct Node { v: i64 }
+
+function main() {
+  var total: i64 = 0;
+  var i: i64 = 0;
+  while i < 100 {
+    var n: Node = Node { v: i };   // allocated, freed deterministically at iteration's re-bind / scope end
+    total = total + n.v;
+    i = i + 1;
+  }
+  println("sum ${total}");
+}

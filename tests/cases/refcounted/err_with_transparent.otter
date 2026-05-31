@@ -1,0 +1,7 @@
+//@ kind: compile-error
+//@ description: @RefCounted is incompatible with @Transparent (no header to host the strong count)
+//@ stderr: cannot be combined with `@Transparent`
+@RefCounted
+@Transparent
+struct Wrap(i64)
+function main() {}

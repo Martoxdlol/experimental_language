@@ -771,7 +771,30 @@ The tracing GC is functionally complete for single-threaded programs.
       scope exit, so a channel closes on the last-sender drop without a collection
       — see the Channels entry below (`recv` → `ChannelClosed`, `Receiver:
       Iterator` terminates). TODO: generic `Drop` types; `Shared` lock release on a
-      panicking body; the general opt-in `@RefCounted` object kind (goals.txt).
+      panicking body.
+      **`@RefCounted` — opt-in deterministic reference counting (`docs/16` §8.1) — DONE:**
+      the channel-endpoint carve-out is now generalized into a real, user-facing
+      object kind. A `@RefCounted struct` carries a hidden **atomic strong-count**
+      word at field-block offset 0 (new descriptor `KIND_REFCOUNTED` + an `n_rc`
+      trailer listing owned refcounted-field offsets — the trailer is now written on
+      *every* descriptor so the collector reads it uniformly). Runtime intrinsics
+      `lang_rc_retain` / `lang_rc_release` (in `runtime::gc`): release at count 0 runs
+      the type's `Drop` synchronously, releases owned refcounted fields (cascade),
+      then frees — no collection needed. The backend inserts ARC across codegen
+      (`FnGen::rc_owned` scope-exit release in `emit_return`; retain/move at
+      bind/copy/param/return/capture per a conservative owned-vs-borrowed classifier;
+      heap-store retain at struct/tuple field stores and at the `elem_to_i64` /
+      `box_value` choke points). The tracing GC is retained as the **cycle-collector
+      backstop** (Python-style): a reference cycle keeps its counts > 0 and is
+      reclaimed by the collector (drops on the finalizer path). The GC sweep /
+      finalizer release dying objects' refcounted children to surviving referents so
+      counts stay exact. Checker rejects `@RefCounted` off a plain `struct`
+      (`extern struct`, `@Transparent`, non-struct). Determinism boundary: values
+      held only by a GC collection / `Shared` / channel / `union`-`dynamic` box / a
+      closure capture are GC-timed (never prematurely freed — always memory-safe).
+      `docs/16` §8.1; `examples/refcounted.otter`; 5 runtime unit tests + 15 e2e
+      cases (`tests/cases/refcounted/`). Deferred: `Weak<T>`; deterministic (vs
+      GC-timed) drop for collection/`union`-held refcounted values.
 - [~] **Concurrent reclamation — attempted, gated (memory-safe).** Collection is
       still skipped while >1 mutator is live (`maybe_collect`): garbage is retained
       during concurrency and reclaimed after threads join — never freeing a live
@@ -1931,6 +1954,13 @@ feature, JIT≡native byte-identical and GC-stress clean.
    `bench` + `run --time`.*
 2. **Finish the long tail** (goals.txt "finish end to end"): work the remaining
    items below one by one, test-gated, docs/LSP/examples kept consistent.
+
+**Recently completed:**
+- **`@RefCounted` — opt-in deterministic reference counting (`docs/16` §8.1): DONE.**
+  Generalizes the channel-endpoint carve-out into a user-facing object kind: atomic
+  strong count, synchronous `Drop` + free at count 0, ARC retain/release across
+  codegen, tracing GC as the cycle backstop. See the Phase-5 GC/Drop entry. Deferred:
+  `Weak<T>`; deterministic (vs GC-timed) drop for collection/`union`-held values.
 
 **Remaining features / deferrals (each test-gated when picked up):**
 - **`await` in a short-circuit operand / loop condition** — genuinely conditional

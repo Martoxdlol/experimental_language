@@ -1,0 +1,22 @@
+//@ kind: run
+//@ env: OTTER_FUSION_GC=stress
+//@ description: a @RefCounted reference cycle leaks the count but is reclaimed by the tracing GC backstop (no crash, no leak-abort)
+//@ stdout:
+//~ done
+import { println } from "std:io";
+
+@RefCounted
+struct Node { id: i64, peer: Node | null }
+
+function main() {
+  var i: i64 = 0;
+  // Build many short-lived a<->b cycles; refcounting alone would leak them all,
+  // but the tracing GC reclaims the unreachable cycles under stress.
+  while i < 200 {
+    var a: Node = Node { id: 1, peer: null };
+    var b: Node = Node { id: 2, peer: a };
+    a.peer = b;          // a <-> b cycle
+    i = i + 1;
+  }
+  println("done");
+}

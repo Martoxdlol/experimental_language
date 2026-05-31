@@ -74,7 +74,9 @@
     <li><a href="#spaces">Allocation spaces</a></li>
     <li><a href="#safepoints">Safepoints &amp; stack maps</a></li>
     <li><a href="#barriers">Write barriers</a></li>
-    <li><a href="#drop">Drop semantics</a></li>
+    <li><a href="#drop">Drop semantics</a>
+      <ul><li><a href="#refcounted">Deterministic reference counting — <code>@RefCounted</code></a></li></ul>
+    </li>
     <li><a href="#inline">Inline / stack allocation</a></li>
     <li><a href="#typeid">Type identification</a></li>
     <li><a href="#oom">Allocation failure</a></li>
@@ -480,9 +482,77 @@ enqueued to the finalizer queue. A dedicated finalizer thread pops the queue and
   waiting for a collection — so a drained <code>recv()</code> resolves to <code>ChannelClosed</code>
   and a <code>for x in rx</code> loop terminates. This is a runtime/library mechanism layered on
   top of the collector (the GC still reclaims the underlying queue once both ends are
-  unreachable); it does <em>not</em> introduce a general user-facing destructor. A future
-  opt-in <code>@RefCounted</code> object kind will generalize this deterministic-drop facility to
-  user types, with the tracing GC as the cycle-collector backstop.
+  unreachable); it does <em>not</em> introduce a general user-facing destructor. The opt-in
+  <a href="#refcounted"><code>@RefCounted</code></a> object kind (§8.1) generalizes this
+  deterministic-drop facility to user types, with the tracing GC as the cycle-collector backstop.
+</div>
+
+<!-- =========================================================== -->
+<h3 id="refcounted">8.1 Deterministic reference counting — <code>@RefCounted</code></h3>
+
+<p>A struct may opt in to <strong>deterministic, atomic reference counting</strong> with the
+<code>@RefCounted</code> decorator. This generalizes the channel-endpoint mechanism above into a
+real language feature: any annotated type gets a <strong>deterministic <code>Drop</code> the
+instant its last strong reference goes away</strong> — no waiting for a collection — while the
+tracing GC is retained purely as the <strong>cycle-collector backstop</strong> (reference
+counting alone leaks cycles; the collector reclaims them, Python-style).</p>
+
+<pre><code>@RefCounted
+struct Conn { fd: i64 }
+
+extend Conn: Drop {
+  function drop(self) { close_fd(self.fd) }   // runs at strong-count 0, synchronously
+}
+
+function main() {
+  var a: Conn = Conn { fd: open() }   // strong count 1
+  var b: Conn = a                     // shared: count 2 (assignment retains)
+  use(b)
+}                                     // count 2 → 1 → 0: drop(self) runs here, then freed</code></pre>
+
+<table>
+  <tr><th>Aspect</th><th>Behavior</th></tr>
+  <tr><td>Representation</td><td>A hidden <strong>atomic strong-count word</strong> in the object
+    header region; the object is otherwise a normal managed struct (traced by the GC like any
+    other). Atomic, so a refcounted handle may cross threads.</td></tr>
+  <tr><td>Retain / release</td><td>Inserted by the compiler around every binding: bind, copy,
+    parameter, return, capture, and heap field stores. <code>assignment</code> retains (shares);
+    <code>.clone()</code> makes an independent deep copy with its own count of 1 (it does
+    <em>not</em> alias).</td></tr>
+  <tr><td>Destruction</td><td>When the count reaches zero the type's <code>Drop</code> (if any)
+    runs <strong>synchronously</strong>, the strong references it owns (refcounted fields) are
+    released — cascading destruction through the owned graph — and the memory is reclaimed
+    immediately.</td></tr>
+  <tr><td>Drop is optional</td><td><code>@RefCounted</code> works with or without a
+    <code>Drop</code> impl: you always get deterministic <em>free</em> at count zero; with a
+    <code>Drop</code> impl you also get deterministic <em>finalization</em> (instead of the
+    GC-timed best-effort drop of ordinary managed objects).</td></tr>
+  <tr><td>Cycles</td><td>A reference cycle keeps its members' counts above zero, so reference
+    counting alone never frees it. The tracing GC reclaims the unreachable cycle (running each
+    member's <code>Drop</code> on the finalizer path) — the Python-style backstop.</td></tr>
+</table>
+
+<div class="callout">
+  <strong>The determinism boundary</strong>
+  Deterministic, synchronous drop is guaranteed for a <code>@RefCounted</code> value held by a
+  <strong>local binding</strong> (released at end of its function or when re-bound/reassigned) or
+  owned by a <strong>field of another struct/tuple</strong> (released when that owner is
+  destroyed). A refcounted value that escapes into a <strong>GC-managed container or a wider
+  shape</strong> — a <code>List</code>/<code>Map</code>/<code>Set</code> element, a
+  <code>Shared&lt;T&gt;</code>, a channel message, a <code>union</code>/<code>dynamic</code> box,
+  or a value <strong>captured into a closure</strong> — is pinned alive while that holder
+  references it and then reclaimed by the <strong>GC backstop</strong> (its <code>Drop</code>
+  still runs, but GC-timed, not at the deterministic point). This is always memory-safe: a value
+  is never freed while any holder — counted or GC-traced — still references it.
+</div>
+
+<div class="callout warn">
+  <strong>Placement</strong>
+  <code>@RefCounted</code> decorates a plain managed <code>struct</code> only. It is rejected on
+  an <code>extern struct</code> (C-ABI, header-less, unmanaged) and is incompatible with
+  <code>@Transparent</code> (a newtype with no header to host the count). A future iteration may
+  add a <code>Weak&lt;T&gt;</code> companion for breaking cycles without the GC; today the
+  collector is the sole cycle reclaimer.
 </div>
 
 <!-- =========================================================== -->
@@ -673,7 +743,9 @@ that:</p>
     <li>Write barriers inserted at IR-gen for cross-space and concurrent-marking correctness.</li>
     <li>Allocation spaces: <code>default</code> (Immix), <code>nonmoving</code> (for <code>@Pinnable</code>), <code>immortal</code>, <code>los</code>.</li>
     <li>Drop is best-effort by default — finalizer queue, no ordering.</li>
-    <li>No language-level deterministic-drop mechanism — release resources explicitly.</li>
+    <li><code>@RefCounted</code> opts a struct into deterministic, atomic reference counting:
+      <code>Drop</code> runs synchronously at strong-count zero; the GC is the cycle backstop (§8.1).</li>
+    <li>For ordinary managed objects there is no deterministic-drop hook — release resources explicitly.</li>
     <li>Pinning prevents <em>movement</em>, not reclamation. <code>@Pinnable</code> avoids dynamic pins.</li>
     <li>Handles for long-lived foreign rooting — movement-friendly alternative to pinning.</li>
     <li>Managed alloc panics on OOM; foreign alloc returns null. Two heaps; GC ignores foreign pointers.</li>

@@ -181,6 +181,7 @@ impl<'a> Checker<'a> {
         self.collect_struct_layouts();
         self.collect_impls();
         self.validate_extern_structs();
+        self.validate_refcounted();
         for id in 0..self.prog.defs.len() {
             let def = DefId(id as u32);
             match self.prog.def(def).kind {
@@ -363,6 +364,48 @@ impl<'a> Checker<'a> {
                         fname, name, self.display(fty)
                     )));
                 }
+            }
+        }
+    }
+
+    /// Enforce the placement rules for the `@RefCounted` decorator (`docs/16`
+    /// §8.1): it opts a **plain managed struct** into deterministic, atomic
+    /// reference counting. It is therefore valid only on a non-`extern` `struct`,
+    /// and is incompatible with `@Transparent` (a transparent newtype has its
+    /// single field's ABI and carries no object header to host the strong count).
+    pub(crate) fn validate_refcounted(&mut self) {
+        for id in 0..self.prog.defs.len() {
+            let def = DefId(id as u32);
+            let Some(attr) = self
+                .prog
+                .def(def)
+                .attrs
+                .iter()
+                .find(|a| a.name.name == "RefCounted")
+                .cloned()
+            else {
+                continue;
+            };
+            let kind = self.prog.def(def).kind;
+            let name = self.prog.def(def).name.clone();
+            match kind {
+                DefKind::Struct => {
+                    if self.prog.def(def).attrs.iter().any(|a| a.name.name == "Transparent") {
+                        self.emit(attr.span, SemaErrorKind::Message(format!(
+                            "`@RefCounted` cannot be combined with `@Transparent`: a \
+                             transparent newtype has its field's ABI and no object header to \
+                             hold the strong count (`docs/16` §8.1)"
+                        )));
+                    }
+                }
+                DefKind::ExternStruct => self.emit(attr.span, SemaErrorKind::Message(format!(
+                    "`@RefCounted` cannot be applied to `extern struct {name}`: extern \
+                     structs are C-ABI, header-less, and unmanaged, so they cannot be \
+                     reference counted (`docs/16` §8.1)"
+                ))),
+                _ => self.emit(attr.span, SemaErrorKind::Message(format!(
+                    "`@RefCounted` may only decorate a `struct`, not `{name}` (`docs/16` §8.1)"
+                ))),
             }
         }
     }

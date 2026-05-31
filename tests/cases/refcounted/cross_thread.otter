@@ -1,0 +1,26 @@
+//@ kind: run
+//@ serial
+//@ description: @RefCounted's strong count is atomic — a worker thread can construct, use, and drop a refcounted value
+//@ stdout:
+//~ worker 42
+import { println } from "std:io";
+import { Drop, Future } from "core:prelude";
+import { Thread, JoinHandle, Joined, Panicked } from "std:thread";
+
+@RefCounted
+struct R { id: i64 }
+extend R: Drop { function drop(self) { } }
+
+function work(): i64 {
+  var r: R = R { id: 42 };
+  r.id
+}
+
+function main(): Future<null> async {
+  var h: JoinHandle<i64> = Thread.spawn(() => work());
+  var res: Joined<i64> | Panicked = await h.join();
+  match res {
+    Joined<i64> j => println("worker ${j.value}"),
+    Panicked p => println("panic"),
+  }
+}

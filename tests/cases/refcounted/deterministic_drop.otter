@@ -1,0 +1,23 @@
+//@ kind: run
+//@ description: @RefCounted locals drop deterministically at scope exit, reverse bind order
+//@ stdout:
+//~ start
+//~ end
+//~ drop 2
+//~ drop 1
+import { println } from "std:io";
+import { Drop } from "core:prelude";
+
+@RefCounted
+struct Res { id: i64 }
+
+extend Res: Drop {
+  function drop(self) { println("drop ${self.id}"); }
+}
+
+function main() {
+  println("start");
+  var a: Res = Res { id: 1 };
+  var b: Res = Res { id: 2 };
+  println("end");
+}

@@ -322,6 +322,11 @@ pub(crate) struct Layout {
     pub(crate) align: u32,
     /// Byte offsets of fields that hold managed pointers (the GC trace map).
     pub(crate) ptr_offsets: Vec<u32>,
+    /// Byte offsets of fields that hold `@RefCounted` strong references (a subset
+    /// of `ptr_offsets`). Emitted into the descriptor trailer so the runtime
+    /// releases these owned references when the object is destroyed — by
+    /// `lang_rc_release` reaching zero or by a GC sweep (`docs/16` §8.1).
+    pub(crate) rc_offsets: Vec<u32>,
 }
 
 impl Layout {
@@ -344,6 +349,24 @@ pub(crate) fn is_immutable_value_codegen(analysis: &Analysis, ty: Ty) -> bool {
         TyKind::Int(_) | TyKind::Float(_) | TyKind::Bool | TyKind::Char | TyKind::Str | TyKind::Null
     )
 }
+
+/// Whether nominal type `def` is a `@RefCounted` struct (`docs/16` §8.1): an
+/// opt-in deterministic reference-counted object kind. Read off the struct's
+/// decorators; checked exactly like the other layout decorators (`@Packed`, …).
+pub(crate) fn is_refcounted_def(analysis: &Analysis, def: DefId) -> bool {
+    let d = analysis.program.def(def);
+    d.kind == DefKind::Struct && d.attrs.iter().any(|a| a.name.name == "RefCounted")
+}
+
+/// Whether `ty` resolves to a `@RefCounted` struct. `ty` should already be
+/// resolved through the active substitution.
+pub(crate) fn is_refcounted_ty(analysis: &Analysis, ty: Ty) -> bool {
+    matches!(analysis.tcx.kind(ty), TyKind::Named { def, .. } if is_refcounted_def(analysis, *def))
+}
+
+/// Bytes a `@RefCounted` object prepends to its field block: the hidden atomic
+/// strong-count word at offset 0 (user fields shift up by this much).
+pub(crate) const RC_HEADER: u32 = 8;
 
 /// Is a value of `ty` a managed-heap pointer (so the collector must trace it)?
 /// Primitives are not; `str`, tuples, unions/`dynamic`, and managed structs
@@ -397,6 +420,7 @@ pub(crate) fn layout_of_fields(analysis: &Analysis, fields: &[(String, Ty)]) -> 
     let mut names = Vec::new();
     let mut tys = Vec::new();
     let mut ptr_offsets = Vec::new();
+    let mut rc_offsets = Vec::new();
     let mut max_align = 1u32;
     for (name, ty) in fields {
         let ct = clty_of(analysis, *ty);
@@ -411,6 +435,9 @@ pub(crate) fn layout_of_fields(analysis: &Analysis, fields: &[(String, Ty)]) -> 
         tys.push(*ty);
         if is_managed_ptr(analysis, *ty) {
             ptr_offsets.push(offset);
+            if is_refcounted_ty(analysis, *ty) {
+                rc_offsets.push(offset);
+            }
         }
         offset += size;
         max_align = max_align.max(align);
@@ -423,6 +450,7 @@ pub(crate) fn layout_of_fields(analysis: &Analysis, fields: &[(String, Ty)]) -> 
         size: align_up(offset, max_align).max(1),
         align: max_align,
         ptr_offsets,
+        rc_offsets,
     }
 }
 
@@ -580,6 +608,7 @@ pub(crate) fn extern_layout_of_fields(
         size: align_up(raw, max_align).max(1),
         align: max_align,
         ptr_offsets: Vec::new(),
+        rc_offsets: Vec::new(),
     }
 }
 
@@ -606,7 +635,27 @@ pub(crate) fn compute_layout(analysis: &Analysis, def: DefId, args: &[Ty]) -> La
         let repr = extern_repr(analysis, def);
         return extern_layout_of_fields(analysis, &resolved, &repr);
     }
-    layout_of_fields(analysis, &resolved)
+    let mut layout = layout_of_fields(analysis, &resolved);
+    if is_refcounted_def(analysis, def) {
+        // A `@RefCounted` object reserves a hidden atomic strong-count word at
+        // field-block offset 0; every user field shifts up by `RC_HEADER`. Field
+        // access, construction, clone, pattern-matching, etc. all read offsets
+        // from this `Layout`, so the shift is transparent to them — only the
+        // allocator (stamps the initial count) and the descriptor (kind +
+        // rc-child trailer) treat refcounted objects specially.
+        for o in layout.offsets.iter_mut() {
+            *o += RC_HEADER;
+        }
+        for o in layout.ptr_offsets.iter_mut() {
+            *o += RC_HEADER;
+        }
+        for o in layout.rc_offsets.iter_mut() {
+            *o += RC_HEADER;
+        }
+        layout.size += RC_HEADER;
+        layout.align = layout.align.max(RC_HEADER);
+    }
+    layout
 }
 
 /// The layout of an anonymous tuple, positions named "0", "1", ….

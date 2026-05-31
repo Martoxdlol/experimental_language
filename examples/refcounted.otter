@@ -1,0 +1,43 @@
+// @RefCounted (docs/16 §8.1): opt a struct into deterministic, atomic reference
+// counting. Unlike ordinary managed objects — whose `Drop` is best-effort and
+// GC-timed — a `@RefCounted` value's `drop(self)` runs *synchronously the moment
+// its last strong reference goes away*, with the tracing GC kept only as the
+// cycle-collector backstop (reference counting alone leaks cycles).
+//
+// Assignment SHARES (retains); `.clone()` makes an independent deep copy. The
+// strong count is atomic, so a refcounted handle can cross threads.
+
+import { println } from "std:io";
+import { Drop } from "core:prelude";
+
+@RefCounted
+struct File { id: i64 }
+
+extend File: Drop {
+  // Deterministic finalization: runs at strong-count 0, before the memory is freed.
+  function drop(self) { println("close file ${self.id}"); }
+}
+
+// A @RefCounted owner releases its @RefCounted fields when it is destroyed, so
+// destruction cascades through the owned graph (owner drops first).
+@RefCounted
+struct Session { log: File }
+extend Session: Drop { function drop(self) { println("end session"); } }
+
+function open(id: i64): File { File { id: id } }   // factory: hands back an owned reference
+
+function main() {
+  // Deterministic scope-bound drop, reverse binding order.
+  var a: File = open(1);
+  var b: File = a;            // shared: both name the same file; it closes once
+  println("opened ${b.id}");
+
+  // Reassignment releases the previous value immediately.
+  var c: File = open(2);
+  c = open(3);                // "close file 2" prints here
+
+  // Ownership cascade: the session owns its log file.
+  var s: Session = Session { log: open(4) };
+  println("working");
+  // Scope exit (reverse order): session (end + close 4), then c (3), then a/b (1).
+}

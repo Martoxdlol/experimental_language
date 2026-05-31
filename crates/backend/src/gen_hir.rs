@@ -35,26 +35,45 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         match &stmt.kind {
             hir::StmtKind::Let { pattern, init } => {
                 let init_ty = init.ty;
+                let init_owned = Self::is_owned_rc_expr(init);
                 let val = self.h_expr(init)?;
-                self.h_bind_pattern(pattern, val, init_ty)
+                self.h_bind_pattern(pattern, val, init_ty, init_owned)
             }
             hir::StmtKind::Assign { target, value } => {
+                let owned = Self::is_owned_rc_expr(value);
                 let v = self.h_expr(value)?;
-                self.h_assign(target, v)
+                self.h_assign(target, v, owned)
             }
             hir::StmtKind::Expr(e) => {
-                self.h_expr(e)?;
+                let v = self.h_expr(e)?;
+                // A discarded owned `@RefCounted` temporary (e.g. `make_rc();`)
+                // would otherwise leak its fresh `+1` until the GC backstop runs;
+                // release it now so its `Drop` is deterministic (`docs/16` §8.1).
+                if !self.term && Self::is_owned_rc_expr(e) && self.is_rc_ty(e.ty) {
+                    if let Some(v) = v {
+                        self.emit_rc_release(v);
+                    }
+                }
                 Ok(())
             }
             hir::StmtKind::Item(_) => Ok(()),
         }
     }
 
-    fn h_bind_pattern(&mut self, pattern: &hir::Pattern, val: Option<Value>, ty: Ty) -> CgResult<()> {
+    fn h_bind_pattern(
+        &mut self,
+        pattern: &hir::Pattern,
+        val: Option<Value>,
+        ty: Ty,
+        init_owned: bool,
+    ) -> CgResult<()> {
         match &pattern.kind {
             hir::PatternKind::Bind(local) => {
                 if let Some(v) = val {
                     let ct = self.b.func.dfg.value_type(v);
+                    if self.is_rc_local(*local) {
+                        self.rc_manage_bind(*local, v, init_owned);
+                    }
                     self.bind_local(*local, ct, v);
                 }
                 Ok(())
@@ -78,7 +97,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                         }
                         _ => None,
                     };
-                    self.h_bind_pattern(sub, elem_val, elem_tys[i])?;
+                    self.h_bind_pattern(sub, elem_val, elem_tys[i], false)?;
                 }
                 Ok(())
             }
@@ -93,7 +112,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 for (i, sub) in fields.iter().enumerate() {
                     let fv = self.h_load_field(ptr, &layout, i);
                     let fty = layout.tys.get(i).copied().unwrap_or(self.cx.analysis.tcx.error);
-                    self.h_bind_pattern(sub, fv, fty)?;
+                    self.h_bind_pattern(sub, fv, fty, false)?;
                 }
                 Ok(())
             }
@@ -109,7 +128,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                     let i = fp.index as usize;
                     let fv = self.h_load_field(ptr, &layout, i);
                     let fty = layout.tys.get(i).copied().unwrap_or(self.cx.analysis.tcx.error);
-                    self.h_bind_pattern(&fp.pattern, fv, fty)?;
+                    self.h_bind_pattern(&fp.pattern, fv, fty, false)?;
                 }
                 Ok(())
             }
@@ -129,10 +148,23 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         }
     }
 
-    fn h_assign(&mut self, target: &hir::Expr, val: Option<Value>) -> CgResult<()> {
+    fn h_assign(&mut self, target: &hir::Expr, val: Option<Value>, owned: bool) -> CgResult<()> {
         match &target.kind {
             hir::ExprKind::Name(hir::Res::Local(local)) => {
                 if let Some(v) = val {
+                    // `@RefCounted` local reassignment: the binding drops its old
+                    // reference and takes the new one — release the old value
+                    // (deterministic `Drop` if it was the last reference) and
+                    // retain a borrowed new value (`docs/16` §8.1).
+                    if self.is_rc_local(*local) {
+                        let old = self.read_local(*local);
+                        if !owned {
+                            self.emit_rc_retain(v);
+                        }
+                        if let Some(old) = old {
+                            self.emit_rc_release(old);
+                        }
+                    }
                     self.write_local(*local, v, target.span)?;
                 }
                 Ok(())
@@ -149,10 +181,10 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 Ok(())
             }
             hir::ExprKind::Field { receiver, field } => {
-                self.h_field_store(receiver, field.index as usize, val)
+                self.h_field_store(receiver, field.index as usize, val, owned)
             }
             hir::ExprKind::TupleIndex { receiver, index } => {
-                self.h_field_store(receiver, *index as usize, val)
+                self.h_field_store(receiver, *index as usize, val, owned)
             }
             hir::ExprKind::Index { receiver, index } => self.h_index_store(receiver, index, val),
             // `*p = v` — store a scalar through a raw pointer (`docs/19` §2).
@@ -174,7 +206,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     }
 
     /// Store into a field/tuple position (mirrors the AST `gen_field_store`).
-    fn h_field_store(&mut self, receiver: &hir::Expr, idx: usize, val: Option<Value>)
+    fn h_field_store(&mut self, receiver: &hir::Expr, idx: usize, val: Option<Value>, owned: bool)
         -> CgResult<()>
     {
         let rty = receiver.ty;
@@ -196,7 +228,19 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             }
             return Ok(());
         }
-        if let (Some(v), Some(_)) = (val, layout.cltys[idx]) {
+        if let (Some(v), Some(ct)) = (val, layout.cltys[idx]) {
+            // Storing into a `@RefCounted` field is a heap-store ARC edge
+            // (`docs/16` §8.1 / §7 write-barrier site): the field drops its prior
+            // referent (deterministic `Drop` if it was the last reference) and
+            // takes the new one — retaining a borrowed value so the field owns a
+            // `+1` that the owner's teardown later releases.
+            if self.is_rc_ty(layout.tys[idx]) {
+                let old = self.b.ins().load(ct, MemFlags::trusted(), ptr, off);
+                if !owned {
+                    self.emit_rc_retain(v);
+                }
+                self.emit_rc_release(old);
+            }
             self.b.ins().store(MemFlags::trusted(), v, ptr, off);
         }
         Ok(())
@@ -273,6 +317,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                     Some(e) => self.h_expr(e)?,
                     None => None,
                 };
+                let val = self.rc_return_value(v.as_deref(), val);
                 self.emit_return(val)?;
                 Ok(None)
             }
@@ -1083,6 +1128,11 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 if let Some(ct) = layout.cltys[i] {
                     let off = layout.offsets[i] as i32;
                     let v = self.b.ins().load(ct, MemFlags::trusted(), base_ptr, off);
+                    // A `@RefCounted` field copied from the spread base becomes a
+                    // new owned reference — retain it (`docs/16` §8.1).
+                    if self.is_rc_ty(layout.tys[i]) {
+                        self.emit_rc_retain(v);
+                    }
                     self.b.ins().store(MemFlags::trusted(), v, ptr, off);
                 }
             }
@@ -1093,6 +1143,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 return Err(CodegenError::new(fi.span, "unknown field in struct literal"));
             }
             let off = layout.offsets[idx] as i32;
+            let field_owned = Self::is_owned_rc_expr(&fi.value);
             let val = self.h_expr(&fi.value)?;
             if is_extern_struct_ty(self.cx.analysis, layout.tys[idx]) {
                 if let Some(v) = val {
@@ -1100,6 +1151,19 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                     self.copy_bytes(ptr, off, v, n);
                 }
             } else if let (Some(v), Some(_)) = (val, layout.cltys[idx]) {
+                // A `@RefCounted` field takes ownership of a `+1`: a borrowed
+                // initializer is retained; a freshly-constructed one moves in.
+                // An explicit field overriding a spread base also releases the
+                // value the base copied in (retained above).
+                if self.is_rc_ty(layout.tys[idx]) {
+                    if !field_owned {
+                        self.emit_rc_retain(v);
+                    }
+                    if spread.is_some() {
+                        let old = self.b.ins().load(PTR, MemFlags::trusted(), ptr, off);
+                        self.emit_rc_release(old);
+                    }
+                }
                 self.b.ins().store(MemFlags::trusted(), v, ptr, off);
             }
         }
@@ -1224,8 +1288,16 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         let layout = tuple_layout(self.cx.analysis, &elem_tys);
         let ptr = self.alloc_struct(&layout);
         for (i, e) in elems.iter().enumerate() {
+            let elem_owned = Self::is_owned_rc_expr(e);
             let v = self.h_expr(e)?;
             if let (Some(v), Some(Some(_))) = (v, layout.cltys.get(i)) {
+                // A `@RefCounted` tuple element is owned by the tuple (which
+                // carries the refcounted-child trailer, so it is released on the
+                // tuple's teardown). Retain a borrowed element; move an owned one
+                // (`docs/16` §8.1).
+                if self.is_rc_ty(elem_tys[i]) && !elem_owned {
+                    self.emit_rc_retain(v);
+                }
                 self.b.ins().store(MemFlags::trusted(), v, ptr, layout.offsets[i] as i32);
             }
         }
@@ -1518,7 +1590,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                         for (i, sub) in elems.iter().enumerate() {
                             let idx = self.b.ins().iconst(types::I64, i as i64);
                             let v = load_at(self, idx)?;
-                            self.h_bind_pattern(sub, v, elem)?;
+                            self.h_bind_pattern(sub, v, elem, false)?;
                         }
                     }
                     Some((rp, r)) => {
@@ -1531,14 +1603,14 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                         for (i, sub) in elems.iter().take(rp).enumerate() {
                             let idx = self.b.ins().iconst(types::I64, i as i64);
                             let v = load_at(self, idx)?;
-                            self.h_bind_pattern(sub, v, elem)?;
+                            self.h_bind_pattern(sub, v, elem, false)?;
                         }
                         // Trailing fixed elements at n - trailing + j.
                         let base = self.b.ins().iadd_imm(n, -(trailing as i64));
                         for (j, sub) in elems.iter().skip(rp).enumerate() {
                             let idx = self.b.ins().iadd_imm(base, j as i64);
                             let v = load_at(self, idx)?;
-                            self.h_bind_pattern(sub, v, elem)?;
+                            self.h_bind_pattern(sub, v, elem, false)?;
                         }
                         // `..rest` binds the middle slice [rp, n - trailing).
                         if let Some(local) = r.bind {
@@ -1566,7 +1638,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 } else {
                     scrut
                 };
-                self.h_bind_pattern(pattern, payload, vt)
+                self.h_bind_pattern(pattern, payload, vt, false)
             }
             _ => Err(CodegenError::new(pattern.span, "HIR codegen: pattern not yet supported in match")),
         }
@@ -1631,7 +1703,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 self.mark_root(v);
             }
         }
-        self.h_bind_pattern(pattern, elem_val, elem)?;
+        self.h_bind_pattern(pattern, elem_val, elem, false)?;
         self.loops.push(LoopCg { continue_block: header, break_block: exit, has_value: false });
         self.h_block(body)?;
         if !self.term {
@@ -1691,7 +1763,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             .call_intrinsic("lang_list_get", &[PTR, types::I64], Some(types::I64), &[list_b, i2])
             .expect("get");
         let elem_val = self.i64_to_elem(raw, elem, iter.span)?;
-        self.h_bind_pattern(pattern, elem_val, elem)?;
+        self.h_bind_pattern(pattern, elem_val, elem, false)?;
         self.loops.push(LoopCg { continue_block: latch, break_block: exit, has_value: false });
         self.h_block(body)?;
         if !self.term {
@@ -1798,7 +1870,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             }
             None => None,
         };
-        self.h_bind_pattern(pattern, value, info.elem)?;
+        self.h_bind_pattern(pattern, value, info.elem, false)?;
         self.loops.push(LoopCg { continue_block: header, break_block: exit, has_value: false });
         self.h_block(body)?;
         if !self.term {
@@ -1893,7 +1965,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             .call_intrinsic("lang_list_get", &[PTR, types::I64], Some(types::I64), &[list_b, i2])
             .expect("get");
         let elem_val = self.i64_to_elem(raw, elem, iter.span)?;
-        self.h_bind_pattern(pattern, elem_val, elem)?;
+        self.h_bind_pattern(pattern, elem_val, elem, false)?;
         self.loops.push(LoopCg { continue_block: latch, break_block: exit, has_value: false });
         self.h_block(body)?;
         if !self.term {
@@ -1983,7 +2055,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             }
             None => None,
         };
-        self.h_bind_pattern(pattern, value, info.elem)?;
+        self.h_bind_pattern(pattern, value, info.elem, false)?;
         self.loops.push(LoopCg { continue_block: header, break_block: exit, has_value: false });
         self.h_block(body)?;
         if !self.term {
@@ -2076,7 +2148,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 self.b.ins().store(MemFlags::trusted(), vv, entry, layout.offsets[vo] as i32);
             }
         }
-        self.h_bind_pattern(pattern, Some(entry), entry_ty)?;
+        self.h_bind_pattern(pattern, Some(entry), entry_ty, false)?;
         self.loops.push(LoopCg { continue_block: latch, break_block: exit, has_value: false });
         self.h_block(body)?;
         if !self.term {

@@ -1,0 +1,22 @@
+//@ kind: run
+//@ description: a @RefCounted owner releases its @RefCounted fields on teardown (owner drops first, cascading)
+//@ stdout:
+//~ built
+//~ drop parent
+//~ drop child 1
+import { println } from "std:io";
+import { Drop } from "core:prelude";
+
+@RefCounted
+struct Child { id: i64 }
+extend Child: Drop { function drop(self) { println("drop child ${self.id}"); } }
+
+@RefCounted
+struct Parent { child: Child }
+extend Parent: Drop { function drop(self) { println("drop parent"); } }
+
+function main() {
+  var c: Child = Child { id: 1 };
+  var p: Parent = Parent { child: c };   // field retains; c also owns until scope end
+  println("built");
+}

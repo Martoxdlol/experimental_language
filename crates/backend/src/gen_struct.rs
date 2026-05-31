@@ -8,19 +8,33 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     /// Emit a managed-type descriptor blob (`docs/16` §3 — `gc` module) and
     /// return its address: `[size:u64][kind:u64][n_ptrs:u64][off:u32 …]`.
     pub(crate) fn emit_descriptor(&mut self, size: u32, kind: u64, ptr_offsets: &[u32]) -> Value {
-        self.emit_descriptor_with(size, kind, 0, ptr_offsets)
+        self.emit_descriptor_full(size, kind, 0, ptr_offsets, &[])
     }
 
-    /// Emit a type descriptor blob `[size][kind][type_id][n_ptrs][offsets…]`.
-    /// `type_id` is `0` unless the type has a registered `Drop` finalizer
-    /// (`docs/16` §8); the collector reads it to find the drop function.
-    pub(crate) fn emit_descriptor_with(&mut self, size: u32, kind: u64, type_id: i64, ptr_offsets: &[u32]) -> Value {
-        let mut bytes = Vec::with_capacity(32 + ptr_offsets.len() * 4);
+    /// Emit a full type descriptor blob, including the `@RefCounted`-child
+    /// trailer `[n_rc][rcoff…]` (`docs/16` §8.1). The trailer is *always* written
+    /// (possibly with `n_rc == 0`) so the runtime can read it unconditionally —
+    /// `desc_rc_offsets` reads at `32 + n_ptrs*4` for every object it reclaims.
+    /// `rc_offsets` lists the byte offsets of fields holding refcounted strong
+    /// references (a subset of `ptr_offsets`); they are released on destruction.
+    pub(crate) fn emit_descriptor_full(
+        &mut self,
+        size: u32,
+        kind: u64,
+        type_id: i64,
+        ptr_offsets: &[u32],
+        rc_offsets: &[u32],
+    ) -> Value {
+        let mut bytes = Vec::with_capacity(36 + (ptr_offsets.len() + rc_offsets.len()) * 4);
         bytes.extend_from_slice(&(size as u64).to_le_bytes());
         bytes.extend_from_slice(&kind.to_le_bytes());
         bytes.extend_from_slice(&(type_id as u64).to_le_bytes());
         bytes.extend_from_slice(&(ptr_offsets.len() as u64).to_le_bytes());
         for o in ptr_offsets {
+            bytes.extend_from_slice(&o.to_le_bytes());
+        }
+        bytes.extend_from_slice(&(rc_offsets.len() as u32).to_le_bytes());
+        for o in rc_offsets {
             bytes.extend_from_slice(&o.to_le_bytes());
         }
         let name = format!("desc.{}", DATA_CTR.fetch_add(1, Ordering::Relaxed));
@@ -37,20 +51,40 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     }
 
     /// Allocate a managed object for `layout`, returning the field-block ptr.
+    /// The descriptor carries `layout`'s refcounted-child trailer so the runtime
+    /// releases any `@RefCounted` values this object owns when it is reclaimed
+    /// (relevant for tuples / internal aggregates holding refcounted elements).
     pub(crate) fn alloc_struct(&mut self, layout: &Layout) -> Value {
-        let desc = self.emit_descriptor(layout.size, GC_KIND_PLAIN, &layout.ptr_offsets);
+        let desc = self.emit_descriptor_full(
+            layout.size, GC_KIND_PLAIN, 0, &layout.ptr_offsets, &layout.rc_offsets,
+        );
         self.call_intrinsic("lang_alloc", &[PTR], Some(PTR), &[desc])
             .expect("lang_alloc returns a pointer")
     }
 
     /// Allocate a managed object of nominal type `ty`. If `ty` has a `Drop` impl
-    /// (`docs/16` §8), the descriptor carries its type id so the collector can
-    /// find the finalizer; otherwise this is identical to [`alloc_struct`].
+    /// (`docs/16` §8), the descriptor carries its type id so the collector (or,
+    /// for `@RefCounted`, the release path) can find the finalizer. A
+    /// `@RefCounted` type (`docs/16` §8.1) is allocated as a `KIND_REFCOUNTED`
+    /// object and its hidden strong-count word is stamped to `1` (the creating
+    /// binding owns the one reference).
     pub(crate) fn alloc_struct_typed(&mut self, layout: &Layout, ty: Ty) -> Value {
         let tid = if self.ty_has_drop(ty) { self.type_id_of(ty) } else { 0 };
-        let desc = self.emit_descriptor_with(layout.size, GC_KIND_PLAIN, tid, &layout.ptr_offsets);
-        self.call_intrinsic("lang_alloc", &[PTR], Some(PTR), &[desc])
-            .expect("lang_alloc returns a pointer")
+        let refcounted = is_refcounted_ty(self.cx.analysis, resolve_shallow(self.cx.analysis, ty, &self.subst));
+        let kind = if refcounted { GC_KIND_REFCOUNTED } else { GC_KIND_PLAIN };
+        let desc = self.emit_descriptor_full(
+            layout.size, kind, tid, &layout.ptr_offsets, &layout.rc_offsets,
+        );
+        let ptr = self
+            .call_intrinsic("lang_alloc", &[PTR], Some(PTR), &[desc])
+            .expect("lang_alloc returns a pointer");
+        if refcounted {
+            // Stamp the initial strong count (offset 0). `lang_alloc` zeroes the
+            // object, so the count starts at 0; set it to 1 for the owner.
+            let one = self.b.ins().iconst(types::I64, 1);
+            self.b.ins().store(MemFlags::trusted(), one, ptr, 0);
+        }
+        ptr
     }
 
     /// Allocate an `extern struct` instance on the stack (`docs/19` §3): a
@@ -94,6 +128,97 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             self.b.ins().store(MemFlags::trusted(), zero, addr, (w * 8) as i32);
         }
         addr
+    }
+
+    // -- `@RefCounted` ARC retain/release (`docs/16` §8.1) ------------------
+
+    /// Whether `local` is an *owned* `@RefCounted` local: its type resolves to a
+    /// `@RefCounted` struct and it is **not** cell-backed (captured into a
+    /// closure). Captured locals escape their frame and are reclaimed by the GC
+    /// backstop rather than scope-bound ARC, so they are excluded.
+    pub(crate) fn is_rc_local(&self, local: LocalId) -> bool {
+        if self.cx.captured_locals.contains(&local) {
+            return false;
+        }
+        match self.cx.analysis.hir.local_ty(local) {
+            Some(ty) => {
+                is_refcounted_ty(self.cx.analysis, resolve_shallow(self.cx.analysis, ty, &self.subst))
+            }
+            None => false,
+        }
+    }
+
+    /// Whether `ty` (after this instance's substitution) is a `@RefCounted` struct.
+    pub(crate) fn is_rc_ty(&self, ty: Ty) -> bool {
+        is_refcounted_ty(self.cx.analysis, resolve_shallow(self.cx.analysis, ty, &self.subst))
+    }
+
+    /// Emit a strong-count retain (`+1`) of a `@RefCounted` field-block pointer.
+    pub(crate) fn emit_rc_retain(&mut self, v: Value) {
+        self.call_intrinsic("lang_rc_retain", &[PTR], None, &[v]);
+    }
+
+    /// Emit a strong-count release (`-1`); at zero this runs the type's `Drop`
+    /// synchronously and frees the object (`docs/16` §8.1).
+    pub(crate) fn emit_rc_release(&mut self, v: Value) {
+        self.call_intrinsic("lang_rc_release", &[PTR], None, &[v]);
+    }
+
+    /// Whether HIR expression `e` *produces* an owned `@RefCounted` value (a
+    /// fresh `+1`) rather than borrowing an existing reference. Conservative:
+    /// only struct constructions and calls are owned — calls return `+1` by the
+    /// codegen's return convention (see `emit_return`, which retains a borrowed
+    /// return value). Everything else is treated as a borrow, so consuming it
+    /// *retains*. This never moves a borrowed reference (which could double
+    /// free); at worst it over-retains a genuinely owned value, and the GC
+    /// backstop reclaims that.
+    pub(crate) fn is_owned_rc_expr(e: &compiler::hir::Expr) -> bool {
+        matches!(e.kind, compiler::hir::ExprKind::Struct { .. } | compiler::hir::ExprKind::Call { .. })
+    }
+
+    /// Manage a `@RefCounted` local at a `let`/destructure bind. `init_owned` is
+    /// whether the bound value carried a fresh `+1` (a move) or was borrowed (so
+    /// this binding needs its own retained `+1`). Re-binding a local that was
+    /// already bound (a loop body's `var`) releases its prior value first.
+    pub(crate) fn rc_manage_bind(&mut self, local: LocalId, v: Value, init_owned: bool) {
+        let rebind = self.rc_owned.contains(&local);
+        let old = if rebind { self.read_local(local) } else { None };
+        if !init_owned {
+            self.emit_rc_retain(v);
+        }
+        if let Some(old) = old {
+            self.emit_rc_release(old);
+        }
+        if !rebind {
+            self.rc_owned.push(local);
+        }
+    }
+
+    /// Prepare a return value for the `+1`-return convention (`docs/16` §8.1):
+    /// if the returned expression `e` *borrows* a `@RefCounted` value (rather
+    /// than producing a fresh one), retain it so the caller receives an owned
+    /// `+1` that survives `emit_return`'s release of this frame's owned locals.
+    /// An owned return (a construction/call temporary) is already `+1`.
+    pub(crate) fn rc_return_value(&mut self, e: Option<&compiler::hir::Expr>, val: Option<Value>) -> Option<Value> {
+        if let (Some(e), Some(v)) = (e, val) {
+            if self.is_rc_ty(e.ty) && !Self::is_owned_rc_expr(e) {
+                self.emit_rc_retain(v);
+            }
+        }
+        val
+    }
+
+    /// Release every owned `@RefCounted` local (reverse binding order). Emitted
+    /// by `emit_return` on every return path; locals not bound on the running
+    /// path read back as null (Cranelift's undefined-variable default) and
+    /// release is a no-op, so this is safe across conditional binds.
+    pub(crate) fn rc_release_owned_locals(&mut self) {
+        let owned = self.rc_owned.clone();
+        for local in owned.into_iter().rev() {
+            if let Some(v) = self.read_local(local) {
+                self.emit_rc_release(v);
+            }
+        }
     }
 
     /// Whether `def` is an `extern struct` (laid out on the stack, no header).
