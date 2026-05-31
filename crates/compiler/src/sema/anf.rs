@@ -183,6 +183,10 @@ fn rewrite(e: Expr, pre: &mut Vec<Stmt>) -> Expr {
         | ExprKind::Ident(_)
         | ExprKind::SelfExpr
         | ExprKind::Underscore
+        // A `MacroCall` is eliminated by macro expansion (phase 2) before ANF
+        // runs; one reaching here (a direct `analyze` with no expansion) names
+        // an undefined macro and is reported by the checker — treat as a leaf.
+        | ExprKind::MacroCall { .. }
         | ExprKind::Continue => e.kind,
 
         // `await E` — the canonical statement-level form. Keep the wrapper and
@@ -621,6 +625,8 @@ fn contains_await(e: &Expr) -> bool {
         | ExprKind::Ident(_)
         | ExprKind::SelfExpr
         | ExprKind::Underscore
+        // Eliminated before ANF; a survivor carries no in-scope `await`.
+        | ExprKind::MacroCall { .. }
         | ExprKind::Continue => false,
 
         // Nested scopes — not the current state machine's awaits.

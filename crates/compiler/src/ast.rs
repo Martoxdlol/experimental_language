@@ -519,6 +519,18 @@ pub enum ExprKind {
     AnonFn(Box<FunctionItem>),
     /// `async { … }` — zero-arg inline future literal.
     AsyncBlock(Block),
+
+    /// A procedural-macro invocation in expression or block position
+    /// (`docs/22` §2): `@Name(args)` (expression form) or `@Name(args) { … }` /
+    /// `@Name { … }` (block form). Eliminated during macro expansion (phase 2),
+    /// before type checking — a `MacroCall` that survives to the checker names
+    /// an undefined macro and is reported as such.
+    MacroCall {
+        name: Ident,
+        at_span: Span,
+        args: Vec<AttrArg>,
+        block: Option<Box<Block>>,
+    },
 }
 
 #[derive(Clone, Eq, PartialEq, Debug)]

@@ -28,6 +28,21 @@ impl<'a> Checker<'a> {
             ExprKind::Float(lit) => H::Float(crate::hir::parse_float_lit(lit)),
             ExprKind::Bool(b) => H::Bool(*b),
             ExprKind::Null => H::Null,
+            // A `MacroCall` should have been eliminated by macro expansion
+            // (phase 2). One surviving to the checker names a macro that was
+            // never defined (or isn't marked `@ProcMacro`) — report it
+            // (`docs/22`). The placeholder keeps checking going.
+            ExprKind::MacroCall { name, at_span, .. } => {
+                self.emit(
+                    *at_span,
+                    crate::sema::SemaErrorKind::Message(format!(
+                        "cannot find macro `@{}` in scope — a procedural macro must be \
+                         defined and marked `@ProcMacro` (`docs/22`)",
+                        name.name
+                    )),
+                );
+                H::Null
+            }
             ExprKind::Char(c) => H::Char(crate::hir::parse_char_lit(&c.raw).unwrap_or(0)),
             // A resolved value name (`self` resolves to its local too); a
             // narrowed read bakes in its `Unbox` via `build_name_node`.

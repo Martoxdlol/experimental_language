@@ -4964,3 +4964,69 @@ fn macro_program_builds_native() {
     assert!(ok, "stderr: {err}");
     assert_eq!(out, "7\n");
 }
+
+// ===========================================================================
+// User procedural macros — expression & block forms (slice 2, `docs/22` §2)
+// ===========================================================================
+
+/// Expression-form `@Name(args)`: the macro returns an expression that replaces
+/// the invocation, including when nested inside a larger expression.
+#[test]
+fn macro_expression_form() {
+    let src = "import { MacroContext, ASTNode } from \"core:compiler\";\n\
+        @ProcMacro\n\
+        pub function Double(ctx: MacroContext, input: ASTNode): ASTNode {\n\
+          var a = ctx.arg(0).text();\n\
+          ctx.parse_expr(\"(\" + a + \") * 2\")\n\
+        }\n\
+        function main() {\n\
+          println(@Double(21) as str);\n\
+          println((@Double(5) + 1) as str);\n\
+        }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "42\n11\n");
+}
+
+/// Block-form `@Name { … }`: the macro receives the block as input and may
+/// return it (or a transformed block/expression) to replace the invocation.
+#[test]
+fn macro_block_form_passthrough() {
+    let src = "import { MacroContext, ASTNode } from \"core:compiler\";\n\
+        @ProcMacro\n\
+        pub function AsBlock(ctx: MacroContext, input: ASTNode): ASTNode { input }\n\
+        function main() {\n\
+          var x = @AsBlock { var t = 3; t + 4 };\n\
+          println(x as str);\n\
+        }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "7\n");
+}
+
+/// A block-form macro can synthesise wrapping code around the user's block —
+/// here doubling the block's value via `parse_expr`.
+#[test]
+fn macro_block_form_transforms() {
+    let src = "import { MacroContext, ASTNode } from \"core:compiler\";\n\
+        @ProcMacro\n\
+        pub function DoubleBlock(ctx: MacroContext, input: ASTNode): ASTNode {\n\
+          ctx.parse_expr(\"(\" + input.text() + \") * 2\")\n\
+        }\n\
+        function main() {\n\
+          println(@DoubleBlock { 3 + 4 } as str);\n\
+        }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "14\n");
+}
+
+/// An undefined `@Name(...)` in expression position is reported as an
+/// unknown-macro error by the checker (it survives expansion unchanged).
+#[test]
+fn unknown_expression_macro_is_reported() {
+    let src = "function main() { println(@Nope(1) as str); }";
+    let (_out, err, ok) = lang("check", src);
+    assert!(!ok, "expected unknown-macro error");
+    assert!(err.contains("cannot find macro `@Nope`"), "stderr: {err}");
+}

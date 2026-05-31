@@ -434,5 +434,18 @@ fn rs_expr(e: &mut Expr) {
         }
         ExprKind::AnonFn(f) => rs_function(f),
         ExprKind::AsyncBlock(b) => rs_block(b),
+        // Normally eliminated by macro expansion before this pass; recurse into
+        // arguments/block so a survivor still gets consistent unique spans.
+        ExprKind::MacroCall { args, block, .. } => {
+            for arg in args {
+                match arg {
+                    AttrArg::Positional(e) => rs_expr(e),
+                    AttrArg::Named { value, .. } => rs_expr(value),
+                }
+            }
+            if let Some(b) = block {
+                rs_block(b);
+            }
+        }
     }
 }

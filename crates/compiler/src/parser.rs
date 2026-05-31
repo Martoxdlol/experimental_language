@@ -2029,6 +2029,7 @@ impl<'src> Parser<'src> {
             }
             TokenKind::LBracket => self.parse_list_literal(),
             TokenKind::LParen => self.parse_paren_or_closure_or_tuple(),
+            TokenKind::At => self.parse_macro_call_expr(),
             TokenKind::Ident => self.parse_ident_primary(restrict),
             _ => {
                 self.error(ParseError::new(
@@ -2045,6 +2046,52 @@ impl<'src> Parser<'src> {
                 }
                 Expr { kind: ExprKind::Null, span: tok_span }
             }
+        }
+    }
+
+    /// `@Name`, `@Name(args)` (expression form), or `@Name(args) { … }` /
+    /// `@Name { … }` (block form) — a procedural-macro invocation in expression
+    /// or block position (`docs/22` §2). Eliminated during macro expansion.
+    fn parse_macro_call_expr(&mut self) -> Expr {
+        let at_tok = self.bump(); // `@`
+        let name = match self.eat(TokenKind::Ident) {
+            Some(t) => self.ident_from(t),
+            None => {
+                let span = self.peek_span();
+                self.error(ParseError::new(
+                    ParseErrorKind::Expected {
+                        expected: vec!["macro name after `@`"],
+                        found: self.peek_kind(),
+                    },
+                    span,
+                ));
+                Ident { name: String::new(), span }
+            }
+        };
+        let mut args = Vec::new();
+        if self.eat(TokenKind::LParen).is_some() {
+            while !self.at(TokenKind::RParen) && !self.at(TokenKind::Eof) {
+                args.push(self.parse_attr_arg());
+                if self.eat(TokenKind::Comma).is_none() {
+                    break;
+                }
+            }
+            self.expect(TokenKind::RParen, "`)`");
+        }
+        // Block form: a trailing `{ … }` becomes the macro's input block.
+        let block = if self.at(TokenKind::LBrace) {
+            Some(Box::new(self.parse_block()))
+        } else {
+            None
+        };
+        let end = self
+            .tokens
+            .get(self.pos.saturating_sub(1))
+            .map(|t| t.span)
+            .unwrap_or(at_tok.span);
+        Expr {
+            kind: ExprKind::MacroCall { name, at_span: at_tok.span, args, block },
+            span: at_tok.span.join(end),
         }
     }
 
@@ -2652,6 +2699,9 @@ fn can_start_expr(k: TokenKind) -> bool {
         ),
         LParen | LBracket | LBrace => true,
         Minus | Bang | Tilde | Amp | Star => true,
+        // `@Name(...)` / `@Name { ... }` — a macro invocation in expression or
+        // block position (`docs/22` §2).
+        At => true,
         _ => false,
     }
 }

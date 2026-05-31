@@ -68,8 +68,10 @@ pub fn expand_user_macros(
     loop {
         let mut changed = false;
         changed |= expand_module(root, &macro_names, &jit, &mut errors);
+        changed |= expand_value_macros_in_module(root, &macro_names, &jit, &mut errors);
         for m in externals.values_mut() {
             changed |= expand_module(m, &macro_names, &jit, &mut errors);
+            changed |= expand_value_macros_in_module(m, &macro_names, &jit, &mut errors);
         }
         if !changed {
             break;
@@ -408,6 +410,71 @@ fn expand_module(
     changed
 }
 
+/// Outcome of invoking a macro: the returned node (if any) and whether the
+/// macro reported an error (via `ctx.error`) or an error marker.
+struct MacroOutcome {
+    node: Option<Node>,
+    had_error: bool,
+}
+
+/// Run macro `macro_name` with `args` (positional + keyword) and the given
+/// `input` node at `invocation_span`. Drains the macro's diagnostics into
+/// `errors`. Shared by every invocation form.
+fn invoke_macro(
+    jit: &backend::Jit,
+    macro_name: &str,
+    args: &[AttrArg],
+    input: Node,
+    invocation_span: Span,
+    errors: &mut Vec<SemaError>,
+) -> MacroOutcome {
+    let mut mctx = MacroCtx { invocation_span, ..Default::default() };
+    for a in args {
+        match a {
+            AttrArg::Positional(e) => mctx.args.push(host::intern_arg_expr(e.clone())),
+            AttrArg::Named { name, value, .. } => {
+                let h = host::intern_arg_expr(value.clone());
+                mctx.kwargs.push((name.name.clone(), h));
+            }
+        }
+    }
+    let input_h = arena::with(|s| s.push_node(input));
+    let ctx_h = arena::with(|s| {
+        s.contexts.push(mctx);
+        (s.contexts.len() - 1) as i64
+    });
+
+    let entry = format!("__macro_entry_{macro_name}");
+    let Some(ptr) = jit.func_ptr(&entry) else {
+        errors.push(SemaError::message(
+            invocation_span,
+            format!("internal error: macro entry `{entry}` was not compiled"),
+        ));
+        return MacroOutcome { node: None, had_error: true };
+    };
+    // SAFETY: the shim has signature `(i64, i64) -> i64` by construction.
+    let f: extern "C" fn(i64, i64) -> i64 = unsafe { std::mem::transmute(ptr) };
+    let out_h = f(ctx_h, input_h);
+
+    let diags = arena::with(|s| {
+        usize::try_from(ctx_h)
+            .ok()
+            .and_then(|i| s.contexts.get_mut(i))
+            .map(|c| std::mem::take(&mut c.diags))
+            .unwrap_or_default()
+    });
+    let mut had_error = false;
+    for d in diags {
+        had_error |= d.level == DiagLevel::Error;
+        errors.push(diag_to_sema(d));
+    }
+    let node = arena::with(|s| s.node(out_h).cloned());
+    if matches!(node, Some(Node::ErrorMarker)) {
+        had_error = true;
+    }
+    MacroOutcome { node, had_error }
+}
+
 /// Run one decorator macro. Returns the replacement items, or `None` if the
 /// macro yielded an error marker / a non-item result (an error is recorded).
 fn run_decorator(
@@ -417,51 +484,12 @@ fn run_decorator(
     input_item: Item,
     errors: &mut Vec<SemaError>,
 ) -> Option<Vec<Item>> {
-    // Marshal the context: invocation span + positional/keyword args.
-    let mut mctx = MacroCtx { invocation_span: attr.span, ..Default::default() };
-    for a in &attr.args {
-        match a {
-            AttrArg::Positional(e) => {
-                mctx.args.push(host::intern_arg_expr(e.clone()));
-            }
-            AttrArg::Named { name, value, .. } => {
-                let h = host::intern_arg_expr(value.clone());
-                mctx.kwargs.push((name.name.clone(), h));
-            }
-        }
-    }
-    let input_h = arena::with(|s| s.push_node(Node::Item(input_item.clone())));
-    let ctx_h = arena::with(|s| {
-        s.contexts.push(mctx);
-        (s.contexts.len() - 1) as i64
-    });
-
-    let entry = format!("__macro_entry_{macro_name}");
-    let Some(ptr) = jit.func_ptr(&entry) else {
-        errors.push(SemaError::message(
-            attr.span,
-            format!("internal error: macro entry `{entry}` was not compiled"),
-        ));
+    let outcome = invoke_macro(jit, macro_name, &attr.args, Node::Item(input_item), attr.span, errors);
+    if outcome.had_error {
         return None;
-    };
-    // SAFETY: the shim has signature `(i64, i64) -> i64` by construction.
-    let f: extern "C" fn(i64, i64) -> i64 = unsafe { std::mem::transmute(ptr) };
-    let out_h = f(ctx_h, input_h);
-
-    // Drain diagnostics the macro emitted.
-    let diags = arena::with(|s| {
-        usize::try_from(ctx_h).ok().and_then(|i| s.contexts.get_mut(i)).map(|c| std::mem::take(&mut c.diags)).unwrap_or_default()
-    });
-    let mut had_error = false;
-    for d in diags {
-        had_error |= d.level == DiagLevel::Error;
-        errors.push(diag_to_sema(d));
     }
-
-    let out = arena::with(|s| s.node(out_h).cloned());
-    match out {
-        Some(Node::ErrorMarker) | None => None,
-        _ if had_error => None,
+    match outcome.node {
+        None | Some(Node::ErrorMarker) => None,
         Some(Node::Item(it)) => Some(vec![it]),
         Some(Node::Items(v)) => Some(v),
         Some(other) => {
@@ -476,6 +504,268 @@ fn run_decorator(
             None
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Expression- and block-form expansion (`docs/22` §2)
+// ---------------------------------------------------------------------------
+
+/// Expand every `@Name(args)` / `@Name { … }` macro call appearing in the item
+/// bodies of `module` (recursing into inline submodules). Returns whether any
+/// expansion happened.
+fn expand_value_macros_in_module(
+    module: &mut Module,
+    macro_names: &HashSet<String>,
+    jit: &backend::Jit,
+    errors: &mut Vec<SemaError>,
+) -> bool {
+    let mut changed = false;
+    for it in &mut module.items {
+        walk_item(it, macro_names, jit, errors, &mut changed);
+    }
+    changed
+}
+
+fn walk_item(
+    item: &mut Item,
+    names: &HashSet<String>,
+    jit: &backend::Jit,
+    errors: &mut Vec<SemaError>,
+    changed: &mut bool,
+) {
+    match &mut item.kind {
+        ItemKind::Var(v) => walk_expr(&mut v.init, names, jit, errors, changed),
+        ItemKind::Function(f) => {
+            if let Some(b) = &mut f.body {
+                walk_block(b, names, jit, errors, changed);
+            }
+        }
+        ItemKind::Extend(e) => {
+            for m in &mut e.members {
+                if let Some(b) = &mut m.function.body {
+                    walk_block(b, names, jit, errors, changed);
+                }
+            }
+        }
+        ItemKind::Interface(i) => {
+            for m in &mut i.members {
+                if let Some(b) = &mut m.default_body {
+                    walk_block(b, names, jit, errors, changed);
+                }
+            }
+        }
+        ItemKind::Test(t) => walk_block(&mut t.body, names, jit, errors, changed),
+        ItemKind::Module(ModuleItem { kind: ModuleKind::Inline { items, .. }, .. }) => {
+            for sub in items {
+                walk_item(sub, names, jit, errors, changed);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn walk_block(
+    b: &mut Block,
+    names: &HashSet<String>,
+    jit: &backend::Jit,
+    errors: &mut Vec<SemaError>,
+    changed: &mut bool,
+) {
+    for s in &mut b.stmts {
+        walk_stmt(s, names, jit, errors, changed);
+    }
+    if let Some(t) = &mut b.trailing {
+        walk_expr(t, names, jit, errors, changed);
+    }
+}
+
+fn walk_stmt(
+    s: &mut Stmt,
+    names: &HashSet<String>,
+    jit: &backend::Jit,
+    errors: &mut Vec<SemaError>,
+    changed: &mut bool,
+) {
+    match &mut s.kind {
+        StmtKind::Var(v) => walk_expr(&mut v.init, names, jit, errors, changed),
+        StmtKind::Assign { target, value } => {
+            walk_expr(target, names, jit, errors, changed);
+            walk_expr(value, names, jit, errors, changed);
+        }
+        StmtKind::Expr(e) => walk_expr(e, names, jit, errors, changed),
+        StmtKind::Item(it) => walk_item(it, names, jit, errors, changed),
+    }
+}
+
+/// Recurse into `e`'s sub-expressions, then — if `e` is itself a `@Name(...)` /
+/// `@Name { … }` call to a defined macro — run the macro and replace `e` with
+/// its output expression. Nested macros in the output are expanded in a later
+/// round of the fixed-point loop.
+fn walk_expr(
+    e: &mut Expr,
+    names: &HashSet<String>,
+    jit: &backend::Jit,
+    errors: &mut Vec<SemaError>,
+    changed: &mut bool,
+) {
+    match &mut e.kind {
+        ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Null
+        | ExprKind::Char(_) | ExprKind::Str(_) | ExprKind::SelfExpr | ExprKind::Underscore
+        | ExprKind::Ident(_) | ExprKind::Continue => {}
+        ExprKind::Tuple(es) | ExprKind::List(es) => {
+            for x in es {
+                walk_expr(x, names, jit, errors, changed);
+            }
+        }
+        ExprKind::Paren(x) => walk_expr(x, names, jit, errors, changed),
+        ExprKind::MapLit(items) => {
+            for it in items {
+                match it {
+                    MapItem::Entry { key, value, .. } => {
+                        walk_expr(key, names, jit, errors, changed);
+                        walk_expr(value, names, jit, errors, changed);
+                    }
+                    MapItem::Spread(x) => walk_expr(x, names, jit, errors, changed),
+                }
+            }
+        }
+        ExprKind::StructLit { fields, spread, .. } => {
+            for f in fields {
+                if let Some(v) = &mut f.value {
+                    walk_expr(v, names, jit, errors, changed);
+                }
+            }
+            if let Some(s) = spread {
+                walk_expr(s, names, jit, errors, changed);
+            }
+        }
+        ExprKind::Unary { operand, .. } => walk_expr(operand, names, jit, errors, changed),
+        ExprKind::Binary { left, right, .. } => {
+            walk_expr(left, names, jit, errors, changed);
+            walk_expr(right, names, jit, errors, changed);
+        }
+        ExprKind::Cast { expr, .. } => walk_expr(expr, names, jit, errors, changed),
+        ExprKind::Field { receiver, .. } => walk_expr(receiver, names, jit, errors, changed),
+        ExprKind::TupleIndex { receiver, .. } => walk_expr(receiver, names, jit, errors, changed),
+        ExprKind::Call { callee, args, trailing_closure, .. } => {
+            walk_expr(callee, names, jit, errors, changed);
+            for a in args {
+                walk_expr(a, names, jit, errors, changed);
+            }
+            if let Some(tc) = trailing_closure {
+                walk_expr(tc, names, jit, errors, changed);
+            }
+        }
+        ExprKind::Index { receiver, index } => {
+            walk_expr(receiver, names, jit, errors, changed);
+            walk_expr(index, names, jit, errors, changed);
+        }
+        ExprKind::Try { expr, .. } | ExprKind::Ref { expr, .. } | ExprKind::Deref { expr, .. }
+        | ExprKind::Await { expr, .. } | ExprKind::Spawn { expr, .. } => {
+            walk_expr(expr, names, jit, errors, changed)
+        }
+        ExprKind::If { cond, then_block, else_branch } => {
+            walk_expr(cond, names, jit, errors, changed);
+            walk_block(then_block, names, jit, errors, changed);
+            if let Some(eb) = else_branch {
+                match eb {
+                    ElseBranch::If(x) => walk_expr(x, names, jit, errors, changed),
+                    ElseBranch::Block(b) => walk_block(b, names, jit, errors, changed),
+                }
+            }
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            walk_expr(scrutinee, names, jit, errors, changed);
+            for arm in arms {
+                if let Some(g) = &mut arm.guard {
+                    walk_expr(g, names, jit, errors, changed);
+                }
+                walk_expr(&mut arm.body, names, jit, errors, changed);
+            }
+        }
+        ExprKind::Block(b) | ExprKind::Loop(b) => walk_block(b, names, jit, errors, changed),
+        ExprKind::While { cond, body } => {
+            walk_expr(cond, names, jit, errors, changed);
+            walk_block(body, names, jit, errors, changed);
+        }
+        ExprKind::For { iter, body, .. } => {
+            walk_expr(iter, names, jit, errors, changed);
+            walk_block(body, names, jit, errors, changed);
+        }
+        ExprKind::Return(v) | ExprKind::Break(v) => {
+            if let Some(x) = v {
+                walk_expr(x, names, jit, errors, changed);
+            }
+        }
+        ExprKind::Closure { body, .. } => walk_expr(body, names, jit, errors, changed),
+        ExprKind::AnonFn(f) => {
+            if let Some(b) = &mut f.body {
+                walk_block(b, names, jit, errors, changed);
+            }
+        }
+        ExprKind::AsyncBlock(b) => walk_block(b, names, jit, errors, changed),
+        ExprKind::MacroCall { .. } => {
+            // Children (args, block) walked below by the dedicated branch.
+        }
+    }
+
+    // After children, expand this node if it is a macro call to a defined macro.
+    let ExprKind::MacroCall { name, args, block, at_span } = &mut e.kind else { return };
+    if !names.contains(&name.name) {
+        return; // unknown macro — left for the checker to report.
+    }
+    // Walk the call's own arguments/block (children) before invoking.
+    for a in args.iter_mut() {
+        match a {
+            AttrArg::Positional(x) => walk_expr(x, names, jit, errors, changed),
+            AttrArg::Named { value, .. } => walk_expr(value, names, jit, errors, changed),
+        }
+    }
+    if let Some(b) = block.as_mut() {
+        walk_block(b, names, jit, errors, changed);
+    }
+
+    let macro_name = name.name.clone();
+    let span = *at_span;
+    let args_owned = std::mem::take(args);
+    let input = match block.take() {
+        Some(b) => Node::Block(*b),
+        None => Node::Args(positional_exprs(&args_owned)),
+    };
+    let outcome = invoke_macro(jit, &macro_name, &args_owned, input, span, errors);
+    *changed = true;
+    match (outcome.had_error, outcome.node) {
+        (false, Some(Node::Expr(out))) => *e = out,
+        (false, Some(Node::Block(b))) => e.kind = ExprKind::Block(b),
+        (false, Some(Node::ErrorMarker)) | (true, _) => {
+            // Reported its own error: leave a typed placeholder so the checker
+            // does not additionally complain about an undefined macro.
+            e.kind = ExprKind::Null;
+        }
+        (false, Some(other)) => {
+            errors.push(SemaError::message(
+                span,
+                format!(
+                    "macro `@{macro_name}` in expression position must return an expression \
+                     or block, but returned a `{}` node",
+                    arena::node_kind(&other)
+                ),
+            ));
+            e.kind = ExprKind::Null;
+        }
+        (false, None) => e.kind = ExprKind::Null,
+    }
+}
+
+/// The positional argument expressions of an invocation (keyword args dropped —
+/// they remain reachable via `ctx.kwargs`).
+fn positional_exprs(args: &[AttrArg]) -> Vec<Expr> {
+    args.iter()
+        .filter_map(|a| match a {
+            AttrArg::Positional(e) => Some(e.clone()),
+            AttrArg::Named { .. } => None,
+        })
+        .collect()
 }
 
 fn diag_to_sema(d: arena::MacroDiag) -> SemaError {

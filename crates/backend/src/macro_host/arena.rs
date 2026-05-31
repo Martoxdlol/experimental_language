@@ -29,6 +29,10 @@ pub enum Node {
     Items(Vec<Item>),
     /// An expression (an invocation argument, or a `parse_expr` result).
     Expr(Expr),
+    /// The positional arguments of an expression-form invocation `@Name(a, b)`
+    /// — the macro's `input` in expression position (`docs/22` §2). The macro
+    /// usually reads them via `ctx.args()`.
+    Args(Vec<Expr>),
     /// A block of statements (the block-form input, or a `parse_block` result).
     Block(Block),
     /// A bare identifier (a `fresh_ident` / `unhygienic` result).
@@ -163,6 +167,7 @@ pub fn node_kind(n: &Node) -> &'static str {
     match n {
         Node::Item(it) => item_kind(&it.kind),
         Node::Items(_) => "items",
+        Node::Args(_) => "args",
         Node::Expr(e) => expr_kind(&e.kind),
         Node::Block(_) => "block",
         Node::Ident(_) => "ident",
@@ -285,6 +290,7 @@ pub fn node_span(n: &Node) -> Span {
         Node::Item(it) => it.span,
         Node::Items(items) => items.first().map(|i| i.span).unwrap_or_else(Span::dummy),
         Node::Expr(e) => e.span,
+        Node::Args(es) => es.first().map(|e| e.span).unwrap_or_else(Span::dummy),
         Node::Block(b) => b.span,
         Node::Ident(id) => id.span,
         Node::ErrorMarker => Span::dummy(),
@@ -299,6 +305,11 @@ pub fn node_text(n: &Node) -> String {
             items.iter().map(compiler::ast_print::print_item).collect::<Vec<_>>().join("\n")
         }
         Node::Expr(e) => compiler::ast_print::print_expr(e),
+        Node::Args(es) => {
+            let inner =
+                es.iter().map(compiler::ast_print::print_expr).collect::<Vec<_>>().join(", ");
+            format!("({inner})")
+        }
         Node::Block(b) => compiler::ast_print::print_block(b),
         Node::Ident(id) => id.name.clone(),
         Node::ErrorMarker => String::new(),

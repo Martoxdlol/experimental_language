@@ -933,6 +933,31 @@ impl Printer {
                 self.push("async ");
                 self.block(b);
             }
+            ExprKind::MacroCall { name, args, block, .. } => {
+                self.push("@");
+                self.push(&name.name);
+                if !args.is_empty() {
+                    self.push("(");
+                    for (i, arg) in args.iter().enumerate() {
+                        if i > 0 {
+                            self.push(", ");
+                        }
+                        match arg {
+                            AttrArg::Positional(e) => self.expr(e),
+                            AttrArg::Named { name, value, .. } => {
+                                self.push(&name.name);
+                                self.push(" = ");
+                                self.expr(value);
+                            }
+                        }
+                    }
+                    self.push(")");
+                }
+                if let Some(b) = block {
+                    self.push(" ");
+                    self.block(b);
+                }
+            }
         }
     }
 
