@@ -5189,3 +5189,77 @@ fn macro_recursion_limit_is_configurable() {
     assert!(!ok, "runaway macro must be rejected");
     assert!(err.contains("recursion limit of 3"), "configured limit should appear: {err}");
 }
+
+// ===========================================================================
+// User procedural macros — sandbox & diagnostics (slice 5, `docs/22` §6/§7)
+// ===========================================================================
+
+/// A `@ProcMacro` that uses a `std:` name is rejected: macros are sandboxed and
+/// cannot perform I/O (`docs/22` §6). Non-macro code using `std:` is unaffected.
+#[test]
+fn macro_sandbox_rejects_std_usage() {
+    let src = "import { MacroContext, ASTNode } from \"core:compiler\";\n\
+        @ProcMacro\n\
+        pub function Bad(ctx: MacroContext, input: ASTNode): ASTNode {\n\
+          println(\"compile-time side effect\");\n\
+          input\n\
+        }\n\
+        @Bad\n\
+        struct S { x: i64 }\n\
+        function main() {}";
+    let (_out, err, ok) = lang("check", src);
+    assert!(!ok, "macro using std: must be rejected");
+    assert!(err.contains("sandboxed"), "stderr: {err}");
+    assert!(err.contains("println"), "stderr: {err}");
+}
+
+/// `ctx.warn` is informational: it appears on stderr but does not fail the
+/// build (`docs/22` §7).
+#[test]
+fn macro_warn_is_non_fatal() {
+    let src = "import { MacroContext, ASTNode } from \"core:compiler\";\n\
+        @ProcMacro\n\
+        pub function Warned(ctx: MacroContext, input: ASTNode): ASTNode {\n\
+          ctx.warn(input.span(), \"heads up\");\n\
+          input\n\
+        }\n\
+        @Warned\n\
+        struct S { x: i64 }\n\
+        function main() {}";
+    let (_out, err, ok) = lang("check", src);
+    assert!(ok, "warn must not fail the build; stderr: {err}");
+    assert!(err.contains("heads up"), "warning text should appear: {err}");
+}
+
+/// A macro that reports its own error and returns `ASTNode.error_marker()`
+/// yields exactly that error — no spurious "cannot find macro" follow-on
+/// (`docs/22` §7).
+#[test]
+fn macro_error_marker_suppresses_followon() {
+    let src = "import { MacroContext, ASTNode } from \"core:compiler\";\n\
+        @ProcMacro\n\
+        pub function Fail(ctx: MacroContext, input: ASTNode): ASTNode {\n\
+          ctx.error(ctx.invocation_span(), \"boom\");\n\
+          ASTNode.error_marker()\n\
+        }\n\
+        function main() { var x = @Fail(); }";
+    let (_out, err, ok) = lang("check", src);
+    assert!(!ok);
+    assert!(err.contains("boom"), "stderr: {err}");
+    assert!(!err.contains("cannot find macro"), "no follow-on error: {err}");
+}
+
+/// A parse error in macro-generated source is reported (not a crash): the
+/// `parse_*` helper records a diagnostic and hands back an error marker.
+#[test]
+fn macro_generated_parse_error_is_reported() {
+    let src = "import { MacroContext, ASTNode } from \"core:compiler\";\n\
+        @ProcMacro\n\
+        pub function BadGen(ctx: MacroContext, input: ASTNode): ASTNode {\n\
+          ctx.parse_expr(\"1 +\")\n\
+        }\n\
+        function main() { var x = @BadGen(); }";
+    let (_out, err, ok) = lang("check", src);
+    assert!(!ok, "generated parse error must surface");
+    assert!(err.contains("parse_expr"), "stderr: {err}");
+}

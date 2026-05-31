@@ -57,8 +57,13 @@ pub fn expand_user_macros(
         return Vec::new();
     }
 
-    // 2. Are there any invocations at all? If not, still compile the macro
-    //    sub-program so definition errors surface, but skip the expansion loop.
+    // 2. Enforce the sandbox before doing any work: a macro that uses a `std:`
+    //    name is rejected up front (`docs/22` §6).
+    let sandbox = sandbox_violations(root, externals);
+    if !sandbox.is_empty() {
+        return sandbox;
+    }
+
     arena::reset();
 
     // 3. Build + compile the macro sub-program.
@@ -123,18 +128,90 @@ fn strip_macro_definitions(module: &mut Module) {
     }
 }
 
-/// Whether an import targets the `core:compiler` macro-authoring module.
-fn imports_compiler_surface(imp: &ImportItem) -> bool {
-    let path: String = imp
-        .path
+/// The literal text of an import path (`"core:compiler"` → `core:compiler`).
+fn import_path(imp: &ImportItem) -> String {
+    imp.path
         .parts
         .iter()
         .map(|p| match p {
             StringPart::Text { text, .. } => text.as_str(),
             _ => "",
         })
-        .collect();
-    path == "core:compiler"
+        .collect()
+}
+
+/// Whether an import targets the `core:compiler` macro-authoring module.
+fn imports_compiler_surface(imp: &ImportItem) -> bool {
+    import_path(imp) == "core:compiler"
+}
+
+/// Whether an import targets an OS-backed `std:` module (`docs/22` §6: a
+/// procedural macro is sandboxed and may not use one).
+fn is_std_import(imp: &ImportItem) -> bool {
+    import_path(imp).starts_with("std:")
+}
+
+// ---------------------------------------------------------------------------
+// Sandbox (`docs/22` §6)
+// ---------------------------------------------------------------------------
+
+/// Enforce the macro sandbox: a `@ProcMacro` function may not use any name
+/// brought in from a `std:` module (OS-backed I/O, threads, etc.). Returns one
+/// error per offending (macro, name). The check is by reference, so a program
+/// where only non-macro code (e.g. `main`) uses `std:` is unaffected.
+fn sandbox_violations(root: &Module, externals: &sema::symbols::Externals) -> Vec<SemaError> {
+    // Local name (alias or original) → its import span, for every `std:` import.
+    let mut std_names: Vec<(String, Span)> = Vec::new();
+    let mut collect_std = |m: &Module| {
+        for it in &m.items {
+            if let ItemKind::Import(imp) = &it.kind {
+                if is_std_import(imp) {
+                    if let ImportKind::Named(specs) = &imp.kind {
+                        for s in specs {
+                            let local = s.alias.as_ref().unwrap_or(&s.name);
+                            std_names.push((local.name.clone(), s.span));
+                        }
+                    }
+                }
+            }
+        }
+    };
+    collect_std(root);
+    for m in externals.values() {
+        collect_std(m);
+    }
+    if std_names.is_empty() {
+        return Vec::new();
+    }
+
+    let mut errors = Vec::new();
+    let mut check = |m: &Module| {
+        for it in &m.items {
+            if !is_proc_macro(it) {
+                continue;
+            }
+            let ItemKind::Function(f) = &it.kind else { continue };
+            let refs = referenced_names(it);
+            for (name, span) in &std_names {
+                if refs.contains(name) {
+                    errors.push(SemaError::message(
+                        *span,
+                        format!(
+                            "procedural macro `{}` may not use `{}` from a `std:` module — \
+                             macros are sandboxed and cannot perform I/O or use OS-backed \
+                             modules (`docs/22` §6)",
+                            f.name.name, name
+                        ),
+                    ));
+                }
+            }
+        }
+    };
+    check(root);
+    for m in externals.values() {
+        check(m);
+    }
+    errors
 }
 
 // ---------------------------------------------------------------------------
@@ -182,6 +259,9 @@ fn build_macro_jit(
     let mut gather = |m: &Module| {
         for it in &m.items {
             match &it.kind {
+                // Sandbox (`docs/22` §6): never give the macro sub-program access
+                // to `std:` — defence in depth alongside `sandbox_violations`.
+                ItemKind::Import(imp) if is_std_import(imp) => {}
                 ItemKind::Import(_) => {
                     let key = compiler::ast_print::print_item(it);
                     if seen_imports.insert(key) {
@@ -505,8 +585,17 @@ fn invoke_macro(
     });
     let mut had_error = false;
     for d in diags {
-        had_error |= d.level == DiagLevel::Error;
-        errors.push(diag_to_sema(d));
+        match d.level {
+            // Errors are fatal and join the diagnostic stream.
+            DiagLevel::Error => {
+                had_error = true;
+                errors.push(SemaError::message(d.span, d.message));
+            }
+            // `warn`/`note` are informational and must not fail compilation;
+            // surface them on stderr immediately (`docs/22` §7).
+            DiagLevel::Warn => eprintln!("warning: [@{macro_name}] {}", d.message),
+            DiagLevel::Note => eprintln!("note: [@{macro_name}] {}", d.message),
+        }
     }
     let node = arena::with(|s| s.node(out_h).cloned());
     if matches!(node, Some(Node::ErrorMarker)) {
@@ -777,11 +866,3 @@ fn positional_exprs(args: &[AttrArg]) -> Vec<Expr> {
         .collect()
 }
 
-fn diag_to_sema(d: arena::MacroDiag) -> SemaError {
-    let prefix = match d.level {
-        DiagLevel::Error => "",
-        DiagLevel::Warn => "warning: ",
-        DiagLevel::Note => "note: ",
-    };
-    SemaError::message(d.span, format!("{prefix}{}", d.message))
-}
