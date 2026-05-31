@@ -884,6 +884,7 @@ version = "0.1.0"
 dependencies = [
  "compiler",
  "dashmap 6.2.1",
+ "macros",
  "serde_json",
  "tokio",
  "tower-lsp",

@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 compiler.workspace = true
+macros = { path = "../macros" }
 tower-lsp = "0.20"
 tokio = { version = "1", features = ["rt-multi-thread", "io-std", "macros"] }
 dashmap = "6"

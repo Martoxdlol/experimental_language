@@ -1,0 +1,11 @@
+//@ kind: compile-error
+//@ description: a self-emitting macro hits the recursion limit and is rejected with its chain (docs/22 §10)
+//@ stderr: recursion limit
+//@ stderr: @Loop
+import { MacroContext, ASTNode } from "core:compiler";
+import { println } from "std:io";
+
+@ProcMacro
+pub function Loop(ctx: MacroContext, input: ASTNode): ASTNode { ctx.parse_expr("@Loop()") }
+
+function main() { println(@Loop() as str); }

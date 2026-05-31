@@ -1,0 +1,20 @@
+//@ kind: run
+//@ description: ctx.fresh_ident is hygienic — a macro temp cannot capture a caller binding (docs/22 §5)
+//@ stdout:
+//~ 25
+//~ 5
+import { MacroContext, ASTNode } from "core:compiler";
+import { println } from "std:io";
+
+@ProcMacro
+pub function Squared(ctx: MacroContext, input: ASTNode): ASTNode {
+  var t = ctx.fresh_ident("t").name();
+  var a = ctx.arg(0).text();
+  ctx.parse_block("var " + t + " = " + a + "; " + t + " * " + t)
+}
+
+function main() {
+  var t = 5;
+  println(@Squared(t) as str);
+  println(t as str);
+}

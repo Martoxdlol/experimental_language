@@ -1,0 +1,18 @@
+//@ kind: compile-error
+//@ description: a macro reports its own diagnostic via ctx.error (docs/22 §7)
+//@ stderr: only applies to structs
+import { MacroContext, ASTNode } from "core:compiler";
+
+@ProcMacro
+pub function MustBeStruct(ctx: MacroContext, input: ASTNode): ASTNode {
+  if input.kind() != "struct" {
+    ctx.error(input.span(), "MustBeStruct only applies to structs");
+    return ASTNode.error_marker();
+  }
+  input
+}
+
+@MustBeStruct
+function not_a_struct() {}
+
+function main() {}

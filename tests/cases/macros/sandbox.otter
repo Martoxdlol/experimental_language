@@ -1,0 +1,16 @@
+//@ kind: compile-error
+//@ description: a procedural macro may not use a std: module — macros are sandboxed (docs/22 §6)
+//@ stderr: sandboxed
+import { MacroContext, ASTNode } from "core:compiler";
+import { println } from "std:io";
+
+@ProcMacro
+pub function Bad(ctx: MacroContext, input: ASTNode): ASTNode {
+  println("compile-time side effect");
+  input
+}
+
+@Bad
+struct S { x: i64 }
+
+function main() {}

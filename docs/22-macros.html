@@ -73,11 +73,23 @@
     <li><a href="#sand">Sandbox</a></li>
     <li><a href="#err">Errors &amp; diagnostics</a></li>
     <li><a href="#ctx"><code>MacroContext</code> API</a></li>
-    <li><a href="#ast"><code>ASTNode</code> (deferred)</a></li>
+    <li><a href="#ast"><code>ASTNode</code> (opaque handle)</a></li>
     <li><a href="#rec">Recursion &amp; depth limit</a></li>
     <li><a href="#derive">Built-in <code>@Derive</code></a></li>
     <li><a href="#nodecl">No declarative macros</a></li>
   </ol>
+</div>
+
+<div class="callout good">
+  <strong>Implementation status.</strong> User procedural macros are implemented
+  end-to-end: a <code>@ProcMacro</code> function is JIT-compiled and run at
+  compile time (phase 2) against all three invocation forms, with the
+  <code>core:compiler</code> surface (§8–9) backed by host functions over the
+  compiler's AST arena. Hygiene (§5, via <code>fresh_ident</code> gensym),
+  the <code>std:</code> sandbox (§6), <code>ctx.error</code>/<code>warn</code>/<code>note</code>
+  diagnostics and <code>error_marker</code> (§7), fixed-point + depth-limited
+  recursion (§10), and built-in <code>@Derive</code> (§11) all work. See
+  <code>examples/macros.otter</code> and <code>tests/cases/macros/</code>.
 </div>
 
 <!-- =========================================================== -->
@@ -351,17 +363,33 @@ pub function Route(ctx: MacroContext, input: ASTNode): ASTNode {
 }</code></pre>
 
 <!-- =========================================================== -->
-<h2 id="ast">9. <code>ASTNode</code> — deferred</h2>
+<h2 id="ast">9. <code>ASTNode</code> — opaque handle + reparse</h2>
 
-<div class="callout warn">
-  <strong>Exact schema in a future spec</strong>
-  The full <code>ASTNode</code> schema is deferred. This version commits to:
+<div class="callout good">
+  <strong>Implemented schema</strong>
+  <code>ASTNode</code> is an <strong>opaque handle</strong> into the compiler's AST
+  arena — the macro never holds a raw node, only a handle wrapped in the
+  <code>ASTNode</code> value. It carries a <code>Span</code> and is immutable;
+  "modifying" produces a new node. Two complementary surfaces operate on it:
   <ul>
-    <li>It is a discriminated union with one variant per syntactic category.</li>
-    <li>Every node carries a <code>Span</code> for diagnostics.</li>
-    <li>Nodes are immutable; "modifying" produces a new node.</li>
-    <li>Re-parse from source via <code>core:compiler</code> helpers — <code>parse_item</code>, <code>parse_expr</code>, <code>parse_block</code> — letting macros generate code by string concatenation when convenient.</li>
+    <li><strong>Inspect</strong> the syntactic shape: <code>kind(): str</code>
+        (<code>"struct"</code>, <code>"function"</code>, <code>"call"</code>, …),
+        <code>name(): str</code> (an item's declared name),
+        <code>text(): str</code> (source rendering), <code>span(): Span</code>,
+        and struct queries <code>field_count()</code>, <code>field_name(i)</code>,
+        <code>is_record()</code> / <code>is_tuple()</code> / <code>is_unit()</code>.</li>
+    <li><strong>Build</strong> new nodes by re-parsing source — <code>ctx.parse_item</code>,
+        <code>ctx.parse_items</code>, <code>ctx.parse_expr</code>, <code>ctx.parse_block</code>
+        — so a macro generates code by string concatenation (the convenient path),
+        plus <code>ctx.fresh_ident</code> / <code>ctx.unhygienic</code> and
+        <code>ASTNode.error_marker()</code>.</li>
   </ul>
+  The reparse-based build model also fixes the <strong>hygiene</strong> mechanism
+  (§5): since generated code is assembled as text, hygiene is realised as a
+  <em>gensym</em> — <code>ctx.fresh_ident(hint)</code> mints a guaranteed-unique
+  name; <code>ctx.unhygienic(name)</code> opts out. (Token-stream context hygiene
+  would require a non-textual build API; the opaque-handle model deliberately
+  trades that for the string-concatenation convenience §9 calls out.)
 </div>
 
 <!-- =========================================================== -->
@@ -375,6 +403,13 @@ recursion_limit = 256</code></pre>
 
 <p>A macro that recursively emits itself with no termination hits the limit and is rejected;
 the error includes the invocation chain.</p>
+
+<div class="callout good">
+  <strong>Implemented.</strong> The default depth limit is <strong>128</strong>;
+  set <code>[macros] recursion_limit = N</code> in the project manifest to change
+  it. Each invocation's output is re-expanded immediately, so the depth bounds
+  self-emitting macros and a runaway is rejected with its (truncated) chain.
+</div>
 
 <!-- =========================================================== -->
 <h2 id="derive">11. Built-in <code>@Derive</code></h2>

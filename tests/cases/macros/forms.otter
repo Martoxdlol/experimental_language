@@ -1,0 +1,41 @@
+//@ kind: run
+//@ description: procedural macros in decorator, expression, block, and nested forms (docs/22)
+//@ stdout:
+//~ Point
+//~ 25
+//~ 10
+//~ 15
+import { MacroContext, ASTNode } from "core:compiler";
+import { println } from "std:io";
+
+@ProcMacro
+pub function Named(ctx: MacroContext, input: ASTNode): ASTNode {
+  var n = input.name();
+  ctx.parse_items(input.text() + " extend " + n + " { function type_name(self): str { \"" + n + "\" } }")
+}
+
+@ProcMacro
+pub function Square(ctx: MacroContext, input: ASTNode): ASTNode {
+  var a = ctx.arg(0).text();
+  ctx.parse_expr("(" + a + ") * (" + a + ")")
+}
+
+@ProcMacro
+pub function AsBlock(ctx: MacroContext, input: ASTNode): ASTNode { input }
+
+@ProcMacro
+pub function Inner(ctx: MacroContext, input: ASTNode): ASTNode { ctx.parse_expr("10") }
+
+@ProcMacro
+pub function Outer(ctx: MacroContext, input: ASTNode): ASTNode { ctx.parse_expr("@Inner() + 5") }
+
+@Named
+struct Point { x: i64, y: i64 }
+
+function main() {
+  var p = Point { x: 1, y: 2 };
+  println(p.type_name());
+  println(@Square(5) as str);
+  println(@AsBlock { 4 + 6 } as str);
+  println(@Outer() as str);
+}

@@ -366,10 +366,21 @@ impl Compiled {
                 dependencies: HashSet::new(),
                 packages: HashMap::new(),
                 file_targets: HashMap::new(),
+                macro_recursion_limit: None,
             };
         }
 
-        let analysis = analyze_multi_ctx(&module, &externals, &ctx);
+        // Expand user procedural macros (`docs/22`) on a *clone* before analysis,
+        // so the editor sees diagnostics, hover, and go-to over the post-expansion
+        // program — while `module` keeps the user's verbatim items for syntactic
+        // views. A file with no `@ProcMacro` definitions expands to itself at no
+        // cost (and runs no macro code).
+        let mut expanded = module.clone();
+        let mut exp_externals = externals.clone();
+        let macro_errors =
+            macros::expand_user_macros(&mut expanded, &mut exp_externals, &ctx);
+
+        let analysis = analyze_multi_ctx(&expanded, &exp_externals, &ctx);
         let index = HirIndex::build(&analysis.hir);
 
         let mut diagnostics = Vec::new();
@@ -377,6 +388,9 @@ impl Compiled {
             diagnostics.push((e.span, e.kind.to_string()));
         }
         for e in &parse_errors {
+            diagnostics.push((e.span, e.kind.to_string()));
+        }
+        for e in &macro_errors {
             diagnostics.push((e.span, e.kind.to_string()));
         }
         for e in &analysis.errors {
@@ -388,6 +402,32 @@ impl Compiled {
         diagnostics.retain(|(s, _)| s.file == DOC_FILE);
 
         Compiled { text, map, tokens, module, analysis, index, diagnostics }
+    }
+
+    /// The names of every `@ProcMacro` function defined in the open document
+    /// (recursing into inline submodules) — for `@`-prefix macro completion
+    /// (`docs/22`).
+    pub fn proc_macro_names(&self) -> Vec<String> {
+        fn walk(module: &compiler::ast::Module, out: &mut Vec<String>) {
+            use compiler::ast::*;
+            for it in &module.items {
+                if let ItemKind::Function(f) = &it.kind {
+                    if it.attrs.iter().any(|a| a.name.name == "ProcMacro") {
+                        out.push(f.name.name.clone());
+                    }
+                }
+                if let ItemKind::Module(ModuleItem {
+                    kind: ModuleKind::Inline { items, .. }, ..
+                }) = &it.kind
+                {
+                    let sub = Module { inner_docs: Vec::new(), items: items.clone(), span: it.span };
+                    walk(&sub, out);
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(&self.module, &mut out);
+        out
     }
 
     /// Render a type using the program's definition names.
@@ -1386,6 +1426,40 @@ function main() {
             .find(|&i| c.map.file(FileId(i)).name.ends_with("util.otter"))
             .expect("util file loaded");
         assert!(files.contains(&util_fid), "missing the cross-file (util) use sites");
+    }
+
+    #[test]
+    fn macro_program_analyzes_without_spurious_errors() {
+        // The LSP expands user macros before analysis, so a defined macro's
+        // invocation type-checks and the generated method is visible (`docs/22`).
+        let src = "import { MacroContext, ASTNode } from \"core:compiler\";\n\
+            @ProcMacro\n\
+            pub function Tag(ctx: MacroContext, input: ASTNode): ASTNode {\n\
+              ctx.parse_items(input.text() + \" extend \" + input.name() + \" { function tag(self): i64 { 1 } }\")\n\
+            }\n\
+            @Tag\n\
+            struct W { x: i64 }\n\
+            function main() { var w = W { x: 0 }; var t = w.tag(); }\n";
+        let c = Compiled::new(src.into());
+        assert!(c.diagnostics.is_empty(), "unexpected diagnostics: {:?}", c.diagnostics);
+        assert_eq!(c.proc_macro_names(), vec!["Tag".to_string()]);
+    }
+
+    #[test]
+    fn macro_using_std_is_flagged_by_lsp() {
+        let src = "import { MacroContext, ASTNode } from \"core:compiler\";\n\
+            import { println } from \"std:io\";\n\
+            @ProcMacro\n\
+            pub function Bad(ctx: MacroContext, input: ASTNode): ASTNode { println(\"x\"); input }\n\
+            @Bad\n\
+            struct W { x: i64 }\n\
+            function main() {}\n";
+        let c = Compiled::new(src.into());
+        assert!(
+            c.diagnostics.iter().any(|(_, m)| m.contains("sandboxed")),
+            "expected sandbox diagnostic: {:?}",
+            c.diagnostics
+        );
     }
 
     #[test]

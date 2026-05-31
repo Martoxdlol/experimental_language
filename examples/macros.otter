@@ -1,0 +1,54 @@
+// Procedural macros (docs/22): functions written in the language itself,
+// marked @ProcMacro, run at compile time to transform the AST. They come in
+// three invocation forms — decorator, expression, and block.
+//
+// Run: otter_fusion run examples/macros.otter
+import { MacroContext, ASTNode } from "core:compiler";
+import { println } from "std:io";
+
+// --- Decorator form: annotate an item; the macro rewrites it. -------------
+// @Named re-emits the struct plus an `extend` adding a `type_name()` method
+// returning the struct's own name. It inspects the *syntactic shape* of its
+// input (the macro runs before type checking, so types don't exist yet — but
+// the struct's name and fields do).
+@ProcMacro
+pub function Named(ctx: MacroContext, input: ASTNode): ASTNode {
+  var name = input.name();
+  ctx.parse_items(
+    input.text() +
+    " extend " + name + " { function type_name(self): str { \"" + name + "\" } }"
+  )
+}
+
+@Named
+struct Point { x: i64, y: i64 }
+
+// --- Expression form: @Name(args) becomes an expression. ------------------
+// @Square(e) expands to (e) * (e), reading the argument's source via ctx.arg.
+@ProcMacro
+pub function Square(ctx: MacroContext, input: ASTNode): ASTNode {
+  var a = ctx.arg(0).text();
+  ctx.parse_expr("(" + a + ") * (" + a + ")")
+}
+
+// --- Block form + hygiene: @Name { ... } receives the block. --------------
+// @WithTotal sums two numbers using a hygienic temporary so the binding it
+// introduces can never collide with — or capture — a caller's `total`.
+@ProcMacro
+pub function WithTotal(ctx: MacroContext, input: ASTNode): ASTNode {
+  var t = ctx.fresh_ident("total").name();
+  ctx.parse_block("var " + t + " = 3 + 4; " + t + " * 2")
+}
+
+function main() {
+  var p = Point { x: 1, y: 2 };
+  println(p.type_name());            // Point  (decorator-synthesised method)
+
+  println(@Square(5) as str);        // 25     (expression macro)
+  println((@Square(3) + 1) as str);  // 10     (nested in a larger expression)
+
+  var total = 100;                   // caller's `total`
+  var r = @WithTotal { };            // macro's hygienic `total` is distinct
+  println(r as str);                 // 14
+  println(total as str);             // 100    (caller's `total` untouched)
+}

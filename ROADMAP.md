@@ -1300,7 +1300,8 @@ and complete with the world-barrier mark-sweep.
       struct in `sema::results` holds the method, targs, union, output,
       and residual. JIT + native + GC-stress parity. 4 new CLI tests
       (basic / FromResidual chained / native / plain-type rejected).
-- [ ] User macros; ambient/`pkg:` imports; concurrent GC.
+- [x] User procedural macros (`docs/22` — done, see the dedicated entry).
+- [ ] Ambient/`pkg:` imports; concurrent GC.
 - [x] **Native object output + linking for `otter_fusion build`** (`docs/23`): the
       codegen backend is now generic over `cranelift_module::Module`, so the
       same lowering drives the JIT (`compile`) and a `cranelift-object`
@@ -1614,7 +1615,7 @@ and complete with the world-barrier mark-sweep.
       `@Variadic` function decorators (the latter blocked by Cranelift's lack of
       portable varargs-ABI support), a managed `CString` handle type with `Drop`
       + `Buffer`.
-- [~] `@Derive` + procedural macros (`docs/22`): **`@Derive(Eq)`, `@Derive(Ord)`,
+- [x] `@Derive` + procedural macros (`docs/22`): **`@Derive(Eq)`, `@Derive(Ord)`,
       `@Derive(ToStr)`, `@Derive(Clone)`, and `@Derive(Hash)` work** — a source-level desugaring
       (`sema/derive::expand_derives`, run in `analyze`/`analyze_multi` before
       collection) synthesises one deduped `extend` block: field-by-field `eq`
@@ -1648,7 +1649,33 @@ and complete with the world-barrier mark-sweep.
       Synthesised nodes get unique spans in a virtual file (`FileId(u32::MAX-1)`)
       so the span-keyed checker tables don't collide; the CLI renders diagnostics
       on virtual files without an excerpt. 13 CLI tests (incl. native parity).
-      TODO: user proc macros.
+      **User procedural macros now work end-to-end** (`docs/22`, see the
+      dedicated entry below).
+- [x] **User procedural macros** (`docs/22`): a `@ProcMacro pub function
+      Name(MacroContext, ASTNode): ASTNode` written in the language is
+      JIT-compiled and run at compile time (phase 2, before type checking) by a
+      new `crates/macros` driver, for all three invocation forms — decorator on
+      items, expression `@Name(args)`, and block `@Name { … }` (new
+      `ExprKind::MacroCall`). The `core:compiler` surface
+      (`ASTNode`/`MacroContext`/`Span` + `__ast_*`/`__mctx_*` externs + method
+      wrappers) lives in the prelude; `ASTNode` is an **opaque handle** into a
+      per-thread AST arena in `backend::macro_host` (so its host symbols register
+      into every JIT — the seeded prelude surface methods must link, but are
+      compiled lazily via `is_macro_surface_method`, never seeded). The engine
+      gathers macro defs, builds a self-contained macro sub-program (dependency
+      closure + `i64`-ABI entry shims), compiles it via
+      `backend::compile_with_symbols`, expands invocations recursively to a fixed
+      point, then strips the compile-time-only macro defs from the runtime
+      program. **Hygiene** is a gensym (`ctx.fresh_ident`/`unhygienic`, §5);
+      **sandbox** rejects any macro that uses a `std:` name (§6); diagnostics via
+      `ctx.error` (fatal) / `warn` / `note` (informational) + `ASTNode.error_marker()`
+      (§7); **recursion** is depth-limited (default 128, `[macros]
+      recursion_limit` in the manifest) with an invocation-chain error (§10). CLI
+      runs `expand_user_macros` in `prepare` before analysis; the LSP expands a
+      clone before analysis (cross-boundary diagnostics/hover/goto) and offers
+      `@`-prefix macro-name completion. ~21 CLI unit tests + 6 backend arena unit
+      tests + 5 `tests/cases/macros/` e2e cases + 2 LSP tests + manifest test;
+      `examples/macros.otter` (JIT + native parity).
 - [x] **`Hash` + user-typed `Map` keys** (`docs/15` §7, `docs/18` §6): prelude
       `interface Hash { function hash(self): u64 }` (`Program.hash_def`).
       Primitives + `str` implement `Hash` intrinsically (`type_implements`);
@@ -1966,7 +1993,11 @@ feature, JIT≡native byte-identical and GC-stress clean.
 - **`await` in a short-circuit operand / loop condition** — genuinely conditional
   suspension; currently a clean "not yet supported" error, *not* miscompiled.
   Needs principled lowering (changes eval order/frequency).
-- **User procedural macros** (`docs/22`) — only `@Derive(...)` is implemented.
+- **User procedural macros** (`docs/22`) — **done** (decorator/expression/block
+  forms, JIT-run at compile time, hygiene, sandbox, recursion limit). Remaining
+  refinements: cross-*package* (`pkg:`) compiled macro plugins; precise spans
+  rendered into macro-generated source; macro-using-macro at the definition site;
+  privileged build-script macros (§future).
 - **Channel close on last-`Sender` drop** + `Receiver: Iterator` termination —
   needs *deterministic* `Drop` (tension with GC-timed best-effort `Drop`).
 - **Worker-panic isolation** — a panicking thread/`spawn` worker currently aborts

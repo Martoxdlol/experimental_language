@@ -154,7 +154,7 @@ impl LanguageServer for Backend {
                 document_formatting_provider: Some(OneOf::Left(true)),
                 code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
                 completion_provider: Some(CompletionOptions {
-                    trigger_characters: Some(vec![".".into()]),
+                    trigger_characters: Some(vec![".".into(), "@".into()]),
                     ..Default::default()
                 }),
                 signature_help_provider: Some(SignatureHelpOptions {
@@ -501,6 +501,12 @@ impl LanguageServer for Backend {
             return Ok(Some(CompletionResponse::Array(member_completions(&c, &ctx))));
         }
 
+        // Macro completion: just after `@` (with an optional partial name),
+        // offer the defined procedural macros plus the built-ins (`docs/22`).
+        if at_macro_context(&c.text, off) {
+            return Ok(Some(CompletionResponse::Array(macro_completions(&c))));
+        }
+
         Ok(Some(CompletionResponse::Array(default_completions(&c))))
     }
 
@@ -788,6 +794,55 @@ fn document_symbols(c: &Compiled) -> Vec<DocumentSymbol> {
 
 /// The completion set when the cursor is *not* after a `.` — keywords,
 /// builtins, declared top-level items, and locals visible anywhere in the
+/// Whether `off` sits just after an `@` (with an optional partial macro name) —
+/// the position where a procedural-macro invocation begins (`docs/22`).
+fn at_macro_context(text: &str, off: usize) -> bool {
+    let bytes = text.as_bytes();
+    let mut i = off.min(bytes.len());
+    while i > 0 {
+        let c = bytes[i - 1];
+        if c == b'_' || c.is_ascii_alphanumeric() {
+            i -= 1;
+        } else {
+            break;
+        }
+    }
+    i > 0 && bytes[i - 1] == b'@'
+}
+
+/// Completions for an `@`-prefixed macro position: the document's defined
+/// procedural macros plus the built-in `@Derive` / `@ProcMacro` (`docs/22`).
+fn macro_completions(c: &Compiled) -> Vec<CompletionItem> {
+    let mut items = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for name in c.proc_macro_names() {
+        if seen.insert(name.clone()) {
+            items.push(CompletionItem {
+                label: name,
+                kind: Some(CompletionItemKind::FUNCTION),
+                detail: Some("procedural macro".into()),
+                sort_text: Some("0".into()),
+                ..Default::default()
+            });
+        }
+    }
+    for (name, detail) in [
+        ("Derive", "built-in derive macro"),
+        ("ProcMacro", "marks a procedural-macro definition"),
+    ] {
+        if seen.insert(name.to_string()) {
+            items.push(CompletionItem {
+                label: name.into(),
+                kind: Some(CompletionItemKind::KEYWORD),
+                detail: Some(detail.into()),
+                sort_text: Some("1".into()),
+                ..Default::default()
+            });
+        }
+    }
+    items
+}
+
 /// file (a single-file LSP cannot do precise lexical scoping yet).
 fn default_completions(c: &Compiled) -> Vec<CompletionItem> {
     let mut items: Vec<CompletionItem> = Vec::new();
