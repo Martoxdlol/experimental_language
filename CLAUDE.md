@@ -10,6 +10,8 @@ This language is aimed to be at the same level or rust, c, go or any other produ
 
 **We are building a well architected fully featured end to end working language**
 
+We keep track goals in goals.txt. You can read it for more context. Goals that are definitely done are put before "---" and pending ones after. We automatically update goals.txt when we complete a goal. We also add new goals when planning new features or splitting existing ones.
+
 # RULES
 
 - Do not take shortcuts
