@@ -5119,3 +5119,73 @@ fn macro_fresh_ident_unique_per_expansion() {
     assert!(ok, "stderr: {err}");
     assert_eq!(out, "32\n");
 }
+
+// ===========================================================================
+// User procedural macros — recursion, depth limit, chain (slice 4, `docs/22` §10)
+// ===========================================================================
+
+/// A macro whose output invokes another macro is re-expanded to a fixed point.
+#[test]
+fn macro_nested_expansion() {
+    let src = "import { MacroContext, ASTNode } from \"core:compiler\";\n\
+        @ProcMacro\n\
+        pub function Inner(ctx: MacroContext, input: ASTNode): ASTNode { ctx.parse_expr(\"10\") }\n\
+        @ProcMacro\n\
+        pub function Outer(ctx: MacroContext, input: ASTNode): ASTNode { ctx.parse_expr(\"@Inner() + 5\") }\n\
+        function main() { println(@Outer() as str); }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "15\n");
+}
+
+/// A self-emitting macro hits the recursion limit and is rejected, with an
+/// invocation chain in the message (`docs/22` §10).
+#[test]
+fn macro_runaway_recursion_is_rejected() {
+    let src = "import { MacroContext, ASTNode } from \"core:compiler\";\n\
+        @ProcMacro\n\
+        pub function Loop(ctx: MacroContext, input: ASTNode): ASTNode { ctx.parse_expr(\"@Loop()\") }\n\
+        function main() { println(@Loop() as str); }";
+    let (_out, err, ok) = lang("check", src);
+    assert!(!ok, "runaway macro must be rejected");
+    assert!(err.contains("recursion limit"), "stderr: {err}");
+    assert!(err.contains("@Loop"), "chain should be reported: {err}");
+}
+
+/// A decorator macro re-emitting its own decorator also hits the limit.
+#[test]
+fn macro_runaway_decorator_recursion_is_rejected() {
+    let src = "import { MacroContext, ASTNode } from \"core:compiler\";\n\
+        @ProcMacro\n\
+        pub function Grow(ctx: MacroContext, input: ASTNode): ASTNode {\n\
+          ctx.parse_items(\"@Grow\\n\" + input.text())\n\
+        }\n\
+        @Grow\n\
+        struct S { x: i64 }\n\
+        function main() {}";
+    let (_out, err, ok) = lang("check", src);
+    assert!(!ok, "runaway decorator must be rejected");
+    assert!(err.contains("recursion limit"), "stderr: {err}");
+}
+
+/// `[macros] recursion_limit` in the manifest overrides the default depth.
+#[test]
+fn macro_recursion_limit_is_configurable() {
+    let files = &[
+        (
+            "project.toml",
+            "[package]\nname = \"m\"\nkind = \"binary\"\n[macros]\nrecursion_limit = 3\n",
+        ),
+        (
+            "src/main.otter",
+            "import { MacroContext, ASTNode } from \"core:compiler\";\n\
+             import { println } from \"std:io\";\n\
+             @ProcMacro\n\
+             pub function Loop(ctx: MacroContext, input: ASTNode): ASTNode { ctx.parse_expr(\"@Loop()\") }\n\
+             function main() { println(@Loop() as str); }",
+        ),
+    ];
+    let (_out, err, ok) = lang_run_project("project.toml", files);
+    assert!(!ok, "runaway macro must be rejected");
+    assert!(err.contains("recursion limit of 3"), "configured limit should appear: {err}");
+}

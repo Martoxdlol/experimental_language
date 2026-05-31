@@ -43,6 +43,9 @@ pub struct ResolveContext {
     /// which the driver loaded it (`["__file__", N]`). The compiler collects each
     /// as a standalone module and binds `file:` imports against it.
     pub file_targets: HashMap<PathBuf, Vec<String>>,
+    /// `[macros] recursion_limit` from the manifest, if set — the procedural-
+    /// macro expansion depth limit (`docs/22` §10). `None` uses the default.
+    pub macro_recursion_limit: Option<usize>,
 }
 
 impl ResolveContext {

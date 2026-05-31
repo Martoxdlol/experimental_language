@@ -27,6 +27,9 @@ pub struct Manifest {
     /// `[file-imports] allow = [...]` — roots/globs an escaping `file:` import
     /// may resolve into (`docs/17` §17.4).
     pub file_import_allow: Vec<String>,
+    /// `[macros] recursion_limit = N` — procedural-macro expansion depth limit
+    /// (`docs/22` §10). `None` uses the compiler default (128).
+    pub macro_recursion_limit: Option<usize>,
 }
 
 /// The `[package]` table.
@@ -184,6 +187,8 @@ struct RawManifest {
     registries: BTreeMap<String, RawRegistry>,
     #[serde(default, rename = "file-imports")]
     file_imports: Option<RawFileImports>,
+    #[serde(default)]
+    macros: Option<RawMacros>,
 }
 
 #[derive(Deserialize)]
@@ -251,6 +256,12 @@ struct RawFileImports {
     allow: Vec<String>,
 }
 
+#[derive(Deserialize)]
+struct RawMacros {
+    #[serde(default, rename = "recursion_limit", alias = "recursion-limit")]
+    recursion_limit: Option<usize>,
+}
+
 impl RawManifest {
     fn into_manifest(self) -> Result<Manifest, ManifestError> {
         let src = self.package.src.clone().unwrap_or_else(|| "src".to_string());
@@ -297,6 +308,7 @@ impl RawManifest {
             default_registry: self.registry.and_then(|r| r.default),
             registries,
             file_import_allow: self.file_imports.map(|f| f.allow).unwrap_or_default(),
+            macro_recursion_limit: self.macros.and_then(|m| m.recursion_limit),
         })
     }
 }
@@ -457,6 +469,18 @@ ci = "otter_fusion test"
         let opt = &m.dependencies["opt-dep"];
         assert!(opt.optional);
         assert!(!opt.default_features);
+    }
+
+    #[test]
+    fn macros_recursion_limit_parses() {
+        let m = Manifest::parse(
+            "[package]\nname = \"x\"\n[macros]\nrecursion_limit = 256\n",
+        )
+        .unwrap();
+        assert_eq!(m.macro_recursion_limit, Some(256));
+        // Absent table → None (default applies).
+        let m2 = Manifest::parse("[package]\nname = \"x\"\n").unwrap();
+        assert_eq!(m2.macro_recursion_limit, None);
     }
 
     #[test]

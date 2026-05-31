@@ -505,6 +505,7 @@ fn prepare_project(proj: &ProjectContext) -> Prepared {
         dependencies,
         packages: packages_map,
         file_targets: tree.file_targets.clone(),
+        macro_recursion_limit: proj.manifest.macro_recursion_limit,
     };
     Prepared {
         root: tree.root,
