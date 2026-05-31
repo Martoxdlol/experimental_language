@@ -1,0 +1,16 @@
+//@ kind: compile-error
+//@ known-bug: docs/20 §4 detachment rule — pushing a live lock reference into a list that outlives the lock is an escape and must be rejected (push a `.clone()` instead). Escape analysis is not yet implemented, so this currently compiles instead of erroring.
+//@ stderr: escape
+import { List } from "core:collections";
+import { println } from "std:io";
+import { Shared } from "std:sync";
+struct X { value: i64 }
+struct Counter { x: X }
+function main() {
+  var state: Shared<Counter> = Shared.new(Counter { x: X { value: 0 } });
+  var sink: List<X> = [];
+  state.lock((c) => { c.x.value = 1; sink.push(c.x); 0 }); // alias stored in outer list
+  sink[0].value = -1; // mutating the shared cell through the escaped alias
+  var snap: i64 = state.lock((c) => c.x.value);
+  println("snap = " + (snap as str));
+}

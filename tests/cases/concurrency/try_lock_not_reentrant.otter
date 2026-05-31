@@ -1,0 +1,27 @@
+//@ kind: run
+//@ description: Shared<T> is not reentrant — `try_lock` on a cell already held by the SAME thread returns LockBusy (never deadlocks); a free cell's `try_lock` returns the body result (docs/20 §4)
+//@ stdout:
+//~ inner = busy
+//~ free = 7
+import { println } from "std:io";
+import { Shared, LockBusy } from "std:sync";
+struct X { value: i64 }
+struct Counter { x: X }
+function main() {
+  var state: Shared<Counter> = Shared.new(Counter { x: X { value: 7 } });
+  // Re-entering the same cell from inside its own lock body is not allowed;
+  // `try_lock` reports LockBusy rather than deadlocking (which `lock` would).
+  var inner: str = state.lock((c) => {
+    match state.try_lock((c2) => c2.x.value) {
+      i64 n => "value " + (n as str),
+      LockBusy busy => "busy",
+    }
+  });
+  println("inner = " + inner);
+  // Once released, a non-blocking try_lock succeeds and yields the body result.
+  var free: str = match state.try_lock((c) => c.x.value) {
+    i64 n => (n as str),
+    LockBusy busy => "busy",
+  };
+  println("free = " + free);
+}

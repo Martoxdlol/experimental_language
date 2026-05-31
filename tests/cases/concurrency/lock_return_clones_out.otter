@@ -1,0 +1,22 @@
+//@ kind: run
+//@ description: the lock RETURN boundary clones references out (docs/20 §4 "return value cloned out") — mutating the returned value must not affect the shared cell
+//@ known-bug: docs/20 §4 says a reference returned from the lock body is cloned at the return boundary, but the body currently returns a live alias — mutating it writes through to the shared cell (observed `shared = -1` instead of `5`). Return-boundary clone-out is not yet implemented.
+//@ stdout:
+//~ returned = -1
+//~ shared = 5
+import { println } from "std:io";
+import { Shared } from "std:sync";
+import { Clone } from "core:prelude";
+@Derive(Clone)
+struct X { value: i64 }
+@Derive(Clone)
+struct Counter { x: X }
+function main() {
+  var state: Shared<Counter> = Shared.new(Counter { x: X { value: 0 } });
+  // Returning a reference detaches it: the value is cloned at the return boundary.
+  var got: X = state.lock((c) => { c.x.value = 5; c.x });
+  got.value = -1;
+  var snap: i64 = state.lock((c) => c.x.value);
+  println("returned = " + (got.value as str));
+  println("shared = " + (snap as str));
+}

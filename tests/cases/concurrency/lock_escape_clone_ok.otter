@@ -1,0 +1,23 @@
+//@ kind: run
+//@ description: a cloned (detached) value MAY leave the lock — assigning `c.x.clone()` to an outer variable is legal, and mutating that clone never touches the shared cell (docs/20 §4 detachment rule, clone escape hatch)
+//@ stdout:
+//~ shared = 1
+//~ escaped = -1
+import { println } from "std:io";
+import { Shared } from "std:sync";
+import { Clone } from "core:prelude";
+@Derive(Clone)
+struct X { value: i64 }
+@Derive(Clone)
+struct Counter { x: X }
+function main() {
+  var state: Shared<Counter> = Shared.new(Counter { x: X { value: 0 } });
+  // Corrected form of the racy example: escape a *clone*, not a live alias.
+  var escaped: X | null = null;
+  state.lock((c) => { c.x.value = c.x.value + 1; escaped = c.x.clone(); 0 });
+  // Mutating the detached clone is harmless — it is not aliased into the cell.
+  (escaped as X).value = -1;
+  var snap: i64 = state.lock((c) => c.x.value);
+  println("shared = " + (snap as str));
+  println("escaped = " + ((escaped as X).value as str));
+}

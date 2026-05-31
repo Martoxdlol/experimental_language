@@ -1,0 +1,35 @@
+//@ kind: run
+//@ serial
+//@ description: many workers each clone the handle and increment under the lock; the mutex serializes every write so the total is exact with no lost updates (docs/20 §4)
+//@ stdout:
+//~ total = 800
+import { List } from "core:collections";
+import { println } from "std:io";
+import { Future } from "core:prelude";
+import { Thread, JoinHandle, Joined, Panicked } from "std:thread";
+import { Shared } from "std:sync";
+struct X { value: i64 }
+struct Counter { x: X }
+function bump(s: Shared<Counter>, times: i64): i64 {
+  var i: i64 = 0;
+  while i < times {
+    s.lock((c) => { c.x.value = c.x.value + 1; 0 });
+    i = i + 1;
+  }
+  0
+}
+function main(): Future<null> async {
+  var state: Shared<Counter> = Shared.new(Counter { x: X { value: 0 } });
+  var handles: List<JoinHandle<i64>> = [];
+  var t = 0;
+  while t < 8 {
+    var s: Shared<Counter> = state.clone();
+    handles.push(Thread.spawn(() => bump(s, 100)));
+    t = t + 1;
+  }
+  for h in handles {
+    var r: Joined<i64> | Panicked = await h.join();
+  }
+  var total: i64 = state.lock((c) => c.x.value);
+  println("total = " + (total as str));
+}

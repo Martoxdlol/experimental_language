@@ -110,12 +110,12 @@ import { Shared, channel } from "std:sync"</code></pre>
 
       <g transform="translate(20, 60)" font-size="11">
         <text y="0">var s = Shared.new(value)</text>
-        <text y="22">s.lock { v =&gt; mutate(v) }</text>
-        <text y="40">s.try_lock { v =&gt; read(v) }</text>
+        <text y="22">await s.lock { v =&gt; mutate(v) }</text>
+        <text y="40">await s.try_lock { v =&gt; read(v) }</text>
       </g>
 
-      <text x="20" y="140" font-size="11">— exclusive access in body</text>
-      <text x="20" y="156" font-size="11">— return value cloned out</text>
+      <text x="20" y="140" font-size="11">— async; await it (body may await)</text>
+      <text x="20" y="156" font-size="11">— exclusive access; return cloned out</text>
       <text x="20" y="172" font-size="11">— not reentrant</text>
       <text x="20" y="188" font-size="11">— not poisoned on panic</text>
     </g>
@@ -455,32 +455,50 @@ prove the value is not aliased; otherwise it falls back to <strong>Clone</strong
 
 extend&lt;T&gt; Shared&lt;T&gt; {
   function new(value: T): Shared&lt;T&gt;
-  function lock&lt;R&gt;(self, body: (T) =&gt; R): R
-  function try_lock&lt;R&gt;(self, body: (T) =&gt; R): R | LockBusy
+  // `lock`/`try_lock` are ALWAYS async — `await` them. `body` may itself be
+  // `async` and may `await`; the mutex is held across the body's suspension
+  // points (it is task-aware, not OS-thread-bound). When `body` is `async`,
+  // `lock` awaits it to completion under the lock, so `R` denotes the body's
+  // final (awaited) value — never a nested `Future`.
+  function lock&lt;R&gt;(self, body: (T) =&gt; R): Future&lt;R&gt; async
+  function try_lock&lt;R&gt;(self, body: (T) =&gt; R): Future&lt;R | LockBusy&gt; async
 }
 
 pub struct LockBusy;
 
 var state = Shared.new(Counter { value: 0 })
 
-state.lock { c =&gt; c.value = c.value + 1 }
-var snapshot = state.lock { c =&gt; c.value }</code></pre>
+await state.lock { c =&gt; c.value = c.value + 1 }
+var snapshot = await state.lock { c =&gt; c.value }
+
+// The body may itself `await`; the lock is held across the suspension, so the
+// critical section spans the awaited work (an async-aware mutex).
+var loaded = await state.lock { c async =&gt; { c.value = await fetch(); c.value } }</code></pre>
 
 <div class="callout warn">
   <strong>Detachment rule — references can't escape the lock</strong>
-  Reference returns are <code>Clone</code>d at the return boundary (no <code>Clone</code> →
-  compile error). The reference passed to <code>body</code> is valid only inside the lock;
-  storing it in an outer-scoped variable is rejected by escape analysis.
+  A reference <em>returned</em> from <code>body</code> is <code>Clone</code>d at the return
+  boundary (no <code>Clone</code> → compile error). The reference passed to <code>body</code> —
+  <em>and any reference reachable through it</em> (e.g. <code>c.x</code>, <code>c.x.y</code>) — is
+  valid only inside the lock; storing it where it outlives the lock (an outer-scoped variable, a
+  struct field, a collection, or an escaping closure) is rejected by escape analysis. To carry data
+  out, store a <code>.clone()</code> — a detached deep copy that is no longer aliased into the cell.
+  <br>This analysis is <strong>the same whether <code>body</code> is synchronous or
+  <code>async</code></strong>: it spans the body's <code>await</code> points, so a reference may not
+  escape across a suspension either. (Any additional restriction specific to async bodies will be
+  called out explicitly; the baseline is identical to the sync rule.)
 </div>
 
 <div class="callout warn">
   <strong>Not reentrant</strong>
-  A thread that holds the lock and calls <code>lock</code> again on the same
-  <code>Shared&lt;T&gt;</code> will deadlock. Use <code>try_lock</code> if uncertain.
+  A task that holds the lock and <code>await</code>s <code>lock</code> again on the same
+  <code>Shared&lt;T&gt;</code> deadlocks — the holder is suspended and never releases. This includes
+  re-locking the same cell from within the body after an <code>await</code>. Use
+  <code>try_lock</code> if uncertain.
   <br><strong style="margin-top: 0.4rem;">No poisoning</strong>
-  A panic in <code>body</code> unwinds and releases the lock — future lockers see whatever state
-  the panicking body left behind. Use <code>try_lock</code> + transactional patterns if consistency
-  matters.
+  A panic in <code>body</code> — or cancellation of an <code>async</code> body — unwinds and
+  releases the lock; future lockers see whatever state the body left behind. Use
+  <code>try_lock</code> + transactional patterns if consistency matters.
 </div>
 
 <!-- =========================================================== -->
@@ -591,29 +609,27 @@ function main(): Future&lt;null&gt; async {
   var _ = await h2.join()
 }</code></pre>
 
-<pre><code>// Shared counter incremented by many threads
-import { Thread, JoinHandle } from "std:thread"
+<pre><code>// Shared counter incremented by many tasks
 import { Shared } from "std:sync"
 
-function gather(handles: List&lt;JoinHandle&lt;null&gt;&gt;): Future&lt;null&gt; async {
-  // Awaiting each `join()` suspends the task (instead of parking the OS
-  // thread) until that worker finishes.
-  for h in handles { var _ = await h.join() }
+// Because `lock` is async, the worker must be able to `await` — so it is an
+// `async` function scheduled with the `spawn` keyword (docs/21), NOT a
+// synchronous `Thread.spawn` closure (which cannot `await`).
+function worker(s: Shared&lt;i64&gt;): Future&lt;null&gt; async {
+  for _ in (Range { current: 0, end: 1000 }) {
+    await s.lock { /* mutate */ it }
+  }
 }
 
 function main(): Future&lt;null&gt; async {
   var state = Shared.new(0i64)
-  var handles = List.new&lt;JoinHandle&lt;null&gt;&gt;()
+  var tasks = List.new&lt;Future&lt;null&gt;&gt;()
   for _ in (Range { current: 0, end: 8 }) {
     var s = state.clone()    // Shared&lt;T&gt; is Clone (clones the handle, same inner)
-    handles.push(Thread.spawn {
-      for _ in (Range { current: 0, end: 1000 }) {
-        s.lock { /* mutate */ it }
-      }
-    })
+    tasks.push(spawn worker(s))   // `spawn EXPR` yields a Future&lt;null&gt;
   }
-  await gather(handles)
-  println(state.lock { it } as str)
+  for t in tasks { await t }
+  println((await state.lock { it }) as str)
 }</code></pre>
 
 <div class="callout">
