@@ -1,17 +1,11 @@
 [package]
-name = "cli"
+name = "macros"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
-[[bin]]
-name = "otter_fusion"
-path = "src/main.rs"
-
 [dependencies]
 compiler.workspace = true
-pkg.workspace = true
 backend = { path = "../backend" }
-macros = { path = "../macros" }
-clap = { version = "4", features = ["derive"] }
+runtime = { path = "../runtime" }

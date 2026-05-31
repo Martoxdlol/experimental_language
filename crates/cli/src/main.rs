@@ -392,11 +392,36 @@ struct Prepared {
     map: SourceMap,
     /// Diagnostics gathered while loading the module tree.
     diags: Vec<LoadDiag>,
+    /// Diagnostics produced while expanding user procedural macros (`docs/22`).
+    /// Merged into every analysis of this program.
+    macro_errors: Vec<compiler::sema::SemaError>,
+}
+
+/// Analyse a [`Prepared`] program, folding in any procedural-macro expansion
+/// diagnostics (which were produced once, up front, in [`prepare`]).
+fn analyze_prepared(p: &Prepared) -> Analysis {
+    let mut analysis = analyze_multi_ctx(&p.root, &p.externals, &p.ctx);
+    if !p.macro_errors.is_empty() {
+        let mut merged = p.macro_errors.clone();
+        merged.extend(analysis.errors.drain(..));
+        analysis.errors = merged;
+    }
+    analysis
 }
 
 /// Resolve an [`Input`] into [`Prepared`] analysis inputs, determining the run
 /// mode and project context (`docs/17` §17.13).
 fn prepare(input: &Input) -> Result<Prepared, String> {
+    let mut prepared = prepare_inner(input)?;
+    // Phase 2 (`docs/22` §4): expand user procedural macros over the loaded
+    // module tree before any type checking. A program with no `@ProcMacro`
+    // definitions returns immediately and pays nothing.
+    prepared.macro_errors =
+        macros::expand_user_macros(&mut prepared.root, &mut prepared.externals, &prepared.ctx);
+    Ok(prepared)
+}
+
+fn prepare_inner(input: &Input) -> Result<Prepared, String> {
     match input {
         // `exec`: always standalone, ignoring any surrounding project.
         Input::Exec(file) => Ok(prepare_loose(file)),
@@ -481,7 +506,14 @@ fn prepare_project(proj: &ProjectContext) -> Prepared {
         packages: packages_map,
         file_targets: tree.file_targets.clone(),
     };
-    Prepared { root: tree.root, externals: tree.externals, ctx, map: tree.map, diags: tree.diagnostics }
+    Prepared {
+        root: tree.root,
+        externals: tree.externals,
+        ctx,
+        map: tree.map,
+        diags: tree.diagnostics,
+        macro_errors: Vec::new(),
+    }
 }
 
 /// Build [`Prepared`] for a loose file with no project context (`docs/17`
@@ -495,7 +527,14 @@ fn prepare_loose(file: &Path) -> Prepared {
         file_targets: tree.file_targets.clone(),
         ..ResolveContext::direct()
     };
-    Prepared { root: tree.root, externals: tree.externals, ctx, map: tree.map, diags: tree.diagnostics }
+    Prepared {
+        root: tree.root,
+        externals: tree.externals,
+        ctx,
+        map: tree.map,
+        diags: tree.diagnostics,
+        macro_errors: Vec::new(),
+    }
 }
 
 /// Render the loader's diagnostics; returns `true` if any were errors.
@@ -631,7 +670,7 @@ fn emit(input: &Input, ir: EmitIr) -> ExitCode {
             println!("{:#?}", prepared.root);
         }
         EmitIr::Hir => {
-            let analysis = analyze_multi_ctx(&prepared.root, &prepared.externals, &prepared.ctx);
+            let analysis = analyze_prepared(&prepared);
             for e in &analysis.errors {
                 render_sema(map, e);
             }
@@ -641,7 +680,7 @@ fn emit(input: &Input, ir: EmitIr) -> ExitCode {
             );
         }
         EmitIr::Clif => {
-            let analysis = analyze_multi_ctx(&prepared.root, &prepared.externals, &prepared.ctx);
+            let analysis = analyze_prepared(&prepared);
             for e in &analysis.errors {
                 render_sema(map, e);
             }
@@ -701,7 +740,7 @@ fn drive(input: &Input, stage: Stage, release: bool, time: bool) -> ExitCode {
 
     // 3. Semantic analysis over the whole multi-file program, with the resolved
     //    run-mode context governing import-scheme availability.
-    let analysis = analyze_multi_ctx(&prepared.root, &prepared.externals, &prepared.ctx);
+    let analysis = analyze_prepared(&prepared);
     for e in &analysis.errors {
         render_sema(map, e);
         had_error = true;
@@ -825,7 +864,7 @@ fn run_tests(path: &Path, bench: bool) -> ExitCode {
         eprintln!("\naborting due to previous error(s).");
         return ExitCode::FAILURE;
     }
-    let analysis = analyze_multi_ctx(&prepared.root, &prepared.externals, &prepared.ctx);
+    let analysis = analyze_prepared(&prepared);
     for e in &analysis.errors {
         render_sema(map, e);
         had_error = true;
@@ -1010,7 +1049,7 @@ fn run_lint(input: &Input) -> ExitCode {
         eprintln!("\naborting due to previous error(s).");
         return ExitCode::FAILURE;
     }
-    let analysis = analyze_multi_ctx(&prepared.root, &prepared.externals, &prepared.ctx);
+    let analysis = analyze_prepared(&prepared);
     for e in &analysis.errors {
         render_sema(map, e);
         had_error = true;
@@ -1051,7 +1090,7 @@ fn run_fix(input: &Input, check: bool) -> ExitCode {
         eprintln!("\naborting due to previous error(s).");
         return ExitCode::FAILURE;
     }
-    let analysis = analyze_multi_ctx(&prepared.root, &prepared.externals, &prepared.ctx);
+    let analysis = analyze_prepared(&prepared);
     for e in &analysis.errors {
         render_sema(map, e);
         had_error = true;

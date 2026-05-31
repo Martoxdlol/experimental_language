@@ -51,6 +51,7 @@ mod gen_collections;
 mod gen_struct;
 mod gen_call;
 mod gen_hir;
+pub mod macro_host;
 
 /// Pointer-width integer type on the host (str/reference values are pointers).
 /// The JIT only targets the 64-bit host, so this is `I64`.
@@ -162,6 +163,11 @@ fn register_runtime_symbols(b: &mut JITBuilder) {
     b.symbol("lang_char_to_str", runtime::lang_char_to_str as *const u8);
     b.symbol("lang_print", runtime::lang_print as *const u8);
     b.symbol("lang_println", runtime::lang_println as *const u8);
+    // Procedural-macro host functions (`docs/22`): the prelude's
+    // `extend ASTNode/MacroContext` methods are seeded into every JIT, so their
+    // `__ast_*`/`__mctx_*` externs must always resolve (dead code in a normal
+    // program; live when a macro runs).
+    macro_host::register_symbols(b);
 }
 
 /// A failure to lower a construct that is otherwise well-typed.
@@ -403,7 +409,21 @@ fn dlopen_link_libs(hir: &Hir) {
 
 /// JIT-compile and return a runnable [`Jit`], walking the AST per function.
 pub fn compile(analysis: &Analysis) -> CgResult<Jit> {
-    compile_jit(analysis)
+    compile_jit(analysis, &[])
+}
+
+/// As [`compile`], but additionally registers `extra` `(symbol, address)`
+/// pairs into the JIT's symbol table before lowering. This is the hook the
+/// procedural-macro engine (`crates/macros`) uses to resolve the prelude's
+/// `extern function __ast_* / __mctx_*` declarations to its host functions, so
+/// a macro JIT can call back into the compiler's AST arena (`docs/22`).
+///
+/// # Safety
+/// Each address must point to a live `extern "C"` function whose signature
+/// matches the corresponding extern declaration; it must outlive the returned
+/// [`Jit`].
+pub fn compile_with_symbols(analysis: &Analysis, extra: &[(&str, *const u8)]) -> CgResult<Jit> {
+    compile_jit(analysis, extra)
 }
 
 /// Alias for [`compile`] retained by the code-generation test suite. Code
@@ -419,12 +439,15 @@ pub fn hir_eligible_fns(analysis: &Analysis) -> usize {
     analysis.hir.bodies.len()
 }
 
-fn compile_jit(analysis: &Analysis) -> CgResult<Jit> {
+fn compile_jit(analysis: &Analysis, extra_symbols: &[(&str, *const u8)]) -> CgResult<Jit> {
     let hir = &analysis.hir;
     dlopen_link_libs(hir);
     let isa = make_isa(target_lexicon::Triple::host(), false);
     let mut builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
     register_runtime_symbols(&mut builder);
+    for (name, addr) in extra_symbols {
+        builder.symbol(*name, *addr);
+    }
     let mut module = JITModule::new(builder);
 
     let (by_name, safepoints, drops, line_info, _func_len) =
@@ -842,6 +865,13 @@ impl<'a, M: Module> Codegen<'a, M> {
                         continue;
                     }
                 }
+            }
+            // The `core:compiler` macro-surface methods (`docs/22`) call host
+            // externs that only exist inside the macro JIT; compile them lazily
+            // (when a macro calls them) rather than seeding them into every
+            // program — otherwise native object output gets unresolved symbols.
+            if self.analysis.program.is_macro_surface_method(DefId(i as u32)) {
+                continue;
             }
             let Some(ItemKind::Function(f)) = &def.item else { continue };
             if f.body.is_none() {

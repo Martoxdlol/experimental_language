@@ -4864,3 +4864,103 @@ fn promoted_member_diagnostics_carry_codes() {
         );
     }
 }
+
+// ===========================================================================
+// User procedural macros (`docs/22`) — decorator form (slice 1)
+// ===========================================================================
+
+/// A decorator macro that re-emits the annotated item plus a synthesised
+/// `extend` adding a `label()` method returning the type's own name. Exercises
+/// `input.name()`, `input.text()`, and `ctx.parse_items` end-to-end through the
+/// compile-time macro JIT.
+#[test]
+fn macro_decorator_generates_method() {
+    let src = "import { MacroContext, ASTNode } from \"core:compiler\";\n\
+        @ProcMacro\n\
+        pub function WithName(ctx: MacroContext, input: ASTNode): ASTNode {\n\
+          var n = input.name();\n\
+          ctx.parse_items(input.text() + \" extend \" + n + \" { function label(self): str { \\\"\" + n + \"\\\" } }\")\n\
+        }\n\
+        @WithName\n\
+        struct Widget { id: i64 }\n\
+        function main() { var w = Widget { id: 1 }; println(w.label()); }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "Widget\n");
+}
+
+/// A macro can inspect the *syntactic shape* of its input (field count) — types
+/// don't exist yet at expansion time, but structure does (`docs/22` §4).
+#[test]
+fn macro_inspects_struct_field_count() {
+    let src = "import { MacroContext, ASTNode } from \"core:compiler\";\n\
+        @ProcMacro\n\
+        pub function Arity(ctx: MacroContext, input: ASTNode): ASTNode {\n\
+          var n = input.name();\n\
+          var c = input.field_count();\n\
+          ctx.parse_items(input.text() + \" extend \" + n + \" { function arity(self): i64 { \" + (c as str) + \" } }\")\n\
+        }\n\
+        @Arity\n\
+        struct Trio { a: i64, b: i64, c: i64 }\n\
+        function main() { var t = Trio { a: 1, b: 2, c: 3 }; println(t.arity() as str); }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "3\n");
+}
+
+/// A decorator macro reads its invocation arguments via `ctx.arg(i)` and splices
+/// the argument's source back into generated code.
+#[test]
+fn macro_reads_invocation_arguments() {
+    let src = "import { MacroContext, ASTNode } from \"core:compiler\";\n\
+        @ProcMacro\n\
+        pub function Tag(ctx: MacroContext, input: ASTNode): ASTNode {\n\
+          var n = input.name();\n\
+          var t = ctx.arg(0).text();\n\
+          ctx.parse_items(input.text() + \" extend \" + n + \" { function tag(self): str { \" + t + \" } }\")\n\
+        }\n\
+        @Tag(\"hello\")\n\
+        struct S { x: i64 }\n\
+        function main() { var s = S { x: 0 }; println(s.tag()); }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "hello\n");
+}
+
+/// A macro that emits a diagnostic via `ctx.error` and returns
+/// `ASTNode.error_marker()` makes compilation fail with that message
+/// (`docs/22` §7).
+#[test]
+fn macro_error_is_reported() {
+    let src = "import { MacroContext, ASTNode } from \"core:compiler\";\n\
+        @ProcMacro\n\
+        pub function MustBeStruct(ctx: MacroContext, input: ASTNode): ASTNode {\n\
+          if input.kind() != \"struct\" {\n\
+            ctx.error(input.span(), \"MustBeStruct only applies to structs\");\n\
+            return ASTNode.error_marker();\n\
+          }\n\
+          input\n\
+        }\n\
+        @MustBeStruct\n\
+        function not_a_struct() {}\n\
+        function main() {}";
+    let (_out, err, ok) = lang("check", src);
+    assert!(!ok, "expected a macro error");
+    assert!(err.contains("MustBeStruct only applies to structs"), "stderr: {err}");
+}
+
+/// The macro-surface methods are compile-time only: a program that defines a
+/// macro but whose runtime code never touches `core:compiler` still builds to a
+/// native executable (the surface methods are not seeded into the object).
+#[test]
+fn macro_program_builds_native() {
+    let src = "import { MacroContext, ASTNode } from \"core:compiler\";\n\
+        @ProcMacro\n\
+        pub function Ident(ctx: MacroContext, input: ASTNode): ASTNode { input }\n\
+        @Ident\n\
+        struct Cfg { n: i64 }\n\
+        function main() { var c = Cfg { n: 7 }; println(c.n as str); }";
+    let (out, err, ok) = lang_build_run(src, &[]);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "7\n");
+}

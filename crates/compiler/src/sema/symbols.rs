@@ -498,6 +498,75 @@ function channel_mpmc_bounded() {}
 function yield_now() {}
 function sleep(ms: i64) {}
 function timeout() {}
+struct Span { raw: i64 }
+struct ASTNode { handle: i64 }
+struct MacroContext { ctx: i64 }
+extern function __ast_kind(h: i64): str;
+extern function __ast_text(h: i64): str;
+extern function __ast_name(h: i64): str;
+extern function __ast_field_count(h: i64): i64;
+extern function __ast_field_name(h: i64, i: i64): str;
+extern function __ast_span(h: i64): i64;
+extern function __ast_is_record(h: i64): i64;
+extern function __ast_is_tuple(h: i64): i64;
+extern function __ast_is_unit(h: i64): i64;
+extern function __ast_error_marker(): i64;
+extern function __mctx_invocation_span(c: i64): i64;
+extern function __mctx_arg_count(c: i64): i64;
+extern function __mctx_arg(c: i64, i: i64): i64;
+extern function __mctx_kwarg(c: i64, name: str): i64;
+extern function __mctx_kwarg_has(c: i64, name: str): i64;
+extern function __mctx_error(c: i64, span: i64, msg: str);
+extern function __mctx_warn(c: i64, span: i64, msg: str);
+extern function __mctx_note(c: i64, span: i64, msg: str);
+extern function __mctx_fresh_ident(c: i64, hint: str): i64;
+extern function __mctx_unhygienic(c: i64, name: str): i64;
+extern function __mctx_parse_item(c: i64, src: str): i64;
+extern function __mctx_parse_items(c: i64, src: str): i64;
+extern function __mctx_parse_expr(c: i64, src: str): i64;
+extern function __mctx_parse_block(c: i64, src: str): i64;
+extern function __mctx_node_text(h: i64): str;
+extend Span {
+  function eq(self, other: Span): bool { self.raw == other.raw }
+}
+extend ASTNode {
+  function kind(self): str { __ast_kind(self.handle) }
+  function text(self): str { __ast_text(self.handle) }
+  function name(self): str { __ast_name(self.handle) }
+  function field_count(self): i64 { __ast_field_count(self.handle) }
+  function field_name(self, i: i64): str { __ast_field_name(self.handle, i) }
+  function is_record(self): bool { __ast_is_record(self.handle) != 0 }
+  function is_tuple(self): bool { __ast_is_tuple(self.handle) != 0 }
+  function is_unit(self): bool { __ast_is_unit(self.handle) != 0 }
+  function span(self): Span { Span { raw: __ast_span(self.handle) } }
+  function error_marker(): ASTNode { ASTNode { handle: __ast_error_marker() } }
+}
+extend MacroContext {
+  function invocation_span(self): Span { Span { raw: __mctx_invocation_span(self.ctx) } }
+  function arg_count(self): i64 { __mctx_arg_count(self.ctx) }
+  function arg(self, i: i64): ASTNode { ASTNode { handle: __mctx_arg(self.ctx, i) } }
+  function args(self): List<ASTNode> {
+    var out = List<ASTNode>();
+    var n = __mctx_arg_count(self.ctx);
+    var i = 0;
+    while (i < n) {
+      out.push(ASTNode { handle: __mctx_arg(self.ctx, i) });
+      i = i + 1;
+    }
+    out
+  }
+  function has_kwarg(self, name: str): bool { __mctx_kwarg_has(self.ctx, name) != 0 }
+  function kwarg(self, name: str): ASTNode { ASTNode { handle: __mctx_kwarg(self.ctx, name) } }
+  function error(self, span: Span, msg: str) { __mctx_error(self.ctx, span.raw, msg); }
+  function warn(self, span: Span, msg: str) { __mctx_warn(self.ctx, span.raw, msg); }
+  function note(self, span: Span, msg: str) { __mctx_note(self.ctx, span.raw, msg); }
+  function fresh_ident(self, hint: str): ASTNode { ASTNode { handle: __mctx_fresh_ident(self.ctx, hint) } }
+  function unhygienic(self, name: str): ASTNode { ASTNode { handle: __mctx_unhygienic(self.ctx, name) } }
+  function parse_item(self, src: str): ASTNode { ASTNode { handle: __mctx_parse_item(self.ctx, src) } }
+  function parse_items(self, src: str): ASTNode { ASTNode { handle: __mctx_parse_items(self.ctx, src) } }
+  function parse_expr(self, src: str): ASTNode { ASTNode { handle: __mctx_parse_expr(self.ctx, src) } }
+  function parse_block(self, src: str): ASTNode { ASTNode { handle: __mctx_parse_block(self.ctx, src) } }
+}
 ";
 
 impl Default for Program {
@@ -685,6 +754,26 @@ impl Program {
         }
     }
 
+    /// Whether `def` is a method of the `core:compiler` macro-authoring surface
+    /// (`extend ASTNode/MacroContext/Span`, `docs/22`). These methods call the
+    /// `__ast_*`/`__mctx_*` host externs, which only exist inside the macro JIT;
+    /// they are therefore compiled on demand (when a macro actually calls them)
+    /// and must never be eagerly seeded into a normal program's code generation
+    /// — doing so would emit unresolved references in native object output.
+    pub fn is_macro_surface_method(&self, def: DefId) -> bool {
+        let d = self.def(def);
+        if d.kind != DefKind::ExtendMethod || !self.is_builtin_def(def) {
+            return false;
+        }
+        let Some(parent) = d.parent else { return false };
+        let Some(crate::ast::ItemKind::Extend(e)) = &self.def(parent).item else { return false };
+        matches!(
+            &e.target.kind,
+            crate::ast::TypeKind::Named { name, .. }
+                if matches!(name.name.as_str(), "ASTNode" | "MacroContext" | "Span")
+        )
+    }
+
     /// The builtin a marker-function `DefId` dispatches to, if any.
     pub fn builtin_of_def(&self, def: DefId) -> Option<crate::sema::results::Builtin> {
         self.builtin_fns.get(&def).copied()
@@ -726,6 +815,10 @@ impl Program {
                 ],
             ),
             (&["std", "async"], &["AsyncIterator", "TimedOut", "yield_now", "sleep", "timeout"]),
+            // Procedural-macro authoring surface (`docs/22`). Imported by
+            // `@ProcMacro` functions; the methods are backed by host functions
+            // registered into the macro JIT (`crates/macros`).
+            (&["core", "compiler"], &["MacroContext", "ASTNode", "Span"]),
         ];
         let b = self.builtin_module.index();
         for (path, names) in VIEWS {
@@ -1647,11 +1740,17 @@ mod tests {
         assert_eq!(iface_methods, 1);
         // The user's `extend P: Named` contributes one method; the prelude
         // also contributes `extend MapKeys/MapValues/MapEntries: Iterator<…>`
-        // impls (each with one `next` method) and is collected into ROOT.
+        // impls plus the `core:compiler` macro surface (`extend ASTNode { name }`),
+        // so restrict the count to non-toolchain (user) defs.
         let user_extend_methods = p
             .defs
             .iter()
-            .filter(|d| d.kind == DefKind::ExtendMethod && d.name == "name")
+            .enumerate()
+            .filter(|(i, d)| {
+                d.kind == DefKind::ExtendMethod
+                    && d.name == "name"
+                    && !p.is_builtin_def(DefId(*i as u32))
+            })
             .count();
         assert_eq!(user_extend_methods, 1);
         let user_extends = p

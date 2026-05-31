@@ -45,6 +45,20 @@ pub fn print_item(it: &Item) -> String {
     p.out
 }
 
+/// Render a single statement (used by the macro host to echo block contents).
+pub fn print_stmt(s: &Stmt) -> String {
+    let mut p = Printer::new();
+    p.stmt(s);
+    p.out
+}
+
+/// Render a block (`{ … }`), braces included.
+pub fn print_block(b: &Block) -> String {
+    let mut p = Printer::new();
+    p.block(b);
+    p.out
+}
+
 struct Printer {
     out: String,
     indent: usize,
