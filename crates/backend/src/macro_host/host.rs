@@ -153,9 +153,12 @@ pub extern "C" fn mctx_fresh_ident(_c: i64, hint: *const LangStr) -> i64 {
     arena::with(|s| {
         let n = s.fresh_ctr;
         s.fresh_ctr += 1;
-        // A uniquely-suffixed name in its own virtual file → unique span. True
-        // syntax-context hygiene layers on top of this in a later slice.
-        let name = format!("{hint}__m{n}");
+        // Hygiene for the reparse-based ASTNode model is realised as a gensym:
+        // a guaranteed-unique name (monotonic counter, distinctive `__hyg`
+        // infix) so a macro-introduced binding cannot collide with — or capture
+        // — a caller binding of the same spelling (`docs/22` §5). The name lives
+        // in its own virtual file so its span is unique too.
+        let name = format!("{hint}__hyg{n}");
         let file = s.new_gen_file(name.clone());
         let span = Span::new(file, BytePos(0), BytePos(name.len() as u32));
         s.push_node(Node::Ident(Ident { name, span }))

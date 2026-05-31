@@ -5030,3 +5030,92 @@ fn unknown_expression_macro_is_reported() {
     assert!(!ok, "expected unknown-macro error");
     assert!(err.contains("cannot find macro `@Nope`"), "stderr: {err}");
 }
+
+// ===========================================================================
+// User procedural macros — hygiene (slice 3, `docs/22` §5)
+// ===========================================================================
+
+/// `ctx.fresh_ident` mints a guaranteed-unique name: a macro-introduced binding
+/// does not capture or shadow a caller binding of the same spelling. Here the
+/// macro introduces its own `t` while the caller already has a `t`; both keep
+/// their values.
+#[test]
+fn macro_fresh_ident_is_hygienic() {
+    let src = "import { MacroContext, ASTNode } from \"core:compiler\";\n\
+        @ProcMacro\n\
+        pub function Squared(ctx: MacroContext, input: ASTNode): ASTNode {\n\
+          var t = ctx.fresh_ident(\"t\").name();\n\
+          var a = ctx.arg(0).text();\n\
+          ctx.parse_block(\"var \" + t + \" = \" + a + \"; \" + t + \" * \" + t)\n\
+        }\n\
+        function main() {\n\
+          var t = 5;\n\
+          var r = @Squared(t);\n\
+          println(r as str);\n\
+          println(t as str);\n\
+        }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    // r = t*t = 25 (the arg `t` is the caller's 5); the caller's `t` is still 5.
+    assert_eq!(out, "25\n5\n");
+}
+
+/// `ctx.unhygienic` produces the name verbatim, so a macro can deliberately
+/// introduce a caller-callable name (the mechanism `@Derive` relies on).
+#[test]
+fn macro_unhygienic_name_is_callable() {
+    let src = "import { MacroContext, ASTNode } from \"core:compiler\";\n\
+        @ProcMacro\n\
+        pub function Describe(ctx: MacroContext, input: ASTNode): ASTNode {\n\
+          var n = input.name();\n\
+          var m = ctx.unhygienic(\"describe\").name();\n\
+          ctx.parse_items(input.text() + \" extend \" + n + \" { function \" + m + \"(self): str { \\\"\" + n + \"\\\" } }\")\n\
+        }\n\
+        @Describe\n\
+        struct W { x: i64 }\n\
+        function main() { var w = W { x: 0 }; println(w.describe()); }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "W\n");
+}
+
+/// A hygienic name is *not* the literal spelling, so it is not callable under
+/// that spelling — the dual of the previous test, confirming `fresh_ident`
+/// really mangles.
+#[test]
+fn macro_fresh_ident_name_is_not_the_literal() {
+    let src = "import { MacroContext, ASTNode } from \"core:compiler\";\n\
+        @ProcMacro\n\
+        pub function Hidden(ctx: MacroContext, input: ASTNode): ASTNode {\n\
+          var n = input.name();\n\
+          var m = ctx.fresh_ident(\"secret\").name();\n\
+          ctx.parse_items(input.text() + \" extend \" + n + \" { function \" + m + \"(self): i64 { 1 } }\")\n\
+        }\n\
+        @Hidden\n\
+        struct W { x: i64 }\n\
+        function main() { var w = W { x: 0 }; println(w.secret() as str); }";
+    let (_out, err, ok) = lang("check", src);
+    assert!(!ok, "calling the hygienic name should fail");
+    assert!(err.contains("secret"), "stderr: {err}");
+}
+
+/// Used twice in one scope, a macro's fresh bindings are distinct each time, so
+/// repeated expansions never collide.
+#[test]
+fn macro_fresh_ident_unique_per_expansion() {
+    let src = "import { MacroContext, ASTNode } from \"core:compiler\";\n\
+        @ProcMacro\n\
+        pub function Inc(ctx: MacroContext, input: ASTNode): ASTNode {\n\
+          var t = ctx.fresh_ident(\"t\").name();\n\
+          var a = ctx.arg(0).text();\n\
+          ctx.parse_block(\"var \" + t + \" = \" + a + \" + 1; \" + t)\n\
+        }\n\
+        function main() {\n\
+          var p = @Inc(10);\n\
+          var q = @Inc(20);\n\
+          println((p + q) as str);\n\
+        }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "32\n");
+}
