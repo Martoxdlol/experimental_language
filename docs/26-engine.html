@@ -84,6 +84,7 @@
     <li><a href="#channels">Bridge channels &amp; shared state</a></li>
     <li><a href="#invoke">Invoking any entry — sync &amp; async</a></li>
     <li><a href="#isolation">Resource control &amp; per-isolate runtime</a></li>
+    <li><a href="#perf">Cold starts &amp; caching</a></li>
     <li><a href="#security">Security model</a></li>
     <li><a href="#impl">Implementation &amp; staging</a></li>
     <li><a href="#summary">Summary</a></li>
@@ -98,7 +99,7 @@
   binds host functions into a virtual <code>core:compiler</code> module, JIT-compiles
   it, and calls it by pointer at compile time. <code>std:engine</code> turns that
   one-shot, compile-time machinery into a persistent, re-entrant, sandboxed runtime
-  surface. §10 records exactly what exists today versus what is new work.
+  surface. §11 records exactly what exists today versus what is new work.
 </div>
 
 <!-- =========================================================== -->
@@ -485,7 +486,84 @@ heap bytes, cumulative bytes allocated, collection count, and wall-clock elapsed
 These come directly from the per-isolate heap accounting the limits already maintain.</p>
 
 <!-- =========================================================== -->
-<h2 id="security">9. Security model</h2>
+<h2 id="perf">9. Cold starts &amp; caching</h2>
+
+<p>An isolate has two performance regimes. The <strong>warm</strong> path —
+<code>load</code> once, <code>invoke</code> many — is fast by construction: loading
+pays the full front-end + Cranelift codegen once, and each subsequent invocation is a
+direct call into already-compiled machine code. The <strong>cold</strong> path — the
+first <code>load</code> of a given source, or the first after a process restart — is
+where the work lives. The design attacks it on two fronts: a persistent
+<em>compiled-artifact cache</em> so a cold start rarely recompiles, and a
+<em>warm isolate pool</em> so a fresh execution context rarely waits.</p>
+
+<h3>Compiled-artifact cache</h3>
+
+<p>Compiling guest source to machine code is deterministic, so the result is
+cacheable. The engine reuses the backend's existing <strong>native object emission</strong>
+path (the same one behind <code>otter_fusion build</code>) as an ahead-of-time target:
+on a cache miss it compiles the unit to a relocatable object and writes it to a
+content-addressed store; on a hit it <code>mmap</code>s/<code>dlopen</code>s the cached
+object and resolves entries by symbol, skipping the front-end and codegen entirely.
+The runtime symbols a cached object refers to (<code>lang_alloc</code>, the GC
+safepoint, channel/lock ops) resolve against the host process, exactly as the in-process
+JIT resolves them today. Cold start becomes <strong>map + relocate</strong> instead of
+<strong>parse + check + codegen</strong> — milliseconds-to-microseconds rather than the
+full pipeline.</p>
+
+<pre><code>// A store is configured once; load() consults it transparently.
+var eng = Engine.cache(disk_store("/var/cache/otter"))   // or an in-memory store
+
+var iso = eng.isolate()
+    .allow(["core:prelude", "std:io"])
+    .limits(limits)
+
+var unit = iso.load(source)?   // hit → mmap cached object; miss → compile + store
+</code></pre>
+
+<div class="callout warn">
+  <strong>The cache key must capture the whole compilation contract.</strong> An
+  artifact is only reusable under an identical contract, so the key hashes the
+  <em>guest source</em>, the <em>capability policy</em> (a stricter policy could have
+  rejected code the artifact contains), every participating <code>@Bridge</code>
+  <em>layout</em> (the marshalling ABI must match), the <em>target triple</em>, and the
+  <em>compiler/runtime version</em>. Any mismatch is a miss, never a silent reuse — a
+  cached object compiled under a looser policy or an older ABI must not run under a
+  stricter one.
+</div>
+
+<h3>Warm isolate pool</h3>
+
+<p>A cached artifact removes compilation; a pool removes setup. Because each isolate
+owns its runtime state (§8), the engine can keep a pool of pre-instantiated isolates
+over a single cached <code>Unit</code> and hand one out per request, recycling it
+afterward. A fresh isolate is then just a fresh heap + registry set over code that is
+already mapped and relocated — no compilation, no symbol resolution. This is the
+direct payoff of per-isolate runtime state and the intended shape for an
+edge-function dispatcher fanning many concurrent requests onto one cached unit.</p>
+
+<table>
+  <thead><tr><th>Scenario</th><th>Cost</th></tr></thead>
+  <tbody>
+    <tr><td>Warm invoke (loaded unit, live isolate)</td><td>Direct JIT call — negligible.</td></tr>
+    <tr><td>New isolate from a pool over a cached unit</td><td>Allocate heap + registries; no compile, no map.</td></tr>
+    <tr><td>Cold start, cache hit</td><td><code>mmap</code>/<code>dlopen</code> + relocate + register safepoints.</td></tr>
+    <tr><td>Cold start, cache miss</td><td>Full pipeline (lex → check → codegen), then write to store.</td></tr>
+  </tbody>
+</table>
+
+<h3>Heap snapshots <span class="pill planned">future</span></h3>
+
+<p>The artifact cache eliminates <em>compilation</em> cost but not the guest's own
+<em>initialization</em> (building module-level state, warming caches). The next tier —
+analogous to V8 startup snapshots — would run a unit's initialization once, snapshot
+the resulting heap, and restore that snapshot when spawning a new isolate, so the guest
+starts mid-initialized. This is materially harder with a tracing GC (the snapshot must
+be a relocatable, root-consistent heap image) and is recorded as a future direction,
+not part of the committed staging.</p>
+
+<!-- =========================================================== -->
+<h2 id="security">10. Security model</h2>
 
 <p>The guest's authority is <strong>exactly</strong> the union of (a) its whitelisted
 built-in/package modules and (b) the host bindings given to it — nothing more. The
@@ -513,7 +591,7 @@ three enforcement layers compose:</p>
 </div>
 
 <!-- =========================================================== -->
-<h2 id="impl">10. Implementation &amp; staging</h2>
+<h2 id="impl">11. Implementation &amp; staging</h2>
 
 <p>What the design rests on, and what is new work.</p>
 
@@ -558,17 +636,23 @@ three enforcement layers compose:</p>
       the per-isolate allocator; deadline/cancel flag at safepoints; stack-depth guard.</li>
   <li><span class="pill planned">planned</span> Engine-managed bridge channels /
       <code>Shared</code> cells that span the boundary across per-isolate registries.</li>
+  <li><span class="pill planned">planned</span> Cold-start caching (§9): a
+      content-addressed compiled-artifact store over the existing native-object path
+      (keyed by source + policy + bridge layouts + target + version) with
+      <code>mmap</code>/<code>dlopen</code> on hit, plus a warm isolate pool over a
+      cached unit. Heap snapshots noted as future.</li>
 </ul>
 
 <p>Staging keeps each step shippable: (1) a single-isolate <code>load</code>/<code>invoke</code>
 returning primitives under the capability whitelist; (2) <code>@Bridge</code> structs
 and <code>str</code> across the boundary; (3) host bindings + bridge channels;
-(4) per-isolate runtime state; (5) hard limits + stats; (6) async entries. The
-per-isolate-state phase is the deep one and gates real hard limits — earlier phases
-run on the shared global heap with best-effort limits and are explicit about it.</p>
+(4) per-isolate runtime state; (5) hard limits + stats; (6) async entries;
+(7) cold-start caching + warm pool (§9). The per-isolate-state phase is the deep one
+and gates real hard limits — earlier phases run on the shared global heap with
+best-effort limits and are explicit about it.</p>
 
 <!-- =========================================================== -->
-<h2 id="summary">11. Summary</h2>
+<h2 id="summary">12. Summary</h2>
 
 <div class="callout good">
   <ul>
@@ -591,6 +675,10 @@ run on the shared global heap with best-effort limits and are explicit about it.
         <code>max_alloc_bytes</code>, <code>timeout_ms</code>, and <code>max_stack_depth</code>
         real per-isolate walls, with cooperative interruption at existing safepoints
         and usage reported via <code>stats()</code>.</li>
+    <li><strong>Cold starts</strong> are attacked by a content-addressed
+        compiled-artifact cache (AOT over the native-object path: <code>mmap</code> +
+        relocate instead of recompile) and a warm isolate pool over a cached unit;
+        heap snapshots are a future tier.</li>
     <li>Builds on the proven macro-host substrate (chapter 22); the largest new piece
         is making the runtime isolate-aware.</li>
   </ul>

@@ -2052,6 +2052,18 @@ current-isolate pointer). Staged so each step is shippable:
       (Future-returning) and drive it on the isolate's executor, completing the
       host's `await` when the guest future resolves (preserves the no-user-visible-
       `block_on` rule). Interacts with the M:N executor work (Phase 5 deferral).
+- [ ] **Stage 8 — cold-start caching (`docs/26` §9).** A content-addressed
+      compiled-artifact store over the existing native-object path (`compile_object`):
+      key = hash of guest source + capability policy + participating `@Bridge` layouts
+      + target triple + compiler/runtime version; on hit `mmap`/`dlopen` the cached
+      object and resolve entries by symbol (runtime `lang_*` resolve against the host
+      process, as the JIT does) instead of recompiling; on miss compile + store. Plus
+      a **warm isolate pool** over a cached `Unit` (a payoff of Stage 5's per-isolate
+      state — a fresh isolate is a fresh heap/registry set over already-mapped code).
+      Cache key correctness is the critical property: a mismatch is always a miss,
+      never a silent reuse under a different policy/ABI. **Heap snapshots**
+      (V8-startup-snapshot analogue — snapshot a unit's post-init heap, restore on
+      spawn) are noted as a *future* tier, harder under the tracing GC, NOT in scope.
 - Tests (when picked up): unit + integration + e2e — capability denial (compile
   error), `@Bridge` round-trips (host↔guest, all bridge types), host bindings +
   bridge channels, arbitrary-entry invocation, per-isolate heap independence,
