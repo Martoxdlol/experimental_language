@@ -348,4 +348,23 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         }
     }
 
+    /// Copy a by-value `extern struct` (`v` is a pointer to its stack/inline/
+    /// foreign field block) into a fresh managed heap block and return the
+    /// block's pointer. The copy holds plain C bytes — its own `*T` fields point
+    /// into unmanaged memory — so the GC traces references *to* the block but
+    /// never scans inside it (`GC_KIND_PLAIN`, empty trace map). This gives an
+    /// extern struct a stable home when it escapes the frame that built it:
+    /// boxed into a union/`dynamic` (see `box_value`) or returned by value (see
+    /// `emit_return`). `ty` must resolve to an extern struct.
+    pub(crate) fn heap_copy_extern(&mut self, v: Value, ty: Ty) -> Value {
+        let size = self.sizeof_ty(ty);
+        let block = (size.div_ceil(8) * 8).max(8);
+        let desc = self.emit_descriptor(block, GC_KIND_PLAIN, &[]);
+        let copy = self
+            .call_intrinsic("lang_alloc", &[PTR], Some(PTR), &[desc])
+            .expect("lang_alloc returns a pointer");
+        self.copy_bytes(copy, 0, v, size);
+        copy
+    }
+
 }

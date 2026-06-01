@@ -96,6 +96,37 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     /// The payload (offset 8) is a managed pointer iff the boxed type is one.
     pub(crate) fn box_value(&mut self, v: Option<Value>, from: Ty) -> Value {
         let resolved = resolve_shallow(self.cx.analysis, from, &self.subst);
+        // A by-value `extern struct` (`docs/19` §3) is a pointer to a stack (or
+        // foreign) field block, not a managed heap object — and a `Buffer`-sized
+        // (>8-byte) struct does not fit the box's single 8-byte payload slot.
+        // Boxing the bare pointer would both truncate and dangle once the block's
+        // scope ends. Instead copy the struct's bytes into a fresh managed heap
+        // block and box *that* (traced) pointer, so the union/`dynamic` value owns
+        // a stable copy. Unboxing (`Adjust::Unbox`, pattern binding) loads the
+        // pointer back at offset 8 — exactly an extern struct value's
+        // representation — so no special-casing is needed on the way out.
+        if is_extern_struct_ty(self.cx.analysis, resolved) {
+            // Copy the struct's bytes into a managed heap block; an absent value
+            // (a diverging `null`-typed operand) leaves a zeroed block.
+            let copy = match v {
+                Some(src) => self.heap_copy_extern(src, resolved),
+                None => {
+                    let desc = self.emit_descriptor(8, GC_KIND_PLAIN, &[]);
+                    self.call_intrinsic("lang_alloc", &[PTR], Some(PTR), &[desc])
+                        .expect("lang_alloc returns a pointer")
+                }
+            };
+            // Root the copy across the box allocation below (a GC safepoint).
+            self.mark_root(copy);
+            let desc = self.emit_descriptor(16, GC_KIND_PLAIN, &[8]);
+            let ptr = self
+                .call_intrinsic("lang_alloc", &[PTR], Some(PTR), &[desc])
+                .expect("lang_alloc returns a pointer");
+            let id = { let id = self.type_id_of(from); self.b.ins().iconst(types::I64, id) };
+            self.b.ins().store(MemFlags::trusted(), id, ptr, 0);
+            self.b.ins().store(MemFlags::trusted(), copy, ptr, 8);
+            return ptr;
+        }
         let managed = is_managed_ptr(self.cx.analysis, resolved);
         // If the payload is itself a managed pointer, it must survive the box
         // allocation below (which is a GC safepoint) even though it is not yet

@@ -1,0 +1,14 @@
+//@ kind: run
+//@ description: docs/19 §3 — returning an extern struct by value works; the value is copied to a managed heap block so it does not dangle past the callee frame
+//@ stdout:
+//~ 11 22
+//~ 7 14
+import { println } from "std:io";
+extern struct Pair { a: i64, b: i64 }
+function make(x: i64, y: i64): Pair { Pair { a: x, b: y } }
+function main() {
+  var p = make(11, 22);
+  println("${p.a} ${p.b}");
+  var q = make(7, 14);
+  println("${q.a} ${q.b}");
+}

@@ -18,7 +18,7 @@ const PRELUDE: &str = "import { List, Map, Set, Entry } from \"core:collections\
     import { Shared, LockBusy, Sender, Receiver, ChannelClosed, MpmcSender, MpmcReceiver, channel, channel_bounded, channel_mpmc, channel_mpmc_bounded } from \"std:sync\";\n\
     import { Thread, JoinHandle, Joined, Panicked } from \"std:thread\";\n\
     import { AsyncIterator, TimedOut, yield_now, sleep, timeout } from \"std:async\";\n\
-    import { Foreign, CString, CStr } from \"core:ffi\";\n";
+    import { Foreign, CString, CStr, Buffer } from \"core:ffi\";\n";
 
 /// Parse + run the full semantic pipeline, asserting a clean program.
 fn analyzed(src: &str) -> Analysis {

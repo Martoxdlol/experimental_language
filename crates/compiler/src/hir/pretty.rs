@@ -452,8 +452,6 @@ fn intrinsic_str(i: &Intrinsic) -> &'static str {
         Intrinsic::ForeignFree => "foreign-free",
         Intrinsic::ForeignRealloc => "foreign-realloc",
         Intrinsic::ForeignFlex { .. } => "foreign-flex",
-        Intrinsic::CStringFromStr => "cstring-from-str",
-        Intrinsic::CStrToStr => "cstr-to-str",
     }
 }
 

@@ -1,0 +1,19 @@
+//@ kind: run
+//@ description: docs/19 §6 — CString.from_str marshals a str to an owning NUL-terminated C string; as_ptr/byte_len/to_str/as_cstr round-trip; CStr.from_ptr borrows
+//@ stdout:
+//~ len=12 byte_len=12
+//~ to_str=otter fusion
+//~ as_cstr=otter fusion 12
+//~ from_ptr=otter fusion
+import { println } from "std:io";
+import { CString, CStr } from "core:ffi";
+extern function strlen(s: *u8): u64;
+function main() {
+  var cs = CString.from_str("otter fusion");
+  println("len=${strlen(cs.as_ptr())} byte_len=${cs.byte_len()}");
+  println("to_str=${cs.to_str()}");
+  var v = cs.as_cstr();
+  println("as_cstr=${v.to_str()} ${v.byte_len()}");
+  var w = CStr.from_ptr(cs.as_ptr());
+  println("from_ptr=${w.to_str()}");
+}

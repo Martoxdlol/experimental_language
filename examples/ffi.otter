@@ -8,11 +8,14 @@
 // An extern struct is C-laid-out and header-less; it lives on the stack.
 import { println } from "std:io";
 
-import { Foreign, CString, CStr } from "core:ffi";
+import { Foreign, CString, CStr, Buffer } from "core:ffi";
 extern struct Pair { a: i64, b: i64 }
 
 // A C function called across the ABI by its real symbol name. `memcpy` fills a
-// destination through an out-pointer.
+// destination through an out-pointer. `@CallConv` selects the calling
+// convention (default "c"); on 64-bit targets "c"/"system"/"stdcall"/"fastcall"
+// all coincide with the platform C ABI (docs/19 §7).
+@CallConv("c")
 extern function memcpy(dst: *u8, src: *u8, n: u64): *u8;
 
 // @Union overlays all fields at offset 0 — read the bits of a float as a u32.
@@ -117,12 +120,34 @@ function main() {
     Foreign.free(cell);
   }
 
-  // String marshaling (`docs/19` §6): a language `str` → a C string for libc,
-  // and back again.
+  // String marshaling (`docs/19` §6). `CString` is an *owning* handle: it holds
+  // a NUL-terminated foreign-heap copy of the `str` and frees it on scope exit
+  // (it implements `Drop`) — no manual `Foreign.free`. Hand its raw `*u8` to C
+  // with `as_ptr`; recover a managed `str` with `to_str`.
   var cs = CString.from_str("otter");
-  println("strlen=${strlen(cs)}");
-  println("round-trip=${CStr.to_str(cs)}");
-  Foreign.free(cs);
+  println("strlen=${strlen(cs.as_ptr())} byte_len=${cs.byte_len()}");
+  println("round-trip=${cs.to_str()}");
+
+  // `CStr` is a *borrowed* NUL-terminated view over a `*u8` the caller keeps
+  // alive — here the bytes `cs` owns. No allocation, no free.
+  var view = CStr.from_ptr(cs.as_ptr());
+  println("view=${view.to_str()} (len ${view.byte_len()})");
+
+  // `Buffer` is an `extern struct { data: *u8, size: u64 }` (docs/18 §9): a
+  // foreign-heap byte region with *manual* lifetime. `alloc` is fallible
+  // (`Buffer | null` on OOM); `get`/`set` are bounds-checked; `free` releases it.
+  var maybe = Buffer.alloc(4u64);
+  if maybe is null {
+    println("buffer alloc failed");
+  } else {
+    var buf = maybe as Buffer;
+    buf.set(0u64, 79u8);                // 'O'
+    buf.set(1u64, 75u8);                // 'K'
+    var b0 = buf.get(0u64);
+    var oob = buf.get(99u64);           // out of range → null
+    println("buffer[0]=${if b0 is null { 0u8 } else { b0 as u8 }} oob_is_null=${oob is null} size=${buf.size}");
+    buf.free();
+  }
 
   // Nested extern structs are embedded inline (`docs/19` §3).
   var usage = Usage {

@@ -483,8 +483,45 @@ struct MpmcSender<T> { chan: i64 }
 struct MpmcReceiver<T> { chan: i64 }
 struct Thread {}
 struct Foreign {}
-struct CString {}
-struct CStr {}
+@RefCounted
+struct CString { ptr: *u8 }
+extern struct CStr { ptr: *u8 }
+extern struct Buffer { data: *u8, size: u64 }
+extern function lang_cstring_from_str(s: str): *u8;
+extern function lang_cstr_to_str(p: *u8): str;
+extern function lang_cstr_len(p: *u8): u64;
+extern function lang_foreign_alloc(size: u64): *u8 | null;
+extern function lang_foreign_free(p: *u8);
+extern function lang_buffer_read(data: *u8, i: u64): u8;
+extern function lang_buffer_write(data: *u8, i: u64, v: u8);
+extend CString {
+  function from_str(s: str): CString { CString { ptr: lang_cstring_from_str(s) } }
+  function as_ptr(self): *u8 { self.ptr }
+  function as_cstr(self): CStr { CStr { ptr: self.ptr } }
+  function byte_len(self): u64 { lang_cstr_len(self.ptr) }
+  function to_str(self): str { lang_cstr_to_str(self.ptr) }
+}
+extend CString: Drop {
+  function drop(self) { lang_foreign_free(self.ptr); }
+}
+extend CStr {
+  function from_ptr(p: *u8): CStr { CStr { ptr: p } }
+  function byte_len(self): u64 { lang_cstr_len(self.ptr) }
+  function to_str(self): str { lang_cstr_to_str(self.ptr) }
+}
+extend Buffer {
+  function alloc(size: u64): Buffer | null {
+    var p = lang_foreign_alloc(size);
+    if p is null { null } else { Buffer { data: p, size: size } }
+  }
+  function get(self, i: u64): u8 | null {
+    if i >= self.size { null } else { lang_buffer_read(self.data, i) }
+  }
+  function set(self, i: u64, v: u8) {
+    if i < self.size { lang_buffer_write(self.data, i, v); }
+  }
+  function free(self) { lang_foreign_free(self.data); }
+}
 function print(s: str) {}
 function println(s: str) {}
 function panic(msg: str) {}
@@ -803,7 +840,7 @@ impl Program {
                 ],
             ),
             (&["core", "collections"], &["List", "Map", "Set", "Entry"]),
-            (&["core", "ffi"], &["Foreign", "CString", "CStr"]),
+            (&["core", "ffi"], &["Foreign", "CString", "CStr", "Buffer"]),
             (&["std", "io"], &["print", "println"]),
             (&["std", "thread"], &["Thread", "JoinHandle", "Joined", "Panicked"]),
             (

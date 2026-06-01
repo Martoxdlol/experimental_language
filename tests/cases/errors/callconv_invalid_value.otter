@@ -1,0 +1,6 @@
+//@ kind: compile-error
+//@ description: docs/19 §7 — @CallConv only accepts "c"/"system"/"stdcall"/"fastcall"; any other value is rejected.
+//@ stderr: `@CallConv` takes one string argument
+@CallConv("bogus")
+extern function strlen(s: *u8): u64;
+function main() {}

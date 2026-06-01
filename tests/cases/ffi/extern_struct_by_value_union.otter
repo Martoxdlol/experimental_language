@@ -1,0 +1,16 @@
+//@ kind: run
+//@ description: docs/19 §3 — a by-value extern struct boxed into a non-NPO union (Pt|null) round-trips correctly; its 16 bytes are copied to the managed heap, not truncated to a dangling stack pointer
+//@ stdout:
+//~ a=5,10
+//~ b null
+import { println } from "std:io";
+extern struct Pt { x: i64, y: i64 }
+function pick(n: i64): Pt | null {
+  if n < 0 { null } else { Pt { x: n, y: n * 2 } }
+}
+function main() {
+  var a = pick(5);
+  var b = pick(-1);
+  if a is null { println("a null"); } else { var p = a as Pt; println("a=${p.x},${p.y}"); }
+  if b is null { println("b null"); } else { println("b not null"); }
+}

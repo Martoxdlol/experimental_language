@@ -710,10 +710,6 @@ impl<'a> Checker<'a> {
                 if let ExprKind::Ident(recv) = &receiver.kind {
                     match (recv.name.as_str(), name.name.as_str()) {
                         ("Shared", "new") => return intrinsic(Intrinsic::SharedNew, &all),
-                        ("CString", "from_str") => {
-                            return intrinsic(Intrinsic::CStringFromStr, head1)
-                        }
-                        ("CStr", "to_str") => return intrinsic(Intrinsic::CStrToStr, head1),
                         ("Foreign", "free") => return intrinsic(Intrinsic::ForeignFree, head1),
                         ("Foreign", "realloc") => {
                             return intrinsic(Intrinsic::ForeignRealloc, &all[..2.min(all.len())])
@@ -1799,13 +1795,9 @@ impl<'a> Checker<'a> {
                 if recv.name == "Foreign" && self.intr_ns(&recv.name) {
                     return self.check_foreign_builtin(&name.name, _generics, args, span);
                 }
-                // `CString.from_str(s)` / `CStr.to_str(p)` (`docs/19` §6).
-                if recv.name == "CString" && name.name == "from_str" && self.intr_ns(&recv.name) {
-                    return self.check_cstring_from_str(args, span);
-                }
-                if recv.name == "CStr" && name.name == "to_str" && self.intr_ns(&recv.name) {
-                    return self.check_cstr_to_str(args, span);
-                }
+                // `CString` / `CStr` / `Buffer` are ordinary prelude types now
+                // (`docs/19` §6, `docs/18` §9): their methods resolve through the
+                // normal static-/instance-method path, not a builtin shortcut.
             }
         }
         // Numeric-namespace methods: `i32.wrapping_add(a,b)`, `f64.is_nan(x)`, …

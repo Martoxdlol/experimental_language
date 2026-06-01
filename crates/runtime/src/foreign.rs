@@ -6,11 +6,28 @@
 
 use crate::strings::{lang_str_from_utf8, str_bytes, LangStr};
 use std::alloc::{alloc, alloc_zeroed, dealloc, Layout};
+use std::sync::atomic::{AtomicI64, Ordering};
 
 /// The allocation-header size: we stash the `Layout` size just before the
 /// returned block so `lang_foreign_free` can reconstruct it (Rust's allocator
 /// requires the size at `dealloc`). Kept pointer-aligned.
 const HEADER: usize = 16;
+
+/// Net count of live foreign-heap blocks: bumped on every successful
+/// `alloc`/`alloc_zeroed`, dropped on every `free`. A balanced program (every
+/// `Foreign.free` / `CString` drop / `Buffer.free` matched to an alloc) returns
+/// to zero. Exposed via [`lang_foreign_outstanding`] for leak checks and tests
+/// (e.g. proving a `CString`'s `Drop` frees its buffer). A relaxed atomic — the
+/// foreign allocator is already a `malloc`-class call, so the cost is noise.
+static FOREIGN_OUTSTANDING: AtomicI64 = AtomicI64::new(0);
+
+/// The number of foreign-heap blocks currently outstanding (allocated and not
+/// yet freed). Zero in a leak-free program at quiescence. Backs leak assertions
+/// in tests and is a small observability hook (`docs/19` §5).
+#[unsafe(no_mangle)]
+pub extern "C" fn lang_foreign_outstanding() -> i64 {
+    FOREIGN_OUTSTANDING.load(Ordering::Relaxed)
+}
 
 /// Allocate `size` bytes on the foreign heap, returning a raw pointer (or null
 /// on failure / zero size). The block is 16-byte aligned (fits any C scalar /
@@ -43,6 +60,7 @@ fn foreign_alloc(size: usize, zeroed: bool) -> *mut u8 {
         return std::ptr::null_mut();
     }
     // Stash the total size in the header so `free` can rebuild the layout.
+    FOREIGN_OUTSTANDING.fetch_add(1, Ordering::Relaxed);
     unsafe {
         (base as *mut u64).write(total as u64);
         base.add(HEADER)
@@ -120,6 +138,47 @@ pub unsafe extern "C" fn lang_cstr_to_str(p: *const u8) -> *const LangStr {
     }
 }
 
+/// The byte length of a NUL-terminated C string (`docs/19` §6), i.e. C
+/// `strlen`. A null pointer yields 0. Backs `CStr.byte_len` / `CString.byte_len`.
+///
+/// # Safety
+/// `p` must be null or point to a NUL-terminated byte string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lang_cstr_len(p: *const u8) -> u64 {
+    if p.is_null() {
+        return 0;
+    }
+    let mut len = 0u64;
+    unsafe {
+        while *p.add(len as usize) != 0 {
+            len += 1;
+        }
+    }
+    len
+}
+
+/// Read one byte from a foreign buffer at `i` (`docs/18` §9, backs
+/// `Buffer.get`). The bounds check lives in the language method; this is the
+/// raw, unchecked load.
+///
+/// # Safety
+/// `data` must point to at least `i + 1` readable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lang_buffer_read(data: *const u8, i: u64) -> u8 {
+    unsafe { *data.add(i as usize) }
+}
+
+/// Write one byte into a foreign buffer at `i` (`docs/18` §9, backs
+/// `Buffer.set`). The bounds check lives in the language method; this is the
+/// raw, unchecked store.
+///
+/// # Safety
+/// `data` must point to at least `i + 1` writable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lang_buffer_write(data: *mut u8, i: u64, v: u8) {
+    unsafe { *data.add(i as usize) = v }
+}
+
 /// Free a block returned by [`lang_foreign_alloc`] / `_zeroed`. A null pointer
 /// is a no-op (matching C `free(NULL)`).
 #[unsafe(no_mangle)]
@@ -134,6 +193,7 @@ pub extern "C" fn lang_foreign_free(ptr: *mut u8) {
         let total = (base as *const u64).read() as usize;
         if let Ok(layout) = Layout::from_size_align(total, 16) {
             dealloc(base, layout);
+            FOREIGN_OUTSTANDING.fetch_sub(1, Ordering::Relaxed);
         }
     }
 }

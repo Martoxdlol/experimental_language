@@ -80,8 +80,10 @@ The full module/import/package system, end to end.
   `print`/`println`/`panic`/`panic_with`/`exit`/`abort` are importable marker
   functions dispatched by `DefId`. The concurrency/FFI intrinsics
   (`channel`/`sleep`/`yield_now`/`timeout`/`Thread.spawn`/`Shared.new`/
-  `Foreign.*`/`CString`/`CStr`) also require their import — recognized only when
-  the name resolves to a built-in (`intr_fn`/`intr_ns`). Only `str` methods +
+  `Foreign.*`) also require their import — recognized only when
+  the name resolves to a built-in (`intr_fn`/`intr_ns`). (`CString`/`CStr`/
+  `Buffer` are now ordinary imported prelude types with real `extend` methods,
+  not callee-shape intrinsics.) Only `str` methods +
   numeric namespaces stay free (per spec).
 - **Package manager** (`crates/pkg`): `project.toml` manifest, `project.lock`
   lockfile (+ sha256 verify), semver resolution (unify compatible ranges),
@@ -216,8 +218,9 @@ the full typed `Hir` directly and every consumer reads `analysis.hir`.**
           `.clone()` (shared `emit_builtin_clone`), the numeric namespace
           (`T.MIN/MAX`, `f*.NAN/is_nan/…`, `{wrapping,saturating,checked,
           overflowing}_{add,…,shl,shr}` via shared `emit_num_intrinsic` /
-          `emit_int_arith`), and foreign FFI memory (`alloc`/`free`/`realloc`/
-          `alloc_flex`, `CString.from_str`/`CStr.to_str`).
+          `emit_int_arith`), and foreign FFI memory (`Foreign.alloc`/`free`/
+          `realloc`/`alloc_flex`; the `CString`/`CStr`/`Buffer` boundary types are
+          ordinary prelude types over `lang_*` runtime helpers, not intrinsics).
     - [x] Method-call dispatch (shared `emit_primitive_compare`): dynamic
           dispatch through an interface object's vtable, builtin-bound fallbacks
           (`Clone`/`Eq`/`Ord`/`ToStr`/`Hash` on primitives/`str`/collections),
@@ -1688,14 +1691,29 @@ The tracing GC is functionally complete for single-threaded programs.
       `free`/`realloc` recover the layout); fields are written through `*p`.
       Recognized as builtins (like `Shared.new`); JIT + native + GC-stress
       parity (foreign blocks are never traced); 4 CLI tests + `examples/ffi.otter`.
-      **String marshaling (`docs/19` §6)**: `CString.from_str(s): *u8` copies a
-      `str` into a fresh NUL-terminated C string on the foreign heap (free with
-      `Foreign.free`); `CStr.to_str(p): str` copies a C string back into a
-      managed `str`. Verified against libc `strlen`/`puts`; JIT + native +
-      GC-stress parity (the `to_str` allocation survives); 2 CLI tests +
-      `examples/ffi.otter`. **Loudly rejected**: extern-struct-by-value return,
-      `&` on non-extern-struct scalars, deref of an opaque type, `match`/`?` on
-      `*T | null`. **Nested extern structs
+      **Boundary string/byte types (`docs/19` §6, `docs/18` §9)**: `CString` is
+      an owning, `@RefCounted` managed handle — `from_str(s)` copies a `str` into
+      a fresh NUL-terminated foreign-heap C string; `as_ptr` hands the raw `*u8`
+      to C, `as_cstr` borrows a `CStr`, `byte_len` is C `strlen`, `to_str` copies
+      back to a managed `str` — and it **frees its buffer deterministically on
+      scope exit** via `Drop` (no manual `free`). `CStr` is a borrowed
+      `extern struct { ptr: *u8 }` view (`from_ptr`, `byte_len`, `to_str`).
+      `Buffer` is an `extern struct { data: *u8, size: u64 }` foreign-heap byte
+      region with *manual* lifetime (`alloc(size): Buffer | null`, bounds-checked
+      `get(i): u8 | null` / `set(i, v)`, `free`). All three are ordinary prelude
+      types (`extend` blocks over small runtime helpers `lang_cstr_len` /
+      `lang_buffer_read` / `lang_buffer_write`; `lang_foreign_outstanding` exposes
+      the live-foreign-block count for leak assertions). Verified against libc
+      `strlen`/`strcmp`/`memcmp`/`strncmp`; JIT + native + GC-stress parity (drop
+      frees the buffer — the foreign-block counter returns to baseline); CLI tests
+      + `tests/cases/ffi/` e2e + `examples/ffi.otter`. **Extern-struct-by-value
+      escape (`docs/19` §3)**: returning an extern struct by value, or boxing one
+      into a non-NPO union (`Buffer | null`, `Pt | null`), copies its bytes into a
+      managed heap block (`GC_KIND_PLAIN`, traced reference *to* it, never inside)
+      so the value does not dangle past its frame — fixing a latent miscompile
+      that truncated a 16-byte struct to an 8-byte stack pointer. **Loudly
+      rejected**: `&` on non-extern-struct scalars, deref of an opaque type,
+      `match`/`?` on `*T | null`. **Nested extern structs
       (`docs/19` §3)**: an `extern struct` field of another extern struct is laid
       out *inline* (its bytes, not a pointer): `field_size_align` returns the
       inner C-layout size/align, construction byte-copies the inner value in
@@ -1713,10 +1731,16 @@ The tracing GC is functionally complete for single-threaded programs.
       ABI are exactly its field's — no heap box. `transparent_inner` makes
       `clty_of`/`is_managed_ptr` see through it; construction returns the inner
       value, `.0` is the identity. Verified via libc `abs(Num(-5)) == 5` (proving
-      the i32 ABI); JIT + native + GC-stress; 2 CLI tests. TODO: `@CallConv`/
-      `@Variadic` function decorators (the latter blocked by Cranelift's lack of
-      portable varargs-ABI support), a managed `CString` handle type with `Drop`
-      + `Buffer`.
+      the i32 ABI); JIT + native + GC-stress; 2 CLI tests. **`@CallConv("c"|
+      "system"|"stdcall"|"fastcall")` (`docs/19` §7)**: the checker validates
+      placement (extern functions only) and value (default `"c"`); the backend
+      wires the selected convention into the extern-call signature
+      (`extern_call_conv`). On the 64-bit targets the compiler emits, the four
+      spellings coincide with the platform C ABI (`stdcall`/`fastcall` are 32-bit
+      x86 conventions that 64-bit ABIs fold into the default, as C compilers do).
+      Verified calling libc under each convention; JIT + native; CLI tests + 2
+      e2e error cases. TODO: `@Variadic` (blocked by Cranelift's lack of portable
+      varargs-ABI support — separate goal).
 - [x] `@Derive` + procedural macros (`docs/22`): **`@Derive(Eq)`, `@Derive(Ord)`,
       `@Derive(ToStr)`, `@Derive(Clone)`, and `@Derive(Hash)` work** — a source-level desugaring
       (`sema/derive::expand_derives`, run in `analyze`/`analyze_multi` before

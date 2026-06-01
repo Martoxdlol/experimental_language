@@ -372,8 +372,9 @@ function make_message(kind: u32, payload: Buffer): *Message | null {
   </div>
   <div>
     <h3>CString — owned</h3>
-    <pre><code>pub struct CString { ... }</code></pre>
-    <p style="font-size:0.85rem"><code>from_str(s)</code> → foreign-heap copy with NUL. Implements <code>Drop</code> — frees on scope exit.</p>
+    <pre><code>@RefCounted
+struct CString { ptr: *u8 }</code></pre>
+    <p style="font-size:0.85rem"><code>from_str(s)</code> → foreign-heap copy with NUL. <code>as_ptr</code> (hand the raw <code>*u8</code> to C), <code>as_cstr</code>, <code>byte_len</code>, <code>to_str</code>. Implements <code>Drop</code> — being <code>@RefCounted</code> it frees the buffer <em>deterministically</em> on scope exit.</p>
   </div>
   <div>
     <h3>Buffer — ptr + size</h3>
@@ -381,7 +382,7 @@ function make_message(kind: u32, payload: Buffer): *Message | null {
   pub data: *u8,
   pub size: u64,
 }</code></pre>
-    <p style="font-size:0.85rem">Length matters separately from NUL. See <a href="18-stdlib.html#buffer">18-stdlib §8</a>.</p>
+    <p style="font-size:0.85rem">Foreign-heap byte region with <em>manual</em> lifetime (it's <code>extern</code> — crosses the C ABI by value, no <code>Drop</code>). <code>alloc</code>/<code>get</code>/<code>set</code>/<code>free</code>; see <a href="18-stdlib.html#buffer">18-stdlib §9</a>.</p>
   </div>
 </div>
 
@@ -409,7 +410,7 @@ extern function on_tick(d: *MyStruct) {
   <tbody>
     <tr><td><code>@Link(lib, kind, version?, path?)</code></td><td>imports</td><td>References a <code>[package.links]</code> entry. Absent → host process.</td></tr>
     <tr><td><code>@Symbol("name")</code></td><td>imports, exports</td><td>Override symbol name.</td></tr>
-    <tr><td><code>@CallConv("c"|"system"|"stdcall"|"fastcall")</code></td><td>imports, exports</td><td>Default <code>"c"</code>.</td></tr>
+    <tr><td><code>@CallConv("c"|"system"|"stdcall"|"fastcall")</code></td><td>imports, exports</td><td>Default <code>"c"</code>. On the 64-bit targets the compiler emits, all four coincide with the platform C ABI (<code>stdcall</code>/<code>fastcall</code> are 32-bit x86 conventions that 64-bit ABIs fold into the default, as C compilers do).</td></tr>
     <tr><td><code>@Variadic</code></td><td>imports</td><td>Additional args after fixed prefix; C default promotions apply.</td></tr>
     <tr><td><code>@Reentrant("managed-only"|"any")</code></td><td>exports</td><td>Whether foreign threads may invoke.</td></tr>
     <tr><td><code>@OnPanic("abort"|value)</code></td><td>exports</td><td>Behavior on panic in the body.</td></tr>

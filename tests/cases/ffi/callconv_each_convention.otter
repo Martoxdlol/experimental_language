@@ -1,0 +1,25 @@
+//@ kind: run
+//@ description: docs/19 §7 — @CallConv("c"|"system"|"stdcall"|"fastcall") on extern imports calling real libc; on 64-bit targets the four conventions coincide with the platform C ABI
+//@ stdout:
+//~ c=5
+//~ system=0
+//~ stdcall=0
+//~ fastcall=0
+import { println } from "std:io";
+import { CString } from "core:ffi";
+@CallConv("c")
+extern function strlen(s: *u8): u64;
+@CallConv("system")
+extern function strcmp(a: *u8, b: *u8): i32;
+@CallConv("stdcall")
+extern function memcmp(a: *u8, b: *u8, n: u64): i32;
+@CallConv("fastcall")
+extern function strncmp(a: *u8, b: *u8, n: u64): i32;
+function main() {
+  var a = CString.from_str("hello");
+  var b = CString.from_str("hello");
+  println("c=${strlen(a.as_ptr())}");
+  println("system=${strcmp(a.as_ptr(), b.as_ptr())}");
+  println("stdcall=${memcmp(a.as_ptr(), b.as_ptr(), 5u64)}");
+  println("fastcall=${strncmp(a.as_ptr(), b.as_ptr(), 5u64)}");
+}

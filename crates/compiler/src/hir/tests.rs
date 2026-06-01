@@ -208,10 +208,8 @@ fn intrinsics_cover_every_retired_marker_table() {
         Intrinsic::ForeignFree,
         Intrinsic::ForeignRealloc,
         Intrinsic::ForeignFlex { ty: t, elem: t },
-        Intrinsic::CStringFromStr,
-        Intrinsic::CStrToStr,
     ];
-    assert_eq!(kinds.len(), 16);
+    assert_eq!(kinds.len(), 14);
     for intrinsic in kinds {
         let _ = expr(ExprKind::Intrinsic { intrinsic, args: vec![] }, t, 0, 3);
     }

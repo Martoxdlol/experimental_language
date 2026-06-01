@@ -11,8 +11,45 @@ use compiler::sema::{Analysis, DefKind, StructFields};
 use compiler::span::Span;
 use compiler::ty::{FloatTy, IntTy, Ty, TyKind};
 use cranelift_codegen::ir::{types, AbiParam, Type as ClType};
+use cranelift_codegen::isa::CallConv;
 use cranelift_module::{FuncId, Linkage, Module};
 use std::collections::{HashMap, HashSet};
+
+/// The C calling convention an `extern function` should be called with,
+/// selected by its `@CallConv("c"|"system"|"stdcall"|"fastcall")` decorator
+/// (`docs/19` §7) or the platform default when absent.
+///
+/// On every 64-bit target we emit, the four spellings coincide with the
+/// platform's single C convention: `"c"` and `"system"` are the platform ABI,
+/// and `"stdcall"`/`"fastcall"` are 32-bit x86 conventions that 64-bit ABIs
+/// fold into the default — exactly as a C compiler treats them. Reading the
+/// (checker-validated) string keeps the policy in one place and would let a
+/// future 32-bit x86 port diverge here. `default` should be the module ISA's
+/// `default_call_conv()`.
+pub(crate) fn extern_call_conv(analysis: &Analysis, def: DefId, default: CallConv) -> CallConv {
+    let conv = analysis
+        .program
+        .def(def)
+        .attrs
+        .iter()
+        .find(|a| a.name.name == "CallConv")
+        .and_then(|a| match a.args.as_slice() {
+            [AttrArg::Positional(e)] => match &e.kind {
+                ExprKind::Str(s) => match s.parts.as_slice() {
+                    [StringPart::Text { text, .. }] => Some(text.clone()),
+                    _ => None,
+                },
+                _ => None,
+            },
+            _ => None,
+        });
+    match conv.as_deref() {
+        // All C-ABI spellings resolve to the platform default on 64-bit targets.
+        Some("c") | Some("system") | Some("stdcall") | Some("fastcall") | None => default,
+        // The checker rejects any other value before codegen reaches here.
+        Some(_) => default,
+    }
+}
 
 // -- async body analysis (state-machine lowering, `docs/21`) ----------------
 

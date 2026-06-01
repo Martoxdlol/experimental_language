@@ -15,7 +15,7 @@
         import { Shared, LockBusy, Sender, Receiver, ChannelClosed, MpmcSender, MpmcReceiver, channel, channel_bounded, channel_mpmc, channel_mpmc_bounded } from \"std:sync\";\n\
         import { Thread, JoinHandle, Joined, Panicked } from \"std:thread\";\n\
         import { AsyncIterator, TimedOut, yield_now, sleep, timeout } from \"std:async\";\n\
-        import { Foreign, CString, CStr } from \"core:ffi\";\n";
+        import { Foreign, CString, CStr, Buffer } from \"core:ffi\";\n";
 
     fn check(src: &str) -> Vec<SemaError> {
         let src = &format!("{PRELUDE}{src}");
@@ -613,4 +613,32 @@
              \tvar _ = await h.join();\n\
              }",
         );
+    }
+
+    #[test]
+    fn ffi_handle_types_typecheck() {
+        // `docs/19` §6 / `docs/18` §9: the boundary types' methods have the
+        // documented signatures — `CString.from_str: CString`, `as_ptr: *u8`,
+        // `to_str: str`, `byte_len: u64`, `as_cstr: CStr`, `CStr.from_ptr: CStr`,
+        // `Buffer.alloc: Buffer | null`.
+        assert_ok(
+            "extern function strlen(s: *u8): u64;\n\
+             function main() {\n\
+               var cs: CString = CString.from_str(\"x\");\n\
+               var n: u64 = strlen(cs.as_ptr());\n\
+               var s: str = cs.to_str();\n\
+               var bl: u64 = cs.byte_len();\n\
+               var v: CStr = cs.as_cstr();\n\
+               var w: CStr = CStr.from_ptr(cs.as_ptr());\n\
+               var m: Buffer | null = Buffer.alloc(8u64);\n\
+             }",
+        );
+    }
+
+    #[test]
+    fn cstring_from_str_yields_owning_handle_not_raw_ptr() {
+        // `from_str` now returns an owning `CString`, not a raw `*u8` — assigning
+        // it to a `*u8` is a type error (the buffer is owned, freed on Drop).
+        let errs = check("function main() { var p: *u8 = CString.from_str(\"x\"); }");
+        assert!(!errs.is_empty(), "expected a type error binding CString to *u8");
     }

@@ -1272,6 +1272,8 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             .ok_or_else(|| CodegenError::new(span, "extern signature not recorded"))?;
         let (ptys, rty) = (esig.params.clone(), esig.ret);
         let mut sig = self.module.make_signature();
+        // Honor the `@CallConv` decorator (`docs/19` §7); absent → platform C.
+        sig.call_conv = extern_call_conv(self.cx.analysis, def, self.module.isa().default_call_conv());
         for pt in &ptys {
             let ct = clty_of(self.cx.analysis, *pt)
                 .ok_or_else(|| CodegenError::new(span, "extern parameter is zero-sized"))?;
@@ -2559,18 +2561,6 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                     .ok_or_else(|| CodegenError::new(args[0].span, "free argument has no value"))?;
                 self.call_intrinsic("lang_foreign_free", &[PTR], None, &[p]);
                 Ok(None)
-            }
-            hir::Intrinsic::CStringFromStr => {
-                let s = self
-                    .h_expr(&args[0])?
-                    .ok_or_else(|| CodegenError::new(args[0].span, "from_str argument has no value"))?;
-                Ok(self.call_intrinsic("lang_cstring_from_str", &[PTR], Some(PTR), &[s]))
-            }
-            hir::Intrinsic::CStrToStr => {
-                let p = self
-                    .h_expr(&args[0])?
-                    .ok_or_else(|| CodegenError::new(args[0].span, "to_str argument has no value"))?;
-                Ok(self.call_intrinsic("lang_cstr_to_str", &[PTR], Some(PTR), &[p]))
             }
             // -- concurrency (build/return runtime handle & future objects;
             //    no async state machine needed here) -------------------------

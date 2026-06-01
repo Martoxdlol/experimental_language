@@ -1,0 +1,23 @@
+//@ kind: run
+//@ env: OTTER_FUSION_GC=stress
+//@ description: docs/19 §6 — churning many CStrings frees every foreign buffer under GC stress (loop intermediates via the GC backstop, the last via deterministic scope-exit Drop); no leak
+//@ stdout:
+//~ sum=4890 leak=0
+import { println } from "std:io";
+import { CString } from "core:ffi";
+extern function lang_foreign_outstanding(): i64;
+function churn(): i64 {
+  var n = 0;
+  var i = 0;
+  while i < 500 {
+    var cs = CString.from_str("buffer ${i}");
+    n = n + cs.byte_len() as i64;
+    i = i + 1;
+  }
+  n
+}
+function main() {
+  var base = lang_foreign_outstanding();
+  var n = churn();
+  println("sum=${n} leak=${lang_foreign_outstanding() - base}");
+}

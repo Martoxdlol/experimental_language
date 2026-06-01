@@ -182,6 +182,7 @@ impl<'a> Checker<'a> {
         self.collect_impls();
         self.validate_extern_structs();
         self.validate_refcounted();
+        self.validate_callconv();
         for id in 0..self.prog.defs.len() {
             let def = DefId(id as u32);
             match self.prog.def(def).kind {
@@ -427,6 +428,55 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// Validate the `@CallConv("c"|"system"|"stdcall"|"fastcall")` decorator
+    /// (`docs/19` §7): it selects the C calling convention for an `extern
+    /// function` (import or export), defaulting to `"c"`. It is meaningless on
+    /// ordinary functions (which use the language's internal convention) and on
+    /// every other item.
+    pub(crate) fn validate_callconv(&mut self) {
+        for id in 0..self.prog.defs.len() {
+            let def = DefId(id as u32);
+            let Some(attr) = self
+                .prog
+                .def(def)
+                .attrs
+                .iter()
+                .find(|a| a.name.name == "CallConv")
+                .cloned()
+            else {
+                continue;
+            };
+            // Placement: only `extern function` carries a C ABI.
+            if self.prog.def(def).kind != DefKind::ExternFunction {
+                self.emit(attr.span, SemaErrorKind::Message(
+                    "`@CallConv` is only valid on an `extern function` — ordinary \
+                     functions use the language's internal calling convention \
+                     (`docs/19` §7)".into(),
+                ));
+                continue;
+            }
+            // Exactly one positional string literal, one of the four conventions.
+            let conv = match attr.args.as_slice() {
+                [AttrArg::Positional(e)] => match &e.kind {
+                    ExprKind::Str(s) => match s.parts.as_slice() {
+                        [StringPart::Text { text, .. }] => Some(text.clone()),
+                        _ => None,
+                    },
+                    _ => None,
+                },
+                _ => None,
+            };
+            match conv.as_deref() {
+                Some("c") | Some("system") | Some("stdcall") | Some("fastcall") => {}
+                _ => self.emit(attr.span, SemaErrorKind::Message(
+                    "`@CallConv` takes one string argument, one of `\"c\"`, \
+                     `\"system\"`, `\"stdcall\"`, or `\"fastcall\"` (default `\"c\"`) \
+                     (`docs/19` §7)".into(),
+                )),
+            }
+        }
+    }
+
     /// Build the interface-implementation table: for every `extend Target: I…`
     /// block, map `(Target's type def, I's def) → extend def`. Codegen uses this
     /// to monomorphize interface-method calls on type parameters.
@@ -443,9 +493,15 @@ impl<'a> Checker<'a> {
             }
             let target = self.lower_ty(&e.target, &env);
             let TyKind::Named { def: tdef, .. } = self.tcx.kind(target).clone() else { continue };
+            // The interface name in an `extend Target: Iface` clause is resolved
+            // in the module where the `extend` is *written*, not the module
+            // currently being checked. This matters for cross-module and prelude
+            // impls: e.g. the prelude's `extend CString: Drop` must record its
+            // `Drop` impl whether or not the user module imported `Drop`.
+            let ext_module = self.prog.def(ext).module;
             for itf in &e.interfaces {
                 let TypeKind::Named { name, .. } = &itf.kind else { continue };
-                if let Some(idef) = self.prog.resolve_type_in(module, &name.name) {
+                if let Some(idef) = self.prog.resolve_type_in(ext_module, &name.name) {
                     if self.prog.def(idef).kind == DefKind::Interface {
                         self.hir.iface_impls.insert((tdef, idef), ext);
                     }

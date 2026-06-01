@@ -14,7 +14,7 @@ const CLI_PRELUDE: &str = "import { List, Map, Set, Entry } from \"core:collecti
     import { Shared, LockBusy, Sender, Receiver, ChannelClosed, MpmcSender, MpmcReceiver, channel, channel_bounded, channel_mpmc, channel_mpmc_bounded } from \"std:sync\";\n\
     import { Thread, JoinHandle, Joined, Panicked } from \"std:thread\";\n\
     import { AsyncIterator, TimedOut, yield_now, sleep, timeout } from \"std:async\";\n\
-    import { Foreign, CString, CStr } from \"core:ffi\";\n";
+    import { Foreign, CString, CStr, Buffer } from \"core:ffi\";\n";
 
 /// Prepend [`CLI_PRELUDE`] to a program's source.
 fn pre(src: &str) -> String {
@@ -3543,8 +3543,7 @@ fn ffi_link_decorator_resolves_library_symbol() {
                extern function crc32(crc: u64, buf: *u8, len: u32): u64;\n\
                function main() {\n\
                  var s = CString.from_str(\"hello\");\n\
-                 println(\"${crc32(0u64, s, 5u32)}\");\n\
-                 Foreign.free(s);\n\
+                 println(\"${crc32(0u64, s.as_ptr(), 5u32)}\");\n\
                }";
     let (jit, jerr, jok) = lang("run", src);
     assert!(jok, "jit: {jerr}");
@@ -3614,44 +3613,150 @@ fn ffi_foreign_realloc_and_alloc_flex() {
 
 #[test]
 fn ffi_cstring_marshaling_round_trip() {
-    // `docs/19` §6: `CString.from_str` marshals a `str` into a NUL-terminated C
-    // string (passed to libc `strlen`), and `CStr.to_str` copies a C string
-    // back into a managed `str`.
+    // `docs/19` §6: `CString.from_str` marshals a `str` into an owning,
+    // NUL-terminated C string (its `*u8` passed to libc `strlen` via `as_ptr`),
+    // `byte_len` is C `strlen`, and `to_str` copies the C string back into a
+    // managed `str`. The `CString` frees its buffer on scope exit (`Drop`).
     let src = "extern function strlen(s: *u8): u64;\n\
                function main() {\n\
-                 var p = CString.from_str(\"hello, C\");\n\
-                 println(\"len=${strlen(p)}\");\n\
-                 var back = CStr.to_str(p);\n\
+                 var cs = CString.from_str(\"hello, C\");\n\
+                 println(\"len=${strlen(cs.as_ptr())} blen=${cs.byte_len()}\");\n\
+                 var back = cs.to_str();\n\
                  println(\"eq=${back == \"hello, C\"}\");\n\
-                 Foreign.free(p);\n\
+                 var view = CStr.from_ptr(cs.as_ptr());\n\
+                 println(\"view=${view.to_str()} vlen=${view.byte_len()}\");\n\
                }";
     let (jit, jerr, jok) = lang("run", src);
     assert!(jok, "jit: {jerr}");
     let (nat, nerr, nok) = lang_build_run(src, &[]);
     assert!(nok, "native: {nerr}");
     assert_eq!(jit, nat);
-    assert_eq!(nat, "len=8\neq=true\n");
+    assert_eq!(nat, "len=8 blen=8\neq=true\nview=hello, C vlen=8\n");
 }
 
 #[test]
 fn ffi_cstring_survives_gc_stress() {
-    // `CStr.to_str` allocates a managed `str`; round-trip under stress.
+    // `to_str` allocates a managed `str`; the owning `CString` frees its buffer
+    // on each iteration's scope exit (with the GC backstop under stress). Round-
+    // trip 200 times; the foreign-block count must return to its starting value.
     let src = "extern function strlen(s: *u8): u64;\n\
-               function main() {\n\
+               extern function lang_foreign_outstanding(): i64;\n\
+               function roundtrip(): i64 {\n\
                  var total = 0;\n\
                  var i = 0;\n\
                  while i < 200 {\n\
                    var p = CString.from_str(\"item ${i}\");\n\
-                   var back = CStr.to_str(p);\n\
-                   total = total + (strlen(p) as i64) + back.size();\n\
-                   Foreign.free(p);\n\
+                   var back = p.to_str();\n\
+                   total = total + (strlen(p.as_ptr()) as i64) + back.size();\n\
                    i = i + 1;\n\
                  }\n\
-                 println(\"${total}\");\n\
+                 total\n\
+               }\n\
+               function main() {\n\
+                 var base = lang_foreign_outstanding();\n\
+                 var total = roundtrip();\n\
+                 println(\"${total} leak=${lang_foreign_outstanding() - base}\");\n\
                }";
     let (out, err, ok) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
     assert!(ok, "stderr: {err}");
-    assert_eq!(out, "2980\n");
+    assert_eq!(out, "2980 leak=0\n");
+}
+
+#[test]
+fn ffi_cstring_drop_frees_buffer() {
+    // `docs/19` §6: `CString` is `@RefCounted` and frees its foreign buffer on
+    // scope exit (its `Drop`). `lang_foreign_outstanding` proves the buffer was
+    // released — the count returns to baseline after the owning scope ends.
+    let src = "extern function lang_foreign_outstanding(): i64;\n\
+               function scope() { var cs = CString.from_str(\"owned, freed on drop\"); }\n\
+               function main() {\n\
+                 var base = lang_foreign_outstanding();\n\
+                 scope();\n\
+                 println(\"leak=${lang_foreign_outstanding() - base}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    assert_eq!(nat, "leak=0\n");
+}
+
+#[test]
+fn ffi_buffer_alloc_get_set_free() {
+    // `docs/18` §9: `Buffer` is an extern struct with manual lifetime. `alloc` is
+    // fallible (`Buffer | null`), `get`/`set` are bounds-checked (OOB read → null,
+    // OOB write → no-op), `free` releases the region. JIT + native parity.
+    let src = "extern function lang_foreign_outstanding(): i64;\n\
+               function main() {\n\
+                 var base = lang_foreign_outstanding();\n\
+                 var m = Buffer.alloc(4u64);\n\
+                 if m is null { println(\"oom\"); } else {\n\
+                   var b = m as Buffer;\n\
+                   b.set(0u64, 72u8);\n\
+                   b.set(9u64, 1u8);\n\
+                   var g = b.get(0u64);\n\
+                   var oob = b.get(4u64);\n\
+                   println(\"g=${g as u8} oob=${oob is null} size=${b.size} live=${lang_foreign_outstanding() - base}\");\n\
+                   b.free();\n\
+                   println(\"freed=${lang_foreign_outstanding() - base}\");\n\
+                 }\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    assert_eq!(nat, "g=72 oob=true size=4 live=1\nfreed=0\n");
+}
+
+#[test]
+fn ffi_callconv_each_convention_calls_libc() {
+    // `docs/19` §7: `@CallConv("c"|"system"|"stdcall"|"fastcall")` on extern
+    // imports. On 64-bit targets the four coincide with the platform C ABI; each
+    // correctly calls real libc. JIT + native parity.
+    let src = "@CallConv(\"c\")\n\
+               extern function strlen(s: *u8): u64;\n\
+               @CallConv(\"system\")\n\
+               extern function strcmp(a: *u8, b: *u8): i32;\n\
+               @CallConv(\"stdcall\")\n\
+               extern function memcmp(a: *u8, b: *u8, n: u64): i32;\n\
+               @CallConv(\"fastcall\")\n\
+               extern function strncmp(a: *u8, b: *u8, n: u64): i32;\n\
+               function main() {\n\
+                 var a = CString.from_str(\"hello\");\n\
+                 var b = CString.from_str(\"hello\");\n\
+                 println(\"${strlen(a.as_ptr())} ${strcmp(a.as_ptr(), b.as_ptr())} ${memcmp(a.as_ptr(), b.as_ptr(), 5u64)} ${strncmp(a.as_ptr(), b.as_ptr(), 5u64)}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    assert_eq!(nat, "5 0 0 0\n");
+}
+
+#[test]
+fn ffi_extern_struct_by_value_union_round_trip() {
+    // `docs/19` §3: a by-value extern struct boxed into a non-NPO union
+    // (`Pt | null`) round-trips — its 16 bytes are copied to the managed heap,
+    // not truncated to a dangling stack pointer. JIT + native parity.
+    let src = "extern struct Pt { x: i64, y: i64 }\n\
+               function pick(n: i64): Pt | null {\n\
+                 if n < 0 { null } else { Pt { x: n, y: n * 2 } }\n\
+               }\n\
+               function main() {\n\
+                 var a = pick(5);\n\
+                 var b = pick(-1);\n\
+                 if a is null { println(\"a null\"); } else { var p = a as Pt; println(\"a=${p.x},${p.y}\"); }\n\
+                 println(\"b_null=${b is null}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    assert_eq!(nat, "a=5,10\nb_null=true\n");
 }
 
 #[test]
@@ -3826,14 +3931,44 @@ fn check_rejects_non_repr_c_extern_field() {
 }
 
 #[test]
-fn check_rejects_extern_struct_by_value_return() {
-    // Returning an extern struct by value would dangle (stack pointer escapes).
-    let src = "extern struct Pair { a: i64, b: i64 }\n\
-               function make(): Pair { Pair { a: 1, b: 2 } }\n\
+fn check_rejects_callconv_invalid_value() {
+    // `docs/19` §7: `@CallConv` accepts only "c"/"system"/"stdcall"/"fastcall".
+    let src = "@CallConv(\"pascal\")\n\
+               extern function f(s: *u8): u64;\n\
                function main() {}";
     let (_, err, ok) = lang("check", src);
     assert!(!ok);
-    assert!(err.contains("by value is not yet supported"), "stderr: {err}");
+    assert!(err.contains("@CallConv` takes one string argument"), "stderr: {err}");
+}
+
+#[test]
+fn check_rejects_callconv_on_non_extern() {
+    // `docs/19` §7: `@CallConv` is only meaningful on an `extern function`.
+    let src = "@CallConv(\"c\")\n\
+               function foo() {}\n\
+               function main() {}";
+    let (_, err, ok) = lang("check", src);
+    assert!(!ok);
+    assert!(err.contains("only valid on an `extern function`"), "stderr: {err}");
+}
+
+#[test]
+fn ffi_extern_struct_by_value_return() {
+    // Returning an `extern struct` by value is supported: the value is copied to
+    // a managed heap block so the pointer does not dangle past the callee's
+    // frame (the same escape handling as boxing one into a union). JIT + native.
+    let src = "extern struct Pair { a: i64, b: i64 }\n\
+               function make(x: i64, y: i64): Pair { Pair { a: x, b: y } }\n\
+               function main() {\n\
+                 var p = make(11, 22);\n\
+                 println(\"${p.a} ${p.b}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    assert_eq!(nat, "11 22\n");
 }
 
 #[test]

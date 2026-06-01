@@ -780,10 +780,6 @@ pub enum Intrinsic {
     ForeignRealloc,
     /// `Foreign.alloc_flex<T, E>(extra)`. Was `foreign_flex`.
     ForeignFlex { ty: Ty, elem: Ty },
-    /// `CString.from_str(s)`. Was `cstring_from_strs`.
-    CStringFromStr,
-    /// `CStr.to_str(p)`. Was `cstr_to_strs`.
-    CStrToStr,
 }
 
 /// How a `for` loop is driven (was `for_iters` / `for_maps` / `for_async_iters`,

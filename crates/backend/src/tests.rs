@@ -13,7 +13,7 @@
         import { Shared, LockBusy, Sender, Receiver, ChannelClosed, MpmcSender, MpmcReceiver, channel, channel_bounded, channel_mpmc, channel_mpmc_bounded } from \"std:sync\";\n\
         import { Thread, JoinHandle, Joined, Panicked } from \"std:thread\";\n\
         import { AsyncIterator, TimedOut, yield_now, sleep, timeout } from \"std:async\";\n\
-        import { Foreign, CString, CStr } from \"core:ffi\";\n";
+        import { Foreign, CString, CStr, Buffer } from \"core:ffi\";\n";
 
     fn with_prelude(src: &str) -> String {
         format!("{PRELUDE}{src}")
@@ -2470,4 +2470,30 @@ extend Cat: Sound { function code(self): i64 { 2 } }\n";
         // The struct is at least the state word + inner slot + one 8-byte slot
         // per captured local.
         assert!(layout.state_size as usize >= 16 + cap_ids.len() * 8);
+    }
+
+    #[test]
+    fn extern_struct_returned_by_value_is_heap_materialized() {
+        // Returning an `extern struct` by value must not return a dangling
+        // pointer into the callee's frame: the bytes are copied to a managed
+        // heap block. Reading both fields back through the returned value proves
+        // the copy is intact (`docs/19` §3).
+        let src = "extern struct Pt { x: i64, y: i64 }\n\
+                   function make(a: i64, b: i64): Pt { Pt { x: a, y: b } }\n\
+                   function f(): i64 { var p = make(7, 35); p.x + p.y }";
+        assert_eq!(run(src, "f"), 42);
+    }
+
+    #[test]
+    fn extern_struct_boxed_into_union_round_trips() {
+        // A by-value extern struct boxed into a non-NPO union (`Pt | null`) is
+        // copied into the box (16 bytes), not truncated to an 8-byte dangling
+        // stack pointer. Unboxing via `as` reads both fields back (`docs/19` §3).
+        let src = "extern struct Pt { x: i64, y: i64 }\n\
+                   function pick(): Pt | null { Pt { x: 100, y: 23 } }\n\
+                   function f(): i64 {\n\
+                     var u = pick();\n\
+                     if u is null { 0 } else { var p = u as Pt; p.x + p.y }\n\
+                   }";
+        assert_eq!(run(src, "f"), 123);
     }

@@ -1113,35 +1113,6 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// `CString.from_str(s): *u8` (`docs/19` §6): marshal a `str` into a fresh
-    /// NUL-terminated C string on the foreign heap. The caller owns the buffer
-    /// and releases it with `Foreign.free`.
-    pub(crate) fn check_cstring_from_str(&mut self, args: &[Expr], span: Span) -> Ty {
-        if args.len() != 1 {
-            self.emit(span, SemaErrorKind::ArgCount { expected: 1, found: args.len() });
-            return self.tcx.error;
-        }
-        let at = self.check_expr(&args[0], Some(self.tcx.str));
-        self.expect(at, self.tcx.str, args[0].span);
-        self.tcx.mk_ptr(self.tcx.int(IntTy::U8))
-    }
-
-    /// `CStr.to_str(p): str` (`docs/19` §6): copy a NUL-terminated C string
-    /// (any raw pointer) into a managed `str`.
-    pub(crate) fn check_cstr_to_str(&mut self, args: &[Expr], span: Span) -> Ty {
-        if args.len() != 1 {
-            self.emit(span, SemaErrorKind::ArgCount { expected: 1, found: args.len() });
-            return self.tcx.error;
-        }
-        let at = self.check_expr(&args[0], None);
-        if !matches!(self.tcx.kind(at), TyKind::Ptr(_)) {
-            self.emit(args[0].span, SemaErrorKind::Message(format!(
-                "`CStr.to_str` expects a raw pointer `*T`, got `{}`", self.display(at)
-            )));
-        }
-        self.tcx.str
-    }
-
     /// `Shared<T>` builtin methods (`docs/20` §4): `lock`/`try_lock` run a
     /// closure under the mutex with exclusive access to the value.
     pub(crate) fn check_shared_method(&mut self, elem: Ty, name: &Ident, args: &[Expr], span: Span) -> Ty {

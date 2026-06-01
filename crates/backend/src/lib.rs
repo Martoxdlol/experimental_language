@@ -112,6 +112,10 @@ fn register_runtime_symbols(b: &mut JITBuilder) {
     b.symbol("lang_foreign_realloc", runtime::foreign::lang_foreign_realloc as *const u8);
     b.symbol("lang_cstring_from_str", runtime::foreign::lang_cstring_from_str as *const u8);
     b.symbol("lang_cstr_to_str", runtime::foreign::lang_cstr_to_str as *const u8);
+    b.symbol("lang_cstr_len", runtime::foreign::lang_cstr_len as *const u8);
+    b.symbol("lang_buffer_read", runtime::foreign::lang_buffer_read as *const u8);
+    b.symbol("lang_buffer_write", runtime::foreign::lang_buffer_write as *const u8);
+    b.symbol("lang_foreign_outstanding", runtime::foreign::lang_foreign_outstanding as *const u8);
     b.symbol("lang_list_new", runtime::lang_list_new as *const u8);
     b.symbol("lang_list_push", runtime::lang_list_push as *const u8);
     b.symbol("lang_list_size", runtime::lang_list_size as *const u8);
@@ -2060,6 +2064,20 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             self.b.ins().return_(&[boxed]);
             self.term = true;
             return Ok(());
+        }
+        // A by-value `extern struct` return (e.g. `CStr.from_ptr`): the value is
+        // a pointer to a stack/inline field block that dies with this frame.
+        // Copy the block to a managed heap block and return *that* stable
+        // pointer — the same escape handling `box_value` applies for unions
+        // (`docs/19` §3).
+        if let Some(v) = val {
+            let rty = resolve_shallow(self.cx.analysis, self.ret_ty, &self.subst);
+            if is_extern_struct_ty(self.cx.analysis, rty) {
+                let heap = self.heap_copy_extern(v, rty);
+                self.b.ins().return_(&[heap]);
+                self.term = true;
+                return Ok(());
+            }
         }
         match (self.cx_clty(self.ret_ty), val) {
             (Some(_), Some(v)) => {
