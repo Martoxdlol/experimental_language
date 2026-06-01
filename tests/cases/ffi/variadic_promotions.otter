@@ -1,0 +1,35 @@
+//@ kind: run
+//@ description: docs/19 §13 — C default argument promotions for variadic args: f32→double, sub-int integers→int (sign/zero correct); i64/u64 keep full width; a no-vararg call still routes through libffi
+//@ stdout:
+//~ i64=9000000000 u64=18000000000 neg=-7
+//~ f32=2.500
+//~ u8=200 i16=-300
+//~ plain n=5 [plain]
+import { println } from "std:io";
+import { CString, CStr, Buffer } from "core:ffi";
+@Variadic
+extern function snprintf(buf: *u8, size: u64, fmt: *u8): i32;
+function main() {
+  var b = Buffer.alloc(128u64) as Buffer;
+
+  var f1 = CString.from_str("i64=%lld u64=%llu neg=%d");
+  snprintf(b.data, 128u64, f1.as_ptr(), 9000000000i64, 18000000000u64, -7i32);
+  println(CStr.from_ptr(b.data).to_str());
+
+  var f2 = CString.from_str("f32=%.3f");
+  var x: f32 = 2.5f32;
+  snprintf(b.data, 128u64, f2.as_ptr(), x);
+  println(CStr.from_ptr(b.data).to_str());
+
+  var f3 = CString.from_str("u8=%d i16=%d");
+  var u: u8 = 200u8;
+  var i: i16 = -300i16;
+  snprintf(b.data, 128u64, f3.as_ptr(), u, i);
+  println(CStr.from_ptr(b.data).to_str());
+
+  var f4 = CString.from_str("plain");
+  var n = snprintf(b.data, 128u64, f4.as_ptr());
+  println("plain n=${n} [${CStr.from_ptr(b.data).to_str()}]");
+
+  b.free();
+}

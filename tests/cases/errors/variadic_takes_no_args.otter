@@ -1,0 +1,6 @@
+//@ kind: compile-error
+//@ description: docs/19 §13 — @Variadic is a bare marker and takes no decorator arguments.
+//@ stderr: `@Variadic` takes no arguments
+@Variadic("x")
+extern function foo(fmt: *u8): i32;
+function main() {}

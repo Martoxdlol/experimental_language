@@ -24,6 +24,7 @@ pub mod panic_boundary;
 pub mod shared;
 pub mod strings;
 pub mod threads;
+pub mod variadic;
 
 // Re-export the `str`/`List`/`Map` intrinsics at the crate root so generated
 // code and the backend keep referring to them as `runtime::lang_*` (and to

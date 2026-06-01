@@ -1264,6 +1264,12 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     fn h_extern_call(&mut self, def: DefId, args: &[hir::Expr], span: Span)
         -> CgResult<Option<Value>>
     {
+        // A `@Variadic` extern (`docs/19` §13) cannot be lowered as a plain
+        // Cranelift call — Cranelift has no fixed/variadic ABI boundary — so it
+        // is marshalled through `libffi` instead.
+        if is_variadic_extern(self.cx.analysis, def) {
+            return self.h_variadic_call(def, args, span);
+        }
         let esig = self
             .cx
             .hir
@@ -1297,6 +1303,143 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         let fref = self.module.declare_func_in_func(id, self.b.func);
         let inst = self.b.ins().call(fref, &arg_vals);
         Ok(self.b.inst_results(inst).first().copied())
+    }
+
+    /// Lower a call to a `@Variadic` extern function through `libffi`
+    /// (`docs/19` §13).
+    ///
+    /// Cranelift has no fixed/variadic ABI boundary, so each call is marshalled:
+    /// every argument is evaluated, C-default-promoted if it is in variadic
+    /// position (index `>= n_fixed`), and packed into a flat 8-byte-slot value
+    /// buffer with a parallel tag buffer; the callee address, the slot/tag
+    /// buffers, the fixed/total counts, and a return slot are handed to
+    /// [`runtime::variadic::lang_variadic_call`], which builds the correct
+    /// per-target call interface and invokes the function.
+    fn h_variadic_call(&mut self, def: DefId, args: &[hir::Expr], span: Span)
+        -> CgResult<Option<Value>>
+    {
+        let analysis = self.cx.analysis;
+        let esig = self
+            .cx
+            .hir
+            .extern_sigs
+            .get(&def)
+            .ok_or_else(|| CodegenError::new(span, "extern signature not recorded"))?;
+        let rty = esig.ret;
+        // The declared parameters are the fixed prefix; everything past them is
+        // a variadic argument subject to the C default promotions. The checker
+        // guarantees `0 < n_fixed <= n_total` and that every argument type is
+        // variadic-passable, but we re-derive the tags defensively.
+        let n_fixed = esig.params.len();
+        let n_total = args.len();
+
+        // Evaluate every argument and compute its (promoted) marshalled value
+        // and `libffi` type tag.
+        let mut marshalled: Vec<(Value, u8)> = Vec::with_capacity(n_total);
+        for (i, a) in args.iter().enumerate() {
+            let promote = i >= n_fixed;
+            let aty = resolve_shallow(analysis, a.ty, &self.subst);
+            let tag = variadic_tag(analysis, aty, promote).ok_or_else(|| {
+                CodegenError::new(a.span, "argument type cannot be passed to a variadic function")
+            })?;
+            let raw = self
+                .h_expr(a)?
+                .ok_or_else(|| CodegenError::new(a.span, "variadic argument has no value"))?;
+            let v = self.marshal_variadic_value(raw, aty, tag);
+            marshalled.push((v, tag));
+        }
+
+        // Stack buffers: one 8-byte value slot and one tag byte per argument,
+        // plus an 8-byte return slot (>= sizeof(ffi_arg), as `ffi_call` wants).
+        let slot_bytes = runtime::variadic::VARIADIC_SLOT_BYTES as u32;
+        let values_slot = self.b.create_sized_stack_slot(StackSlotData::new(
+            StackSlotKind::ExplicitSlot, n_total as u32 * slot_bytes, 3,
+        ));
+        let tags_slot = self.b.create_sized_stack_slot(StackSlotData::new(
+            StackSlotKind::ExplicitSlot, n_total.max(1) as u32, 0,
+        ));
+        let ret_slot = self.b.create_sized_stack_slot(StackSlotData::new(
+            StackSlotKind::ExplicitSlot, slot_bytes, 3,
+        ));
+        let values_ptr = self.b.ins().stack_addr(PTR, values_slot, 0);
+        let tags_ptr = self.b.ins().stack_addr(PTR, tags_slot, 0);
+        let ret_ptr = self.b.ins().stack_addr(PTR, ret_slot, 0);
+        for (i, (v, tag)) in marshalled.iter().enumerate() {
+            self.b.ins().store(MemFlags::trusted(), *v, values_ptr, (i as i32) * slot_bytes as i32);
+            let tagv = self.b.ins().iconst(types::I8, *tag as i64);
+            self.b.ins().store(MemFlags::trusted(), tagv, tags_ptr, i as i32);
+        }
+
+        // The callee address: declare the imported symbol (with an address-only
+        // empty signature — `func_addr` ignores it) and materialize its address.
+        let name = analysis.program.def(def).name.clone();
+        let sig = self.module.make_signature();
+        let id = self
+            .module
+            .declare_function(&name, Linkage::Import, &sig)
+            .map_err(|e| CodegenError::new(span, format!("declare extern `{name}`: {e}")))?;
+        let fref = self.module.declare_func_in_func(id, self.b.func);
+        let fn_addr = self.b.ins().func_addr(PTR, fref);
+
+        // The return tag: the declared return type's C type (no promotion), or
+        // `void` when the function yields nothing.
+        let ret_tag = variadic_tag(analysis, rty, false).unwrap_or(runtime::variadic::VTAG_VOID);
+        let n_fixed_v = self.b.ins().iconst(types::I32, n_fixed as i64);
+        let n_total_v = self.b.ins().iconst(types::I32, n_total as i64);
+        let ret_tag_v = self.b.ins().iconst(types::I8, ret_tag as i64);
+        self.call_intrinsic(
+            "lang_variadic_call",
+            &[PTR, types::I32, types::I32, PTR, PTR, types::I8, PTR],
+            None,
+            &[fn_addr, n_fixed_v, n_total_v, tags_ptr, values_ptr, ret_tag_v, ret_ptr],
+        );
+
+        // Load the return value (if any) from the return slot.
+        match clty_of(analysis, rty) {
+            Some(rc) => Ok(Some(self.b.ins().load(rc, MemFlags::trusted(), ret_ptr, 0))),
+            None => Ok(None),
+        }
+    }
+
+    /// Pack an evaluated argument `raw` (of type `aty`) into the 8-byte value
+    /// slot representation expected for `libffi` type `tag`: integers are sign-
+    /// or zero-extended (per the source type's signedness) to a 64-bit slot so
+    /// `libffi` reads the correct low bytes on little-endian targets, and a
+    /// promoted `f32` argument is widened to `f64`.
+    fn marshal_variadic_value(&mut self, raw: Value, aty: Ty, tag: u8) -> Value {
+        use runtime::variadic as v;
+        let analysis = self.cx.analysis;
+        // See through `@Transparent` newtypes to the inner scalar's type, so the
+        // signed/unsigned widening below uses the real representation.
+        let mut aty = aty;
+        while let Some(inner) = transparent_inner(analysis, aty) {
+            aty = inner;
+        }
+        match tag {
+            v::VTAG_PTR => raw,
+            v::VTAG_F32 => raw,
+            v::VTAG_F64 => {
+                // A promoted variadic `f32` arrives as an `F32` value.
+                if clty_of(analysis, aty) == Some(types::F32) {
+                    self.b.ins().fpromote(types::F64, raw)
+                } else {
+                    raw
+                }
+            }
+            // Integer tags: widen to a 64-bit slot value preserving the source's
+            // signed/unsigned value.
+            _ => {
+                let signed = matches!(analysis.tcx.kind(aty), TyKind::Int(it) if it.is_signed());
+                let clty = clty_of(analysis, aty).unwrap_or(types::I64);
+                if clty == types::I64 {
+                    raw
+                } else if signed {
+                    self.b.ins().sextend(types::I64, raw)
+                } else {
+                    self.b.ins().uextend(types::I64, raw)
+                }
+            }
+        }
     }
 
     /// An anonymous tuple value (mirrors the AST `ExprKind::Tuple` arm).

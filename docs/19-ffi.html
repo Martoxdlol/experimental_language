@@ -411,7 +411,7 @@ extern function on_tick(d: *MyStruct) {
     <tr><td><code>@Link(lib, kind, version?, path?)</code></td><td>imports</td><td>References a <code>[package.links]</code> entry. Absent → host process.</td></tr>
     <tr><td><code>@Symbol("name")</code></td><td>imports, exports</td><td>Override symbol name.</td></tr>
     <tr><td><code>@CallConv("c"|"system"|"stdcall"|"fastcall")</code></td><td>imports, exports</td><td>Default <code>"c"</code>. On the 64-bit targets the compiler emits, all four coincide with the platform C ABI (<code>stdcall</code>/<code>fastcall</code> are 32-bit x86 conventions that 64-bit ABIs fold into the default, as C compilers do).</td></tr>
-    <tr><td><code>@Variadic</code></td><td>imports</td><td>Additional args after fixed prefix; C default promotions apply.</td></tr>
+    <tr><td><code>@Variadic</code></td><td>imports</td><td>Call may pass extra args after the declared fixed prefix; C default promotions apply (see below).</td></tr>
     <tr><td><code>@Reentrant("managed-only"|"any")</code></td><td>exports</td><td>Whether foreign threads may invoke.</td></tr>
     <tr><td><code>@OnPanic("abort"|value)</code></td><td>exports</td><td>Behavior on panic in the body.</td></tr>
   </tbody>
@@ -429,6 +429,56 @@ extern function printf(fmt: *u8): c_int
 extern function on_tick(data: *c_void) {
   ...
 }</code></pre>
+
+<h3><code>@Variadic</code> — calling C variadic functions</h3>
+
+<p>A <code>@Variadic</code> import (<code>printf</code>, <code>snprintf</code>, …) declares
+only its <strong>fixed prefix</strong> of parameters; a call may then pass any number of
+additional arguments. The fixed prefix must be non-empty — C requires a named argument
+before the ellipsis, and the default argument promotions are defined relative to the
+prototype. Each call site is checked individually: the fixed arguments against the declared
+parameter types, and every trailing argument against the rule that it must be a type able to
+cross the C variadic boundary.</p>
+
+<pre><code>@Variadic
+extern function printf(fmt: *u8): c_int
+
+@Variadic
+extern function snprintf(buf: *u8, size: u64, fmt: *u8): c_int
+
+// fixed: buf, size, fmt — then any number of variadic arguments
+var n = snprintf(b.data, 128u64, fmt.as_ptr(), 42i32, s.as_ptr(), 3.14f64)</code></pre>
+
+<div class="callout">
+  <strong>C default argument promotions</strong>
+  A variadic-position argument is promoted exactly as C promotes anonymous arguments:
+  <code>f32</code> → <code>f64</code>, and any integer narrower than 32 bits (including
+  <code>bool</code> and <code>char</code>) → 32-bit <code>int</code>. The fixed prefix uses
+  the declared types unchanged. A <code>@Transparent</code> newtype is passed by its inner
+  scalar's representation.
+</div>
+
+<p>Only <strong>scalars and pointers</strong> may be passed as variadic arguments: the
+numeric types, <code>bool</code>, <code>char</code>, raw pointers <code>*T</code>, and C
+function pointers (plus <code>@Transparent</code> wrappers of those). A <code>str</code> is a
+managed value, <em>not</em> a C <code>char*</code> — pass a <code>CString</code>'s
+<code>*u8</code> instead. Aggregates (structs, tuples, fixed arrays) cannot be passed by
+value as variadic arguments.</p>
+
+<div class="callout">
+  <strong>How it is implemented</strong>
+  Cranelift has no fixed/variadic ABI boundary (an <code>ir::Signature</code> is just
+  <code>{params, returns, call_conv}</code>), so a variadic call cannot be lowered as an
+  ordinary call — on aarch64-apple-darwin the variadic arguments go on the stack, on
+  x86-64 System V <code>%al</code> must carry the vector-register count, and Windows x64
+  duplicates floats into general-purpose registers. The compiler therefore marshals the
+  (already promoted) arguments into a flat value buffer and routes the call through
+  <code>libffi</code>'s <code>ffi_prep_cif_var</code>/<code>ffi_call</code>, which apply the
+  correct per-target variadic ABI. JIT and native output behave identically; native
+  executables link the system <code>libffi</code> (<code>-lffi</code>). Used as a
+  <em>value</em> rather than called by name, a <code>@Variadic</code> import is an ordinary
+  non-variadic function pointer over its fixed prefix.
+</div>
 
 <!-- =========================================================== -->
 <h2 id="cb">8. Function pointers and callbacks</h2>

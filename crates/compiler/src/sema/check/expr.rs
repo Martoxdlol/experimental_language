@@ -1888,11 +1888,120 @@ impl<'a> Checker<'a> {
                 }
             }
         }
+        // A direct call to a `@Variadic` extern function (`docs/19` §13): the
+        // declared parameters are a fixed prefix that any number of C-passable
+        // variadic arguments may follow, so the usual exact-arity check does not
+        // apply. (Used as a *value*, the same extern is an ordinary non-variadic
+        // function pointer over its fixed prefix — handled by the normal path.)
+        if let ExprKind::Ident(name) = &callee.kind {
+            if self.lookup(&name.name).is_none() {
+                if let Some(def) = self.prog.resolve_value_in(self.current_module(), &name.name) {
+                    if self.prog.def(def).kind == DefKind::ExternFunction
+                        && self.prog.def(def).attrs.iter().any(|a| a.name.name == "Variadic")
+                    {
+                        return self.check_variadic_call(callee, args, trailing, span);
+                    }
+                }
+            }
+        }
         let callee_ty = self.check_expr(callee, None);
         if self.tcx.is_error(callee_ty) {
             return self.tcx.error;
         }
         self.check_args_against(callee_ty, args, trailing, span)
+    }
+
+    /// Type-check a direct call to a `@Variadic` extern function (`docs/19`
+    /// §13). The first `n_fixed` arguments are checked against the declared
+    /// parameter types; every following argument is a variadic argument and must
+    /// be a type that can cross the C variadic boundary (see
+    /// [`Self::is_variadic_passable`]). The result is the function's return type.
+    pub(crate) fn check_variadic_call(
+        &mut self,
+        callee: &Expr,
+        args: &[Expr],
+        trailing: Option<&Expr>,
+        span: Span,
+    ) -> Ty {
+        // Resolve + record the callee (so HIR building emits a `CallKind::Extern`)
+        // and read its fixed-prefix parameter and return types.
+        let callee_ty = self.check_expr(callee, None);
+        let TyKind::Func { params, ret, .. } = self.tcx.kind(callee_ty).clone() else {
+            return self.tcx.error;
+        };
+        let n_fixed = params.len();
+        // A trailing closure is never a C variadic argument.
+        if let Some(tc) = trailing {
+            self.emit(tc.span, SemaErrorKind::Message(
+                "a trailing closure cannot be passed to a variadic `extern function` \
+                 (`docs/19` §13)".into(),
+            ));
+        }
+        // At least the fixed prefix must be supplied.
+        if args.len() < n_fixed {
+            self.emit(span, SemaErrorKind::ArgCount { expected: n_fixed, found: args.len() });
+        }
+        for (i, arg) in args.iter().enumerate() {
+            if i < n_fixed {
+                let exp = params.get(i).copied();
+                let aty = self.check_expr(arg, exp);
+                if let Some(p) = exp {
+                    self.expect(aty, p, arg.span);
+                }
+            } else {
+                // A variadic argument: no expected type, but it must be passable.
+                let aty = self.check_expr(arg, None);
+                if !self.tcx.is_error(aty) && !self.is_variadic_passable(aty) {
+                    let found = self.display(aty);
+                    self.emit(arg.span, SemaErrorKind::Message(format!(
+                        "`{found}` cannot be passed as a variadic argument to an `extern \
+                         function`; only numeric, `bool`, `char`, raw pointer (`*T`), and \
+                         C-function-pointer types may cross the C variadic boundary — pass a \
+                         C string (`*u8`) rather than a `str` (`docs/19` §13)"
+                    )));
+                }
+            }
+        }
+        ret
+    }
+
+    /// Whether `ty` may be passed as a C *variadic* argument (`docs/19` §13):
+    /// the numeric primitives, `bool`, `char`, raw pointers (`*T`), and C
+    /// function pointers, plus `@Transparent` newtypes over any of those. Unlike
+    /// an `extern struct` field, an aggregate (struct/array/tuple) is **not**
+    /// passable — variadic marshalling handles scalars and pointers only — and
+    /// `str` is excluded (it is a managed `LangStr`, not a C `char*`).
+    pub(crate) fn is_variadic_passable(&self, ty: Ty) -> bool {
+        let ty = self.variadic_inner(ty);
+        matches!(
+            self.tcx.kind(ty),
+            TyKind::Int(_)
+                | TyKind::Float(_)
+                | TyKind::Bool
+                | TyKind::Char
+                | TyKind::Ptr(_)
+                | TyKind::Func { is_extern: true, .. }
+        )
+    }
+
+    /// See through `@Transparent` ABI newtypes (`docs/19` §3) to the single
+    /// field's type, so a transparent scalar wrapper is variadic-passable and
+    /// marshalled by its inner representation. Non-transparent types are
+    /// returned unchanged.
+    pub(crate) fn variadic_inner(&self, ty: Ty) -> Ty {
+        use crate::sema::results::StructFields as SF;
+        let mut ty = ty;
+        loop {
+            let TyKind::Named { def, .. } = self.tcx.kind(ty) else { return ty };
+            let def = *def;
+            if !self.prog.def(def).attrs.iter().any(|a| a.name.name == "Transparent") {
+                return ty;
+            }
+            match self.hir.structs.get(&def) {
+                Some(SF::Tuple(ts)) if ts.len() == 1 => ty = ts[0],
+                _ => return ty,
+            }
+        }
     }
 
     /// Type-check `args` (and an optional trailing closure) against a callable

@@ -18,4 +18,12 @@ fn main() {
         build.flag("-mmacosx-version-min=11.0");
     }
     build.compile("otter_panic_boundary");
+
+    // Variadic `extern function` calls (`docs/19` §13) go through `libffi`'s
+    // `ffi_prep_cif_var`/`ffi_call` (see `src/variadic.rs`). Link the system
+    // `libffi` so the in-process JIT — which links this crate as an `rlib` into
+    // the `otter_fusion` binary — resolves those symbols. The native `otter_fusion
+    // build` path links `-lffi` separately at its own `cc` step, since a
+    // `staticlib` does not bundle native libraries.
+    println!("cargo:rustc-link-lib=dylib=ffi");
 }

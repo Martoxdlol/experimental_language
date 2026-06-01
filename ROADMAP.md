@@ -1766,8 +1766,25 @@ The tracing GC is functionally complete for single-threaded programs.
       spellings coincide with the platform C ABI (`stdcall`/`fastcall` are 32-bit
       x86 conventions that 64-bit ABIs fold into the default, as C compilers do).
       Verified calling libc under each convention; JIT + native; CLI tests + 2
-      e2e error cases. TODO: `@Variadic` (blocked by Cranelift's lack of portable
-      varargs-ABI support — separate goal).
+      e2e error cases. **`@Variadic` (`docs/19` §13) done — via `libffi`**: Cranelift
+      has no fixed/variadic ABI boundary (`ir::Signature` is just
+      `{params, returns, call_conv}`), so a variadic call cannot be lowered as an
+      ordinary call (aarch64-apple-darwin passes variadics on the stack; x86-64
+      SysV needs `%al`; Windows x64 duplicates floats). The backend marshals the
+      arguments — C-default-promoted in variadic position (`f32`→`f64`, sub-int→
+      `int`), `@Transparent` seen through to its inner scalar — into a flat
+      8-byte-slot value buffer + tag array and routes the call through the runtime
+      `lang_variadic_call` shim, which drives `libffi`'s `ffi_prep_cif_var`/
+      `ffi_call` (`crates/runtime/src/variadic.rs`, a minimal hand binding to the
+      system `libffi` since neither `pkg-config` nor autotools is assumed; JIT links
+      it via the runtime build script, native links `-lffi`). The checker rejects
+      `@Variadic` off an extern import, with no fixed prefix, with decorator args,
+      or with a non-scalar/`str` variadic argument; a call below the fixed arity is
+      an arity error. Used as a value (not called by name) the import is an ordinary
+      non-variadic fn pointer over its fixed prefix. Verified against real `printf`/
+      `snprintf` (int/str/double/char/hex, i64/u64, f32 promotion, negatives,
+      `@Transparent`); JIT + native parity + GC-stress; runtime + checker unit
+      tests, 4 e2e `run` cases, 7 e2e error cases, 1 native-parity test.
 - [x] `@Derive` + procedural macros (`docs/22`): **`@Derive(Eq)`, `@Derive(Ord)`,
       `@Derive(ToStr)`, `@Derive(Clone)`, and `@Derive(Hash)` work** — a source-level desugaring
       (`sema/derive::expand_derives`, run in `analyze`/`analyze_multi` before
@@ -2276,8 +2293,10 @@ feature, JIT≡native byte-identical and GC-stress clean.
   goroutine-style green threads (transparent blocking, no `async`/`await` coloring):
   that is a second concurrency model in tension with the explicit-async design and
   needs Go-runtime-level syscall handoff + preemption.
-- **FFI tail:** `@CallConv` decorator; a managed `CString`/`Buffer` handle type
-  with `Drop`. `@Variadic` is **blocked** by Cranelift (no portable varargs ABI).
+- **FFI tail — done:** `@CallConv` decorator; a managed `CString`/`Buffer` handle
+  type with `Drop`; `@Variadic` via `libffi` (Cranelift has no portable varargs
+  ABI, so variadic calls are marshalled through `ffi_prep_cif_var`/`ffi_call` —
+  see the completed-work entry above).
 - **Generic `Drop` types; generic-interface default methods; cross-module
   interface default methods** — currently scoped out with clear errors, not
   miscompiles.

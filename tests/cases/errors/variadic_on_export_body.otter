@@ -1,0 +1,6 @@
+//@ kind: compile-error
+//@ description: docs/19 §13 — @Variadic applies to an extern import, not an extern definition with a body (a variadic C function cannot be defined here).
+//@ stderr: applies to an `extern function` import, not a definition with a body
+@Variadic
+extern function foo(fmt: *u8): i32 { 0 }
+function main() {}

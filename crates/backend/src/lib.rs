@@ -171,6 +171,8 @@ fn register_runtime_symbols(b: &mut JITBuilder) {
     b.symbol("lang_char_to_str", runtime::lang_char_to_str as *const u8);
     b.symbol("lang_print", runtime::lang_print as *const u8);
     b.symbol("lang_println", runtime::lang_println as *const u8);
+    // Variadic `extern function` calls (`docs/19` §13) route through `libffi`.
+    b.symbol("lang_variadic_call", runtime::variadic::lang_variadic_call as *const u8);
     // Procedural-macro host functions (`docs/22`): the prelude's
     // `extend ASTNode/MacroContext` methods are seeded into every JIT, so their
     // `__ast_*`/`__mctx_*` externs must always resolve (dead code in a normal

@@ -1,0 +1,7 @@
+//@ kind: compile-error
+//@ description: docs/19 §13 — a managed str cannot cross the C variadic boundary; pass a C string (*u8) instead.
+//@ stderr: `str` cannot be passed as a variadic argument
+import { CString } from "core:ffi";
+@Variadic
+extern function printf(fmt: *u8): i32;
+function main() { var p = CString.from_str("%s"); printf(p.as_ptr(), "hello"); }

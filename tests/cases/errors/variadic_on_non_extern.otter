@@ -1,0 +1,6 @@
+//@ kind: compile-error
+//@ description: docs/19 §13 — @Variadic is only valid on an extern function import, not an ordinary function.
+//@ stderr: `@Variadic` is only valid on an `extern function`
+@Variadic
+function foo(x: i32): i32 { x }
+function main() {}

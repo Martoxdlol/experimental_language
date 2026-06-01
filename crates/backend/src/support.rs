@@ -51,6 +51,54 @@ pub(crate) fn extern_call_conv(analysis: &Analysis, def: DefId, default: CallCon
     }
 }
 
+/// Whether an `extern function` def is declared `@Variadic` (`docs/19` §13) —
+/// i.e. its call must be lowered through `libffi` rather than as an ordinary
+/// fixed-arity Cranelift call (see [`crate::gen_hir`]'s `h_variadic_call`).
+pub(crate) fn is_variadic_extern(analysis: &Analysis, def: DefId) -> bool {
+    analysis.program.def(def).kind == DefKind::ExternFunction
+        && analysis.program.def(def).attrs.iter().any(|a| a.name.name == "Variadic")
+}
+
+/// The `libffi` type tag (`runtime::variadic::VTAG_*`) for a C-ABI scalar or
+/// pointer type, or `None` if the type cannot cross a variadic C call.
+///
+/// When `promote` is set — the argument is in *variadic* position — the C
+/// default argument promotions are applied: `f32` → `f64`, and any integer
+/// narrower than 32 bits (including `bool`/`char`) → 32-bit `int`. Named
+/// (fixed-prefix) arguments and the return type use `promote = false`, taking
+/// their declared C type. `@Transparent` newtypes are seen through to their
+/// inner field's ABI (`docs/19` §3).
+pub(crate) fn variadic_tag(analysis: &Analysis, ty: Ty, promote: bool) -> Option<u8> {
+    use runtime::variadic as v;
+    if let Some(inner) = transparent_inner(analysis, ty) {
+        return variadic_tag(analysis, inner, promote);
+    }
+    Some(match analysis.tcx.kind(ty) {
+        TyKind::Int(it) => match it {
+            IntTy::I8 => if promote { v::VTAG_I32 } else { v::VTAG_I8 },
+            IntTy::U8 => if promote { v::VTAG_I32 } else { v::VTAG_U8 },
+            IntTy::I16 => if promote { v::VTAG_I32 } else { v::VTAG_I16 },
+            IntTy::U16 => if promote { v::VTAG_I32 } else { v::VTAG_U16 },
+            IntTy::I32 => v::VTAG_I32,
+            IntTy::U32 => v::VTAG_U32,
+            IntTy::I64 | IntTy::Isize => v::VTAG_I64,
+            IntTy::U64 | IntTy::Usize => v::VTAG_U64,
+        },
+        // `bool` is a 1-byte `_Bool` when named; it promotes to `int` as a
+        // variadic. `char` is a 32-bit Unicode scalar (C `int`-width).
+        TyKind::Bool => if promote { v::VTAG_I32 } else { v::VTAG_U8 },
+        TyKind::Char => v::VTAG_I32,
+        TyKind::Float(FloatTy::F32) => if promote { v::VTAG_F64 } else { v::VTAG_F32 },
+        TyKind::Float(FloatTy::F64) => v::VTAG_F64,
+        // Raw FFI pointers and extern function pointers are machine pointers.
+        // (`str` is deliberately excluded — it is a managed `LangStr`, not a C
+        // `char*`; the checker rejects it as a variadic argument.)
+        TyKind::Ptr(_) => v::VTAG_PTR,
+        TyKind::Func { is_extern: true, .. } => v::VTAG_PTR,
+        _ => return None,
+    })
+}
+
 // -- async body analysis (state-machine lowering, `docs/21`) ----------------
 
 /// The state-struct layout for an async body that suspends: `[state @0][inner

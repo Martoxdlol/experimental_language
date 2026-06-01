@@ -603,6 +603,31 @@ fn native_build_matches_jit_output() {
 }
 
 #[test]
+fn native_build_variadic_ffi_matches_jit() {
+    // A `@Variadic` extern (`docs/19` §13) is lowered through `libffi`, never as
+    // a plain Cranelift call. The marshalled int/string/double/char arguments —
+    // with the C default promotions applied — must produce identical output in
+    // the JIT and in the linked native executable (which links `-lffi`).
+    let src = "@Variadic\n\
+               extern function snprintf(buf: *u8, size: u64, fmt: *u8): i32;\n\
+               function main() {\n\
+                 var b = Buffer.alloc(128u64) as Buffer;\n\
+                 var fmt = CString.from_str(\"%d %s %.2f %c neg=%d f32=%.1f\");\n\
+                 var s = CString.from_str(\"hi\");\n\
+                 var x: f32 = 7.5f32;\n\
+                 var n = snprintf(b.data, 128u64, fmt.as_ptr(), 42i32, s.as_ptr(), 3.14159f64, 65i32, -9i32, x);\n\
+                 println(\"n=${n} [${CStr.from_ptr(b.data).to_str()}]\");\n\
+                 b.free();\n\
+               }";
+    let (jit_out, jerr, jok) = lang("run", src);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(jit_out, nat_out, "JIT/native variadic output diverged");
+    assert_eq!(nat_out, "n=27 [42 hi 3.14 A neg=-9 f32=7.5]\n");
+}
+
+#[test]
 fn native_build_gc_stress_keeps_live_roots() {
     // The native entry registers each function's GC safepoints at startup
     // (function address + code offset → precise pc). Under stress collection a

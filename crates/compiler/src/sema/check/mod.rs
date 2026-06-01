@@ -183,6 +183,7 @@ impl<'a> Checker<'a> {
         self.validate_extern_structs();
         self.validate_refcounted();
         self.validate_callconv();
+        self.validate_variadic();
         for id in 0..self.prog.defs.len() {
             let def = DefId(id as u32);
             match self.prog.def(def).kind {
@@ -473,6 +474,55 @@ impl<'a> Checker<'a> {
                      `\"system\"`, `\"stdcall\"`, or `\"fastcall\"` (default `\"c\"`) \
                      (`docs/19` §7)".into(),
                 )),
+            }
+        }
+    }
+
+    /// Validate the `@Variadic` decorator (`docs/19` §13): it marks an `extern
+    /// function` *import* as a C variadic (e.g. `printf`), so a call may pass
+    /// additional arguments after the declared fixed prefix. It is valid only on
+    /// an imported `extern function` with at least one fixed parameter (C
+    /// requires a named prefix, and the default argument promotions are defined
+    /// relative to the prototype). Call-site arity and argument types are
+    /// checked in [`Self::check_variadic_call`].
+    pub(crate) fn validate_variadic(&mut self) {
+        for id in 0..self.prog.defs.len() {
+            let def = DefId(id as u32);
+            let Some(attr) =
+                self.prog.def(def).attrs.iter().find(|a| a.name.name == "Variadic").cloned()
+            else {
+                continue;
+            };
+            // `@Variadic` takes no arguments.
+            if !attr.args.is_empty() {
+                self.emit(attr.span, SemaErrorKind::Message(
+                    "`@Variadic` takes no arguments (`docs/19` §13)".into(),
+                ));
+            }
+            // Placement: only an `extern function`.
+            if self.prog.def(def).kind != DefKind::ExternFunction {
+                self.emit(attr.span, SemaErrorKind::Message(
+                    "`@Variadic` is only valid on an `extern function` import \
+                     (`docs/19` §13)".into(),
+                ));
+                continue;
+            }
+            // It must be an *import* (no body) with a non-empty fixed prefix.
+            if let Some(ItemKind::Extern(ExternItem::Function(f))) = &self.prog.def(def).item {
+                if f.body.is_some() {
+                    self.emit(attr.span, SemaErrorKind::Message(
+                        "`@Variadic` applies to an `extern function` import, not a \
+                         definition with a body — a variadic C function cannot be \
+                         *defined* here, only called (`docs/19` §13)".into(),
+                    ));
+                }
+                if f.params.is_empty() {
+                    self.emit(attr.span, SemaErrorKind::Message(
+                        "a `@Variadic` `extern function` needs at least one fixed \
+                         parameter before the variadic arguments (e.g. the format \
+                         string of `printf(fmt: *u8, ...)`) (`docs/19` §13)".into(),
+                    ));
+                }
             }
         }
     }

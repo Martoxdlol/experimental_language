@@ -1,0 +1,16 @@
+//@ kind: run
+//@ description: docs/19 §13 — @Variadic extern routed through libffi; snprintf formats int/str-ptr/double/char/hex into a Buffer, returns the would-be length
+//@ stdout:
+//~ n=35 [int=42 str=hi dbl=3.14 chr=A hex=ff]
+import { println } from "std:io";
+import { CString, CStr, Buffer } from "core:ffi";
+@Variadic
+extern function snprintf(buf: *u8, size: u64, fmt: *u8): i32;
+function main() {
+  var fmt = CString.from_str("int=%d str=%s dbl=%.2f chr=%c hex=%x");
+  var s = CString.from_str("hi");
+  var b = Buffer.alloc(128u64) as Buffer;
+  var n = snprintf(b.data, 128u64, fmt.as_ptr(), 42i32, s.as_ptr(), 3.14159f64, 65i32, 255i32);
+  println("n=${n} [${CStr.from_ptr(b.data).to_str()}]");
+  b.free();
+}

@@ -43,6 +43,13 @@ extern function free(p: *Sockaddr);
 // Strings cross the boundary as NUL-terminated C strings.
 extern function strlen(s: *u8): u64;
 
+// @Variadic marks a C variadic import (docs/19 §13): only the fixed prefix
+// (here buf/size/fmt) is declared, and a call may pass any number of additional
+// scalar/pointer arguments. They are routed through libffi with the C default
+// promotions (f32→double, sub-int→int) applied — see the call in `main`.
+@Variadic
+extern function snprintf(buf: *u8, size: u64, fmt: *u8): i32;
+
 // A nested extern struct field is laid out inline (its bytes, not a pointer).
 extern struct Timeval { sec: i64, usec: i64 }
 extern struct Usage { utime: Timeval, stime: Timeval, maxrss: i64 }
@@ -159,4 +166,18 @@ function main() {
 
   // @Transparent: `Count(-9)` is just an i32 across the C ABI.
   println("abs=${abs(Count(-9i32))}");
+
+  // @Variadic: snprintf formats a mix of int, C string, and double into a
+  // buffer; the variadic arguments are passed through libffi (docs/19 §13).
+  var m = Buffer.alloc(64u64);
+  if m is null {
+    println("oom");
+  } else {
+    var b = m as Buffer;
+    var fmt = CString.from_str("n=%d who=%s pi=%.2f");
+    var who = CString.from_str("otter");
+    var len = snprintf(b.data, 64u64, fmt.as_ptr(), 7i32, who.as_ptr(), 3.14159f64);
+    println("snprintf(${len}): ${CStr.from_ptr(b.data).to_str()}");
+    b.free();
+  }
 }

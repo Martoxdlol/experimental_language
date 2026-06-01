@@ -1198,6 +1198,19 @@ fn build_executable(map: &SourceMap, analysis: &Analysis, exe: &Path) -> ExitCod
     for lib in &analysis.hir.link_libs {
         cmd.arg(format!("-l{lib}"));
     }
+    // A `@Variadic` extern call routes through `libffi` (`docs/19` §13): the
+    // `lang_variadic_call` runtime shim in `libruntime.a` references `libffi`'s
+    // `ffi_prep_cif_var`/`ffi_call`, so link the system `libffi` when the program
+    // declares any variadic import. (A `staticlib` does not bundle native libs,
+    // hence the explicit `-lffi` here in addition to the runtime's build script.)
+    let uses_variadic = analysis
+        .program
+        .defs
+        .iter()
+        .any(|d| d.attrs.iter().any(|a| a.name.name == "Variadic"));
+    if uses_variadic {
+        cmd.arg("-lffi");
+    }
 
     match cmd.status() {
         Ok(s) if s.success() => {

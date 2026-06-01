@@ -1,0 +1,8 @@
+//@ kind: compile-error
+//@ description: docs/19 §13 — an aggregate (struct) is not a passable variadic argument; only scalars and pointers are.
+//@ stderr: cannot be passed as a variadic argument
+import { CString } from "core:ffi";
+struct P { x: i32 }
+@Variadic
+extern function printf(fmt: *u8): i32;
+function main() { var p = CString.from_str("%d"); printf(p.as_ptr(), P{x:1}); }

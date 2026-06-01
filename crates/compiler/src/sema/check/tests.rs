@@ -642,3 +642,95 @@
         let errs = check("function main() { var p: *u8 = CString.from_str(\"x\"); }");
         assert!(!errs.is_empty(), "expected a type error binding CString to *u8");
     }
+
+    // -- @Variadic (`docs/19` §13) ------------------------------------------
+
+    fn has_msg(errs: &[SemaError], needle: &str) -> bool {
+        errs.iter().any(|e| matches!(&e.kind, SemaErrorKind::Message(m) if m.contains(needle)))
+    }
+
+    #[test]
+    fn variadic_call_accepts_extra_promotable_args() {
+        // A direct call may pass any number of C-passable args after the fixed
+        // prefix (int, double, char, pointer) — no exact-arity error.
+        assert_ok(
+            "@Variadic\n\
+             extern function snprintf(buf: *u8, size: u64, fmt: *u8): i32;\n\
+             function main() {\n\
+               var b: Buffer = Buffer.alloc(64u64) as Buffer;\n\
+               var f: CString = CString.from_str(\"x\");\n\
+               var n: i32 = snprintf(b.data, 64u64, f.as_ptr(), 1i32, 2.0f64, 65i32, f.as_ptr());\n\
+             }",
+        );
+    }
+
+    #[test]
+    fn variadic_on_ordinary_function_rejected() {
+        let errs = check("@Variadic\nfunction f(x: i32): i32 { x }");
+        assert!(has_msg(&errs, "only valid on an `extern function`"));
+    }
+
+    #[test]
+    fn variadic_on_extern_with_body_rejected() {
+        let errs = check("@Variadic\nextern function f(fmt: *u8): i32 { 0 }");
+        assert!(has_msg(&errs, "not a definition with a body"));
+    }
+
+    #[test]
+    fn variadic_without_fixed_param_rejected() {
+        let errs = check("@Variadic\nextern function f(): i32;");
+        assert!(has_msg(&errs, "needs at least one fixed parameter"));
+    }
+
+    #[test]
+    fn variadic_with_decorator_arg_rejected() {
+        let errs = check("@Variadic(\"x\")\nextern function f(fmt: *u8): i32;");
+        assert!(has_msg(&errs, "takes no arguments"));
+    }
+
+    #[test]
+    fn variadic_call_below_fixed_arity_rejected() {
+        let errs = check(
+            "@Variadic\n\
+             extern function snprintf(buf: *u8, size: u64, fmt: *u8): i32;\n\
+             function main() { snprintf(); }",
+        );
+        assert!(errs.iter().any(|e| matches!(e.kind, SemaErrorKind::ArgCount { expected: 3, .. })));
+    }
+
+    #[test]
+    fn variadic_str_argument_rejected() {
+        let errs = check(
+            "@Variadic\n\
+             extern function printf(fmt: *u8): i32;\n\
+             function main() { var p: CString = CString.from_str(\"%s\"); printf(p.as_ptr(), \"hi\"); }",
+        );
+        assert!(has_msg(&errs, "cannot be passed as a variadic argument"));
+    }
+
+    #[test]
+    fn variadic_struct_argument_rejected() {
+        let errs = check(
+            "struct P { x: i32 }\n\
+             @Variadic\n\
+             extern function printf(fmt: *u8): i32;\n\
+             function main() { var p: CString = CString.from_str(\"%d\"); printf(p.as_ptr(), P { x: 1 }); }",
+        );
+        assert!(has_msg(&errs, "cannot be passed as a variadic argument"));
+    }
+
+    #[test]
+    fn variadic_transparent_newtype_argument_ok() {
+        // A @Transparent scalar wrapper is passable by its inner representation.
+        assert_ok(
+            "@Transparent\n\
+             struct Cents(i32)\n\
+             @Variadic\n\
+             extern function snprintf(buf: *u8, size: u64, fmt: *u8): i32;\n\
+             function main() {\n\
+               var b: Buffer = Buffer.alloc(64u64) as Buffer;\n\
+               var f: CString = CString.from_str(\"%d\");\n\
+               var n: i32 = snprintf(b.data, 64u64, f.as_ptr(), Cents(5i32));\n\
+             }",
+        );
+    }

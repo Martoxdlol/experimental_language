@@ -1,0 +1,11 @@
+//@ kind: run
+//@ description: docs/19 §13 — @Variadic printf writes formatted text straight to C stdout (flushed at exit); the call is the program's only output so ordering is deterministic
+//@ stdout:
+//~ printf 2+3=5 pi=3.14
+import { CString } from "core:ffi";
+@Variadic
+extern function printf(fmt: *u8): i32;
+function main() {
+  var f = CString.from_str("printf %d+%d=%d pi=%.2f\n");
+  printf(f.as_ptr(), 2i32, 3i32, 5i32, 3.14159f64);
+}
