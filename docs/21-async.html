@@ -252,6 +252,57 @@ extend MyFetcher: Fetcher {
   <code>await (f(a, b))</code>.
 </div>
 
+<h3><code>await</code> in operand and conditional positions</h3>
+
+<p><code>await</code> is an expression, so it can appear inside a larger one — a
+call argument, a binary operand, an interpolation. The compiler turns every
+<code>await</code> into a suspend point on the surrounding state machine while
+preserving the program's <strong>evaluation order</strong> and, crucially,
+<em>whether</em> and <em>how often</em> each future is awaited.</p>
+
+<ul>
+  <li><strong>Unconditional operand positions</strong> (call arguments, both
+    operands of an arithmetic/comparison operator, list/tuple/struct elements,
+    interpolation holes) always run when their enclosing expression does. Each
+    <code>await</code> is <em>hoisted</em> to a preceding temporary in
+    left-to-right order, so <code>f(await a(), await b())</code> awaits
+    <code>a</code> then <code>b</code> and binds both before calling
+    <code>f</code> — the suspend sits at a clean statement-level position and no
+    sibling value is left live across it.</li>
+  <li><strong>Genuinely-conditional positions</strong> run only sometimes, so an
+    <code>await</code> in them must <em>not</em> be hoisted out — that would
+    change how often the future is awaited (and could run a side effect that
+    should have been short-circuited away). These positions are:
+    <ul>
+      <li>the <strong>right operand of <code>&amp;&amp;</code> / <code>||</code></strong>,
+        which runs only when the left operand does not short-circuit;</li>
+      <li>the <strong>condition of a <code>while</code> loop</strong>, which is
+        re-evaluated once per iteration.</li>
+    </ul>
+    An <code>await</code> here suspends only when (and as often as) the position
+    is actually reached. A bare <code>a &amp;&amp; await b()</code> or
+    <code>while await cond()</code> stays exactly that; an <code>await</code>
+    <em>nested inside</em> such a position (e.g.
+    <code>a &amp;&amp; (await b()) &gt; 0</code>) is lowered into a block that
+    runs in place, so its suspend is reached on the same schedule.</li>
+</ul>
+
+<pre><code>// `check` runs only when `enabled` is true, and re-runs every iteration.
+while enabled &amp;&amp; await check(i) {
+  process(i);
+  i = i + 1;
+}
+
+// Short-circuit suppresses the awaited side effect entirely:
+var ok = ready || await fetch();   // `fetch` is never awaited when `ready` is true</code></pre>
+
+<div class="callout">
+  <strong>Still async-only</strong>
+  These positions do not relax the rule above: an <code>await</code> in an
+  operand or a loop condition is still only legal inside an <code>async</code>
+  body. A sync function with <code>a &amp;&amp; await b()</code> is rejected.
+</div>
+
 <!-- =========================================================== -->
 <h2 id="forgot">5. "Forgot to await" — futures must be captured</h2>
 

@@ -1527,9 +1527,12 @@ The tracing GC is functionally complete for single-threaded programs.
       `&&`/`||` right operand and the `while` condition so every such `await` gets
       a state slot. Short-circuit suppresses the awaited side effect; a `while`
       condition suspends exactly once per iteration. `await` in a sync function
-      (even in an operand) is still rejected by the checker. 7 ANF unit tests + 7
-      CLI integration tests + 7 e2e cases (`tests/cases/async/`); JIT + native +
-      GC-stress parity.
+      (even in an operand) is still rejected by the checker. Covered for the bare
+      operand/condition forms, nested-`await` operands (scoped in place), chained
+      `&&`, `await` in both operands, evaluation order vs. an effectful left, and
+      `||` in a `while` condition (+ a managed-value GC-stress case). 7 ANF unit
+      tests + 13 CLI integration tests + 9 e2e cases (`tests/cases/async/`); JIT +
+      native + GC-stress parity.
 - [x] **Async closures** (`docs/21` §7): `(p) async => E` is desugared by
       `sema/anf.rs` into a plain closure returning an async block —
       `(p) => async { E }` — reusing the closure-environment + async-block
@@ -1562,8 +1565,6 @@ The tracing GC is functionally complete for single-threaded programs.
       (`Intrinsic::AsyncTimeout { output }`). 2 CLI tests (value vs `TimedOut`;
       managed `str` value under GC stress); JIT + native + GC-stress parity;
       `examples/async.otter`.
-      TODO async: `await` in a short-circuit operand / loop condition (the
-      genuinely-conditional cases — would change evaluation order/frequency).
 - [x] **Sync `for` loop with an `await` in its body** (`docs/21`): a `for` loop
       that is not itself `for await` but whose body suspends now preserves its
       iteration state across the suspend. The loop's codegen-internal iterable
@@ -2059,8 +2060,10 @@ feature, JIT≡native byte-identical and GC-stress clean.
 
 **Remaining features / deferrals (each test-gated when picked up):**
 - **`await` in a short-circuit operand / loop condition** — genuinely conditional
-  suspension; currently a clean "not yet supported" error, *not* miscompiled.
-  Needs principled lowering (changes eval order/frequency).
+  suspension — **done.** `sema/anf.rs` rewrites the `&&`/`||` right operand and the
+  `while` condition as their own *scope* (rather than hoisting the `await` out),
+  preserving evaluation order and conditional suspension frequency; the backend
+  suspend-site scan recurses into those positions. See the Phase-5 async entry.
 - **User procedural macros** (`docs/22`) — **done** (decorator/expression/block
   forms, JIT-run at compile time, hygiene, sandbox, recursion limit). Remaining
   refinements: cross-*package* (`pkg:`) compiled macro plugins; precise spans

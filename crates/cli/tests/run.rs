@@ -3131,6 +3131,164 @@ fn async_await_in_sync_function_still_rejected() {
 }
 
 #[test]
+fn async_await_in_and_preserves_evaluation_order() {
+    // The left operand of `&&` is unconditional and evaluated *first*; the right
+    // operand (carrying the `await`) runs only afterwards, and only when the left
+    // is `true` (`docs/21` §4). An effectful sync left operand must therefore
+    // print before the awaited side effect, and not at all when it short-circuits.
+    let src = "function mark(tag: str, b: bool): bool { print(tag); b }\n\
+               function side(tag: str, b: bool): Future<bool> async {\n\
+                 await yield_now();\n\
+                 print(tag);\n\
+                 b\n\
+               }\n\
+               function main(): Future<null> async {\n\
+                 var r1 = mark(\"L\", true) && await side(\"R\", true);\n\
+                 var r2 = mark(\"M\", false) && await side(\"Q\", true);\n\
+                 println(\"|${r1}|${r2}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    // r1: "L" (left) then "R" (right await runs). r2: "M" only — left is false so
+    // the right operand (and "Q") never runs. Order is L, R, M.
+    assert_eq!(nat, "LRM|true|false\n");
+}
+
+#[test]
+fn async_await_in_both_operands_of_and() {
+    // `await a() && await b()`: the left `await` is unconditional (hoisted to a
+    // temporary, evaluated first); the right `await` is the conditional scope and
+    // runs only when the left resolves to `true`. Evaluation order is left-await
+    // then right-await, and a `false` left suppresses the right entirely.
+    let src = "function side(tag: str, b: bool): Future<bool> async {\n\
+                 await yield_now();\n\
+                 print(tag);\n\
+                 b\n\
+               }\n\
+               function main(): Future<null> async {\n\
+                 var r1 = await side(\"A\", true) && await side(\"B\", false);\n\
+                 var r2 = await side(\"C\", false) && await side(\"D\", true);\n\
+                 println(\"|${r1}|${r2}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    // r1: A (true) then B (false) → false. r2: C (false) short-circuits, so D never
+    // runs → false. Order is A, B, C.
+    assert_eq!(nat, "ABC|false|false\n");
+}
+
+#[test]
+fn async_await_in_chained_and_short_circuits() {
+    // Left-associative `a && b && await c()` parses as `(a && b) && await c()`.
+    // The `await` is in the right operand of the *outer* `&&`, so it runs only
+    // when the whole left subexpression `(a && b)` is `true`.
+    let src = "function side(tag: str, b: bool): Future<bool> async {\n\
+                 await yield_now();\n\
+                 print(tag);\n\
+                 b\n\
+               }\n\
+               function main(): Future<null> async {\n\
+                 var x = (true && false) && await side(\"X\", true);\n\
+                 var y = (true && true) && await side(\"Y\", true);\n\
+                 println(\"|${x}|${y}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    // x: `true && false` is false → "X" suppressed → false. y: `true && true` is
+    // true → "Y" runs → true.
+    assert_eq!(nat, "Y|false|true\n");
+}
+
+#[test]
+fn async_bare_await_as_while_condition_suspends_each_iteration() {
+    // The whole `while` condition is a bare `await` (the direct-await-preserved
+    // path, distinct from an `await` nested inside a larger condition). It is
+    // re-polled once per iteration — including the final iteration that ends the
+    // loop — and never lifted out of the loop.
+    let src = "function tick(i: i64): Future<bool> async {\n\
+                 await yield_now();\n\
+                 print(\"t\");\n\
+                 i < 3\n\
+               }\n\
+               function main(): Future<null> async {\n\
+                 var i = 0;\n\
+                 while await tick(i) {\n\
+                   i = i + 1;\n\
+                 }\n\
+                 println(\"|i=${i}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    // tick polled at i = 0,1,2 (true) and i = 3 (false) → four suspends, "tttt".
+    assert_eq!(nat, "tttt|i=3\n");
+}
+
+#[test]
+fn async_await_in_or_within_while_condition() {
+    // A `while` condition `(i < 3) || await more()`: the `||` right operand awaits
+    // only on the iteration where the left is `false`. While `i < 3` holds the
+    // left short-circuits and `more` never runs; once `i` reaches 3 the await runs
+    // (returning `false`) and ends the loop.
+    let src = "function more(): Future<bool> async {\n\
+                 await yield_now();\n\
+                 print(\"m\");\n\
+                 false\n\
+               }\n\
+               function main(): Future<null> async {\n\
+                 var i = 0;\n\
+                 while (i < 3) || await more() {\n\
+                   i = i + 1;\n\
+                 }\n\
+                 println(\"|i=${i}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit: {jerr}");
+    let (nat, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native: {nerr}");
+    assert_eq!(jit, nat);
+    // i = 0,1,2: left true, "m" suppressed, body runs. i = 3: left false → "m"
+    // runs, returns false → exit. So "m" prints exactly once.
+    assert_eq!(nat, "m|i=3\n");
+}
+
+#[test]
+fn async_await_in_while_condition_managed_value_survives_gc_stress() {
+    // A managed (`str`) accumulator must survive the per-iteration suspend of a
+    // `while` condition whose `&&` right operand awaits — including the transient
+    // allocations of the condition itself — under stress GC.
+    let src = "function probe(i: i64): Future<bool> async {\n\
+                 await yield_now();\n\
+                 i < 3\n\
+               }\n\
+               function main(): Future<null> async {\n\
+                 var acc: str = \"\";\n\
+                 var i = 0;\n\
+                 while (acc.size() < 1000) && await probe(i) {\n\
+                   var garbage = \"junk\" + (i as str);\n\
+                   acc = acc + \"x\" + (i as str);\n\
+                   i = i + 1;\n\
+                 }\n\
+                 println(\"|i=${i}|acc=${acc}\");\n\
+               }";
+    let (out, err, ok) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
+    assert!(ok, "stderr: {err}");
+    // probe true for i = 0,1,2 then false at i = 3; acc accumulates "x0x1x2".
+    assert_eq!(out, "|i=3|acc=x0x1x2\n");
+}
+
+#[test]
 fn stdlib_list_iter() {
     // `docs/18` §5: `List.iter(): Iterator<E>` — a cursor view driven by the
     // `Iterator` protocol.

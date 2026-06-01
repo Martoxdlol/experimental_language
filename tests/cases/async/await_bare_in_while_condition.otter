@@ -1,0 +1,21 @@
+//@ kind: run
+//@ description: a bare `await` as the whole `while` condition (the direct-await-preserved path) is re-polled once per iteration — including the final iteration that ends the loop — and never lifted out of the loop (docs/21 §4)
+//@ stdout:
+//~ tttt
+//~ i=3
+import { println, print } from "std:io";
+import { Future } from "core:prelude";
+import { yield_now } from "std:async";
+function tick(i: i64): Future<bool> async {
+  await yield_now();
+  print("t");
+  i < 3
+}
+function main(): Future<null> async {
+  var i = 0;
+  while await tick(i) {
+    i = i + 1;
+  }
+  println("");
+  println("i=${i}");
+}

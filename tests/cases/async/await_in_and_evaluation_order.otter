@@ -1,0 +1,20 @@
+//@ kind: run
+//@ description: the left operand of `&&` is unconditional and runs first; the right operand (carrying the `await`) runs only afterwards and only when the left is true — so an effectful sync left prints before the awaited side effect, and not at all when it short-circuits (docs/21 §4)
+//@ stdout:
+//~ LRM
+//~ r1=true r2=false
+import { println, print } from "std:io";
+import { Future } from "core:prelude";
+import { yield_now } from "std:async";
+function mark(tag: str, b: bool): bool { print(tag); b }
+function side(tag: str, b: bool): Future<bool> async {
+  await yield_now();
+  print(tag);
+  b
+}
+function main(): Future<null> async {
+  var r1 = mark("L", true) && await side("R", true);
+  var r2 = mark("M", false) && await side("Q", true);
+  println("");
+  println("r1=${r1} r2=${r2}");
+}
