@@ -1366,11 +1366,33 @@ The tracing GC is functionally complete for single-threaded programs.
       byte-identical output to `otter_fusion run`, including under `OTTER_FUSION_GC=stress`.
 
 ### Phase 5 — System features  ✅ DONE (advanced deferrals tracked in "What's next")
-- [~] **Threads (`docs/20` §1): `Thread.spawn`/`join` work.** `Thread.spawn(() =>
-      R)` (positional or trailing closure) runs the closure on a real OS thread
-      (`runtime::threads::lang_thread_spawn` reads the fn pointer from the closure
-      env and runs it) and returns a `JoinHandle<R>` (prelude struct holding a
-      registry id). **`JoinHandle<R>.join()` is now async + non-blocking**: it
+- [~] **Threads (`docs/20` §1): `Thread.spawn`/`join`/`detach` work, sync *and*
+      async workers.** `Thread.spawn(() => R)` (positional or trailing closure)
+      runs the closure on a real OS thread (`runtime::threads::lang_thread_spawn`
+      reads the fn pointer from the closure env and runs it) and returns a
+      `JoinHandle<R>` (prelude struct holding a registry id).
+      **Async worker overload:** when the closure is async (`() => Future<R>`,
+      including the trailing form `Thread.spawn { async => … }`), the worker drives
+      that future to completion on its own OS thread
+      (`lang_thread_spawn_async` = closure-call + `block_on`-drive) and the handle
+      still joins on the *awaited* `R` (not `Future<R>`). Such a worker therefore
+      MAY `await` and lock a `Shared<T>` — only a *synchronous* `Thread.spawn`
+      closure cannot lock (the narrowed compile error). The checker detects the
+      async closure (return type `Future<R'>`) and yields `JoinHandle<R'>`; the
+      backend passes the `Pending` tid and no `float_kind` (the awaited value rides
+      as raw bits through `block_on`). A captured channel endpoint is owned by the
+      *future* (released on its completion, not when the building closure returns)
+      so a worker can `await` then `send`/`recv` across a suspension. **`detach()`**
+      relinquishes a worker fire-and-forget (`lang_thread_detach` drops the
+      registry claim + detaches the OS thread); works for sync and async workers.
+      **One OS thread per worker is intended** — `Thread.spawn` is the real-OS-thread
+      primitive (Rust `std::thread::spawn` analogue), so a worker may block freely;
+      massive lightweight concurrency is the `spawn` keyword's job (and a future
+      `Task.spawn` on an M:N executor — see "What's next"). The only open follow-up
+      for `Thread.spawn` itself is **worker-panic isolation**. JIT + native parity;
+      `examples/async_thread_spawn.otter` + `concurrency/async_thread_spawn_*`
+      cases (lock, parallel, detach, cross-thread channel, GC-stress).
+      **`JoinHandle<R>.join()` is async + non-blocking**: it
       yields a `Future<Joined<R> | Panicked>` so the joining task *suspends*
       (`lang_thread_join_future` registers a waker; the worker wakes it on
       publish) instead of parking the OS thread. From sync code the implicit-async
@@ -1984,6 +2006,59 @@ The tracing GC is functionally complete for single-threaded programs.
       GC section); the full MMTk Immix move is the remaining behavior-neutral
       throughput follow-up.
 
+### Phase 7 — Embedding engine (`std:engine`, `docs/26`)  🔧 DESIGN — NOT STARTED
+Run Otter Fusion *from* Otter Fusion: compile + execute guest source inside a
+sandboxed **isolate** (own heap/GC/registries, capability whitelist, host-bound
+modules, hard resource limits) — the substrate for edge-function-style workloads
+and plugin systems. **Spec: `docs/26-engine.html`.** The substrate is proven: the
+backend is already a Cranelift JIT and the macro system (Phase 5 / `docs/22`)
+already compiles guest source from a string, binds host functions into a virtual
+module, JITs it, and calls it by pointer. This phase turns that one-shot,
+compile-time machinery into a persistent, re-entrant, sandboxed runtime surface.
+**Locked design decisions (user-approved):** bridged data crosses by
+**copy-by-value over a `@Bridge` repr-C layout** (never by shared heap pointer, so
+the heaps stay independent); resource isolation uses **per-isolate runtime state**
+(each isolate owns its heap/GC/registries, selected by a thread-local
+current-isolate pointer). Staged so each step is shippable:
+- [ ] **Stage 1 — single-isolate `load`/`invoke` (primitives).** `std:engine`
+      prelude surface (`Isolate`/`Unit`/`Policy`/`Limits`/`Stats`/`LoadError`/
+      `EngineError`) + host externs; compile guest source under a capability policy;
+      invoke a `pub` entry by name returning a primitive. Per-entry trampolines
+      follow the macro-shim pattern.
+- [ ] **Stage 2 — capability policy enforcement (`docs/26` §3).** A policy field on
+      the resolve context + per-isolate built-in-view whitelist enforced at import
+      resolution (deny-by-default; compile-time rejection of forbidden `std:`/`core:`
+      modules; `pkg:`/`file:` denied unless granted with vetted source).
+- [ ] **Stage 3 — `@Bridge` ABI (`docs/26` §5).** The `@Bridge` decorator: frozen
+      repr-C layout (reuse extern-struct machinery), bridge-compatibility checking
+      (plain-data only; no managed refs / `Drop` / dyn / unions), and field-by-field
+      copy-by-value marshalling in trampolines + bindings; `str` copied as bytes.
+- [ ] **Stage 4 — host bindings + bridge channels (`docs/26` §4, §6).** Bind
+      host/native functions into virtual `host:` modules the guest imports
+      (generalize the macro-host symbol registration to arbitrary signatures +
+      modules); engine-managed bridge channels / `Shared` cells that span the
+      boundary; entry/signature introspection on `Unit`.
+- [ ] **Stage 5 — per-isolate runtime state (`docs/26` §8).** *The deep one.* Thread
+      a runtime-context handle (selected by a thread-local current-isolate pointer)
+      through every `lang_*` entry point so heap, GC, mutator set, channel/`Shared`/
+      finalizer registries, and allocation accounting are per isolate; stop-the-world
+      GC operates per isolate. Foundation for hard limits + true isolation.
+- [ ] **Stage 6 — hard limits + stats (`docs/26` §8).** `max_heap_bytes`/
+      `max_alloc_bytes` enforced in the per-isolate allocator; `timeout_ms` +
+      cancellation via a deadline/cancel flag polled at the safepoints codegen
+      already emits; `max_stack_depth` guard; `Stats` from the per-isolate accounting.
+      Earlier stages run on the shared global heap with best-effort limits and say so.
+- [ ] **Stage 7 — async entries (`docs/26` §7).** Detect an `async` guest entry
+      (Future-returning) and drive it on the isolate's executor, completing the
+      host's `await` when the guest future resolves (preserves the no-user-visible-
+      `block_on` rule). Interacts with the M:N executor work (Phase 5 deferral).
+- Tests (when picked up): unit + integration + e2e — capability denial (compile
+  error), `@Bridge` round-trips (host↔guest, all bridge types), host bindings +
+  bridge channels, arbitrary-entry invocation, per-isolate heap independence,
+  hard memory cap → `OutOfMemory`, timeout → `Timeout` (incl. tight-loop latency),
+  guest panic containment, async entry driven from a host `await`; JIT + native
+  parity + GC-stress. Keep `docs/26`, examples, LSP and ROADMAP consistent.
+
 ## Current state (verified 2026-05-30)
 
 **The language is feature-complete end-to-end at production quality.** The full
@@ -2043,8 +2118,10 @@ feature, JIT≡native byte-identical and GC-stress clean.
   HELD across the body's `await`s — fixing the release-before-await footgun) → clone the
   result out *while held* (via a codegen-emitted clone thunk) → release. Cancel/panic
   release via a per-thread held-lock set (`lang_shared_release_all`) — the worker-panic
-  side fully closes once **worker-panic isolation** lands. `Thread.spawn` workers cannot
-  lock (compile error → use the `spawn` keyword). A new sema escape/detachment taint pass
+  side fully closes once **worker-panic isolation** lands. Only *synchronous* `Thread.spawn`
+  workers cannot lock (the narrowed compile error → use an *async* `Thread.spawn` worker or
+  the `spawn` keyword); an async worker drives its future with a real executor and may lock.
+  A new sema escape/detachment taint pass
   rejects references that outlive the body (`.clone()` detaches; a returned reference is
   cloned at the boundary). Tests: e2e `tests/cases/concurrency/*` (mutual exclusion under
   contention, held-across-`await`, `try_lock` busy/free, non-reentrancy, escape rejection
@@ -2073,6 +2150,28 @@ feature, JIT≡native byte-identical and GC-stress clean.
   needs *deterministic* `Drop` (tension with GC-timed best-effort `Drop`).
 - **Worker-panic isolation** — a panicking thread/`spawn` worker currently aborts
   the process (Rust unwinding can't cross Cranelift frames).
+- **M:N work-stealing executor + `Task.spawn` (`std:task`)** — the async runtime is
+  one-OS-thread-per-task today. Add a real multi-threaded work-stealing scheduler
+  (a small worker pool, per-worker run queues + stealing, a global injector, and a
+  reactor/timer for `sleep`/`timeout`/I/O) that the `spawn` keyword and `await`
+  drive onto. On top of it, add `Task.spawn` (`std:task`): the *same* surface as
+  `Thread.spawn` (sync or async closure → `JoinHandle<R>` with `join`/`detach`) and
+  the *same* safety model (by-value capture snapshots for cross-task isolation +
+  `Shared<T>`/channels for shared state), but scheduled on the executor instead of a
+  dedicated OS thread per worker — so code stays thread-like while scaling to far
+  more concurrency without one OS thread each. **Complements, not replaces,**
+  `Thread.spawn` (kept for dedicated/blocking work). **Folds in cancellation
+  teeth** (`docs/21` §8): on the executor, `future.cancel()` stops polling the task
+  and drops its state machine (running drops, releasing held `Shared` locks /
+  endpoints via the per-task release path); `Task.spawn`'s
+  `JoinHandle.cancel()`/`abort()` + a `Cancelled` join result
+  (`Joined<R> | Panicked | Cancelled`); `timeout()`/`select!` losers ride the same
+  path. Cancellation is **cooperative** (effective at the next `await`) — no
+  forceful kill; a `Thread.spawn` OS-thread worker has no hard kill (cooperative
+  `Shared<bool>`/channel signal only). Explicitly *not* stackful
+  goroutine-style green threads (transparent blocking, no `async`/`await` coloring):
+  that is a second concurrency model in tension with the explicit-async design and
+  needs Go-runtime-level syscall handoff + preemption.
 - **FFI tail:** `@CallConv` decorator; a managed `CString`/`Buffer` handle type
   with `Drop`. `@Variadic` is **blocked** by Cranelift (no portable varargs ABI).
 - **Generic `Drop` types; generic-interface default methods; cross-module
@@ -2087,6 +2186,10 @@ feature, JIT≡native byte-identical and GC-stress clean.
   MMTk Immix move remains (behavior-neutral).
 - **`fmt` follow-up:** token-level intra-line spacing + line wrapping (currently
   whitespace/indentation only, comment-preserving infra permitting).
+- **Embedding engine (`std:engine`, `docs/26`)** — run guest Otter Fusion inside a
+  sandboxed isolate (capability whitelist, host bindings, `@Bridge` copy-by-value
+  ABI, per-isolate heap/GC + hard limits). Design done (`docs/26`, Phase 7);
+  substrate proven by the macro JIT. Largest new piece is per-isolate runtime state.
 
 ## Historical: initial vertical-slice target (achieved long ago)
 Smallest end-to-end program that exercised the full pipeline at the start:

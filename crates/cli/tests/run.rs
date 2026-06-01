@@ -630,6 +630,39 @@ fn native_build_gc_stress_keeps_live_roots() {
 }
 
 #[test]
+fn native_build_async_thread_spawn_matches_jit() {
+    // An async `Thread.spawn` worker (`() => Future<R>`) drives its future to
+    // completion on its own OS thread, awaiting and locking a `Shared<T>`
+    // (docs/20 §1/§4). The handle joins on the awaited `R`. The result must be
+    // identical whether JIT-run or compiled to a native executable.
+    let src = "struct C { value: i64 }\n\
+               function value_of(r: Joined<i64> | Panicked): i64 {\n\
+                 match r { Joined<i64> j => j.value, Panicked p => -1 }\n\
+               }\n\
+               function main(): Future<null> async {\n\
+                 var state: Shared<C> = Shared.new(C { value: 0 });\n\
+                 var s: Shared<C> = state.clone();\n\
+                 var h: JoinHandle<i64> = Thread.spawn(() async => {\n\
+                   var i: i64 = 0;\n\
+                   while i < 50 {\n\
+                     await s.lock((c) => { c.value = c.value + 1; 0 });\n\
+                     i = i + 1;\n\
+                   }\n\
+                   await s.lock((c) => c.value)\n\
+                 });\n\
+                 var r: Joined<i64> | Panicked = await h.join();\n\
+                 var total: i64 = await state.lock((c) => c.value);\n\
+                 println(\"worker=${value_of(r)} total=${total}\");\n\
+               }";
+    let (jit_out, jerr, jok) = lang("run", src);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(jit_out, nat_out);
+    assert_eq!(nat_out, "worker=50 total=50\n");
+}
+
+#[test]
 fn native_build_panic_exits_101() {
     // A runtime panic (divide by zero) in a native binary must exit with 101,
     // the same code the runtime uses under the JIT.

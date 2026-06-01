@@ -1,0 +1,59 @@
+// Async `Thread.spawn` workers (docs/20 §1, docs/21 §6). `Thread.spawn` accepts
+// either a synchronous closure `() => R` or an *async* closure `() => Future<R>`
+// and always returns `JoinHandle<R>` — joining on the *awaited* `R`. An async
+// worker drives its future to completion on its own OS thread, so it MAY
+// `await` and lock a `Shared<T>` (docs/20 §4), unlike a synchronous worker.
+
+import { println } from "std:io";
+import { Future } from "core:prelude";
+import { Shared } from "std:sync";
+import { Thread, JoinHandle, Joined, Panicked } from "std:thread";
+import { Sender, Receiver, ChannelClosed, channel } from "std:sync";
+
+struct Counter { value: i64 }
+
+function result_of(r: Joined<i64> | Panicked): i64 {
+  match r {
+    Joined<i64> j => j.value,
+    Panicked p => 0 - 1,
+  }
+}
+
+function main(): Future<null> async {
+  var state: Shared<Counter> = Shared.new(Counter { value: 0 });
+
+  // Spawn an async worker. Each `await s.lock(...)` acquires the async mutex,
+  // mutates under exclusive access, and releases — all without parking the OS
+  // thread. The handle joins on the awaited `i64`.
+  var s: Shared<Counter> = state.clone();
+  var worker: JoinHandle<i64> = Thread.spawn(() async => {
+    var i: i64 = 0;
+    while i < 100 {
+      await s.lock((c) => { c.value = c.value + 1; 0 });
+      i = i + 1;
+    }
+    await s.lock((c) => c.value)
+  });
+  var worker_saw: i64 = result_of(await worker.join());
+
+  // A fire-and-forget *detached* async worker: it locks the same counter, then
+  // signals completion over a channel (detached workers have no JoinHandle, so
+  // we observe their effect another way). The trailing-closure spelling
+  // `Thread.spawn { async => … }` is equivalent to `Thread.spawn(() async => …)`.
+  var ends = channel<i64>();
+  var tx = ends.0;
+  var rx = ends.1;
+  var s2: Shared<Counter> = state.clone();
+  Thread.spawn { async =>
+    {
+      await s2.lock((c) => { c.value = c.value + 1000; 0 });
+      tx.send(1);
+      0
+    }
+  }.detach();
+  var _signal: i64 | ChannelClosed = await rx.recv();
+
+  var total: i64 = await state.lock((c) => c.value);
+  println("worker observed: " + (worker_saw as str));
+  println("final total = " + (total as str));
+}

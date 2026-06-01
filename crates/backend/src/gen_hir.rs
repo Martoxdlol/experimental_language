@@ -2465,6 +2465,10 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             subst: self.subst.clone(),
             span,
             out: output,
+            // Populated by `define_closure` when this block is the body of a
+            // by-value `Thread.spawn` async worker (the future then owns and
+            // releases the captured endpoints); empty for an ordinary block.
+            owned_endpoints: Vec::new(),
         });
         Ok(Some(fut))
     }
@@ -2557,17 +2561,32 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 let v = self.h_expr(&args[0])?;
                 self.emit_shared_new(v, elem, ty, span)
             }
-            hir::Intrinsic::ThreadSpawn { output } => {
+            hir::Intrinsic::ThreadSpawn { output, is_async } => {
                 let env = self
                     .h_spawn_closure_arg(&args[0])?
                     .ok_or_else(|| CodegenError::new(args[0].span, "spawn closure has no value"))?;
-                self.emit_thread_spawn(env, *output, span)
+                self.emit_thread_spawn(env, *output, *is_async, span)
             }
             hir::Intrinsic::ThreadJoin { output } => {
                 let jh = self
                     .h_expr(&args[0])?
                     .ok_or_else(|| CodegenError::new(args[0].span, "join receiver has no value"))?;
                 self.emit_thread_join(jh, *output, span)
+            }
+            hir::Intrinsic::ThreadDetach => {
+                let jh = self
+                    .h_expr(&args[0])?
+                    .ok_or_else(|| CodegenError::new(args[0].span, "detach receiver has no value"))?;
+                // The handle's `R` is the `JoinHandle<R>` receiver's type arg; it
+                // selects the struct layout the `id` field is read from.
+                let recv_ty = resolve_shallow(self.cx.analysis, args[0].ty, &self.subst);
+                let r = match self.cx.analysis.tcx.kind(recv_ty) {
+                    TyKind::Named { args: targs, .. } => {
+                        targs.first().copied().unwrap_or(self.cx.analysis.tcx.error)
+                    }
+                    _ => self.cx.analysis.tcx.error,
+                };
+                self.emit_thread_detach(jh, r, span)
             }
             hir::Intrinsic::YieldNow => {
                 let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;

@@ -1792,12 +1792,21 @@ impl<'src> Parser<'src> {
 
     fn parse_trailing_closure(&mut self) -> Expr {
         let lbrace = self.bump();
-        // Attempt `params =>` header. If success, body is rest of block.
+        // Attempt `[params] [async] =>` header. If success, body is rest of
+        // block. The optional `async` (with zero or more params) makes the
+        // trailing closure an async closure — e.g. `Thread.spawn { async => … }`
+        // (`docs/20` §1) or `state.lock { c async => … }` (`docs/20` §4).
         let cp = self.checkpoint();
         let mut params = Vec::new();
+        let mut is_async = false;
         let mut had_params = false;
         let header_ok = (|| {
-            loop {
+            // Parse zero or more comma-separated params, stopping before an
+            // `async` keyword or the `=>`.
+            while !matches!(
+                self.peek_kind(),
+                TokenKind::Kw(Keyword::Async) | TokenKind::FatArrow
+            ) {
                 if !matches!(self.peek_kind(), TokenKind::Ident) {
                     return false;
                 }
@@ -1813,12 +1822,15 @@ impl<'src> Parser<'src> {
                 if self.eat(TokenKind::Comma).is_some() {
                     continue;
                 }
-                return self.eat(TokenKind::FatArrow).is_some();
+                break;
             }
+            is_async = self.eat_kw(Keyword::Async).is_some();
+            self.eat(TokenKind::FatArrow).is_some()
         })();
         if !header_ok {
             self.restore(cp);
             params.clear();
+            is_async = false;
         } else {
             had_params = true;
         }
@@ -1851,7 +1863,7 @@ impl<'src> Parser<'src> {
             kind: ExprKind::Closure {
                 params,
                 return_type: None,
-                is_async: false,
+                is_async,
                 body: Box::new(body_expr),
             },
             span: lbrace.span.join(end),

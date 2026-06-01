@@ -199,7 +199,7 @@ fn intrinsics_cover_every_retired_marker_table() {
         Intrinsic::Clone(CloneKind::Identity),
         Intrinsic::SharedNew,
         Intrinsic::ChannelNew,
-        Intrinsic::ThreadSpawn { output: t },
+        Intrinsic::ThreadSpawn { output: t, is_async: false },
         Intrinsic::ThreadJoin { output: t },
         Intrinsic::YieldNow,
         Intrinsic::AsyncSleep,

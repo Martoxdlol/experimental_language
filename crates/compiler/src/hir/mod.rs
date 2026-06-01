@@ -753,11 +753,16 @@ pub enum Intrinsic {
     SharedNew,
     /// `channel<T>()`. Was `channel_news`.
     ChannelNew,
-    /// `Thread.spawn { … }` — `output` is the closure's result type `R`. Was
-    /// `thread_spawns`.
-    ThreadSpawn { output: Ty },
+    /// `Thread.spawn { … }` — `output` is the worker's result type `R`. When the
+    /// closure is **async** (`() => Future<R>`, `is_async` set), the worker drives
+    /// the future to completion and the handle joins on the awaited `R` (`docs/20`
+    /// §1); `output` is then the awaited `R`, not `Future<R>`. Was `thread_spawns`.
+    ThreadSpawn { output: Ty, is_async: bool },
     /// `JoinHandle<R>.join()` — `output` is `R`. Was `thread_joins`.
     ThreadJoin { output: Ty },
+    /// `JoinHandle<R>.detach()` — relinquish the worker, fire-and-forget
+    /// (`docs/20` §1). Yields `null`.
+    ThreadDetach,
     /// `yield_now()`. Was `yield_nows`.
     YieldNow,
     /// `sleep(ms)`. Was `async_sleeps`.

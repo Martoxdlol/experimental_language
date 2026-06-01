@@ -603,7 +603,25 @@ impl<'a> Checker<'a> {
                 )));
             }
         }
-        self.tcx.mk_named(self.prog.join_handle_def, vec![r])
+        // An async worker — the closure returns a `Future<R>` (`docs/20` §1).
+        // The worker drives that future to completion, so the handle joins on
+        // the awaited `R`, not a `Future<R>`. A synchronous worker keeps `R`.
+        let output = self.future_def_output(r).unwrap_or(r);
+        self.tcx.mk_named(self.prog.join_handle_def, vec![output])
+    }
+
+    /// If `ty` is the canonical `Future<Out>` interface object (`docs/21` §1),
+    /// its `Out`. Unlike [`future_output`](Self::future_output) this matches
+    /// *only* the named `Future<Out>` form — the shape an async closure body
+    /// desugars to (`docs/21` §7) — so a synchronous worker returning a concrete
+    /// `Future`-implementing value is not mistaken for an async worker.
+    fn future_def_output(&self, ty: Ty) -> Option<Ty> {
+        if let TyKind::Named { def, args } = self.tcx.kind(ty) {
+            if *def == self.prog.future_def && args.len() == 1 {
+                return Some(args[0]);
+            }
+        }
+        None
     }
 
     /// `JoinHandle<R>.join(): Future<Joined<R> | Panicked>` and

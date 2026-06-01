@@ -84,7 +84,9 @@ fn register_runtime_symbols(b: &mut JITBuilder) {
     b.symbol("lang_async_spawn", runtime::threads::lang_async_spawn as *const u8);
     b.symbol("lang_async_spawn_future", runtime::threads::lang_async_spawn_future as *const u8);
     b.symbol("lang_thread_spawn", runtime::threads::lang_thread_spawn as *const u8);
+    b.symbol("lang_thread_spawn_async", runtime::threads::lang_thread_spawn_async as *const u8);
     b.symbol("lang_thread_join_future", runtime::threads::lang_thread_join_future as *const u8);
+    b.symbol("lang_thread_detach", runtime::threads::lang_thread_detach as *const u8);
     b.symbol("lang_channel_new", runtime::channels::lang_channel_new as *const u8);
     b.symbol("lang_chan_send", runtime::channels::lang_chan_send as *const u8);
     b.symbol("lang_chan_recv_future", runtime::channels::lang_chan_recv_future as *const u8);
@@ -747,6 +749,16 @@ struct AsyncJob {
     subst: HashMap<DefId, Ty>,
     span: Span,
     out: Ty,
+    /// Channel endpoints this future **owns** (`docs/20` §1/§2): a `Thread.spawn`
+    /// async worker captures its `Sender`/`Receiver` snapshot, so the endpoint
+    /// must outlive the closure that merely *built* the future and be released
+    /// when the future *completes*, not when that closure returns. Each entry is
+    /// `(captured local, endpoint type, is_sender)`; `define_closure` populates it
+    /// (and suppresses the building closure's own release) for an async worker.
+    /// The poll releases each on its single completion path. Empty for an
+    /// ordinary `async { … }` block, which borrows its captures and never owns
+    /// them.
+    owned_endpoints: Vec<(LocalId, Ty, bool)>,
 }
 
 /// A clone-out thunk awaiting code generation (`docs/20` §4). A
@@ -1062,6 +1074,13 @@ impl<'a, M: Module> Codegen<'a, M> {
             sig.returns.push(AbiParam::new(rc));
         }
         ctx.func.signature = sig;
+        // An async worker's body is a single `async { … }` block (`docs/20` §1):
+        // captured channel endpoints are owned by the *future* it builds, not by
+        // this builder closure. Collect them here so their release can be
+        // transferred to the future after the body is generated.
+        let is_async_worker =
+            by_value && matches!(&body.kind, compiler::hir::ExprKind::AsyncBlock { .. });
+        let mut worker_endpoints: Vec<(LocalId, Ty, bool)> = Vec::new();
         let mut fctx = FunctionBuilderContext::new();
         {
             let mut b = FunctionBuilder::new(&mut ctx.func, &mut fctx);
@@ -1107,10 +1126,16 @@ impl<'a, M: Module> Codegen<'a, M> {
                         // OWNS that endpoint for the worker's lifetime; releasing
                         // it when the worker returns is the deterministic
                         // last-sender drop that closes the channel (`docs/20` §2,
-                        // `docs/16` §8). Record the chan id to release on exit.
+                        // `docs/16` §8). Record the chan id to release on exit —
+                        // unless the future owns it (async worker, transferred
+                        // below).
                         if let Some(is_sender) = fg.channel_endpoint_kind(*ty) {
-                            let chan = fg.emit_channel_id(val, *ty, span)?;
-                            fg.endpoint_releases.push((chan, is_sender));
+                            if is_async_worker {
+                                worker_endpoints.push((*local, *ty, is_sender));
+                            } else {
+                                let chan = fg.emit_channel_id(val, *ty, span)?;
+                                fg.endpoint_releases.push((chan, is_sender));
+                            }
                         }
                     } else {
                         let cell_ptr = fg.b.ins().load(PTR, MemFlags::trusted(), env, off);
@@ -1132,6 +1157,14 @@ impl<'a, M: Module> Codegen<'a, M> {
                 };
                 let val = fg.rc_return_value(ret_expr, val);
                 fg.emit_return(val)?;
+            }
+            // Transfer endpoint ownership to the async worker's future (the
+            // `AsyncJob` just pushed while generating the body): it releases them
+            // on completion instead of this builder closure (`docs/20` §1/§2).
+            if is_async_worker && !worker_endpoints.is_empty() {
+                if let Some(job) = self.async_jobs.last_mut() {
+                    job.owned_endpoints = std::mem::take(&mut worker_endpoints);
+                }
             }
             b.seal_all_blocks();
             b.finalize();
@@ -1417,6 +1450,7 @@ impl<'a, M: Module> Codegen<'a, M> {
         entry_set: &HashSet<LocalId>,
         live: &[(LocalId, i32, ClType)],
         for_slots: &HashMap<Span, (i32, i32, i32)>,
+        owned_endpoints: &[(LocalId, Ty, bool)],
         err_span: Span,
     ) -> CgResult<()> {
         let mut await_spans = Vec::new();
@@ -1502,6 +1536,18 @@ impl<'a, M: Module> Codegen<'a, M> {
                 });
                 let val = fg.gen_body_view(&body)?;
                 let val = fg.rc_return_value(body.0.trailing.as_deref(), val);
+                // Release each owned channel endpoint on the completion path (the
+                // building closure transferred ownership instead of releasing it,
+                // `docs/20` §1/§2). Read the endpoint through its capture local
+                // *here*, at the completion block, so the chan id dominates the
+                // `emit_return` that follows (a value computed in `body_entry`
+                // would not dominate completion reached via a resume block).
+                for (local, ty, is_sender) in owned_endpoints {
+                    let ep = fg.read_local(*local)
+                        .ok_or_else(|| CodegenError::new(err_span, "owned endpoint has no slot"))?;
+                    let chan = fg.emit_channel_id(ep, *ty, err_span)?;
+                    fg.endpoint_releases.push((chan, *is_sender));
+                }
                 fg.emit_return(val)?;
 
                 // Resume blocks: reload every local, jump to the await's poll.
@@ -1570,7 +1616,10 @@ impl<'a, M: Module> Codegen<'a, M> {
         let poll_fid = self.module
             .declare_function(&poll_name, Linkage::Local, &poll_sig)
             .map_err(|e| CodegenError::new(span, format!("declare poll: {e}")))?;
-        self.build_stateful_poll(poll_fid, &subst, out, body, &entry_set, &layout.live, &layout.for_slots, span)?;
+        // An async function owns its endpoint *parameters* through the ordinary
+        // param/return refcount discipline, not the by-value-capture path — so it
+        // transfers no owned endpoints here.
+        self.build_stateful_poll(poll_fid, &subst, out, body, &entry_set, &layout.live, &layout.for_slots, &[], span)?;
 
         // -- constructor body ----------------------------------------------
         let mut cctx = self.module.make_context();
@@ -1638,7 +1687,7 @@ impl<'a, M: Module> Codegen<'a, M> {
     /// captured locals from the state struct, run the body, and return the
     /// result wrapped in `Ready<Output> | Pending` (`docs/21`).
     fn define_async_job(&mut self, job: AsyncJob) -> CgResult<()> {
-        let AsyncJob { poll_fid, info, body, subst, span, out } = job;
+        let AsyncJob { poll_fid, info, body, subst, span, out, owned_endpoints } = job;
         // A view of the wrapped HIR block.
         let block_view = match &body.kind {
             compiler::hir::ExprKind::Block(b) => Some(BodyView(b)),
@@ -1652,7 +1701,8 @@ impl<'a, M: Module> Codegen<'a, M> {
                 let layout = async_state_layout(self.analysis, &subst, &cap_ids, bv, &self.captured_locals);
                 let entry_set: HashSet<LocalId> = cap_ids.into_iter().collect();
                 return self.build_stateful_poll(
-                    poll_fid, &subst, out, bv, &entry_set, &layout.live, &layout.for_slots, span,
+                    poll_fid, &subst, out, bv, &entry_set, &layout.live, &layout.for_slots,
+                    &owned_endpoints, span,
                 );
             }
         }
@@ -1706,6 +1756,16 @@ impl<'a, M: Module> Codegen<'a, M> {
                             fg.bind_local(*local, ct, loaded);
                         }
                     }
+                }
+                // Release each owned channel endpoint when the future completes
+                // (the building closure transferred ownership instead of releasing
+                // it); `emit_return` emits the releases on the single completion
+                // path (`docs/20` §1/§2).
+                for (local, ty, is_sender) in &owned_endpoints {
+                    let ep = fg.read_local(*local)
+                        .ok_or_else(|| CodegenError::new(span, "owned endpoint has no slot"))?;
+                    let chan = fg.emit_channel_id(ep, *ty, span)?;
+                    fg.endpoint_releases.push((chan, *is_sender));
                 }
                 let val = fg.h_expr(&body)?;
                 let ret_expr = match &body.kind {

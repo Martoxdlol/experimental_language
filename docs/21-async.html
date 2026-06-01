@@ -360,6 +360,16 @@ result. This mirrors Tokio's <code>JoinHandle</code>, but typed as a
 <code>Future&lt;T&gt;</code> directly (in the JS/Dart spirit).</p>
 
 <div class="callout">
+  <strong><code>spawn EXPR</code> vs. an async <code>Thread.spawn</code> worker</strong>
+  Both run an async task on a worker OS thread (same one-OS-thread-per-task
+  executor today). They differ only in the handle: <code>spawn EXPR</code>
+  yields a bare <code>Future&lt;T&gt;</code> you <code>await</code>;
+  <code>Thread.spawn { async =&gt; … }</code> (<a href="20-concurrency.html">20-concurrency</a>
+  §1) yields a <code>JoinHandle&lt;T&gt;</code> with <code>join</code>/<code>detach</code>
+  — reach for it when you want a fire-and-forget detached async worker or the
+  <code>Joined | Panicked</code> join result rather than a future to await.</div>
+
+<div class="callout">
   <strong>Parallel fan-out</strong>
 <pre style="background: transparent; border: none; padding: 0;"><code>var a: Future&lt;i64&gt; = spawn work(1);
 var b: Future&lt;i64&gt; = spawn work(2);
@@ -429,6 +439,28 @@ winner completes.</p>
   For cooperative cancellation deeper in the future's body, pass a
   <code>Shared&lt;bool&gt;</code> or a <code>Receiver&lt;Cancel&gt;</code> and check it
   periodically.
+</div>
+
+<div class="callout">
+  <strong>Cancellation is cooperative — there is no forceful "kill"</strong>
+  A stackless task can only stop at a <em>suspension point</em> (an
+  <code>await</code>): there is no safe mid-computation preemption, and forcibly
+  killing a running task — or an OS thread — would leak resources and leave
+  <code>Shared&lt;T&gt;</code> locks held and the GC inconsistent. So
+  <code>.cancel()</code> takes effect when the task next suspends (or at once if it
+  is parked): the executor stops polling it and drops its state machine, which runs
+  the body's drops and releases any held locks/endpoints (the same per-task
+  release path used on panic). For an OS-thread worker
+  (<a href="20-concurrency.html">20-concurrency</a> §1, <code>Thread.spawn</code>)
+  there is <em>no</em> hard kill at all — signal it cooperatively with a
+  <code>Shared&lt;bool&gt;</code>/channel and let it return.
+  <br><strong style="margin-top: 0.4rem;">Task-level cancellation lands with the executor</strong>
+  <code>.cancel()</code> on a compute-only future is a no-op today (nothing to
+  stop). Real teeth — plus <code>Task.spawn</code>'s
+  <code>JoinHandle.cancel()</code>/<code>abort()</code> and a <code>Cancelled</code>
+  result so <code>join()</code> resolves to
+  <code>Joined&lt;R&gt; | Panicked | Cancelled</code> — arrive with the planned M:N
+  work-stealing executor (<a href="20-concurrency.html">20-concurrency</a> §1).
 </div>
 
 <!-- =========================================================== -->

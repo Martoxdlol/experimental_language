@@ -535,7 +535,7 @@
 
     #[test]
     fn shared_lock_in_thread_spawn_worker_errors() {
-        // A `Thread.spawn` closure is synchronous → cannot lock (docs/20 §1/§4).
+        // A *synchronous* `Thread.spawn` closure cannot lock (docs/20 §1/§4).
         let errs = check(
             "function f(): Future<null> async {\n\
              \tvar s: Shared<i64> = Shared.new(0);\n\
@@ -545,4 +545,72 @@
         );
         assert!(errs.iter().any(|e| matches!(&e.kind,
             SemaErrorKind::Message(m) if m.contains("spawn"))));
+    }
+
+    #[test]
+    fn async_thread_spawn_worker_yields_awaited_output() {
+        // An async `Thread.spawn` closure `() => Future<R>` joins on the awaited
+        // `R`, so the handle is `JoinHandle<R>` — not `JoinHandle<Future<R>>`
+        // (docs/20 §1). The explicit annotation type-checks only if `R` (here
+        // `i64`) was unwrapped from the closure's `Future<i64>` return.
+        assert_ok(
+            "function f(): Future<null> async {\n\
+             \tvar h: JoinHandle<i64> = Thread.spawn(() async => { 41 + 1 });\n\
+             \tvar _ = await h.join();\n\
+             }",
+        );
+    }
+
+    #[test]
+    fn async_thread_spawn_worker_not_future_handle() {
+        // The awaited-output rule means `JoinHandle<Future<i64>>` is the wrong
+        // annotation for an async worker (docs/20 §1) — it must be a type error.
+        let errs = check(
+            "function f(): Future<null> async {\n\
+             \tvar h: JoinHandle<Future<i64>> = Thread.spawn(() async => { 7 });\n\
+             \tvar _ = await h.join();\n\
+             }",
+        );
+        assert!(!errs.is_empty(), "expected a JoinHandle<R> vs JoinHandle<Future<R>> mismatch");
+    }
+
+    #[test]
+    fn async_thread_spawn_worker_can_lock() {
+        // An *async* `Thread.spawn` worker drives its future with a real
+        // executor, so it MAY `await` and lock a `Shared<T>` (docs/20 §1/§4).
+        assert_ok(
+            "struct C { value: i64 }\n\
+             function f(): Future<null> async {\n\
+             \tvar state: Shared<C> = Shared.new(C { value: 0 });\n\
+             \tvar s: Shared<C> = state.clone();\n\
+             \tvar h: JoinHandle<i64> = Thread.spawn(() async => {\n\
+             \t\tawait s.lock((c) => { c.value = c.value + 1; c.value })\n\
+             \t});\n\
+             \tvar _ = await h.join();\n\
+             }",
+        );
+    }
+
+    #[test]
+    fn async_thread_spawn_worker_can_await() {
+        // An async worker may `await` an arbitrary future, like a `spawn` task.
+        assert_ok(
+            "function fetch(): Future<i64> async { 7 }\n\
+             function f(): Future<null> async {\n\
+             \tvar h: JoinHandle<i64> = Thread.spawn(() async => { await fetch() });\n\
+             \tvar _ = await h.join();\n\
+             }",
+        );
+    }
+
+    #[test]
+    fn async_thread_spawn_trailing_closure_form() {
+        // The documented trailing-closure spelling `Thread.spawn { async => … }`
+        // (docs/20 §1) parses as an async worker and yields `JoinHandle<R>`.
+        assert_ok(
+            "function f(): Future<null> async {\n\
+             \tvar h: JoinHandle<i64> = Thread.spawn { async => 7 };\n\
+             \tvar _ = await h.join();\n\
+             }",
+        );
     }

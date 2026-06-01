@@ -606,21 +606,43 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     }
 
     /// `Thread.spawn` over an already-evaluated closure env value. Shared by the
-    /// AST and HIR walks.
-    pub(crate) fn emit_thread_spawn(&mut self, env: Value, r: Ty, _span: Span) -> CgResult<Option<Value>> {
-        // A float result is returned in a floating-point register; tell the
-        // runtime which result ABI the lifted closure uses so it reads the
-        // value from the right register and carries its raw bits (`docs/20`).
-        let r_res = resolve_shallow(self.cx.analysis, r, &self.subst);
-        let float_kind = match self.cx.analysis.tcx.kind(r_res) {
-            TyKind::Float(FloatTy::F64) => 8,
-            TyKind::Float(FloatTy::F32) => 4,
-            _ => 0,
+    /// AST and HIR walks. When `is_async` the closure is `() => Future<R>`: the
+    /// worker drives the future to completion (`docs/20` §1), so we call
+    /// `lang_thread_spawn_async` (passing the `Pending` type id its `block_on`
+    /// needs) instead of `lang_thread_spawn`.
+    pub(crate) fn emit_thread_spawn(
+        &mut self,
+        env: Value,
+        r: Ty,
+        is_async: bool,
+        _span: Span,
+    ) -> CgResult<Option<Value>> {
+        let id = if is_async {
+            // `block_on` carries the awaited `R` as its raw bits (a float is its
+            // own bit pattern), so no `float_kind` is needed here (`docs/20` §1).
+            let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+            let pt = self.b.ins().iconst(types::I64, pending_tid);
+            self.call_intrinsic(
+                "lang_thread_spawn_async",
+                &[PTR, types::I64],
+                Some(types::I64),
+                &[env, pt],
+            )
+            .expect("lang_thread_spawn_async returns an id")
+        } else {
+            // A float result is returned in a floating-point register; tell the
+            // runtime which result ABI the lifted closure uses so it reads the
+            // value from the right register and carries its raw bits (`docs/20`).
+            let r_res = resolve_shallow(self.cx.analysis, r, &self.subst);
+            let float_kind = match self.cx.analysis.tcx.kind(r_res) {
+                TyKind::Float(FloatTy::F64) => 8,
+                TyKind::Float(FloatTy::F32) => 4,
+                _ => 0,
+            };
+            let fk = self.b.ins().iconst(types::I64, float_kind);
+            self.call_intrinsic("lang_thread_spawn", &[PTR, types::I64], Some(types::I64), &[env, fk])
+                .expect("lang_thread_spawn returns an id")
         };
-        let fk = self.b.ins().iconst(types::I64, float_kind);
-        let id = self
-            .call_intrinsic("lang_thread_spawn", &[PTR, types::I64], Some(types::I64), &[env, fk])
-            .expect("lang_thread_spawn returns an id");
         let jh_def = self.cx.analysis.program.join_handle_def;
         let layout = self.struct_layout(jh_def, &[r]);
         let ptr = self.alloc_struct(&layout);
@@ -669,6 +691,20 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             )
             .expect("join future");
         Ok(Some(fut))
+    }
+
+    /// `JoinHandle<R>.detach()` over an already-evaluated handle value
+    /// (`docs/20` §1): unpin the handle from the global roots and relinquish the
+    /// worker (fire-and-forget). Yields no value (`null`).
+    pub(crate) fn emit_thread_detach(&mut self, jh: Value, r: Ty, _span: Span) -> CgResult<Option<Value>> {
+        let jh_def = self.cx.analysis.program.join_handle_def;
+        let jh_layout = self.struct_layout(jh_def, &[r]);
+        let id_off = jh_layout.offsets[jh_layout.index_of("id").unwrap_or(0)] as i32;
+        let id = self.b.ins().load(types::I64, MemFlags::trusted(), jh, id_off);
+        // The handle is consumed by `detach`; unpin it from the global roots.
+        self.call_intrinsic("lang_gc_unpin", &[PTR], None, &[jh]);
+        self.call_intrinsic("lang_thread_detach", &[types::I64], None, &[id]);
+        Ok(None)
     }
 
     /// Lower `channel<T>()` (`docs/20` §2): allocate a runtime channel and build

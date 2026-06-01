@@ -1223,6 +1223,64 @@ fn trailing_closure_on_method() {
 }
 
 #[test]
+fn trailing_closure_async_no_params() {
+    // `Thread.spawn { async => … }` (docs/20 §1): a parameterless async
+    // trailing closure. The `async` keyword (no params) precedes the `=>`.
+    let e = parse_expr_ok("Thread.spawn { async => 7 }");
+    match e.kind {
+        ExprKind::Call { trailing_closure, .. } => {
+            let tc = trailing_closure.expect("expected trailing closure");
+            match tc.kind {
+                ExprKind::Closure { is_async, params, .. } => {
+                    assert!(is_async, "trailing `{{ async => … }}` is an async closure");
+                    assert!(params.is_empty());
+                }
+                _ => panic!("expected a closure"),
+            }
+        }
+        _ => panic!(),
+    }
+}
+
+#[test]
+fn trailing_closure_async_with_params() {
+    // `s.lock { c async => … }` (docs/20 §4): an async trailing closure with a
+    // parameter. The `async` keyword sits between the params and the `=>`.
+    let e = parse_expr_ok("s.lock { c async => c }");
+    match e.kind {
+        ExprKind::Call { trailing_closure, .. } => {
+            let tc = trailing_closure.expect("expected trailing closure");
+            match tc.kind {
+                ExprKind::Closure { is_async, params, .. } => {
+                    assert!(is_async);
+                    assert_eq!(params.len(), 1);
+                }
+                _ => panic!("expected a closure"),
+            }
+        }
+        _ => panic!(),
+    }
+}
+
+#[test]
+fn trailing_closure_with_inner_async_block_not_async_closure() {
+    // A trailing closure whose first statement is an `async { … }` block must
+    // NOT be misparsed as an async closure header: `{ async { … } }` is a
+    // closure with an async-block body, not `{ async => … }`.
+    let e = parse_expr_ok("Thread.spawn { async { 1 } }");
+    match e.kind {
+        ExprKind::Call { trailing_closure, .. } => {
+            let tc = trailing_closure.expect("expected trailing closure");
+            match tc.kind {
+                ExprKind::Closure { is_async, .. } => assert!(!is_async),
+                _ => panic!("expected a closure"),
+            }
+        }
+        _ => panic!(),
+    }
+}
+
+#[test]
 fn trailing_closure_after_call_args() {
     let e = parse_expr_ok("xs.fold(0) { acc, n => acc + n }");
     match e.kind {

@@ -144,6 +144,9 @@ import { Shared, channel } from "std:sync"</code></pre>
 <h2 id="threads">1. Threads — <code>std:thread</code></h2>
 
 <pre><code>pub function Thread.spawn&lt;R&gt;(work: () =&gt; R): JoinHandle&lt;R&gt;
+// Async overload: when `work` is an async closure `() =&gt; Future&lt;R&gt;`, the worker
+// drives the future to completion and the handle joins on the awaited `R`:
+pub function Thread.spawn&lt;R&gt;(work: () =&gt; Future&lt;R&gt;): JoinHandle&lt;R&gt;
 
 pub struct JoinHandle&lt;R&gt; { ... }
 
@@ -176,16 +179,55 @@ pub struct Panicked  { pub message: str }</code></pre>
 }</code></pre>
 
 <div class="callout">
-  <strong>Two flavors of spawn</strong>
-  <code>Thread.spawn</code> runs a synchronous closure on a fresh OS thread and
-  returns a <code>JoinHandle&lt;R&gt;</code>. For <code>Future&lt;T&gt;</code> work,
-  use the <code>spawn</code> keyword from <a href="21-async.html">21-async</a> —
-  <code>spawn EXPR</code> schedules a future on a worker and itself evaluates to
-  a <code>Future&lt;T&gt;</code>. Joining is the same: <code>await</code> the
-  resulting future. Because a <code>Thread.spawn</code> closure is synchronous it
-  cannot <code>await</code> — so a worker that needs to lock a
-  <code>Shared&lt;T&gt;</code> (§4, <code>await</code>-only) must use the
-  <code>spawn</code> keyword, not <code>Thread.spawn</code>.
+  <strong>Two ways to get an async worker</strong>
+  <code>Thread.spawn</code> accepts either a <em>synchronous</em> closure
+  <code>() =&gt; R</code> or an <em>async</em> closure <code>() =&gt; Future&lt;R&gt;</code>,
+  and always returns a <code>JoinHandle&lt;R&gt;</code>. With an async closure the
+  worker drives the future to completion on its own OS thread, so the handle
+  joins on the awaited <code>R</code> (not a <code>Future&lt;R&gt;</code>); such a
+  worker <em>may</em> <code>await</code> and lock a <code>Shared&lt;T&gt;</code>
+  (§4). The alternative is the <code>spawn</code> keyword from
+  <a href="21-async.html">21-async</a> — <code>spawn EXPR</code> schedules a
+  future on a worker and itself evaluates to a <code>Future&lt;T&gt;</code> you
+  <code>await</code>. The two differ only in the handle they yield:
+  <code>Thread.spawn</code> gives a <code>JoinHandle&lt;R&gt;</code> (with
+  <code>join</code>/<code>detach</code>), the <code>spawn</code> keyword gives a
+  bare <code>Future&lt;T&gt;</code>. Both run on the same one-OS-thread-per-task
+  executor today. Only a <em>synchronous</em> <code>Thread.spawn</code> closure
+  cannot <code>await</code> or lock (§4).
+</div>
+
+<div class="callout">
+  <strong>One OS thread per <code>Thread.spawn</code> worker — by design</strong>
+  <code>Thread.spawn</code> is the <em>real-OS-thread</em> primitive (the analogue
+  of Rust's <code>std::thread::spawn</code>): every worker gets its own dedicated
+  OS thread, sync or async. That is intended, not a limitation — you reach for
+  <code>Thread.spawn</code> precisely when you want a real thread (CPU-bound work,
+  blocking FFI, isolation), and a worker may block freely without starving
+  others. The trade-off is that it does <em>not</em> scale to thousands of mostly
+  idle workers: each holds a thread even while suspended on an <code>await</code>.
+  For massive, lightweight concurrency, use the <code>spawn</code> keyword
+  (<a href="21-async.html">21-async</a> §6), whose tasks share the executor.
+</div>
+
+<div class="callout">
+  <strong>Future direction — <code>Task.spawn</code> on a work-stealing executor</strong>
+  A planned <code>std:task</code> module will add <code>Task.spawn</code>: the same
+  surface as <code>Thread.spawn</code> (the same closure forms, the same
+  <code>JoinHandle&lt;R&gt;</code> with <code>join</code>/<code>detach</code>, and
+  the <em>same</em> safety model — by-value capture snapshots for cross-task
+  isolation plus <code>Shared&lt;T&gt;</code>/channels for shared state), but
+  scheduled on an <strong>M:N work-stealing executor</strong> instead of a
+  dedicated OS thread per worker. You write the same thread-like code; the runtime
+  multiplexes many lightweight tasks onto a small thread pool, scaling to far more
+  concurrency without one OS thread each. It <em>complements</em>
+  <code>Thread.spawn</code> rather than replacing it: keep <code>Thread.spawn</code>
+  for dedicated/blocking work, reach for <code>Task.spawn</code> for high task
+  counts. (Stackful, goroutine-style green threads — transparent blocking with no
+  <code>async</code>/<code>await</code> coloring — are deliberately <em>not</em>
+  planned: they are a second concurrency model in tension with this language's
+  explicit-async design and would require Go-runtime-level syscall handoff and
+  preemption.)
 </div>
 
 <h3>Cross-thread capture — isolation rules</h3>
@@ -495,15 +537,17 @@ var loaded = await state.lock { c async =&gt; { c.value = await fetch(); c.value
 </div>
 
 <div class="callout warn">
-  <strong><code>Thread.spawn</code> workers cannot lock</strong>
-  <code>lock</code>/<code>try_lock</code> are <code>await</code>-only, and a
-  <code>Thread.spawn</code> closure is <em>synchronous</em> — it cannot <code>await</code>
-  (§1). Calling <code>lock</code>/<code>try_lock</code> inside a <code>Thread.spawn</code>
-  worker is therefore a <strong>compile error</strong>. Run lock-using workers through the
-  async <code>spawn</code> keyword (<a href="21-async.html">21-async</a> §6) instead, which
-  yields a <code>Future&lt;T&gt;</code> you <code>await</code>:
+  <strong>Only <em>synchronous</em> <code>Thread.spawn</code> workers cannot lock</strong>
+  <code>lock</code>/<code>try_lock</code> are <code>await</code>-only. A
+  <em>synchronous</em> <code>Thread.spawn</code> closure cannot <code>await</code>
+  (§1), so calling <code>lock</code>/<code>try_lock</code> inside one is a
+  <strong>compile error</strong>. An <em>async</em> <code>Thread.spawn</code> closure
+  (<code>() =&gt; Future&lt;R&gt;</code>) <em>may</em> lock — its worker drives the future
+  with a real executor and waker, exactly like a <code>spawn</code>-keyword task. So
+  any of these run a lock-using worker:
   <pre><code>// var h = Thread.spawn(() =&gt; state.lock(...))   // ERROR — sync worker can't await a lock
-var h = spawn async { await state.lock { c =&gt; c.value = c.value + 1 } }   // OK
+var h = spawn async { await state.lock { c =&gt; c.value = c.value + 1 } }   // OK — spawn keyword
+var h = Thread.spawn { async => await state.lock { c =&gt; c.value = c.value + 1 } }   // OK — async Thread.spawn worker
 await h</code></pre>
 </div>
 
@@ -646,8 +690,9 @@ function main(): Future&lt;null&gt; async {
 import { Shared } from "std:sync"
 
 // Because `lock` is async, the worker must be able to `await` — so it is an
-// `async` function scheduled with the `spawn` keyword (docs/21), NOT a
-// synchronous `Thread.spawn` closure (which cannot `await`).
+// `async` function scheduled with the `spawn` keyword (docs/21), or an async
+// `Thread.spawn` closure (§1), NOT a synchronous `Thread.spawn` closure (which
+// cannot `await`).
 function worker(s: Shared&lt;i64&gt;): Future&lt;null&gt; async {
   for _ in (Range { current: 0, end: 1000 }) {
     await s.lock { /* mutate */ it }

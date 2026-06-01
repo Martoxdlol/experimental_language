@@ -573,14 +573,15 @@ fn thread_spawn_lowers_with_output_from_join_handle_type() {
     for stmt in &body.block.stmts {
         if let StmtKind::Let { init, .. } = &stmt.kind {
             walk_expr(init, &mut |e| {
-                if let ExprKind::Intrinsic { intrinsic: Intrinsic::ThreadSpawn { output }, .. } = &e.kind {
-                    found = Some(*output);
+                if let ExprKind::Intrinsic { intrinsic: Intrinsic::ThreadSpawn { output, is_async }, .. } = &e.kind {
+                    found = Some((*output, *is_async));
                 }
             });
         }
     }
-    let out = found.expect("expected a ThreadSpawn intrinsic");
+    let (out, is_async) = found.expect("expected a ThreadSpawn intrinsic");
     assert_eq!(a.tcx.display(out, &|id| a.program.def(id).name.clone()), "i64");
+    assert!(!is_async, "a synchronous `() => R` closure is not an async worker");
 }
 
 #[test]

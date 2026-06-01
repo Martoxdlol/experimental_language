@@ -736,7 +736,24 @@ impl<'a> Checker<'a> {
                         TyKind::Named { args, .. } => args.first().copied().unwrap_or(self.tcx.error),
                         _ => self.tcx.error,
                     };
-                    return intrinsic(Intrinsic::ThreadSpawn { output: out }, &all);
+                    // An async worker: the closure's value type is
+                    // `() => Future<R>` (`docs/20` §1). Detect it from the
+                    // closure argument's return type being the canonical
+                    // `Future<_>` interface object, so the backend drives the
+                    // future to completion instead of just calling the closure.
+                    let is_async = all
+                        .first()
+                        .and_then(|a| self.expr_ty(a.span))
+                        .map(|t| match self.tcx.kind(t) {
+                            TyKind::Func { ret, .. } => matches!(
+                                self.tcx.kind(*ret),
+                                TyKind::Named { def, args }
+                                    if *def == self.prog.future_def && args.len() == 1
+                            ),
+                            _ => false,
+                        })
+                        .unwrap_or(false);
+                    return intrinsic(Intrinsic::ThreadSpawn { output: out, is_async }, &all);
                 }
             }
         }
@@ -779,6 +796,19 @@ impl<'a> Checker<'a> {
                 };
                 if let Some(out) = out {
                     return intrinsic(Intrinsic::ThreadJoin { output: out }, &[receiver]);
+                }
+            }
+        }
+        // `JoinHandle<R>.detach()`.
+        if let ExprKind::Field { receiver, name } = &callee.kind {
+            if name.name == "detach" && self.resolution(callee.span).is_none() {
+                let jh = self.prog.join_handle_def;
+                if jh != DefId(0)
+                    && self
+                        .expr_ty(receiver.span)
+                        .is_some_and(|rty| matches!(self.tcx.kind(rty), TyKind::Named { def, .. } if *def == jh))
+                {
+                    return intrinsic(Intrinsic::ThreadDetach, &[receiver]);
                 }
             }
         }

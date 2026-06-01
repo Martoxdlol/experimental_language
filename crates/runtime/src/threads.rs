@@ -4,7 +4,11 @@
 //! A spawned thread runs a lifted closure — a function `(env) -> R` whose first
 //! env word is the function pointer (the closure ABI from `docs/09`). The
 //! spawning thread hands the environment over; the child runs it on a fresh OS
-//! thread. Results (and the environment) are pinned as global GC roots
+//! thread. When the closure is **async** (`() -> Future<R>`,
+//! [`lang_thread_spawn_async`]) the worker calls it to build the future and then
+//! drives that future to completion on its own thread, publishing the awaited
+//! `R` — so the same `JoinHandle<R>` machinery serves both flavors.
+//! Results (and the environment) are pinned as global GC roots
 //! ([`gc::add_extra_root`]) for the cross-thread handoff window, so a
 //! collection on any thread keeps them alive even before they reach a scanned
 //! stack.
@@ -174,6 +178,54 @@ pub unsafe extern "C" fn lang_async_spawn(fut: *mut u8, pending_tid: i64) -> u64
         let result = unsafe { crate::async_rt::lang_block_on(fut_addr as *mut u8, pending_tid) };
         gc::add_extra_root(result as usize); // pin the result for the joiner
         gc::remove_extra_root(fut_addr);
+        publish_done(&worker, result);
+    });
+    ctl.inner.lock().unwrap().os = Some(os);
+    id
+}
+
+/// Spawn an **async** `() => Future<R>` closure on a new OS worker: call the
+/// lifted closure to construct its `Future<R>` box, then drive that future to
+/// completion on the worker via the executor (`docs/20` §1). The published
+/// result is the *awaited* `R` (widened to a machine word), so `join()` /
+/// `JoinHandle` machinery is identical to a synchronous worker's. This fuses the
+/// closure-call of [`lang_thread_spawn`] with the `block_on`-drive of
+/// [`lang_async_spawn`].
+///
+/// No `float_kind` is needed: `lang_block_on` carries the awaited value as its
+/// raw 8-byte representation (a float is already its bit pattern), exactly the
+/// form the joiner reads back.
+///
+/// # Safety
+/// `env` must be a valid closure environment whose lifted function has signature
+/// `extern "C" fn(*mut u8) -> *mut u8` returning a `Future<R>` box (vtable slot 0
+/// = `poll`). `pending_tid` is the worker's `Pending` type id for `block_on`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lang_thread_spawn_async(env: *mut u8, pending_tid: i64) -> u64 {
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    let ctl = new_ctl();
+    registry().lock().unwrap().insert(id, ctl.clone());
+
+    // Pin the environment so it survives collection during the handoff (before
+    // the child has it rooted on its own stack).
+    gc::add_extra_root(env as usize);
+    let env_addr = env as usize;
+
+    let worker = ctl.clone();
+    let os = std::thread::spawn(move || {
+        gc::thread_start();
+        // Call the lifted async closure to obtain its `Future<R>` box.
+        let fn_ptr = unsafe { (env_addr as *const usize).read() };
+        let f: extern "C" fn(*mut u8) -> *mut u8 = unsafe { std::mem::transmute(fn_ptr) };
+        let fut = f(env_addr as *mut u8);
+        // Pin the future across the call→block_on window, then release the env.
+        gc::add_extra_root(fut as usize);
+        gc::remove_extra_root(env_addr);
+        // Drive the future to completion on this worker (the `spawn`-keyword
+        // path). The awaited `R` comes back widened to a machine word.
+        let result = unsafe { crate::async_rt::lang_block_on(fut, pending_tid) };
+        gc::add_extra_root(result as usize); // pin the result for the joiner
+        gc::remove_extra_root(fut as usize);
         publish_done(&worker, result);
     });
     ctl.inner.lock().unwrap().os = Some(os);
@@ -519,4 +571,106 @@ pub unsafe extern "C" fn lang_thread_join_future(
     }
     gc::resume();
     bx
+}
+
+/// `JoinHandle<R>.detach()` (`docs/20` §1): relinquish the claim on a worker so
+/// it runs to completion in the background, fire-and-forget, with its result
+/// discarded. The worker thread holds its own `Arc<ThreadCtl>` clone, so it
+/// keeps running regardless; we drop the registry's claim and detach the OS
+/// thread (drop its join handle without joining) so it is reclaimed on its own
+/// when it finishes. Works identically for synchronous and async workers.
+///
+/// # Safety
+/// `id` must be a live `JoinHandle` id produced by [`lang_thread_spawn`],
+/// [`lang_thread_spawn_async`], or [`lang_async_spawn`], not yet joined.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lang_thread_detach(id: u64) {
+    let ctl = registry().lock().unwrap().remove(&id);
+    if let Some(ctl) = ctl {
+        let os = ctl.inner.lock().unwrap().os.take();
+        drop(os); // detach: never joined, reclaimed when the worker finishes
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering as O};
+
+    /// Build a `Future<i64>` interface-object box (vtable slot 0 = `poll`).
+    /// Memory is leaked (test-only).
+    fn make_future_box(poll: extern "C" fn(*mut u8, *mut Context) -> *mut u8) -> *mut u8 {
+        let vtable: Box<[usize; 1]> = Box::new([poll as usize]);
+        let vtable_ptr = Box::into_raw(vtable) as usize;
+        let data_ptr = Box::into_raw(Box::new([0i64; 1])) as usize;
+        let fut: Box<[usize; 3]> = Box::new([vtable_ptr, data_ptr, 0]);
+        Box::into_raw(fut) as *mut u8
+    }
+
+    /// Block until the worker behind `id` publishes its result, then read it.
+    fn wait_result(id: u64) -> (i64, bool) {
+        loop {
+            let ctl = registry().lock().unwrap().get(&id).cloned().expect("registered");
+            let g = ctl.inner.lock().unwrap();
+            if g.done {
+                return (g.result, g.panicked);
+            }
+            drop(g);
+            std::thread::yield_now();
+        }
+    }
+
+    // A `poll` that completes immediately as `Ready<i64>{ value: 99 }`.
+    extern "C" fn ready99_poll(_d: *mut u8, _c: *mut Context) -> *mut u8 {
+        let ready: Box<[i64; 1]> = Box::new([99]);
+        let ready_ptr = Box::into_raw(ready) as usize;
+        let union_box: Box<[usize; 2]> = Box::new([7, ready_ptr]); // tag 7 = Ready
+        Box::into_raw(union_box) as *mut u8
+    }
+    // The lifted async closure: env word 0 is this fn; calling it builds and
+    // returns the `Future<i64>` box the worker then drives.
+    extern "C" fn make_ready_future(_env: *mut u8) -> *mut u8 {
+        make_future_box(ready99_poll)
+    }
+
+    #[test]
+    fn spawn_async_drives_immediately_ready_future() {
+        // env: one word = the lifted closure fn ptr (the closure ABI, `docs/09`).
+        let env: Box<[usize; 1]> = Box::new([make_ready_future as *const () as usize]);
+        let env_ptr = Box::into_raw(env) as *mut u8;
+        // Pending tid 9 here; the future is Ready (tag 7), so block_on returns.
+        let id = unsafe { lang_thread_spawn_async(env_ptr, 9) };
+        assert_eq!(wait_result(id), (99, false));
+    }
+
+    // A `poll` that is Pending once (waking itself for an immediate re-poll),
+    // then `Ready<i64>{ value: 123 }` — exercises a genuine suspend/resume cycle
+    // on the worker thread, the behavior `lang_thread_spawn` cannot perform.
+    static DRIVE_POLLS: AtomicU32 = AtomicU32::new(0);
+    extern "C" fn yield_once_poll(_d: *mut u8, ctx: *mut Context) -> *mut u8 {
+        if DRIVE_POLLS.fetch_add(1, O::SeqCst) == 0 {
+            let c = unsafe { &*ctx };
+            (c.wake_fn)(c.waker_data); // arrange an immediate re-poll
+            let pending: Box<[usize; 2]> = Box::new([9, 0]); // tag 9 = Pending
+            return Box::into_raw(pending) as *mut u8;
+        }
+        let ready: Box<[i64; 1]> = Box::new([123]);
+        let ready_ptr = Box::into_raw(ready) as usize;
+        let union_box: Box<[usize; 2]> = Box::new([7, ready_ptr]);
+        Box::into_raw(union_box) as *mut u8
+    }
+    extern "C" fn make_yield_future(_env: *mut u8) -> *mut u8 {
+        make_future_box(yield_once_poll)
+    }
+
+    #[test]
+    fn spawn_async_drives_suspending_future_to_completion() {
+        DRIVE_POLLS.store(0, O::SeqCst);
+        let env: Box<[usize; 1]> = Box::new([make_yield_future as *const () as usize]);
+        let env_ptr = Box::into_raw(env) as *mut u8;
+        let id = unsafe { lang_thread_spawn_async(env_ptr, 9) };
+        assert_eq!(wait_result(id), (123, false));
+        // The worker polled twice: Pending, then Ready.
+        assert_eq!(DRIVE_POLLS.load(O::SeqCst), 2);
+    }
 }

@@ -1535,6 +1535,25 @@ function main() {
     }
 
     #[test]
+    fn async_thread_spawn_hovers_as_joinhandle_of_awaited_output() {
+        // An async `Thread.spawn` worker `() => Future<R>` yields `JoinHandle<R>`
+        // (the awaited `R`, not `Future<R>`) — docs/20 §1. Hovering the call must
+        // surface that signature, so the editor mirrors the checker.
+        let src = "\
+import { Future } from \"core:prelude\";
+import { Thread, JoinHandle, Joined, Panicked } from \"std:thread\";
+function main(): Future<null> async {
+  var h = Thread.spawn(() async => { 1 + 2 });
+  var _ = await h.join();
+}
+";
+        let c = Compiled::new(src.into());
+        let off = find_at(src, "Thread.spawn(");
+        let (_, ty) = c.expr_ty_at(off).expect("expr type at async Thread.spawn");
+        assert_eq!(c.display_ty(ty), "JoinHandle<i64>");
+    }
+
+    #[test]
     fn semantic_tokens_classify_prelude_types_and_primitives_in_type_position() {
         // Mirrors a realistic snippet (see examples/threads.otter): in type
         // position, `JoinHandle`, `Future`, `i64`, and `Thread` must all emit

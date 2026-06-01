@@ -443,6 +443,7 @@ fn intrinsic_str(i: &Intrinsic) -> &'static str {
         Intrinsic::ChannelNew => "channel-new",
         Intrinsic::ThreadSpawn { .. } => "thread-spawn",
         Intrinsic::ThreadJoin { .. } => "thread-join",
+        Intrinsic::ThreadDetach => "thread-detach",
         Intrinsic::YieldNow => "yield-now",
         Intrinsic::AsyncSleep => "async-sleep",
         Intrinsic::AsyncTimeout { .. } => "async-timeout",
