@@ -243,16 +243,28 @@ function require_positive(n: i64): i64 {
 <p>Spawned threads are the unit of fault isolation. A worker thread that panics is observable by
 its spawner via the join API:</p>
 
-<pre><code>var handle = spawn(function() { ... })
-var result = handle.join()
-match result {
-  Joined { value }     =&gt; print("ok: " + value),
-  Panicked { message } =&gt; print("worker died: " + message),
+<pre><code>var handle: JoinHandle&lt;i64&gt; = Thread.spawn(() =&gt; fallible())
+match await handle.join() {                 // async; suspends until the worker finishes
+  Joined&lt;i64&gt; j =&gt; print("ok: " + (j.value as str)),
+  Panicked p   =&gt; print("worker died: " + p.message),
 }</code></pre>
 
-<p><code>Joined&lt;T&gt;</code> and <code>Panicked</code> are unit/wrapper structs provided by stdlib.
-This is the <strong>only</strong> way to "recover" from a panic: isolate the fallible code in its
-own thread and join.</p>
+<p><code>Joined&lt;T&gt;</code> and <code>Panicked</code> are wrapper structs provided by stdlib
+(<code>std:thread</code>). Joining is the <strong>only</strong> way to "recover" from a panic:
+isolate the fallible code in its own worker and join. (A <code>spawn EXPR</code> task instead
+<em>re-propagates</em> the panic at the awaiter — see <a href="21-async.html#panic">async §11</a>.)</p>
+
+<div class="callout good">
+  <strong>How isolation works.</strong> A language <code>panic</code> raised inside generated
+  code cannot be unwound with the host unwinder — the generated (Cranelift) frames carry no
+  unwind tables. Each worker therefore runs its body under a <code>setjmp</code>/<code>longjmp</code>
+  <em>panic boundary</em> installed at the worker's entry: <code>panic</code> restores the saved
+  context directly back to the boundary, crossing the generated frames soundly without walking
+  them. Consistent with §2, the abandoned frames run <strong>no</strong> destructors on the way
+  out; the boundary instead restores the invariants explicitly — every <code>Shared&lt;T&gt;</code>
+  lock the worker still holds is released (no poisoning, <a href="20-concurrency.html">§4</a>) and
+  its stack roots are dropped so its objects become collectable (<a href="16-memory.html">memory</a>).
+  The <strong>main</strong> thread installs no boundary, so a panic there is fatal (exit 101).</div>
 
 <!-- =========================================================== -->
 <h2 id="style">8. Style</h2>

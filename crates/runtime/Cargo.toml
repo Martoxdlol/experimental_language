@@ -10,3 +10,7 @@ license.workspace = true
 # linker links the emitted object against `libruntime.a`.
 [lib]
 crate-type = ["rlib", "staticlib"]
+
+# Compiles the worker-panic-isolation setjmp/longjmp shim (src/panic_boundary.c).
+[build-dependencies]
+cc = "1"

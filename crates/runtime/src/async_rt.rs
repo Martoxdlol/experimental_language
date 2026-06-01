@@ -83,8 +83,10 @@ pub unsafe extern "C" fn lang_block_on(fut: *mut u8, pending_tid: i64) -> i64 {
 
     // `fut` lives only in this (native) frame, which the collector does not
     // scan; pin it (and thus its whole reachable graph, including the state
-    // struct) so a collection triggered inside `poll` cannot free it.
-    gc::add_extra_root(fut as usize);
+    // struct) so a collection triggered inside `poll` cannot free it. The pin is
+    // unwind-scoped: if a `poll` panics on a worker, the panic boundary's
+    // `release_unwind_pins` drops it (the `longjmp` skips the removal below).
+    gc::pin_for_unwind(fut as usize);
 
     let out = loop {
         // Decode the interface-object box: vtable @0, data @8.
@@ -121,7 +123,7 @@ pub unsafe extern "C" fn lang_block_on(fut: *mut u8, pending_tid: i64) -> i64 {
         gc::leave_native();
     };
 
-    gc::remove_extra_root(fut as usize);
+    gc::unpin_for_unwind(fut as usize);
     out
 }
 

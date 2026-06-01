@@ -1,0 +1,37 @@
+//@ kind: run
+//@ serial
+//@ description: a panicking `Thread.spawn` worker is isolated — it surfaces as `Panicked { message }` on `join` (with the exact panic message) while a sibling worker spawned alongside runs to completion and returns its value (docs/20 §1, docs/21 §11).
+//@ stdout:
+//~ a = panicked: worker 0 down
+//~ b = ok 25
+//~ c = panicked: divide by zero
+//~ done
+import { println } from "std:io";
+import { Future, panic } from "core:prelude";
+import { Thread, JoinHandle, Joined, Panicked } from "std:thread";
+
+function maybe_panic(n: i64): i64 {
+  if n == 0 { panic("worker " + (n as str) + " down"); }
+  n * n
+}
+
+// A panic raised by a *builtin* (divide-by-zero) must isolate the same way as an
+// explicit `panic`.
+function div(a: i64, b: i64): i64 { a / b }
+
+function show(label: str, r: Joined<i64> | Panicked) {
+  match r {
+    Joined<i64> j => println(label + " = ok " + (j.value as str)),
+    Panicked p    => println(label + " = panicked: " + p.message),
+  };
+}
+
+function main(): Future<null> async {
+  var a: JoinHandle<i64> = Thread.spawn(() => maybe_panic(0));
+  var b: JoinHandle<i64> = Thread.spawn(() => maybe_panic(5));
+  var c: JoinHandle<i64> = Thread.spawn(() => div(10, 0));
+  show("a", await a.join());
+  show("b", await b.join());
+  show("c", await c.join());
+  println("done");
+}

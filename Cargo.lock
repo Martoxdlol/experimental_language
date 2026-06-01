@@ -1110,6 +1110,9 @@ dependencies = [
 [[package]]
 name = "runtime"
 version = "0.1.0"
+dependencies = [
+ "cc",
+]
 
 [[package]]
 name = "rustc-hash"

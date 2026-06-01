@@ -20,6 +20,7 @@ pub mod gc_alloc;
 pub mod hash;
 pub mod list;
 pub mod map;
+pub mod panic_boundary;
 pub mod shared;
 pub mod strings;
 pub mod threads;
@@ -47,15 +48,29 @@ pub unsafe extern "C" fn lang_alloc(desc: *const u8) -> *mut u8 {
     unsafe { gc::alloc(desc) }
 }
 
-/// Terminate the current thread with a panic message (`docs/14`). Not
-/// catchable; on the main thread this ends the program. Prints to stderr and
-/// exits with code 101 (the conventional ICE/panic code).
+/// Raise a language panic with `msg` (`docs/14`).
+///
+/// On a **spawned worker** (`Thread.spawn` / `spawn EXPR`), a panic is isolated
+/// to that worker: a `setjmp`/`longjmp` boundary is installed at the worker's
+/// entry (see [`panic_boundary`]), so this captures the message and unwinds
+/// there — the worker surfaces as `Panicked { message }` to its joiner (or the
+/// panic re-propagates at a `spawn` awaiter) without aborting the process. On
+/// the **main thread** no boundary is installed, so the panic is fatal: print
+/// to stderr and exit with code 101 (the conventional panic code).
+///
+/// Not catchable from language code in either case.
 ///
 /// # Safety
 /// `msg` must be a valid `LangStr` pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lang_panic(msg: *const LangStr) -> ! {
     let bytes = unsafe { str_bytes(msg) };
+    if panic_boundary::boundary_active() {
+        // A spawned worker: unwind to its boundary instead of killing the
+        // process. The boundary restores GC/lock invariants and reports the
+        // panic to the joiner.
+        unsafe { panic_boundary::capture_panic(bytes) };
+    }
     eprintln!("panic: {}", String::from_utf8_lossy(bytes));
     std::process::exit(101);
 }

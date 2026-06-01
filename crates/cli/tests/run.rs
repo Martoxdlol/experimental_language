@@ -1531,6 +1531,110 @@ fn many_threads_under_gc_stress() {
 }
 
 #[test]
+fn worker_panic_is_isolated_and_reported_on_join() {
+    // `docs/20` §1 / `docs/21` §11: a `panic` in a `Thread.spawn` worker fails
+    // ONLY that worker — it surfaces as `Panicked { message }` on `join`, with
+    // the exact panic message, while a sibling spawned alongside completes. The
+    // process must NOT abort (the pre-isolation behavior).
+    let src = "function maybe(n: i64): i64 { if n == 0 { panic(\"down \" + (n as str)); } n * n }\n\
+               function show(label: str, r: Joined<i64> | Panicked) {\n\
+                 match r {\n\
+                   Joined<i64> j => println(label + \" ok \" + (j.value as str)),\n\
+                   Panicked p    => println(label + \" panic \" + p.message),\n\
+                 };\n\
+               }\n\
+               function main(): Future<null> async {\n\
+                 var a: JoinHandle<i64> = Thread.spawn(() => maybe(0));\n\
+                 var b: JoinHandle<i64> = Thread.spawn(() => maybe(7));\n\
+                 show(\"a\", await a.join());\n\
+                 show(\"b\", await b.join());\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "the process must not abort; stderr: {err}");
+    assert_eq!(out, "a panic down 0\nb ok 49\n");
+    // Native parity.
+    let (nout, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(nout, out, "JIT and native disagree");
+}
+
+#[test]
+fn worker_panic_releases_held_shared_lock() {
+    // `docs/20` §4: a panic inside a lock body unwinds to the worker boundary
+    // and RELEASES the lock (no poisoning). The async worker surfaces as
+    // `Panicked` on join; afterwards the cell is re-lockable and holds the
+    // mutation the panicking body made before it died.
+    let src = "struct C { value: i64 }\n\
+               function main(): Future<null> async {\n\
+                 var state: Shared<C> = Shared.new(C { value: 0 });\n\
+                 var s: Shared<C> = state.clone();\n\
+                 var h: JoinHandle<null> = Thread.spawn(() async => {\n\
+                   await s.lock((c) => { c.value = 1; panic(\"in body\"); 0 });\n\
+                   null\n\
+                 });\n\
+                 match await h.join() {\n\
+                   Joined<null> j => println(\"worker ok\"),\n\
+                   Panicked p     => println(\"worker \" + p.message),\n\
+                 };\n\
+                 match await state.try_lock((c) => c.value) {\n\
+                   i64 n         => println(\"reacquired \" + (n as str)),\n\
+                   LockBusy busy => println(\"still held\"),\n\
+                 };\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "worker in body\nreacquired 1\n");
+}
+
+#[test]
+fn spawn_await_repropagates_worker_panic() {
+    // `docs/21` §11: a `spawn EXPR` task panic is RE-PROPAGATED at the awaiter
+    // (promise-rejection model). With the awaiter on `main` (no boundary), the
+    // program terminates with the worker's message and a non-zero exit. The
+    // recoverable form is `JoinHandle.join` (tested above), not awaiting `spawn`.
+    let src = "function work(): Future<i64> async { panic(\"rejected\"); 0 }\n\
+               function main(): Future<null> async {\n\
+                 var h: Future<i64> = spawn work();\n\
+                 var v: i64 = await h;\n\
+                 println(\"unreachable\");\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(!ok, "awaiting a panicked spawn must propagate (non-zero exit)");
+    assert!(err.contains("rejected"), "message should propagate; stderr: {err}");
+    assert!(out.is_empty(), "nothing after the propagated panic; stdout: {out}");
+}
+
+#[test]
+fn worker_panic_isolation_is_stable_under_gc_stress() {
+    // Panic isolation + concurrent reclamation: a worker that allocates heavily
+    // then panics leaves the heap consistent while siblings allocate; the result
+    // is identical with and without `OTTER_FUSION_GC=stress` (no corruption).
+    let src = "function churn(id: i64, doom: bool): i64 {\n\
+                 var acc: i64 = 0; var i: i64 = 0;\n\
+                 while i < 2000 { var t: str = \"x-${id}-${i}\"; acc = acc + t.size(); i = i + 1; }\n\
+                 if doom { panic(\"doom \" + (id as str)); }\n\
+                 acc\n\
+               }\n\
+               function tag(r: Joined<i64> | Panicked): str {\n\
+                 match r { Joined<i64> j => \"ok\", Panicked p => p.message }\n\
+               }\n\
+               function main(): Future<null> async {\n\
+                 var a: JoinHandle<i64> = Thread.spawn(() => churn(0, true));\n\
+                 var b: JoinHandle<i64> = Thread.spawn(() => churn(1, false));\n\
+                 var c: JoinHandle<i64> = Thread.spawn(() => churn(2, true));\n\
+                 println(tag(await a.join()));\n\
+                 println(tag(await b.join()));\n\
+                 println(tag(await c.join()));\n\
+               }";
+    let (out1, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    let (out2, _, ok2) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
+    assert!(ok2);
+    assert_eq!(out1, "doom 0\nok\ndoom 2\n");
+    assert_eq!(out1, out2, "GC stress changed the result (memory corruption)");
+}
+
+#[test]
 fn spawn_rejects_mutable_capture() {
     // A spawned closure capturing a mutable (struct) value is rejected until
     // deep-clone of captures lands (`docs/20` §1).

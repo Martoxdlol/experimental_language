@@ -21,6 +21,16 @@
 //! [`Context`]) and reports `Pending`, so the *task* suspends while the OS
 //! thread is free to do other work. When the worker eventually finishes, it
 //! invokes the stored waker(s), which re-poll the awaiting task.
+//!
+//! **Worker-panic isolation** (`docs/14`, `docs/20` §1, `docs/21` §11): every
+//! worker runs its body under a `setjmp`/`longjmp` panic boundary
+//! ([`crate::panic_boundary::run_under_boundary`]). A `panic` inside the worker
+//! unwinds to that boundary rather than aborting the process; the boundary
+//! restores GC/lock invariants and [`publish_panic`] records the message. The
+//! worker then surfaces as `Panicked { message }` to a `join()`er, while a
+//! `spawn EXPR` awaiter has the panic *re-propagated* at its own `await`
+//! ([`spawn_poll`]) — the JS/Dart "promise rejection" model. Sibling workers
+//! are unaffected.
 
 use crate::gc;
 use std::collections::HashMap;
@@ -51,10 +61,11 @@ struct ThreadInner {
     taken: bool,
     /// The worker's return value, widened to a machine word (`docs/18`).
     result: i64,
-    /// True if the worker panicked. Panic isolation is a follow-up; currently a
-    /// worker panic aborts the process, so this stays false.
+    /// True if the worker panicked (its body unwound to the panic boundary).
     panicked: bool,
-    /// The worker's panic message (`str` pointer), valid when `panicked`.
+    /// The worker's panic message — a GC-pinned `str` field-block pointer, valid
+    /// when `panicked`. Pinned by the boundary for the cross-thread handoff and
+    /// unpinned by the joiner once it has been copied into the `Panicked` box.
     message: usize,
     /// Wakers from suspended `join()` futures.
     waiters: Vec<Waker>,
@@ -100,6 +111,45 @@ fn publish_done(ctl: &ThreadCtl, result: i64) {
     }
 }
 
+/// Publish a worker's panic and wake every joiner suspended on it. `message` is
+/// a GC-pinned `str` field-block pointer (the panic message), kept pinned until
+/// the joiner copies it into the `Panicked` box.
+fn publish_panic(ctl: &ThreadCtl, message: usize) {
+    let wakers = {
+        let mut g = ctl.inner.lock().unwrap();
+        g.panicked = true;
+        g.message = message;
+        g.done = true;
+        std::mem::take(&mut g.waiters)
+    };
+    for (data, wake) in wakers {
+        wake(data as *mut u8);
+    }
+}
+
+/// Common worker tail (`docs/20` §1): drop the spawner's pin on the worker's
+/// input (`env` or `fut`) and publish the [`run_under_boundary`] outcome to the
+/// joiner — either the (now-pinned) result or the captured panic message.
+///
+/// [`run_under_boundary`]: crate::panic_boundary::run_under_boundary
+fn finish_worker(ctl: &ThreadCtl, input_addr: usize, outcome: Result<i64, usize>) {
+    match outcome {
+        Ok(result) => {
+            // Pin the result for the cross-thread handoff, then release the
+            // spawner's pin on the now-consumed input.
+            gc::add_extra_root(result as usize);
+            gc::remove_extra_root(input_addr);
+            publish_done(ctl, result);
+        }
+        Err(message) => {
+            // The boundary already released held locks + unwind pins and pinned
+            // `message`. Drop the spawner's input pin and report the panic.
+            gc::remove_extra_root(input_addr);
+            publish_panic(ctl, message);
+        }
+    }
+}
+
 /// Spawn `() => R` on a new OS thread. `env` is the closure environment
 /// (`[fn_ptr][captures…]`); the function pointer is its first word. Returns a
 /// registry id for the resulting `JoinHandle<R>`.
@@ -130,26 +180,27 @@ pub unsafe extern "C" fn lang_thread_spawn(env: *mut u8, float_kind: i64) -> u64
         // Register as a mutator and gate on the world barrier before touching
         // managed memory, so the collector always accounts for this thread.
         gc::thread_start();
-        let fn_ptr = unsafe { (env_addr as *const usize).read() };
-        let result = match float_kind {
-            8 => {
-                let f: extern "C" fn(*mut u8) -> f64 = unsafe { std::mem::transmute(fn_ptr) };
-                f(env_addr as *mut u8).to_bits() as i64
+        // Run the closure under the panic boundary so a `panic` in the worker
+        // is isolated to it (surfaced as `Panicked` on `join`) instead of
+        // aborting the process.
+        let outcome = crate::panic_boundary::run_under_boundary(|| {
+            let fn_ptr = unsafe { (env_addr as *const usize).read() };
+            match float_kind {
+                8 => {
+                    let f: extern "C" fn(*mut u8) -> f64 = unsafe { std::mem::transmute(fn_ptr) };
+                    f(env_addr as *mut u8).to_bits() as i64
+                }
+                4 => {
+                    let f: extern "C" fn(*mut u8) -> f32 = unsafe { std::mem::transmute(fn_ptr) };
+                    f(env_addr as *mut u8).to_bits() as i64
+                }
+                _ => {
+                    let f: extern "C" fn(*mut u8) -> i64 = unsafe { std::mem::transmute(fn_ptr) };
+                    f(env_addr as *mut u8)
+                }
             }
-            4 => {
-                let f: extern "C" fn(*mut u8) -> f32 = unsafe { std::mem::transmute(fn_ptr) };
-                f(env_addr as *mut u8).to_bits() as i64
-            }
-            _ => {
-                let f: extern "C" fn(*mut u8) -> i64 = unsafe { std::mem::transmute(fn_ptr) };
-                f(env_addr as *mut u8)
-            }
-        };
-        // Pin the result for the cross-thread handoff to the joiner.
-        gc::add_extra_root(result as usize);
-        // The environment is no longer needed by the child.
-        gc::remove_extra_root(env_addr);
-        publish_done(&worker, result);
+        });
+        finish_worker(&worker, env_addr, outcome);
     });
     ctl.inner.lock().unwrap().os = Some(os);
     id
@@ -175,10 +226,10 @@ pub unsafe extern "C" fn lang_async_spawn(fut: *mut u8, pending_tid: i64) -> u64
     let worker = ctl.clone();
     let os = std::thread::spawn(move || {
         gc::thread_start();
-        let result = unsafe { crate::async_rt::lang_block_on(fut_addr as *mut u8, pending_tid) };
-        gc::add_extra_root(result as usize); // pin the result for the joiner
-        gc::remove_extra_root(fut_addr);
-        publish_done(&worker, result);
+        let outcome = crate::panic_boundary::run_under_boundary(|| unsafe {
+            crate::async_rt::lang_block_on(fut_addr as *mut u8, pending_tid)
+        });
+        finish_worker(&worker, fut_addr, outcome);
     });
     ctl.inner.lock().unwrap().os = Some(os);
     id
@@ -214,19 +265,22 @@ pub unsafe extern "C" fn lang_thread_spawn_async(env: *mut u8, pending_tid: i64)
     let worker = ctl.clone();
     let os = std::thread::spawn(move || {
         gc::thread_start();
-        // Call the lifted async closure to obtain its `Future<R>` box.
-        let fn_ptr = unsafe { (env_addr as *const usize).read() };
-        let f: extern "C" fn(*mut u8) -> *mut u8 = unsafe { std::mem::transmute(fn_ptr) };
-        let fut = f(env_addr as *mut u8);
-        // Pin the future across the call→block_on window, then release the env.
-        gc::add_extra_root(fut as usize);
-        gc::remove_extra_root(env_addr);
-        // Drive the future to completion on this worker (the `spawn`-keyword
-        // path). The awaited `R` comes back widened to a machine word.
-        let result = unsafe { crate::async_rt::lang_block_on(fut, pending_tid) };
-        gc::add_extra_root(result as usize); // pin the result for the joiner
-        gc::remove_extra_root(fut as usize);
-        publish_done(&worker, result);
+        let outcome = crate::panic_boundary::run_under_boundary(|| {
+            // Call the lifted async closure to obtain its `Future<R>` box.
+            let fn_ptr = unsafe { (env_addr as *const usize).read() };
+            let f: extern "C" fn(*mut u8) -> *mut u8 = unsafe { std::mem::transmute(fn_ptr) };
+            let fut = f(env_addr as *mut u8);
+            // Pin the future across the call→block_on window (unwind-scoped, so a
+            // panic in the body releases it). `env` stays pinned by the spawner
+            // until `finish_worker`.
+            gc::pin_for_unwind(fut as usize);
+            // Drive the future to completion on this worker (the `spawn`-keyword
+            // path). The awaited `R` comes back widened to a machine word.
+            let result = unsafe { crate::async_rt::lang_block_on(fut, pending_tid) };
+            gc::unpin_for_unwind(fut as usize);
+            result
+        });
+        finish_worker(&worker, env_addr, outcome);
     });
     ctl.inner.lock().unwrap().os = Some(os);
     id
@@ -397,10 +451,12 @@ extern "C" fn thread_join_poll(data: *mut u8, ctx: *mut Context) -> *mut u8 {
     };
     gc::resume();
 
-    // The value now lives in the (traced) Ready slot; unpin the cross-thread
-    // root on the first Ready poll.
+    // The handed-off value now lives in the (traced) Ready graph — the worker's
+    // `R` for a normal completion, or the panic `message` (inside the `Panicked`
+    // box) for a panic. Unpin the corresponding cross-thread root on the first
+    // Ready poll.
     if !was_taken {
-        gc::remove_extra_root(result as usize);
+        gc::remove_extra_root(if panicked { message } else { result as usize });
     }
 
     r
@@ -661,6 +717,58 @@ mod tests {
     }
     extern "C" fn make_yield_future(_env: *mut u8) -> *mut u8 {
         make_future_box(yield_once_poll)
+    }
+
+    /// A lifted sync worker that raises a language panic. `lang_panic` runs on
+    /// the worker thread (which has a boundary installed), so it must `longjmp`
+    /// back instead of terminating the process.
+    extern "C" fn panicking_worker(_env: *mut u8) -> i64 {
+        let msg = unsafe { crate::strings::lang_str_from_utf8(b"boom".as_ptr(), 4) };
+        unsafe { crate::lang_panic(msg) };
+    }
+    extern "C" fn answer_worker(_env: *mut u8) -> i64 {
+        42
+    }
+
+    /// Join a worker's OS thread so its mutator handle fully deregisters (and
+    /// its alloc log drains) before the heap-resetting teardown.
+    fn join_worker(id: u64) {
+        let os = registry().lock().unwrap().get(&id).cloned().and_then(|c| c.inner.lock().unwrap().os.take());
+        if let Some(os) = os {
+            let _ = os.join();
+        }
+    }
+
+    #[test]
+    fn worker_panic_is_isolated_and_reports_message() {
+        // Shares the process-global heap (the boundary builds a managed message);
+        // serialize against the GC tests and reset the heap around it.
+        let _g = crate::gc::TEST_LOCK.lock().unwrap();
+        unsafe { crate::gc::free_all() };
+
+        // A panicking worker must not abort the process: it publishes `panicked`
+        // with its message, and a sibling spawned alongside completes normally.
+        let penv: Box<[usize; 1]> = Box::new([panicking_worker as *const () as usize]);
+        let aenv: Box<[usize; 1]> = Box::new([answer_worker as *const () as usize]);
+        let pid = unsafe { lang_thread_spawn(Box::into_raw(penv) as *mut u8, 0) };
+        let aid = unsafe { lang_thread_spawn(Box::into_raw(aenv) as *mut u8, 0) };
+
+        let (_pr, panicked) = wait_result(pid);
+        assert!(panicked, "the worker's panic was isolated and recorded");
+        // The message is the pinned `str` the boundary built.
+        let msg = registry().lock().unwrap().get(&pid).cloned().unwrap().inner.lock().unwrap().message;
+        let bytes = unsafe { crate::strings::str_bytes(msg as *const crate::strings::LangStr) };
+        assert_eq!(bytes, b"boom", "panic message propagated through the boundary");
+
+        let (ar, ap) = wait_result(aid);
+        assert!(!ap, "the sibling did not panic");
+        assert_eq!(ar, 42, "the sibling completed normally despite the panic");
+
+        // Teardown: join both workers, unpin the message, reset the heap.
+        join_worker(pid);
+        join_worker(aid);
+        gc::remove_extra_root(msg);
+        unsafe { crate::gc::free_all() };
     }
 
     #[test]

@@ -1404,8 +1404,8 @@ The tracing GC is functionally complete for single-threaded programs.
       **One OS thread per worker is intended** — `Thread.spawn` is the real-OS-thread
       primitive (Rust `std::thread::spawn` analogue), so a worker may block freely;
       massive lightweight concurrency is the `spawn` keyword's job (and a future
-      `Task.spawn` on an M:N executor — see "What's next"). The only open follow-up
-      for `Thread.spawn` itself is **worker-panic isolation**. JIT + native parity;
+      `Task.spawn` on an M:N executor — see "What's next"). **Worker-panic
+      isolation is now done** (see its own item below). JIT + native parity;
       `examples/async_thread_spawn.otter` + `concurrency/async_thread_spawn_*`
       cases (lock, parallel, detach, cross-thread channel, GC-stress).
       **`JoinHandle<R>.join()` is async + non-blocking**: it
@@ -1434,7 +1434,34 @@ The tracing GC is functionally complete for single-threaded programs.
       §). (The intermittent threaded *crash* once attributed to contention was a
       separate async-state-machine bug — a sync `for`+`await` loop losing its
       iteration state across a suspend — now fixed; see the async section.)
-      TODO: worker-panic isolation (currently a worker panic aborts the process).
+- [x] **Worker-panic isolation (`docs/14`, `docs/20` §1, `docs/21` §11): a
+      panicking worker fails only itself.** A language `panic` raised in generated
+      code cannot be unwound by the host unwinder (Cranelift frames have no unwind
+      tables), so each worker runs its body under a `setjmp`/`longjmp` **panic
+      boundary** installed at the worker's entry (`crates/runtime/src/panic_boundary.c`
+      built by `build.rs` via the `cc` crate; Rust glue in `panic_boundary.rs`).
+      `lang_panic` checks `otter_pb_active()`: on a worker it captures the message
+      and `longjmp`s to the boundary (restoring the saved context across the
+      generated frames soundly, no frame-walk); on the **main** thread no boundary
+      is installed, so a panic stays fatal (exit 101). The boundary
+      (`run_under_boundary`) restores the invariants the `longjmp` skipped: it
+      drains held `Shared` locks (`lang_shared_release_all` — no poisoning,
+      `docs/20` §4) and the thread's transient cross-`poll` GC pins
+      (`gc::release_unwind_pins`, used by `block_on`), then materialises the
+      message as a pinned `str`. `finish_worker` publishes `Panicked { message }`
+      so a `JoinHandle.join()` surfaces it recoverably, while a `spawn EXPR`
+      awaiter has the panic *re-propagated* at its own `await` (`spawn_poll`) —
+      the promise-rejection model (`docs/21` §11). Sibling workers are unaffected.
+      Covers `Thread.spawn` (sync + async closures) and the `spawn` keyword
+      (one-OS-thread-per-task today). JIT + native parity; the C shim is bundled
+      into both the `rlib` (JIT) and `libruntime.a` (native). Tests: 5 runtime
+      unit/integration (panic_boundary + a real worker-panic), 4 CLI integration
+      (isolated join, lock-release, `spawn` propagation, GC-stress parity), and
+      e2e `concurrency/{worker_panic_sibling_survives,worker_panic_gc_stress,
+      spawn_panic_propagates,lock_released_on_panic}` (the last graduated from
+      XFAIL). The **executor-multiplexed** case (many `Task.spawn` tasks sharing
+      one work-stealing worker thread, where the boundary must sit at the poll
+      call site) is a separate follow-on after the M:N executor lands.
 - [x] **Channels (`docs/20` §2): `channel<T>()`, `send`, `recv`, `try_recv`, and
       deterministic close-on-last-sender-drop + `Receiver: Iterator`.**
       `channel<T>()` (a recognised builtin, like `Thread.spawn`) allocates a
@@ -2187,8 +2214,9 @@ feature, JIT≡native byte-identical and GC-stress clean.
   closure under the lock (driving an `async` body's future to completion, so the lock is
   HELD across the body's `await`s — fixing the release-before-await footgun) → clone the
   result out *while held* (via a codegen-emitted clone thunk) → release. Cancel/panic
-  release via a per-thread held-lock set (`lang_shared_release_all`) — the worker-panic
-  side fully closes once **worker-panic isolation** lands. Only *synchronous* `Thread.spawn`
+  release via a per-thread held-lock set (`lang_shared_release_all`) — drained by the
+  **worker-panic boundary** (now done; see its entry above) so a panicking lock body
+  releases the lock with no poisoning. Only *synchronous* `Thread.spawn`
   workers cannot lock (the narrowed compile error → use an *async* `Thread.spawn` worker or
   the `spawn` keyword); an async worker drives its future with a real executor and may lock.
   A new sema escape/detachment taint pass
@@ -2218,8 +2246,14 @@ feature, JIT≡native byte-identical and GC-stress clean.
   privileged build-script macros (§future).
 - **Channel close on last-`Sender` drop** + `Receiver: Iterator` termination —
   needs *deterministic* `Drop` (tension with GC-timed best-effort `Drop`).
-- **Worker-panic isolation** — a panicking thread/`spawn` worker currently aborts
-  the process (Rust unwinding can't cross Cranelift frames).
+- **Worker-panic isolation** — **done** (`Thread.spawn` + `spawn` keyword): a
+  panicking worker fails only itself (surfaces as `Panicked` on `join`, or
+  re-propagates at a `spawn` awaiter) via a `setjmp`/`longjmp` panic boundary at
+  the worker entry — host unwinding can't cross Cranelift frames. Locks released,
+  roots dropped. See the Phase-5 concurrency entry. *Follow-on after the M:N
+  executor:* the executor-multiplexed case (boundary at the poll call site so a
+  panicking `Task` unwinds only its own state machine, leaving sibling tasks on
+  the same worker thread alive).
 - **M:N work-stealing executor + `Task.spawn` (`std:task`)** — the async runtime is
   one-OS-thread-per-task today. Add a real multi-threaded work-stealing scheduler
   (a small worker pool, per-worker run queues + stealing, a global injector, and a

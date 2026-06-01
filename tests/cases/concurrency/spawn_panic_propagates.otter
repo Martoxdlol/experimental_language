@@ -1,0 +1,19 @@
+//@ kind: panic
+//@ serial
+//@ stderr: panic: spawned task failed
+//@ description: a panic in a `spawn EXPR` task is re-propagated at the awaiter (the JS/Dart "promise rejection" model, docs/21 §11). When the awaiter is `main`, the program terminates with the worker's panic message and exit 101 — isolation surfaces the panic recoverably only via `JoinHandle.join` (Joined | Panicked), not via awaiting a `spawn`.
+import { println } from "std:io";
+import { Future, panic } from "core:prelude";
+
+function work(): Future<i64> async {
+  panic("spawned task failed");
+  0
+}
+
+function main(): Future<null> async {
+  var h: Future<i64> = spawn work();
+  // The worker panicked; awaiting it re-raises the panic here. With no boundary
+  // on main, the process exits 101 with the propagated message.
+  var v: i64 = await h;
+  println("unreachable ${v}");
+}

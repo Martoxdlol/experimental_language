@@ -854,6 +854,45 @@ pub extern "C" fn lang_gc_pin(p: *mut u8) {
 pub extern "C" fn lang_gc_unpin(p: *mut u8) {
     remove_extra_root(p as usize);
 }
+
+thread_local! {
+    /// Transient global pins this thread holds across a `poll` (e.g. the future
+    /// `block_on` is driving). On the normal path they are released by the
+    /// matching [`unpin_for_unwind`]; if a worker panics, the `longjmp` skips
+    /// that release, so the panic boundary calls [`release_unwind_pins`] to drop
+    /// them — otherwise the worker's abandoned objects would stay pinned (and
+    /// thus uncollectable) forever.
+    static UNWIND_PINS: std::cell::RefCell<Vec<usize>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Pin `p` globally *and* record it as an unwind-scoped pin on this thread, so a
+/// worker panic boundary can release it if the matching [`unpin_for_unwind`] is
+/// skipped by a `longjmp`. Use for pins held across a `poll` on a thread that
+/// may panic (the async executor's driven future).
+pub fn pin_for_unwind(p: usize) {
+    add_extra_root(p);
+    UNWIND_PINS.with(|v| v.borrow_mut().push(p));
+}
+
+/// Unpin a pointer pinned by [`pin_for_unwind`] (normal, non-panicking path).
+pub fn unpin_for_unwind(p: usize) {
+    remove_extra_root(p);
+    UNWIND_PINS.with(|v| {
+        let mut b = v.borrow_mut();
+        if let Some(i) = b.iter().rposition(|&x| x == p) {
+            b.remove(i);
+        }
+    });
+}
+
+/// Release every unwind-scoped pin still held by this thread (worker
+/// panic-boundary cleanup, `docs/16`). A no-op when none are outstanding.
+pub fn release_unwind_pins() {
+    let pins: Vec<usize> = UNWIND_PINS.with(|v| std::mem::take(&mut *v.borrow_mut()));
+    for p in pins {
+        remove_extra_root(p);
+    }
+}
 /// Serializes collectors: only one thread runs the stop-the-world protocol.
 static GC_TURN: Mutex<()> = Mutex::new(());
 /// Generation bumped after each collection; parked threads wait on it.
@@ -1169,12 +1208,18 @@ pub unsafe fn free_all() {
     BYTES_SINCE_GC.store(0, Ordering::Relaxed);
 }
 
+/// Serializes tests that mutate the process-global heap. The collector, the
+/// `@RefCounted` primitives, the threads runtime, and the panic boundary all
+/// share one heap, so any test that allocates managed objects or asserts heap
+/// state must hold this lock (and `free_all` to reset) — otherwise concurrent
+/// test threads interleave allocations and corrupt each other's assertions.
+/// Shared across modules (`gc::tests`, `threads::tests`, `panic_boundary::tests`).
+#[cfg(test)]
+pub(crate) static TEST_LOCK: Mutex<()> = Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // These tests mutate the process-global heap, so they must not interleave.
-    static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     // Build a plain descriptor blob with the given size and pointer offsets.
     fn plain_desc(size: u64, ptrs: &[u32]) -> Vec<u8> {
