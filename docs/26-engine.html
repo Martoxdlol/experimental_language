@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>26. Embedding Engine</title>
+<style>
+  :root {
+    --fg: #1b1b1d; --muted: #5a5a60; --bg: #fdfdfc;
+    --accent: #1a4a8a; --accent-2: #2a6f4d; --warn: #b54708;
+    --code-bg: #f4f2ee; --code-fg: #1b1b1d; --border: #e4e1dc;
+    --table-stripe: #f8f7f4; --pub: #2a6f4d; --priv: #b54708;
+    --pkg: #1a4a8a; --core: #6b4ba8; --proposed: #a8327a;
+  }
+  html { box-sizing: border-box; } *, *::before, *::after { box-sizing: inherit; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color: var(--fg); background: var(--bg); line-height: 1.55;
+    max-width: 980px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem; }
+  h1, h2, h3, h4 { color: var(--fg); line-height: 1.25; margin-top: 2.2rem; margin-bottom: 0.6rem; }
+  h1 { font-size: 2rem; border-bottom: 2px solid var(--border); padding-bottom: 0.4rem; }
+  h2 { font-size: 1.45rem; margin-top: 2.6rem; }
+  h3 { font-size: 1.15rem; color: var(--accent); }
+  h4 { font-size: 1rem; color: var(--muted); }
+  p { margin: 0.7rem 0; } ul, ol { margin: 0.7rem 0; padding-left: 1.6rem; } li { margin: 0.3rem 0; }
+  code { font-family: "SF Mono", Menlo, Consolas, "Courier New", monospace;
+    background: var(--code-bg); color: var(--code-fg); padding: 0.1em 0.35em;
+    border-radius: 3px; font-size: 0.92em; }
+  pre { background: var(--code-bg); color: var(--code-fg); padding: 0.9rem 1rem;
+    border-radius: 6px; overflow-x: auto; font-size: 0.88rem; line-height: 1.5;
+    border: 1px solid var(--border); }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: 0.94rem; }
+  th, td { text-align: left; padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { background: var(--code-bg); font-weight: 600; }
+  tbody tr:nth-child(even) { background: var(--table-stripe); }
+  .lead { font-size: 1.05rem; color: var(--muted); margin-bottom: 1.6rem; }
+  .toc { background: var(--code-bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 1rem 1.2rem; margin: 1.6rem 0 2rem; font-size: 0.94rem; }
+  .toc ol { margin: 0.2rem 0 0; padding-left: 1.3rem; }
+  .toc a { color: var(--accent); text-decoration: none; } .toc a:hover { text-decoration: underline; }
+  .diagram { background: #ffffff; border: 1px solid var(--border);
+    border-radius: 8px; padding: 1.4rem; margin: 1.4rem 0; overflow-x: auto; }
+  .diagram-caption { font-size: 0.85rem; color: var(--muted); text-align: center;
+    margin-top: 0.6rem; font-style: italic; }
+  svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+  svg text { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; fill: var(--fg); }
+  svg .label { font-family: -apple-system, system-ui, sans-serif; font-size: 12px; }
+  svg .small { font-size: 10px; fill: var(--muted); }
+  .callout { border-left: 4px solid var(--accent); background: #f0f4fa;
+    padding: 0.8rem 1rem; margin: 1.2rem 0; border-radius: 0 6px 6px 0; }
+  .callout.warn { border-color: var(--warn); background: #fbf3ec; }
+  .callout.good { border-color: var(--accent-2); background: #eef6f1; }
+  .callout strong { display: block; margin-bottom: 0.3rem; }
+  .pill { display: inline-block; padding: 0.05em 0.45em; margin: 0 0.15em;
+    font-size: 0.78em; font-weight: 600; border-radius: 999px;
+    vertical-align: middle; font-family: -apple-system, system-ui, sans-serif; }
+  .pill.spec    { background: #eef6f1; color: var(--accent-2); border: 1px solid #c2dccf; }
+  .pill.new     { background: #f9eef5; color: var(--proposed); border: 1px solid #d9bdcd; }
+  .pill.planned { background: #fbf3ec; color: var(--warn);    border: 1px solid #e8c9aa; }
+  .pill.core    { background: #f3eefa; color: var(--core);    border: 1px solid #d3c4ec; }
+  .pill.std     { background: #eaf0f8; color: var(--accent);  border: 1px solid #c2d2e8; }
+  .three-col { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; margin: 1.2rem 0; }
+  @media (max-width: 720px) { .three-col { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<h1>26. Embedding Engine <span class="pill new">design</span></h1>
+<p class="lead">
+  Run Otter Fusion <em>from</em> Otter Fusion. <code>std:engine</code> compiles and
+  executes guest source inside a sandboxed <strong>isolate</strong> — its own heap,
+  capability whitelist, host-bound modules, and hard resource limits. The substrate
+  for embedding edge-function-style workloads, plugin systems, and trusted-but-bounded
+  user scripts.
+</p>
+
+<div class="toc">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#model">The isolate model</a></li>
+    <li><a href="#lifecycle">Lifecycle &amp; API surface</a></li>
+    <li><a href="#capabilities">Capability policy — gating <code>std:</code>/<code>core:</code>/<code>pkg:</code></a></li>
+    <li><a href="#bindings">Host bindings — virtual modules</a></li>
+    <li><a href="#bridge">The bridge ABI — <code>@Bridge</code> structs</a></li>
+    <li><a href="#channels">Bridge channels &amp; shared state</a></li>
+    <li><a href="#invoke">Invoking any entry — sync &amp; async</a></li>
+    <li><a href="#isolation">Resource control &amp; per-isolate runtime</a></li>
+    <li><a href="#security">Security model</a></li>
+    <li><a href="#impl">Implementation &amp; staging</a></li>
+    <li><a href="#summary">Summary</a></li>
+  </ol>
+</div>
+
+<div class="callout warn">
+  <strong>Status — design, not yet implemented.</strong> This chapter specifies a
+  feature that does not exist yet. The <em>substrate</em> is real and proven: the
+  compiler is already a Cranelift JIT (<code>backend::compile</code>), and the
+  procedural-macro system (chapter 22) already compiles guest source from a string,
+  binds host functions into a virtual <code>core:compiler</code> module, JIT-compiles
+  it, and calls it by pointer at compile time. <code>std:engine</code> turns that
+  one-shot, compile-time machinery into a persistent, re-entrant, sandboxed runtime
+  surface. §10 records exactly what exists today versus what is new work.
+</div>
+
+<!-- =========================================================== -->
+<h2 id="model">1. The isolate model</h2>
+
+<p>An <strong>isolate</strong> is a self-contained execution context. It owns a
+private heap and garbage collector, a private set of runtime registries (channels,
+locks, finalizers), a frozen <em>capability policy</em> deciding which modules its
+guest code may import, a set of <em>host bindings</em> (native functions the guest
+can call), and a set of <em>resource limits</em> the runtime enforces. Guest code
+loaded into an isolate cannot observe or affect anything outside it except through
+the bindings and bridge values the host explicitly hands it.</p>
+
+<p>This mirrors the isolate/context split familiar from V8 — but it is built on the
+language's own GC and Cranelift backend rather than an embedded VM, and the boundary
+is enforced at three layers: <strong>compile time</strong> (capability gating rejects
+forbidden imports before any code runs), <strong>ABI</strong> (only declared
+<a href="#bridge">bridge types</a> cross the boundary), and <strong>runtime</strong>
+(per-isolate heap accounting + cooperative interruption enforce limits).</p>
+
+<div class="diagram">
+  <svg viewBox="0 0 920 250" role="img" aria-label="Host program embedding a guest isolate">
+    <!-- host -->
+    <rect x="20" y="20" width="380" height="210" rx="10" fill="#eaf0f8" stroke="#1a4a8a" stroke-width="2"/>
+    <text x="210" y="44" text-anchor="middle" font-weight="700" fill="#1a4a8a">Host program</text>
+    <g transform="translate(40, 64)" font-size="11">
+      <text y="0">var iso = Isolate.new()</text>
+      <text y="20">&#160;&#160;.allow(["std:io"])</text>
+      <text y="40">&#160;&#160;.bind("host:env", "now", now_impl)</text>
+      <text y="60">&#160;&#160;.limits(Limits { ... })</text>
+      <text y="84">var unit = iso.load(source)?</text>
+      <text y="104">var out = await iso.invoke(</text>
+      <text y="124">&#160;&#160;unit, "handle", [req])</text>
+    </g>
+    <!-- arrows -->
+    <g stroke="#5a5a60" stroke-width="1.5" fill="none" marker-end="url(#ar)">
+      <path d="M400 110 L470 110"/>
+      <path d="M520 150 L450 150" />
+    </g>
+    <defs><marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#5a5a60"/></marker></defs>
+    <text x="460" y="100" class="small">invoke("handle", args)</text>
+    <text x="455" y="170" class="small">bridged return / host calls</text>
+    <!-- guest -->
+    <rect x="520" y="20" width="380" height="210" rx="10" fill="#fbf3ec" stroke="#b54708" stroke-width="2"/>
+    <text x="710" y="44" text-anchor="middle" font-weight="700" fill="#b54708">Isolate — own heap · GC · limits</text>
+    <g transform="translate(540, 64)" font-size="11">
+      <text y="0">import { now } from "host:env"</text>
+      <text y="20">import { println } from "std:io"</text>
+      <text y="48">@Bridge struct Req { path: str }</text>
+      <text y="68">@Bridge struct Resp { code: i32 }</text>
+      <text y="92">function handle(r: Req): Resp {</text>
+      <text y="112">&#160;&#160;println("t=${now()}")</text>
+      <text y="132">&#160;&#160;Resp { code: 200 }</text>
+      <text y="152">}</text>
+    </g>
+  </svg>
+  <div class="diagram-caption">The host configures, loads, and invokes; the guest sees only whitelisted modules, host bindings, and bridge values.</div>
+</div>
+
+<!-- =========================================================== -->
+<h2 id="lifecycle">2. Lifecycle &amp; API surface</h2>
+
+<p>The whole module lives under <code>std:engine</code> and must be imported. The
+core types:</p>
+
+<table>
+  <thead><tr><th>Type</th><th>Role</th></tr></thead>
+  <tbody>
+    <tr><td><code>Isolate</code></td><td>A sandboxed execution context owning a private heap, GC, registries, policy, bindings, and limits.</td></tr>
+    <tr><td><code>Unit</code></td><td>A compiled guest compilation unit, loaded into one isolate. Holds the JIT'd module and its public entry table.</td></tr>
+    <tr><td><code>Policy</code></td><td>The capability whitelist (§3). Frozen when the first unit is loaded.</td></tr>
+    <tr><td><code>Limits</code></td><td>Hard resource caps (§8): heap, allocation budget, wall-clock timeout, stack depth.</td></tr>
+    <tr><td><code>Stats</code></td><td>Measured usage of the last invocation / the isolate's lifetime.</td></tr>
+    <tr><td><code>LoadError</code></td><td>Compilation/sandbox failure: a diagnostic list (capability denials, type errors, parse errors).</td></tr>
+    <tr><td><code>EngineError</code></td><td>Runtime failure of an invocation: <code>Timeout</code>, <code>OutOfMemory</code>, <code>GuestPanic{message}</code>, <code>NoSuchEntry</code>, <code>BadArgs</code>.</td></tr>
+  </tbody>
+</table>
+
+<p>The lifecycle is <strong>configure → load → invoke → observe → dispose</strong>:</p>
+
+<pre><code>import { Isolate, Policy, Limits } from "std:engine"
+import { println } from "std:io"
+
+// 1. Configure. Builder methods return the isolate for chaining; deny-by-default.
+var iso = Isolate.new()
+    .allow(["core:collections", "std:io"])     // capability whitelist (§3)
+    .bind("host:env", "now", () => clock_ms()) // host binding (§4)
+    .limits(Limits {
+        max_heap_bytes:  64_000_000,           // 64 MiB hard cap
+        max_alloc_bytes: 256_000_000,          // cumulative allocation budget
+        timeout_ms:      500,                  // per-invocation wall clock
+        max_stack_depth: 2048,
+    })
+
+// 2. Load guest source. Compiles inside the isolate under the policy; a forbidden
+//    import or a type error returns LoadError without running anything.
+var unit = iso.load(guest_source)?            // Unit | LoadError
+
+// 3. Invoke any public entry by name with bridged args (§5, §7).
+var resp = await iso.invoke(unit, "handle", [req])   // Resp | EngineError
+
+// 4. Observe.
+var s = iso.stats()
+println("peak heap=${s.peak_heap_bytes}  elapsed=${s.elapsed_ms}ms")
+
+// 5. Dispose — frees the isolate's heap and registries (also runs on Drop).
+iso.dispose()
+</code></pre>
+
+<p>An <code>Isolate</code> is reusable: a host loads one <code>Unit</code> once and
+<code>invoke</code>s it many times (the edge-function hot path — compile once, run
+per request). Loading is the expensive step; invocation is a direct JIT call.</p>
+
+<!-- =========================================================== -->
+<h2 id="capabilities">3. Capability policy — gating <code>std:</code>/<code>core:</code>/<code>pkg:</code></h2>
+
+<p>An isolate is <strong>deny-by-default</strong>. With no <code>.allow(...)</code>,
+the guest gets only the implicit prelude syntax (<code>docs/17</code> §8): built-in
+control flow, primitive operations, and <code>str</code> methods. Every named
+symbol — <code>List</code>, <code>println</code>, <code>channel</code>,
+<code>Thread</code> — must be granted.</p>
+
+<h3>Granting toolchain modules</h3>
+
+<p><code>.allow(paths)</code> whitelists built-in module <em>views</em> at the same
+granularity the language already exposes them (<code>docs/18</code>): a guest may be
+given <code>std:io</code> but not <code>std:thread</code>, <code>core:collections</code>
+but not <code>core:ffi</code>.</p>
+
+<pre><code>Isolate.new().allow([
+  "core:prelude",        // Iterator, Clone, Eq, Ord, ToStr, panic, ... (usually granted)
+  "core:collections",    // List, Map, Set, Entry
+  "std:io",              // print, println
+  "std:async",           // yield_now, sleep, timeout, AsyncIterator
+])
+</code></pre>
+
+<p>Enforcement is at <strong>compile time</strong>, the strongest possible form: a
+guest that writes <code>import { Thread } from "std:thread"</code> when
+<code>std:thread</code> is not in the whitelist fails to compile and returns a
+<code>LoadError</code> — it never produces machine code. This reuses the existing
+import-resolution gate; the policy narrows the set of resolvable built-in views.</p>
+
+<h3>Packages and the filesystem</h3>
+
+<p>The <code>pkg:</code> and <code>file:</code> schemes are <strong>denied outright</strong>
+unless explicitly granted, and an isolate runs in "direct mode" by default where they
+are already hard errors (<code>docs/17</code> §13). To grant a vetted dependency the
+host names it and supplies its source; the engine resolves only the allowed set:</p>
+
+<pre><code>Isolate.new()
+    .allow(["core:prelude"])
+    .allow_package("json", json_source_tree)   // only "json" is importable as pkg:json
+    // file: imports remain denied — no .allow_files(...) call was made
+</code></pre>
+
+<div class="callout">
+  <strong>Granularity.</strong> The policy gates at the <em>module</em> level, not the
+  symbol level. "Allow <code>std:io</code> but only <code>println</code>, not
+  <code>print</code>" is out of scope — fine-grained per-symbol capabilities would
+  require a capability type system upstream of import resolution. Module-level gating
+  matches how the standard library is already partitioned and is sufficient for
+  sandboxing.
+</div>
+
+<!-- =========================================================== -->
+<h2 id="bindings">4. Host bindings — virtual modules</h2>
+
+<p>The host injects native functions the guest can call by binding them into a
+<strong>virtual module</strong> under a host-chosen scheme (<code>host:</code>). The
+guest imports them like any other module; the engine wires each to the host's
+implementation.</p>
+
+<pre><code>// Host side — register implementations into a virtual module.
+var iso = Isolate.new()
+    .allow(["core:prelude"])
+    .bind("host:env", "now",    () => clock_ms())
+    .bind("host:env", "getenv", (key: str) => lookup_env(key))   // str -> str
+    .bind("host:log", "warn",   (msg: str) => { log_warn(msg); null })
+
+// Guest side — import and call them.
+import { now, getenv } from "host:env"
+import { warn } from "host:log"
+
+function handle(): i64 {
+    warn("started at ${now()}")
+    now()
+}
+</code></pre>
+
+<p>A binding's implementation is any callable: a host closure (when the embedder is
+itself Otter code) or a native function (when the embedder is the CLI / a Rust host).
+The signature is part of the binding and is restricted to <a href="#bridge">bridge-compatible
+types</a> — primitives, <code>char</code>, <code>bool</code>, <code>str</code>,
+<code>@Bridge</code> structs, and bridge channel endpoints (§6). This is the same
+mechanism the macro host uses to expose <code>core:compiler</code> over the AST arena
+(chapter 22 §8–9), generalized to host-defined modules and signatures.</p>
+
+<div class="callout warn">
+  <strong>Host calls run on the host's behalf.</strong> A binding is a hole in the
+  sandbox: whatever the host function does (touch the filesystem, the network, a
+  database) happens with the host's privileges, not the guest's. Bind narrowly and
+  validate arguments — bindings are the intended, audited capability surface, so the
+  guest's power is exactly the union of its whitelisted modules and the bindings you
+  give it.
+</div>
+
+<!-- =========================================================== -->
+<h2 id="bridge">5. The bridge ABI — <code>@Bridge</code> structs</h2>
+
+<p>Data crossing the host↔guest boundary uses a <strong>declared, stable layout</strong> —
+the same contract as a <code>repr(C)</code> FFI struct (<code>docs/19</code>), not the
+managed heap. A struct annotated <code>@Bridge</code> has a frozen field layout and
+<strong>crosses by value</strong>: its bytes are copied across the boundary per the
+declared layout. Both sides declare the same <code>@Bridge</code> struct, and the
+engine validates layout compatibility by the contract (name + field types + order),
+<em>not</em> by runtime type identity.</p>
+
+<pre><code>@Bridge
+struct Request {
+    method: str,
+    path:   str,
+    status: i32,
+}
+
+@Bridge
+struct Response {
+    code:    i32,
+    headers: i64,        // bridge-compatible plain-data fields only
+    body:    str,
+}
+</code></pre>
+
+<h3>Why declared layout instead of shared pointers</h3>
+
+<p>Otter Fusion's runtime type identity (<code>type_id</code>) is assigned per
+<em>compiler instance</em>. The host and a separately-compiled guest assign the
+<em>same</em> struct <em>different</em> type ids, so passing a managed struct pointer
+across the boundary would break every type-id-dependent operation (<code>is</code>,
+<code>as</code>, dynamic dispatch, <code>Drop</code>). Copy-by-value over a declared
+layout sidesteps this entirely — and, decisively, it keeps the two sides' heaps
+independent, which is what makes <a href="#isolation">per-isolate heaps and hard
+memory caps</a> possible. A zero-copy shared pointer would couple host and guest to
+one GC and forfeit isolation.</p>
+
+<h3>What may cross</h3>
+
+<table>
+  <thead><tr><th>Kind</th><th>Crosses?</th><th>How</th></tr></thead>
+  <tbody>
+    <tr><td>Primitives (<code>i8..i64</code>, <code>u8..u64</code>, <code>f32/f64</code>, <code>bool</code>, <code>char</code>)</td><td>✅</td><td>Passed directly as ABI words.</td></tr>
+    <tr><td><code>str</code></td><td>✅</td><td>Copied as bytes into the receiving heap.</td></tr>
+    <tr><td><code>@Bridge</code> struct</td><td>✅</td><td>Copied field-by-field over the frozen layout. Fields must themselves be bridge-compatible.</td></tr>
+    <tr><td>Fixed array <code>[T; N]</code> of bridge types</td><td>✅</td><td>Copied element-wise.</td></tr>
+    <tr><td>Bridge channel endpoint (§6)</td><td>✅</td><td>By engine-managed handle, not by heap pointer.</td></tr>
+    <tr><td>Managed <code>List</code>/<code>Map</code>/<code>Set</code></td><td>❌</td><td>Heap-local to an isolate; cross via a <code>@Bridge</code> wrapper, a bridge channel, or by copying into one.</td></tr>
+    <tr><td>Interface objects, unions, closures, <code>Drop</code> types</td><td>❌</td><td>Type-id- or heap-dependent; not bridge-compatible.</td></tr>
+  </tbody>
+</table>
+
+<p>The compiler enforces bridge-compatibility where a type is used as a binding
+parameter, a binding return, or an <code>invoke</code> argument/result: a non-bridge
+type in those positions is a compile error pointing at the offending field or
+parameter.</p>
+
+<!-- =========================================================== -->
+<h2 id="channels">6. Bridge channels &amp; shared state</h2>
+
+<p>Copy-by-value covers request/response shapes. For <strong>streaming</strong>,
+incremental results, or a long-lived back-channel, the host creates a
+<strong>bridge channel</strong> and hands an endpoint to the guest as a bound value.
+Bridge channels carry bridge-compatible messages and reuse the channel semantics of
+<code>docs/20</code> §2 (FIFO, blocking <code>recv</code>, close-on-last-sender), but
+are managed by the <em>engine</em> layer so they can span the host↔isolate boundary
+even though each isolate otherwise has its own channel registry (§8).</p>
+
+<pre><code>// Host: make a bridge channel and pass the receiver end into the guest.
+var (tx, rx) = iso.bridge_channel&lt;LogLine&gt;()    // (Sender&lt;LogLine&gt;, Receiver&lt;LogLine&gt;)
+iso.bind_value("host:log", "sink", tx)           // bind an endpoint as an importable value
+
+spawn drain(rx)                                  // host consumes asynchronously
+await iso.invoke(unit, "run", [])                // guest sends through the bound sink
+
+// Guest:
+import { sink } from "host:log"
+function run() {
+    sink.send(LogLine { level: 1, text: "hello" })   // LogLine is @Bridge
+}
+</code></pre>
+
+<p>The final result of an invocation is delivered the same two ways: a bridged
+<strong>return value</strong> for a single result (§7), or a bridge channel for a
+stream of results. <code>Shared&lt;T&gt;</code> (<code>docs/20</code> §4) may likewise
+be exposed as a bound value when host and guest need shared mutable state behind the
+async lock; the shared cell, like a bridge channel, is engine-managed.</p>
+
+<!-- =========================================================== -->
+<h2 id="invoke">7. Invoking any entry — sync &amp; async</h2>
+
+<p>Any <code>pub</code> function in the loaded unit is an entry; there is no special
+<code>main</code>. <code>invoke</code> takes the entry name and a list of bridged
+arguments, marshals them in, runs the function, and marshals the bridged result out.</p>
+
+<pre><code>// Synchronous entry.
+var resp = iso.invoke(unit, "handle", [req])           // Response | EngineError
+
+// Asynchronous entry — the guest function is `async`; the host awaits it.
+var resp = await iso.invoke(unit, "handle_async", [req])
+
+// Introspection: discover entries and their signatures before calling.
+for e in unit.entries() {
+    println("${e.name}(${e.arity}) -> ${e.returns}")
+}
+</code></pre>
+
+<p>Sync and async entries use the same call; the engine detects an <code>async</code>
+entry (its return type is a <code>Future</code>) and drives it on the isolate's
+executor, completing the host's <code>await</code> when the guest future resolves.
+This keeps the language's "no user-visible <code>block_on</code>" rule
+(<code>docs/21</code> §6): the host stays in its own async world while the guest runs
+in the isolate.</p>
+
+<p>An invocation that exceeds a limit, panics, or names a missing entry returns
+<code>EngineError</code> rather than affecting the host:</p>
+
+<pre><code>match iso.invoke(unit, "handle", [req]) {
+    Response r          =&gt; serve(r),
+    EngineError.Timeout =&gt; reply_504(),
+    EngineError.OutOfMemory =&gt; reply_503(),
+    EngineError.GuestPanic p =&gt; { log("guest: ${p.message}"); reply_500() },
+}
+</code></pre>
+
+<!-- =========================================================== -->
+<h2 id="isolation">8. Resource control &amp; per-isolate runtime</h2>
+
+<p>Hard limits require somewhere to enforce them. The runtime today keeps its heap,
+GC, and registries in process-global state, which can only support best-effort,
+process-wide limits. <code>std:engine</code> therefore introduces
+<strong>per-isolate runtime state</strong>: each isolate owns its heap, GC budget and
+threshold, mutator set, channel/<code>Shared</code>/finalizer registries, and
+allocation accounting. This is the foundation that makes every limit below a genuine
+per-isolate wall rather than a global heuristic.</p>
+
+<h3>The current-isolate context</h3>
+
+<p>Every runtime entry point (<code>lang_alloc</code>, the GC safepoint, channel and
+lock operations, thread/async spawn) is repointed from process-global statics to a
+per-isolate <strong>runtime context</strong>. The context is selected by a
+thread-local <em>current isolate</em> pointer, set when a thread enters an isolate's
+guest code and cleared on exit — so generated code needs no extra parameter and the
+hot path stays a thread-local read. Stop-the-world GC operates per isolate (it stops
+only that isolate's mutators), so one isolate collecting or paused never blocks
+another.</p>
+
+<h3>Limits</h3>
+
+<table>
+  <thead><tr><th>Limit</th><th>Enforcement</th><th>On breach</th></tr></thead>
+  <tbody>
+    <tr><td><code>max_heap_bytes</code></td><td>Checked in the isolate's allocator against its tracked live + reserved bytes.</td><td>Allocation fails → <code>OutOfMemory</code>, invocation unwinds.</td></tr>
+    <tr><td><code>max_alloc_bytes</code></td><td>Cumulative allocation counter per invocation.</td><td><code>OutOfMemory</code> — bounds total churn even if live set stays small.</td></tr>
+    <tr><td><code>timeout_ms</code></td><td>A deadline checked at the cooperative safepoints codegen already emits (every loop header, before allocation, at native-call boundaries).</td><td><code>Timeout</code> — the guest unwinds cleanly at the next safepoint.</td></tr>
+    <tr><td><code>max_stack_depth</code></td><td>Recursion counter / guard page.</td><td><code>GuestPanic</code> (stack overflow), contained to the isolate.</td></tr>
+  </tbody>
+</table>
+
+<div class="callout good">
+  <strong>Cooperative interruption fits the existing design.</strong> The backend
+  already inserts GC safepoints at every loop back-edge and around blocking calls
+  (<code>docs/16</code>). A deadline / cancel flag checked at those same points gives
+  timeouts and cancellation almost for free: interruption latency is one loop
+  iteration. A straight-line, loop-free, allocation-free snippet is inherently bounded
+  and needs no interruption. The one residual case — a deliberately tight inner loop
+  the optimizer collapsed past a back-edge — is bounded by <code>max_alloc_bytes</code>
+  or, if truly necessary, by running the isolate on a thread the host can abandon.
+</div>
+
+<h3>Measurement</h3>
+
+<p><code>iso.stats()</code> reports per-invocation and lifetime usage: peak and current
+heap bytes, cumulative bytes allocated, collection count, and wall-clock elapsed.
+These come directly from the per-isolate heap accounting the limits already maintain.</p>
+
+<!-- =========================================================== -->
+<h2 id="security">9. Security model</h2>
+
+<p>The guest's authority is <strong>exactly</strong> the union of (a) its whitelisted
+built-in/package modules and (b) the host bindings given to it — nothing more. The
+three enforcement layers compose:</p>
+
+<ul>
+  <li><strong>Compile-time</strong>: a forbidden <code>import</code> never compiles
+      (§3). The strongest layer — denied capabilities produce no code.</li>
+  <li><strong>ABI</strong>: only declared bridge types cross the boundary (§5); the
+      guest cannot hand the host (or receive) an arbitrary heap pointer, so it cannot
+      reach into host memory or corrupt host objects.</li>
+  <li><strong>Runtime</strong>: per-isolate heap accounting and cooperative
+      interruption enforce memory and time limits (§8); a guest panic, timeout, or OOM
+      is contained and surfaced as <code>EngineError</code>.</li>
+</ul>
+
+<div class="callout warn">
+  <strong>Threats this does not cover.</strong> The engine bounds <em>resources</em>
+  and <em>capabilities</em>, not micro-architectural side channels (timing, Spectre)
+  or the correctness of host bindings. Treat in-process isolates as a strong
+  defense-in-depth boundary for trusted-but-bounded code and plugins; for fully
+  adversarial multi-tenant workloads, run each isolate (or pool of isolates) in its
+  own OS process behind the same API — the bridge ABI is designed to survive an IPC
+  transport because it never shares heap pointers.
+</div>
+
+<!-- =========================================================== -->
+<h2 id="impl">10. Implementation &amp; staging</h2>
+
+<p>What the design rests on, and what is new work.</p>
+
+<h3>Already exists (the proven substrate)</h3>
+<ul>
+  <li><strong>In-process JIT of guest source</strong>: <code>backend::compile</code> /
+      <code>compile_with_symbols</code> over a full front-end pass
+      (<code>sema::analyze_multi_ctx</code>).</li>
+  <li><strong>Host-function binding</strong>: the macro host registers
+      <code>extern "C"</code> functions + a symbol table into a JIT and exposes them
+      through a virtual module (<code>core:compiler</code>) — the exact template for §4.</li>
+  <li><strong>Calling guest code by name/pointer</strong>: <code>Jit::func_ptr</code>;
+      per-entry trampolines follow the macro-shim pattern for §7.</li>
+  <li><strong>Capability gate seam</strong>: import resolution already gates schemes
+      via the resolve context; §3 narrows the resolvable built-in views.</li>
+  <li><strong>repr-C struct ABI</strong>: extern-struct layout + decorators
+      (<code>docs/19</code>) are the basis for <code>@Bridge</code> (§5).</li>
+  <li><strong>Channels / <code>Shared</code> / async executor</strong> (chapters 20–21)
+      back the bridge channels and async-entry driving of §6–§7.</li>
+  <li><strong>Cooperative safepoints</strong> at loop headers and native boundaries —
+      the interruption points for §8.</li>
+</ul>
+
+<h3>New work</h3>
+<ul>
+  <li><span class="pill planned">planned</span> <code>std:engine</code> prelude surface
+      + host externs (<code>Isolate</code>, <code>Unit</code>, <code>Policy</code>,
+      <code>Limits</code>, <code>Stats</code>, errors).</li>
+  <li><span class="pill planned">planned</span> The capability-policy field on the
+      resolve context + the per-isolate built-in-view whitelist enforcement.</li>
+  <li><span class="pill planned">planned</span> <code>@Bridge</code> decorator:
+      layout freeze, bridge-compatibility checking, and field-by-field marshalling in
+      the entry trampolines and bindings.</li>
+  <li><span class="pill planned">planned</span> Per-entry invocation trampolines + an
+      entry/signature introspection table on <code>Unit</code>.</li>
+  <li><span class="pill planned">planned</span> <strong>Per-isolate runtime state</strong>
+      — the largest item: thread a runtime-context handle (selected by a thread-local
+      current-isolate pointer) through every <code>lang_*</code> entry point, so heap,
+      GC, registries, and accounting are per isolate. Enables hard limits and true
+      isolation.</li>
+  <li><span class="pill planned">planned</span> Limit enforcement: heap/alloc caps in
+      the per-isolate allocator; deadline/cancel flag at safepoints; stack-depth guard.</li>
+  <li><span class="pill planned">planned</span> Engine-managed bridge channels /
+      <code>Shared</code> cells that span the boundary across per-isolate registries.</li>
+</ul>
+
+<p>Staging keeps each step shippable: (1) a single-isolate <code>load</code>/<code>invoke</code>
+returning primitives under the capability whitelist; (2) <code>@Bridge</code> structs
+and <code>str</code> across the boundary; (3) host bindings + bridge channels;
+(4) per-isolate runtime state; (5) hard limits + stats; (6) async entries. The
+per-isolate-state phase is the deep one and gates real hard limits — earlier phases
+run on the shared global heap with best-effort limits and are explicit about it.</p>
+
+<!-- =========================================================== -->
+<h2 id="summary">11. Summary</h2>
+
+<div class="callout good">
+  <ul>
+    <li>An <strong>isolate</strong> runs guest Otter Fusion with its own heap, GC,
+        registries, capability policy, host bindings, and hard limits.</li>
+    <li><strong>Deny-by-default capabilities</strong> whitelist built-in modules at
+        module granularity and are enforced at compile time; <code>pkg:</code>/<code>file:</code>
+        are denied unless explicitly granted with vetted source.</li>
+    <li><strong>Host bindings</strong> expose native/host functions through virtual
+        <code>host:</code> modules the guest imports — the audited capability surface.</li>
+    <li>Data crosses by <strong><code>@Bridge</code> (repr-C, copy-by-value)</strong>:
+        a frozen layout validated by contract, never by runtime type id — which is also
+        what keeps the two heaps independent.</li>
+    <li><strong>Bridge channels</strong> and <strong>bridged return values</strong>
+        carry results and streams; <code>Shared&lt;T&gt;</code> exposes shared mutable
+        state.</li>
+    <li><strong>Any <code>pub</code> entry</strong> is callable by name, sync or async,
+        with the host driving an async guest future to completion.</li>
+    <li><strong>Per-isolate runtime state</strong> makes <code>max_heap_bytes</code>,
+        <code>max_alloc_bytes</code>, <code>timeout_ms</code>, and <code>max_stack_depth</code>
+        real per-isolate walls, with cooperative interruption at existing safepoints
+        and usage reported via <code>stats()</code>.</li>
+    <li>Builds on the proven macro-host substrate (chapter 22); the largest new piece
+        is making the runtime isolate-aware.</li>
+  </ul>
+</div>
+
+</body>
+</html>
