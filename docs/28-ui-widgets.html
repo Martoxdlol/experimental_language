@@ -1,0 +1,764 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>28. UI Framework — Widgets, Elements &amp; Reactivity</title>
+<style>
+  :root {
+    --fg: #1b1b1d; --muted: #5a5a60; --bg: #fdfdfc;
+    --accent: #1a4a8a; --accent-2: #2a6f4d; --warn: #b54708;
+    --code-bg: #f4f2ee; --code-fg: #1b1b1d; --border: #e4e1dc;
+    --table-stripe: #f8f7f4; --pub: #2a6f4d; --priv: #b54708;
+    --pkg: #1a4a8a; --core: #6b4ba8; --proposed: #a8327a;
+  }
+  html { box-sizing: border-box; } *, *::before, *::after { box-sizing: inherit; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color: var(--fg); background: var(--bg); line-height: 1.55;
+    max-width: 980px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem; }
+  h1, h2, h3, h4 { color: var(--fg); line-height: 1.25; margin-top: 2.2rem; margin-bottom: 0.6rem; }
+  h1 { font-size: 2rem; border-bottom: 2px solid var(--border); padding-bottom: 0.4rem; }
+  h2 { font-size: 1.45rem; margin-top: 2.6rem; }
+  h3 { font-size: 1.15rem; color: var(--accent); }
+  h4 { font-size: 1rem; color: var(--muted); }
+  p { margin: 0.7rem 0; } ul, ol { margin: 0.7rem 0; padding-left: 1.6rem; } li { margin: 0.3rem 0; }
+  code { font-family: "SF Mono", Menlo, Consolas, "Courier New", monospace;
+    background: var(--code-bg); color: var(--code-fg); padding: 0.1em 0.35em;
+    border-radius: 3px; font-size: 0.92em; }
+  pre { background: var(--code-bg); color: var(--code-fg); padding: 0.9rem 1rem;
+    border-radius: 6px; overflow-x: auto; font-size: 0.88rem; line-height: 1.5;
+    border: 1px solid var(--border); }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: 0.94rem; }
+  th, td { text-align: left; padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { background: var(--code-bg); font-weight: 600; }
+  tbody tr:nth-child(even) { background: var(--table-stripe); }
+  .lead { font-size: 1.05rem; color: var(--muted); margin-bottom: 1.6rem; }
+  .toc { background: var(--code-bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 1rem 1.2rem; margin: 1.6rem 0 2rem; font-size: 0.94rem;
+    column-count: 2; column-gap: 2rem; }
+  @media (max-width: 720px) { .toc { column-count: 1; } }
+  .toc ol { margin: 0.2rem 0 0; padding-left: 1.3rem; }
+  .toc a { color: var(--accent); text-decoration: none; } .toc a:hover { text-decoration: underline; }
+  .diagram { background: #ffffff; border: 1px solid var(--border);
+    border-radius: 8px; padding: 1.4rem; margin: 1.4rem 0; overflow-x: auto; }
+  .diagram pre { background: none; border: none; padding: 0; font-size: 0.8rem; line-height: 1.35; }
+  .diagram-caption { font-size: 0.85rem; color: var(--muted); text-align: center;
+    margin-top: 0.6rem; font-style: italic; }
+  .callout { border-left: 4px solid var(--accent); background: #f0f4fa;
+    padding: 0.8rem 1rem; margin: 1.2rem 0; border-radius: 0 6px 6px 0; }
+  .callout.warn { border-color: var(--warn); background: #fbf3ec; }
+  .callout.good { border-color: var(--accent-2); background: #eef6f1; }
+  .callout strong { display: block; margin-bottom: 0.3rem; }
+  .pill { display: inline-block; padding: 0.05em 0.45em; margin: 0 0.15em;
+    font-size: 0.78em; font-weight: 600; border-radius: 999px;
+    vertical-align: middle; font-family: -apple-system, system-ui, sans-serif; }
+  .pill.spec    { background: #eef6f1; color: var(--accent-2); border: 1px solid #c2dccf; }
+  .pill.new     { background: #f9eef5; color: var(--proposed); border: 1px solid #d9bdcd; }
+  .pill.planned { background: #fbf3ec; color: var(--warn);    border: 1px solid #e8c9aa; }
+  .pill.core    { background: #f3eefa; color: var(--core);    border: 1px solid #d3c4ec; }
+  .pill.std     { background: #eaf0f8; color: var(--accent);  border: 1px solid #c2d2e8; }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 1.2rem 0; }
+  @media (max-width: 720px) { .two-col { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<h1>28. UI Framework — Widgets, Elements &amp; Reactivity <span class="pill new">design</span></h1>
+<p class="lead">
+  The user-level API of <code>std:ui</code>: a declarative, reactive UI in the spirit of
+  Flutter, written in idiomatic Otter Fusion. A widget is an ordinary struct that
+  <code>extend</code>s the <code>Widget</code> interface; state is a remembered
+  <code>Cell&lt;T&gt;</code> obtained from the build context; children are a
+  <code>List&lt;Widget&gt;</code>. Two authoring forms share one runtime — a fully explicit
+  <strong>manual</strong> form (just <code>struct</code> + <code>extend</code>, no macros) and
+  an optional <strong><code>@Component</code></strong> decorator macro that adds
+  Compose-style brevity by expanding to exactly that manual form. The catalog and names are
+  Flutter's; layout is Flutter's own constraint protocol (chapter 27 §2); the reactive core
+  is <strong>surgical recomposition</strong> — a state change re-runs only the scopes that
+  read it.
+</p>
+
+<div class="toc">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#scope">Scope &amp; the chapter-27 contract</a></li>
+    <li><a href="#trees">The three trees, from the top</a></li>
+    <li><a href="#idioms">Built from Otter Fusion idioms</a></li>
+    <li><a href="#manual">Authoring (1): the manual form</a></li>
+    <li><a href="#component">Authoring (2): the <code>@Component</code> macro</a></li>
+    <li><a href="#state">Reactive state &amp; surgical recomposition</a></li>
+    <li><a href="#context">The build context</a></li>
+    <li><a href="#reconcile">Reconciliation, keys &amp; element lifecycle</a></li>
+    <li><a href="#effects">Effects &amp; lifecycle</a></li>
+    <li><a href="#hooks-compose">Composable logic — hooks</a></li>
+    <li><a href="#inherited">Inherited state &amp; dependency injection</a></li>
+    <li><a href="#derived">Derived values &amp; <code>remember</code></a></li>
+    <li><a href="#gestures">Gestures &amp; hit testing</a></li>
+    <li><a href="#animation">Animation &amp; the ticker</a></li>
+    <li><a href="#catalog">The widget catalog</a></li>
+    <li><a href="#hooks">Mapping onto the engine hooks (ch. 27 §12)</a></li>
+    <li><a href="#example">End-to-end example</a></li>
+    <li><a href="#staging">Implementation &amp; staging</a></li>
+    <li><a href="#open">Open design decisions</a></li>
+    <li><a href="#summary">Summary</a></li>
+  </ol>
+</div>
+
+<div class="callout warn">
+  <strong>Status — design, not yet implemented.</strong> Chapter 27 specifies the engine half
+  this stands on; read it first. Substrate that already exists and that this chapter is built
+  from: interfaces + interface objects (chapter 10), generics + bounds (11), unions + <code>match</code>
+  (3, 8), first-class &amp; trailing closures (9), <code>@Derive</code>/decorator macros (22),
+  <code>@RefCounted</code> deterministic drop (16 §8), the <code>Iterator</code> protocol (18),
+  async/cancellation (21). §18 records new work.
+</div>
+
+<!-- =========================================================== -->
+<h2 id="scope">1. Scope &amp; the chapter-27 contract</h2>
+
+<p>Chapter 27 delivered a frame pipeline (build → layout → paint → composite → raster), a
+persistent <strong>render tree</strong> and <strong>layer tree</strong>, a <code>Canvas</code>
+interface, deterministic native-handle lifetimes, and five engine hooks for skipping clean work
+(§12.1). This chapter adds the <strong>widget layer</strong> (the declarative config the user
+writes), the <strong>element layer</strong> (the persistent instance tree that reconciles configs
+and owns state), and the <strong>reactive model</strong> (how a state change marks the build dirty
+set, and how narrowly).</p>
+
+<!-- =========================================================== -->
+<h2 id="trees">2. The three trees, from the top</h2>
+
+<p>Three parallel trees, as in Flutter. The user authors only the first; the framework manages
+the other two. Each is an <strong>interface object</strong> — the bare interface name used as a
+value type (docs/10 §8), exactly like <code>var a: Shape = Square { … }</code> in the
+dynamic-dispatch example.</p>
+
+<div class="diagram"><pre>
+   WIDGET tree            ELEMENT tree              RENDER tree
+   (immutable config,     (persistent instance,     (layout + paint,
+    rebuilt freely)        stable identity,          chapter 27 §2)
+                           owns remembered cells)
+   ───────────            ─────────────             ─────────────
+   Counter        ──►     ComponentElement  ──►     (composition only)
+     │                      │  owns its Cell<T>s
+     Column       ──►       MultiChildElement ──►     RenderFlex
+       ├ Text     ──►         LeafElement     ──►       RenderParagraph
+       └ Button   ──►         ComponentElement──►       RenderPointerListener
+                                                          └ RenderDecoratedBox
+</pre>
+  <div class="diagram-caption">A widget creates an element (<code>create_element</code>); an
+  element may create a render object. Many widgets are composition-only.</div>
+</div>
+
+<table>
+  <thead><tr><th>Tree</th><th>Value type</th><th>Lifetime</th><th>User-visible?</th></tr></thead>
+  <tbody>
+    <tr><td>Widget</td><td><code>Widget</code> (interface object)</td><td>rebuilt freely; immutable; cheap GC objects</td><td><strong>yes</strong> — what you write</td></tr>
+    <tr><td>Element</td><td><code>Element</code> (interface object)</td><td>persistent; reconciled in place; owns remembered cells</td><td>via the build context</td></tr>
+    <tr><td>Render</td><td><code>RenderObject</code> (ch. 27)</td><td>persistent; layout/paint; <code>@RefCounted</code> native peers</td><td>only for custom render widgets</td></tr>
+  </tbody>
+</table>
+
+<!-- =========================================================== -->
+<h2 id="idioms">3. Built from Otter Fusion idioms</h2>
+
+<p>Every construct in this chapter is an existing language feature, used the way the examples in
+<code>examples/</code> use it:</p>
+
+<table>
+  <thead><tr><th>Otter Fusion feature (docs)</th><th>How the UI API uses it</th></tr></thead>
+  <tbody>
+    <tr><td>Interface objects = the bare interface name as a value type (10 §8, 11 §5)</td><td><code>Widget</code>, <code>Element</code>, <code>RenderObject</code> are interface-object types: <code>function build(self, ctx: BuildContext): Widget</code>, <code>List&lt;Widget&gt;</code>.</td></tr>
+    <tr><td><code>extend T: I { … }</code> for impls; <code>self</code> receiver (10)</td><td>A widget is a struct: <code>extend Counter: Widget { function build(self, ctx) { … } }</code>.</td></tr>
+    <tr><td>Static methods — no <code>self</code>, called <code>Type.method()</code> (10 §10)</td><td>Constructors/helpers: <code>Cell.new(0)</code>, <code>Key.of(id)</code>, <code>Color.rgb(…)</code>, <code>EdgeInsets.all(8.0)</code>, <code>App.run(…)</code>.</td></tr>
+    <tr><td>Tuple structs, positional construction; record structs, literal construction (4)</td><td>Single-value leaves are tuple structs → <code>Text("hi")</code>, <code>Icon(Icons.star)</code>; multi-prop widgets are record structs → <code>Button { label: "+", on_tap: f }</code>.</td></tr>
+    <tr><td>Unions + <code>match</code> (3, 8)</td><td>Closed event/result sets: <code>type PointerEvent = PointerDown | PointerMove | PointerUp | PointerCancel</code>, dispatched with <code>match</code>.</td></tr>
+    <tr><td>First-class &amp; trailing closures, implicit <code>it</code> (9)</td><td>Handlers are closure fields (<code>on_tap: () =&gt; null</code>); child lists build with <code>items.map { … it … }</code>.</td></tr>
+    <tr><td><code>@Derive(Eq, Hash, Clone)</code>; decorator macros (22)</td><td>Config structs derive <code>Eq</code>/<code>Hash</code> so the reconciler skips unchanged subtrees; <code>@Component</code> is a decorator macro.</td></tr>
+    <tr><td><code>null</code> is the unit type; no compound assignment; assignment is a statement (2, 7)</td><td>Void handlers are <code>() =&gt; null</code>; state updates are <code>c.set(c.get() + 1)</code> or <code>c.update((n) =&gt; n + 1)</code> in a block — never <code>+=</code>.</td></tr>
+    <tr><td>No named/default arguments (9 §11); functional update via spread (4)</td><td>Named "arguments" are struct-literal fields; optional props use the spread default <code>Container { ..Container.defaults(), width: 80.0 }</code>.</td></tr>
+  </tbody>
+</table>
+
+<h3>The one interface</h3>
+<p>A widget implements a single interface — there is no stateless/stateful class split, because
+state is a remembered cell from the context (§6), so a "stateful" widget is just one whose
+<code>build</code> calls <code>ctx.state(…)</code>:</p>
+
+<pre><code>interface Widget {
+  function build(self, ctx: BuildContext): Widget;
+}
+</code></pre>
+
+<p>Leaf and render widgets (<code>Text</code>, <code>Container</code>, …) are framework structs
+that also implement <code>Widget</code>; their <code>build</code> produces a render object instead
+of a child widget (the element layer handles the distinction). User code almost always writes
+composition widgets whose <code>build</code> returns other widgets.</p>
+
+<!-- =========================================================== -->
+<h2 id="manual">4. Authoring (1): the manual form</h2>
+
+<p>Nothing but <code>struct</code> + <code>extend</code>. This always works, macros or not.</p>
+
+<h3>Stateless</h3>
+<pre><code>import { Widget, BuildContext } from "std:ui";
+import { Text } from "std:ui";
+
+struct Greeting { name: str }
+
+extend Greeting: Widget {
+  function build(self, ctx: BuildContext): Widget {
+    Text("hello, ${self.name}")
+  }
+}
+
+var g: Widget = Greeting { name: "Ada" };   // struct literal = the language's "named args"
+</code></pre>
+
+<h3>Stateful</h3>
+<p>State is a <code>Cell&lt;T&gt;</code> from <code>ctx.state(initial)</code> — <em>remembered</em>
+for the element's lifetime, so each rebuild gets the same cell. <code>.get()</code> reads (and
+subscribes the current scope, §6); <code>.set()</code>/<code>.update()</code> writes (and marks
+subscribers dirty).</p>
+
+<pre><code>import { Widget, BuildContext } from "std:ui";
+import { Column, Text, Button } from "std:ui";
+
+@Derive(Eq)                       // lets the reconciler skip this subtree when `start` is unchanged
+struct Counter { start: i64 }
+
+extend Counter: Widget {
+  function build(self, ctx: BuildContext): Widget {
+    var count = ctx.state(self.start);          // Cell<i64>, remembered across rebuilds
+    Column { children: [
+      Text("count: ${count.get()}"),                                  // read → subscribe
+      Button { label: "+", on_tap: () => { count.update((n: i64) => n + 1) } },  // write → notify
+    ] }
+  }
+}
+</code></pre>
+
+<p>Every line is plain Otter Fusion: an <code>extend … : Widget</code> implementation with a <code>self</code>
+receiver, a struct-literal <code>Column { children: [...] }</code>, a tuple-struct
+<code>Text(...)</code>, a record-struct <code>Button { … }</code> whose <code>on_tap</code> field
+is a block-bodied closure, and <code>Cell</code> methods. No macro is involved.</p>
+
+<!-- =========================================================== -->
+<h2 id="component">5. Authoring (2): the <code>@Component</code> macro</h2>
+
+<p><code>@Component</code> is a decorator macro (chapter 22) that writes §4 for you and
+<strong>expands to exactly that manual form</strong>. It is the only place the Compose-style
+sugar — bare-children blocks, <code>state()</code> with plain reads/writes — appears, because the
+macro rewrites the body it owns.</p>
+
+<pre><code>import { Component } from "std:ui";
+import { Column, Text, Button } from "std:ui";
+
+@Component
+function Counter(start: i64) {
+  var count = state(start)            // remembered Cell<i64>
+  Column {
+    Text("count: ${count}")                          // rewritten to count.get()
+    Button { label: "+", on_tap: () => { count = count + 1 } }  // rewritten to count.set(count + 1)
+  }
+}
+
+var c: Widget = Counter { start: 10 };   // call site stays a struct literal
+</code></pre>
+
+<p>The macro generates, and you could otherwise hand-write:</p>
+<ol>
+  <li>the config struct from the parameters, with <code>@Derive(Eq, Hash)</code> and a
+  <code>defaults()</code> static for spread construction;</li>
+  <li>the <code>extend … : Widget</code> implementation with the <code>build</code> body;</li>
+  <li><strong>state binding</strong> — <code>var x = state(…)</code> → <code>var x = ctx.state(…)</code>,
+  with <code>x</code> reads rewritten to <code>x.get()</code> and <code>x = e</code> statements to
+  <code>x.set(e)</code> (the write must be an assignment statement in a block — the macro rewrites
+  it; it cannot invent <code>+=</code>, which the lexer has no token for);</li>
+  <li><strong>content-block collection</strong> — bare widget statements inside a layout's trailing
+  block become its <code>children: [...]</code>;</li>
+  <li><strong>recompose-scope</strong> boundaries at child/control-flow points, plus const-scope
+  hoisting (chapter 27 §12.2).</li>
+</ol>
+
+<div class="callout good">
+  <strong>The macro is sugar, never new grammar.</strong> Call sites stay struct literals; there
+  are still no named call arguments and no <code>+=</code>. Its leverage is purely desugaring
+  within legal syntax — collecting block statements and rewriting tracked-cell access — so the
+  framework works identically with macros disabled.
+</div>
+
+<!-- =========================================================== -->
+<h2 id="state">6. Reactive state &amp; surgical recomposition</h2>
+
+<p>Identical semantics in both forms; the macro just hides <code>.get()/.set()</code>. The
+mechanism is a reactive cell plus scope-level auto-tracking.</p>
+
+<h3>6.1 The reactive cell</h3>
+<pre><code>struct Cell&lt;T&gt; { /* value + subscriber scopes — framework-internal */ }
+
+extend&lt;T&gt; Cell&lt;T&gt; {
+  function get(self): T { /* records: current scope depends on this cell */ }
+  function set(self, v: T) { /* marks subscriber scopes dirty; requests a frame (ch.27 §7) */ }
+  function update(self, f: (T) => T) { self.set(f(self.get())) }
+}
+</code></pre>
+
+<p><code>ctx.state(initial)</code> creates such a cell the first time a scope runs and returns the
+same one on every later rebuild (it is remembered on the element). <code>get</code> during a
+scope's execution records the dependency; <code>set</code> marks exactly the dependent scopes.</p>
+
+<h3>6.2 Recompose scopes — the unit of recomputation</h3>
+<p>A scope is a build fragment delimited at child / control-flow boundaries. In
+<code>Counter</code>, the <code>Text</code> and the <code>Button</code> are separate scopes. A
+write re-runs only the scopes that read the cell:</p>
+
+<div class="diagram"><pre>
+   count.update((n) => n + 1)
+        │  cell notifies its subscriber scopes
+        ▼
+   dirty scopes = { Text-scope }              ← Button never called count.get()
+        │  request_frame()
+        ▼
+   FRAME: re-run ONLY the Text scope → new Text("count: 1")
+        │  reconcile new Text vs old Text element  (§8)
+        ▼
+   RenderParagraph text changes → repaint boundary re-records just that;
+   the Column layout and the Button are untouched
+</pre>
+  <div class="diagram-caption">A write re-runs only the scopes that read the cell — not the whole
+  build, not sibling scopes.</div>
+</div>
+
+<h3>6.3 Soundness &amp; the escape hatch</h3>
+<p>Dirty marking is driven by <em>observed</em> <code>get()</code> calls, not static analysis, so
+any path from a cell to a scope creates the subscription when that scope runs; a scope that never
+reads a cell is provably independent of it. <code>ctx.rebuild_all()</code> opts a region into
+coarse, whole-build recomposition where fine-grained splitting is undesirable. Fine-grained is the
+default; coarse is explicit.</p>
+
+<!-- =========================================================== -->
+<h2 id="context">7. The build context</h2>
+
+<p><code>BuildContext</code> is the handle to an element's position in the tree, passed to
+<code>build</code> (and threaded implicitly by the macro). It is the user's window onto the element
+layer:</p>
+
+<table>
+  <thead><tr><th>Method</th><th>Purpose</th></tr></thead>
+  <tbody>
+    <tr><td><code>ctx.state&lt;T&gt;(initial): Cell&lt;T&gt;</code></td><td>create/recall a remembered reactive cell (§6)</td></tr>
+    <tr><td><code>ctx.watch&lt;T&gt;(): T</code></td><td>read inherited state and subscribe the current scope (§11)</td></tr>
+    <tr><td><code>ctx.read&lt;T&gt;(): T</code></td><td>read inherited state once, no subscription</td></tr>
+    <tr><td><code>ctx.derived&lt;T&gt;(compute): Cell&lt;T&gt;</code></td><td>a computed cell (§12)</td></tr>
+    <tr><td><code>ctx.size(): Size</code></td><td>this element's render size (valid post-layout)</td></tr>
+    <tr><td><code>ctx.rebuild_all()</code></td><td>opt this build out of scope tracking (§6.3)</td></tr>
+  </tbody>
+</table>
+
+<p>A <code>BuildContext</code> is valid only during build/lifecycle of its element; an escaped use
+is rejected the way the escape-analysis pass rejects an escaped <code>Shared</code> lock reference
+(chapter 20 §4).</p>
+
+<!-- =========================================================== -->
+<h2 id="reconcile">8. Reconciliation, keys &amp; element lifecycle</h2>
+
+<p>Each frame, a (re-built) widget subtree reconciles against the existing element subtree:</p>
+
+<ol>
+  <li><strong>Same slot, compatible widget</strong> (same struct type and <code>key</code>) →
+  <strong>update in place</strong>: the element keeps its identity and remembered cells; its
+  widget config is replaced. If the new config <code>==</code> the old (via <code>@Derive(Eq)</code>,
+  §3), the subtree is skipped entirely.</li>
+  <li><strong>Incompatible</strong> → <strong>unmount</strong> the old subtree (running effect
+  cleanups + dropping render objects, deterministic via <code>@RefCounted</code>) and
+  <strong>mount</strong> a fresh one.</li>
+  <li><strong>Lists of children</strong> → matched by <code>key</code> first, then position, so a
+  reordered/inserted keyed child moves its element (and cells) instead of rebuilding.</li>
+</ol>
+
+<pre><code>// Build the child list with `.map { it }` (trailing closure + implicit `it`, docs/09 §6) —
+// `Key.of(...)` is a static method; no list-comprehension grammar is needed.
+Column { children:
+  self.items.map { TodoRow { key: Key.of(it.id), item: it } }
+}
+</code></pre>
+
+<p>Lifecycle: <code>initial → mounted → (updated)* → defunct</code>. Because render objects holding
+native peers are <code>@RefCounted</code> (chapter 27 §11), unmounting a subtree releases GPU
+resources deterministically — Flutter's <code>dispose()</code> contract, automatic.</p>
+
+<!-- =========================================================== -->
+<h2 id="effects">9. Effects &amp; lifecycle</h2>
+
+<p>Side effects bound to an element's lifetime are registered from <code>build</code> via context
+methods that take closures. They subsume <code>initState</code>/<code>didUpdateWidget</code>/<code>dispose</code>:</p>
+
+<table>
+  <thead><tr><th>Effect</th><th>Runs</th></tr></thead>
+  <tbody>
+    <tr><td><code>ctx.on_mount(body)</code></td><td>once, after first insertion</td></tr>
+    <tr><td><code>ctx.launched(keys, async_body)</code></td><td>spawns a task on enter; cancelled on leave or key change</td></tr>
+    <tr><td><code>ctx.effect(keys, body)</code> where <code>body</code> returns a cleanup closure</td><td>on enter / key change; cleanup runs before re-run and on unmount</td></tr>
+  </tbody>
+</table>
+
+<pre><code>@Component
+function Clock() {
+  var now = state(Instant.now())
+  ctx.launched([]) {
+    while true {
+      var _ = await sleep(Duration.ms(1000));
+      now = Instant.now()                      // marks only the Text scope below
+    }
+  }                                            // the task is cancelled when Clock leaves the tree
+  Text("now: ${now}")
+}
+</code></pre>
+
+<p>A launched task's cancellation is tied to the element's lifetime: leaving the tree cancels it
+cooperatively at the next <code>await</code>, running its drops and releasing held locks/endpoints
+via the per-task release path (chapter 21 §8). The same path releases an <code>effect</code> cleanup
+closure and any <code>@RefCounted</code> resource it captured.</p>
+
+<!-- =========================================================== -->
+<h2 id="hooks-compose">10. Composable logic — hooks</h2>
+
+<p>The context methods of §6–§9 (<code>ctx.state</code>, <code>ctx.effect</code>,
+<code>ctx.derived</code>, <code>ctx.remember</code>) are <strong>hooks</strong> in the React
+sense: functions that attach per-element state to the current build. So <em>composable logic</em>
+— extracting and reusing stateful behavior across widgets — needs no new runtime: a
+<strong>custom hook is an ordinary function that takes the <code>BuildContext</code> and calls
+other hooks</strong>. Flutter has no native equivalent (it relies on the third-party
+<code>flutter_hooks</code>); this is closer to React/Compose, and falls out of the model already
+in place.</p>
+
+<h3>Custom hooks are just functions</h3>
+<pre><code>// Composable logic: track window size, with cleanup. Reusable in any widget.
+function use_window_size(ctx: BuildContext): Cell&lt;Size&gt; {
+  var size = ctx.state(Window.size());
+  ctx.effect([], () => {
+    var sub = Window.on_resize((s: Size) => { size.set(s) });
+    () => { sub.cancel() }            // block's trailing expr = the cleanup closure
+  });
+  size
+}
+
+// A hook returning state PLUS callbacks — bundle them in a struct.
+struct CounterApi { value: Cell&lt;i64&gt;, inc: () => null, dec: () => null }
+
+function use_counter(ctx: BuildContext, start: i64): CounterApi {
+  var v = ctx.state(start);
+  CounterApi {
+    value: v,
+    inc: () => { v.update((n: i64) => n + 1) },
+    dec: () => { v.update((n: i64) => n - 1) },
+  }
+}
+</code></pre>
+
+<p>Hooks compose with effects, async, and unions — a data-fetching hook:</p>
+<pre><code>struct Loading {}
+struct Ready&lt;T&gt; { value: T }
+struct Failed { error: str }
+type Async&lt;T&gt; = Loading | Ready&lt;T&gt; | Failed;
+
+function use_fetch&lt;T&gt;(ctx: BuildContext, url: str, parse: (str) => T): Cell&lt;Async&lt;T&gt;&gt; {
+  var state = ctx.state(Loading {});
+  ctx.launched([url], async () => {        // re-runs when `url` changes (keyed)
+    var body = await http_get(url);
+    match body {
+      str b       => state.set(Ready { value: parse(b) }),
+      HttpError e => state.set(Failed { error: e.message }),
+    }
+  });
+  state
+}
+</code></pre>
+
+<p>Consuming a hook is a call inside <code>build</code>; because each hook's <code>Cell</code>
+subscribes the reading scope (§6), surgical recomposition still applies per-fragment:</p>
+<pre><code>extend Header: Widget {
+  function build(self, ctx: BuildContext): Widget {
+    var size = use_window_size(ctx);
+    Text("width: ${size.get().width}")
+  }
+}
+</code></pre>
+<p>Inside a <code>@Component</code> body the context is ambient, so the same call reads
+<code>var size = use_window_size()</code>.</p>
+
+<h3>Hook identity — how a hook finds its slot</h3>
+<p><code>ctx.state(init)</code> must return the <em>same</em> cell on every rebuild. How a call is
+matched to its slot is the one design decision, and it sets whether the "rules of hooks" apply.
+The chosen model mirrors the manual/macro split of §4–§5:</p>
+
+<table>
+  <thead><tr><th>Form</th><th>Identity</th><th>Constraint</th></tr></thead>
+  <tbody>
+    <tr><td>Manual (no macro)</td><td><strong>positional</strong> — a per-build hook cursor, reset each <code>build</code> (React's model)</td><td>call hooks unconditionally, in stable order (no hooks inside <code>if</code>/<code>for</code>); use the explicit-key escape <code>ctx.state_keyed(key, init)</code> when you must</td></tr>
+    <tr><td><code>@Component</code> / <code>@Hook</code></td><td><strong>lexical call-site key</strong> — the macro stamps each hook call site with a stable key (Compose's model)</td><td>conditionals are allowed; a hook in a loop takes a <code>key</code> per iteration</td></tr>
+  </tbody>
+</table>
+
+<p>A custom hook annotated <code>@Hook</code> (the sibling of <code>@Component</code>) gets the
+ambient context and the lexical-key treatment, and the compiler <strong>verifies</strong> hook
+usage — reporting any violation on real source (the span discipline of chapter 22). A plain
+<code>function …(ctx: BuildContext)</code> is the always-works manual baseline, governed by the
+positional rules above. Either way a hook's identity is the <code>(call-site, loop-key)</code>
+pair, so the lexical-key form is strictly more permissive than React's call-order.</p>
+
+<div class="callout good">
+  <strong>Why this fits.</strong> Hooks add no engine machinery — every hook bottoms out in
+  <code>ctx.state</code>/<code>effect</code>/<code>derived</code>, whose cells already drive
+  surgical recomposition (§6). The only new pieces are the hook cursor (manual) and the
+  <code>@Hook</code> macro's call-site keying + usage verification, which reuse
+  <code>@Component</code>'s machinery (§5).
+</div>
+
+<h3>The built-in hooks</h3>
+<p>Custom hooks compose the primitives already specified: <code>ctx.state</code> (§6),
+<code>ctx.derived</code> / <code>ctx.remember</code> (§12), <code>ctx.effect</code> /
+<code>ctx.launched</code> / <code>ctx.on_mount</code> (§9), and <code>ctx.watch</code> /
+<code>ctx.read</code> (§11).</p>
+
+<!-- =========================================================== -->
+<h2 id="inherited">11. Inherited state &amp; dependency injection</h2>
+
+<p>Cross-tree shared state uses an <code>Inherited&lt;T&gt;</code> widget — Flutter's
+<code>InheritedWidget</code> — placed above a subtree and read via the context:</p>
+
+<pre><code>Inherited&lt;Theme&gt; { value: dark_theme, child:
+  AppBody {}        // below: ctx.watch&lt;Theme&gt;() reads dark_theme AND subscribes this scope
+}
+</code></pre>
+
+<p>The improvement over Flutter: <code>ctx.watch&lt;T&gt;()</code> subscribes at
+<strong>scope granularity</strong> through the same cell mechanism as <code>ctx.state()</code>
+(§6), so when the inherited value changes only the scopes that actually called
+<code>watch&lt;T&gt;()</code> re-run — not every descendant below the provider.
+<code>ctx.read&lt;T&gt;()</code> is the no-subscription variant.</p>
+
+<!-- =========================================================== -->
+<h2 id="derived">12. Derived values &amp; <code>remember</code></h2>
+
+<ul>
+  <li><code>ctx.remember(compute)</code> — run <code>compute</code> once, reuse across rebuilds
+  (keyed variant <code>ctx.remember(keys, compute)</code> recomputes on key change). For expensive
+  non-reactive setup.</li>
+  <li><code>ctx.derived(compute)</code> — a computed <code>Cell&lt;T&gt;</code> that recomputes only
+  when a cell it <em>reads</em> changes; reading it subscribes the reader.</li>
+</ul>
+
+<pre><code>extend NameTag: Widget {
+  function build(self, ctx: BuildContext): Widget {
+    var first = ctx.state(self.first);
+    var last  = ctx.state(self.last);
+    var full  = ctx.derived(() => "${first.get()} ${last.get()}");  // recomputes only on first/last change
+    Text(full.get())
+  }
+}
+</code></pre>
+
+<p><code>derived</code> generalizes the paragraph/picture memoization the engine already does
+(chapter 27 §10, §12.1 picture memo).</p>
+
+<!-- =========================================================== -->
+<h2 id="gestures">13. Gestures &amp; hit testing</h2>
+
+<p>Pointer input arrives batched on the embedder entry point (chapter 27 §6) and is decoded into a
+union, then routed by hit-testing the render tree (each render object reports whether a point is
+inside it, building a hit path):</p>
+
+<pre><code>type PointerEvent = PointerDown | PointerMove | PointerUp | PointerCancel;
+
+function dispatch(target: GestureRecognizer, e: PointerEvent) {
+  match e {
+    PointerDown d => target.on_down(d.position),
+    PointerMove m => target.on_move(m.delta),
+    PointerUp u   => target.on_up(u.position),
+    PointerCancel => target.on_cancel(),
+  }
+}
+</code></pre>
+
+<p><code>GestureDetector</code> turns the recognized stream into callbacks:</p>
+
+<pre><code>GestureDetector {
+  on_tap: () => { count.update((n: i64) => n + 1) },
+  on_pan_update: (delta: Offset) => { offset.set(offset.get().add(delta)) },
+  child: Container { ..Container.defaults(), width: 80.0, height: 80.0, color: Color.blue },
+}
+</code></pre>
+
+<p>A <strong>gesture arena</strong> resolves competing recognizers (tap vs pan vs scroll) like
+Flutter's; recognizers run on the executor, never blocking the platform thread.</p>
+
+<!-- =========================================================== -->
+<h2 id="animation">14. Animation &amp; the ticker</h2>
+
+<p>Animations are driven by a <strong>ticker</strong> bound to vsync (chapter 27 §7): each frame,
+active controllers advance and feed reactive cells, marking only the dependent scopes dirty.</p>
+
+<pre><code>extend FadeIn: Widget {
+  function build(self, ctx: BuildContext): Widget {
+    var t = ctx.animate(0.0, 1.0, Duration.ms(300));   // remembered controller → Cell<f64>
+    Opacity { opacity: t.get(), child: Text("fading in") }   // only this scope re-runs per frame
+  }
+}
+</code></pre>
+
+<p>The controller is remembered for the element's lifetime and stops when the element leaves the
+tree. A 60/120 fps animation marks one scope dirty per frame, not the whole widget.</p>
+
+<!-- =========================================================== -->
+<h2 id="catalog">15. The widget catalog</h2>
+
+<p>Flutter-faithful names. Single-value leaves are tuple structs (positional construction);
+multi-prop widgets are record structs (struct-literal construction). v1 target set:</p>
+
+<table>
+  <thead><tr><th>Group</th><th>Widgets</th></tr></thead>
+  <tbody>
+    <tr><td>Layout — single child</td><td><code>Container</code>, <code>Padding</code>, <code>Center</code>, <code>Align</code>, <code>SizedBox</code>, <code>Expanded</code>, <code>Opacity</code>, <code>Transform</code>, <code>ClipRRect</code></td></tr>
+    <tr><td>Layout — multi child</td><td><code>Row</code>, <code>Column</code>, <code>Stack</code>, <code>Wrap</code>, <code>Flex</code></td></tr>
+    <tr><td>Scrolling</td><td><code>ListView</code>, <code>ScrollView</code>, <code>GridView</code> (lazy, viewport-recycled)</td></tr>
+    <tr><td>Painting (leaves)</td><td><code>Text</code>, <code>RichText</code>, <code>Image</code>, <code>Icon</code>, <code>DecoratedBox</code>, <code>CustomPaint</code></td></tr>
+    <tr><td>Input</td><td><code>GestureDetector</code>, <code>Button</code>, <code>TextField</code>, <code>Focus</code></td></tr>
+    <tr><td>Structure</td><td><code>App</code> (root), <code>Inherited&lt;T&gt;</code>, <code>Builder</code>, <code>FutureBuilder</code>, <code>StreamBuilder</code></td></tr>
+    <tr><td>Material (separate module)</td><td><code>std:ui/material</code>: <code>Scaffold</code>, <code>AppBar</code>, <code>Card</code>, <code>ElevatedButton</code>, …</td></tr>
+  </tbody>
+</table>
+
+<p>Layout is Flutter's own constraint protocol (chapter 27 §2: <code>layout(Constraints): Size</code>,
+constraints down / sizes up), <em>not</em> a Flexbox/Yoga engine.
+<code>Row</code>/<code>Column</code>/<code>Flex</code>/<code>Expanded</code> reimplement the useful
+flex semantics natively, so layout stays single-pass, integrates with Skia text measurement and
+intrinsics, composes with the relayout-boundary hook, and adds no parallel layout tree or per-node
+FFI crossing. <code>FutureBuilder</code>/<code>StreamBuilder</code> integrate with the language's
+<code>Future</code>/async iterators (chapter 21): completion marks the builder's scope dirty.</p>
+
+<!-- =========================================================== -->
+<h2 id="hooks">16. Mapping onto the engine hooks (chapter 27 §12)</h2>
+
+<table>
+  <thead><tr><th>User-level concept (this ch.)</th><th>Engine hook (ch. 27 §12.1)</th></tr></thead>
+  <tbody>
+    <tr><td>scope marked dirty by <code>Cell.set</code> (§6)</td><td>build dirty set — only marked scopes rebuild</td></tr>
+    <tr><td><code>@Derive(Eq)</code> on widget config (§3)</td><td>value-identity diffing — skip unchanged subtree</td></tr>
+    <tr><td>const scope hoisting by the macro (§5)</td><td>const subtree → cached widget/layer</td></tr>
+    <tr><td>a fixed-size box / clip widget (§15)</td><td>relayout &amp; repaint boundary auto-inserted</td></tr>
+    <tr><td>unchanged paint inputs on a render object</td><td>picture memo — replay cached <code>Picture</code></td></tr>
+    <tr><td>animating scope (§14)</td><td>damage region — only that rect re-rasterizes</td></tr>
+  </tbody>
+</table>
+
+<!-- =========================================================== -->
+<h2 id="example">17. End-to-end example</h2>
+
+<p>The macro form (the manual equivalent is §4):</p>
+<pre><code>import { App, Component } from "std:ui";
+import { Column, Row, Text, Button, Center } from "std:ui";
+
+@Component
+function Counter(start: i64) {
+  var count = state(start)
+  Center {
+    Column {
+      Text("count: ${count}")                       // re-runs on count change
+      Row {
+        Button { label: "-", on_tap: () => { count = count - 1 } }   // independent scopes
+        Button { label: "+", on_tap: () => { count = count + 1 } }
+      }
+    }
+  }
+}
+
+function main() {
+  App.run(Counter { start: 0 });   // opens the window (ch. 27 §6), mounts the tree, drives frames
+}
+</code></pre>
+
+<p>Tapping <code>+</code> writes <code>count</code>; only the <code>Text</code> scope re-runs; the
+engine repaints only the changed paragraph's region; the two <code>Button</code>s and the layout
+are never revisited.</p>
+
+<!-- =========================================================== -->
+<h2 id="staging">18. Implementation &amp; staging</h2>
+
+<ol>
+  <li><strong>Widget/Element core + manual form.</strong> the <code>Widget</code> and
+  <code>Element</code> interfaces, <code>create_element</code>, mount/update/unmount, reconciler +
+  keys — all hand-written, no macro. Tests: reconcile insert/remove/reorder/keyed-move, identity
+  preservation, unmount drops render objects.</li>
+  <li><strong>Reactive cells.</strong> <code>Cell&lt;T&gt;</code>, <code>ctx.state</code>, scope
+  subscription, dirty marking; whole-build first, then scope splitting. Tests: write marks only
+  dependent scopes, sibling isolation, soundness through helpers, <code>rebuild_all</code> opt-out.</li>
+  <li><strong><code>@Component</code> macro.</strong> config struct + <code>@Derive(Eq, Hash)</code>
+  + <code>defaults()</code>, content-block collection, <code>state()</code> read/write rewrite,
+  scope boundaries, const hoisting. Tests: <em>macro output equals the hand-written manual form</em>
+  (golden), call-site struct literal, equality skips unchanged subtree.</li>
+  <li><strong>BuildContext + Inherited.</strong> <code>watch</code>/<code>read</code>, scope-granular
+  inherited subscriptions, escaped-context rejection. Tests: only watchers re-run, read doesn't
+  subscribe, escape rejected.</li>
+  <li><strong>Effects, derived, remember.</strong> <code>on_mount</code>/<code>launched</code>/<code>effect</code>,
+  cancel-on-leave, computed cells. Tests: ordering, cleanup before re-run + on unmount, derived
+  recompute, task cancelled on leave.</li>
+  <li><strong>Gestures + hit testing.</strong> pointer-event union, hit path, arena. Tests: routing
+  via <code>match</code>, tap/pan disambiguation.</li>
+  <li><strong>Animation.</strong> ticker on vsync, controllers → cells. Tests: one-scope-per-frame
+  dirtying, controller stops on leave.</li>
+  <li><strong>Catalog + Material.</strong> §15 widgets, native flex layout, <code>std:ui/material</code>.
+  Tests: layout golden cases, golden-image per widget (ch. 27 <code>FakeCanvas</code> + Skia native
+  parity).</li>
+</ol>
+
+<p>Per <code>CLAUDE.md</code>: unit + integration + e2e at every stage, including failure cases
+(escaped context, missing key causing state loss) and golden-image regression. Stages 1–6 test
+against the <code>FakeCanvas</code> with no GPU (chapter 27 §9). The macro stage's defining test is
+that its expansion is the manual form.</p>
+
+<!-- =========================================================== -->
+<h2 id="open">19. Open design decisions</h2>
+
+<ol>
+  <li><strong>Cell access surface.</strong> Manual uses <code>.get()/.set()/.update()</code>; the
+  macro rewrites <code>x</code>→<code>x.get()</code> and <code>x = e</code>→<code>x.set(e)</code>.
+  Confirm this rewrite vs. always-explicit cells even under the macro.</li>
+  <li><strong>Scope-boundary granularity.</strong> Split at every child, or only at explicit
+  boundaries / list items? Proposed: child-boundary default, coarsen tiny scopes.</li>
+  <li><strong>Optional-prop ergonomics.</strong> <code>{ ..Container.defaults(), … }</code> is the
+  consistent idiom for optional props; confirm whether the catalog should also expose positional
+  static constructors (<code>SizedBox.square(80.0)</code>) for the common leaves.</li>
+  <li><strong>Coarse vs fine default.</strong> Confirmed fine-grained default with a coarse opt-out
+  (§6.3).</li>
+  <li><strong>Routing/navigation</strong> — a <code>Navigator</code>/router is its own design;
+  deferred to a later chapter.</li>
+</ol>
+
+<!-- =========================================================== -->
+<h2 id="summary">20. Summary</h2>
+
+<ul>
+  <li>A widget is a plain struct that <code>extend</code>s the single <code>Widget</code> interface;
+  the value types <code>Widget</code>/<code>Element</code>/<code>RenderObject</code> are
+  <strong>interface objects, written as the bare interface name</strong> (§3).</li>
+  <li>Two authoring forms, one runtime: a fully explicit <strong>manual</strong> form (§4, just
+  <code>struct</code> + <code>extend</code>) and an optional <strong><code>@Component</code></strong>
+  macro (§5) that expands to it for Compose-style brevity.</li>
+  <li>State is a remembered <code>Cell&lt;T&gt;</code> from <code>ctx.state</code> (§6); a write
+  re-runs only the scopes that called <code>get()</code> — surgical recomposition, sound because
+  tracking is by observed reads.</li>
+  <li>Built entirely from Otter Fusion idioms (§3): <code>extend T: I</code>, static
+  <code>Type.method()</code> constructors, tuple/record struct construction, unions + <code>match</code>
+  for events, trailing-closure <code>.map { it }</code>, <code>@Derive(Eq, Hash, Clone)</code>,
+  <code>null</code>-returning handlers, no <code>+=</code>, struct-literal "named args".</li>
+  <li>Composable logic is first-class (§10): a custom <strong>hook</strong> is just a function
+  taking <code>BuildContext</code> and calling other hooks (<code>ctx.state</code>/<code>effect</code>/<code>derived</code>);
+  identity is positional in the manual form and lexical-call-site-keyed under <code>@Component</code>/<code>@Hook</code>.</li>
+  <li>Flutter-faithful catalog and behavior (§§8–15) on Flutter's own constraint layout — no
+  Flexbox/Yoga; every optimization lowers onto a chapter-27 §12 engine hook (§16); native-resource
+  disposal is free from <code>@RefCounted</code> (§8).</li>
+</ul>
+
+</body>
+</html>

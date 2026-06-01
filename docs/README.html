@@ -176,7 +176,7 @@
 <!-- =========================================================== -->
 <h2 id="map">Reading map</h2>
 
-<p>The 26 chapters cluster into six concentric layers — surface syntax at the edges,
+<p>The 28 chapters cluster into six concentric layers — surface syntax at the edges,
 the runtime at the core, and tooling on top. The arrows show the dependency direction; a later chapter
 assumes the ones it points back to.</p>
 
@@ -361,6 +361,8 @@ assumes the ones it points back to.</p>
   <a class="chapter-card platform" href="24-stdlib-extended.html"><span class="num">24 · Tooling</span><span class="title">Stdlib — extended roadmap</span><span class="desc">Full proposed <code>std:*</code> surface beyond chapter 18, with item-level status markers.</span></a>
   <a class="chapter-card platform" href="25-lsp.html"><span class="num">25 · Tooling</span><span class="title">Language server (LSP)</span><span class="desc"><code>lang-lsp</code> + VS Code: diagnostics, hover, goto, references, rename, symbols, completion, semantic tokens.</span></a>
   <a class="chapter-card platform" href="26-engine.html"><span class="num">26 · Tooling</span><span class="title">Embedding engine</span><span class="desc"><code>std:engine</code>: sandboxed isolates, capability whitelist, host bindings, <code>@Bridge</code> ABI, per-isolate limits. (Design.)</span></a>
+  <a class="chapter-card platform" href="27-ui.html"><span class="num">27 · Tooling</span><span class="title">UI framework — engine &amp; Skia</span><span class="desc"><code>std:ui</code>: Flutter-style retained UI. This chapter is the engine half — Skia C shim, embedder, threading/frame pipeline, <code>@RefCounted</code> peers, macro-driven rebuild minimization. (Design.)</span></a>
+  <a class="chapter-card platform" href="28-ui-widgets.html"><span class="num">28 · Tooling</span><span class="title">UI framework — widgets &amp; reactivity</span><span class="desc"><code>std:ui</code> user API: <code>Widget</code>/<code>Element</code>/<code>State</code>. Two forms — manual structs (no macros) + optional <code>@Component</code> sugar — sharing one runtime; surgical (scope-granular) recomposition; Flutter catalog, grammar-consistent syntax. (Design.)</span></a>
 </div>
 
 <!-- =========================================================== -->

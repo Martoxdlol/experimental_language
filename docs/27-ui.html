@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>27. UI Framework — Engine &amp; Skia Integration</title>
+<style>
+  :root {
+    --fg: #1b1b1d; --muted: #5a5a60; --bg: #fdfdfc;
+    --accent: #1a4a8a; --accent-2: #2a6f4d; --warn: #b54708;
+    --code-bg: #f4f2ee; --code-fg: #1b1b1d; --border: #e4e1dc;
+    --table-stripe: #f8f7f4; --pub: #2a6f4d; --priv: #b54708;
+    --pkg: #1a4a8a; --core: #6b4ba8; --proposed: #a8327a;
+  }
+  html { box-sizing: border-box; } *, *::before, *::after { box-sizing: inherit; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color: var(--fg); background: var(--bg); line-height: 1.55;
+    max-width: 980px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem; }
+  h1, h2, h3, h4 { color: var(--fg); line-height: 1.25; margin-top: 2.2rem; margin-bottom: 0.6rem; }
+  h1 { font-size: 2rem; border-bottom: 2px solid var(--border); padding-bottom: 0.4rem; }
+  h2 { font-size: 1.45rem; margin-top: 2.6rem; }
+  h3 { font-size: 1.15rem; color: var(--accent); }
+  h4 { font-size: 1rem; color: var(--muted); }
+  p { margin: 0.7rem 0; } ul, ol { margin: 0.7rem 0; padding-left: 1.6rem; } li { margin: 0.3rem 0; }
+  code { font-family: "SF Mono", Menlo, Consolas, "Courier New", monospace;
+    background: var(--code-bg); color: var(--code-fg); padding: 0.1em 0.35em;
+    border-radius: 3px; font-size: 0.92em; }
+  pre { background: var(--code-bg); color: var(--code-fg); padding: 0.9rem 1rem;
+    border-radius: 6px; overflow-x: auto; font-size: 0.88rem; line-height: 1.5;
+    border: 1px solid var(--border); }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: 0.94rem; }
+  th, td { text-align: left; padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { background: var(--code-bg); font-weight: 600; }
+  tbody tr:nth-child(even) { background: var(--table-stripe); }
+  .lead { font-size: 1.05rem; color: var(--muted); margin-bottom: 1.6rem; }
+  .toc { background: var(--code-bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 1rem 1.2rem; margin: 1.6rem 0 2rem; font-size: 0.94rem;
+    column-count: 2; column-gap: 2rem; }
+  @media (max-width: 720px) { .toc { column-count: 1; } }
+  .toc ol { margin: 0.2rem 0 0; padding-left: 1.3rem; }
+  .toc a { color: var(--accent); text-decoration: none; } .toc a:hover { text-decoration: underline; }
+  .diagram { background: #ffffff; border: 1px solid var(--border);
+    border-radius: 8px; padding: 1.4rem; margin: 1.4rem 0; overflow-x: auto; }
+  .diagram pre { background: none; border: none; padding: 0; font-size: 0.8rem; line-height: 1.35; }
+  .diagram-caption { font-size: 0.85rem; color: var(--muted); text-align: center;
+    margin-top: 0.6rem; font-style: italic; }
+  .callout { border-left: 4px solid var(--accent); background: #f0f4fa;
+    padding: 0.8rem 1rem; margin: 1.2rem 0; border-radius: 0 6px 6px 0; }
+  .callout.warn { border-color: var(--warn); background: #fbf3ec; }
+  .callout.good { border-color: var(--accent-2); background: #eef6f1; }
+  .callout strong { display: block; margin-bottom: 0.3rem; }
+  .pill { display: inline-block; padding: 0.05em 0.45em; margin: 0 0.15em;
+    font-size: 0.78em; font-weight: 600; border-radius: 999px;
+    vertical-align: middle; font-family: -apple-system, system-ui, sans-serif; }
+  .pill.spec    { background: #eef6f1; color: var(--accent-2); border: 1px solid #c2dccf; }
+  .pill.new     { background: #f9eef5; color: var(--proposed); border: 1px solid #d9bdcd; }
+  .pill.planned { background: #fbf3ec; color: var(--warn);    border: 1px solid #e8c9aa; }
+  .pill.core    { background: #f3eefa; color: var(--core);    border: 1px solid #d3c4ec; }
+  .pill.std     { background: #eaf0f8; color: var(--accent);  border: 1px solid #c2d2e8; }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 1.2rem 0; }
+  @media (max-width: 720px) { .two-col { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<h1>27. UI Framework — Engine &amp; Skia Integration <span class="pill new">design</span></h1>
+<p class="lead">
+  A retained-mode, declarative UI framework in the spirit of Flutter, built on
+  Otter Fusion's own runtime. This chapter specifies the <strong>bottom half</strong>:
+  the Skia rendering engine, the native embedder (window, GPU surface, input), the
+  threading and frame-scheduling model, and the resource-lifetime discipline that ties
+  native objects to the language's GC. The <strong>top half</strong> — the user-level
+  <code>Widget</code>/<code>Element</code>/<code>State</code> API and the reactive
+  rebuild model — is deferred to chapter 28, but the optimization <em>substrate</em>
+  it will stand on (repaint/relayout boundaries, damage tracking, compile-time
+  dependency capture via procedural macros) is specified here in §13 because it is an
+  engine concern.
+</p>
+
+<div class="toc">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#scope">Scope, goals &amp; non-goals</a></li>
+    <li><a href="#layers">The layered architecture</a></li>
+    <li><a href="#boundary">The engine boundary — the Flutter lesson</a></li>
+    <li><a href="#shim">The C shim — <code>libofskia</code></a></li>
+    <li><a href="#bindings">The FFI binding layer — <code>std:ui/skia</code></a></li>
+    <li><a href="#embedder">The embedder — window, surface &amp; input</a></li>
+    <li><a href="#threads">The threading model &amp; GC safepoints</a></li>
+    <li><a href="#pipeline">The frame pipeline</a></li>
+    <li><a href="#displaylist">Recording canvas, pictures &amp; the layer tree</a></li>
+    <li><a href="#text">Text shaping &amp; <code>SkParagraph</code></a></li>
+    <li><a href="#lifetime">Lifetime — peers, <code>@RefCounted</code> &amp; the GC backstop</a></li>
+    <li><a href="#optsubstrate">The optimization substrate (language leverage)</a></li>
+    <li><a href="#hotreload">Hot reload via isolates</a></li>
+    <li><a href="#modules">Module layout, build &amp; linking</a></li>
+    <li><a href="#staging">Implementation &amp; staging</a></li>
+    <li><a href="#open">Open design decisions</a></li>
+    <li><a href="#summary">Summary</a></li>
+  </ol>
+</div>
+
+<div class="callout warn">
+  <strong>Status — design, not yet implemented.</strong> This chapter specifies a
+  framework that does not exist yet. The <em>substrate</em> it builds on is real: the
+  FFI is complete (chapter 19 — <code>extern struct</code>/<code>extern function</code>,
+  <code>@CallConv</code>, function-pointer callbacks, safepoints &amp; trampolines), the
+  GC supports opt-in deterministic finalization (<code>@RefCounted</code>, chapter 16
+  §8), the async runtime has a reactor/timer and (in progress) an M:N work-stealing
+  executor (chapters 20–21), and the embedding engine (chapter 26) already demonstrates
+  per-isolate hosting for hot reload. Everything <em>above</em> the embedder is portable
+  Otter Fusion. The single hard external dependency is Skia, reached the way Flutter
+  reaches it — through a co-designed native shim, not a generic FFI. §15 records what
+  exists today versus what is new work.
+</div>
+
+<!-- =========================================================== -->
+<h2 id="scope">1. Scope, goals &amp; non-goals</h2>
+
+<p>The framework targets the same problem Flutter targets: a single declarative,
+reactive UI codebase that renders its own pixels through a GPU-accelerated 2-D engine,
+rather than wrapping native platform widgets. Rendering its own pixels is what makes
+the framework portable and what makes Skia the load-bearing dependency.</p>
+
+<p><strong>This chapter's goals.</strong></p>
+<ul>
+  <li>Specify how Otter Fusion talks to Skia — the C shim ABI, the FFI binding layer,
+  and how native handles are owned and freed.</li>
+  <li>Specify the embedder: window/GPU-surface creation and the input/lifecycle event
+  path from the platform into the language's async runtime.</li>
+  <li>Specify the threading model and how it cooperates with the GC's world-barrier
+  stop-the-world (chapter 16).</li>
+  <li>Specify the frame pipeline (build → layout → paint → composite → rasterize) as a
+  sequence of <em>retained</em>, recorded artifacts — never per-primitive FFI calls on
+  the hot path.</li>
+  <li>Specify the engine-level <em>optimization substrate</em> (§13) that the reactive
+  layer and procedural macros will exploit to minimize rebuilds, relayouts and
+  repaints.</li>
+</ul>
+
+<p><strong>Non-goals for this chapter</strong> (deferred to chapter 28): the public
+<code>Widget</code> type hierarchy, <code>State</code>/<code>setState</code>, the
+element reconciliation algorithm, gesture recognition, and the Material/Cupertino-style
+component library. They are named here only where the engine must expose a hook for
+them.</p>
+
+<p><strong>Out of scope entirely</strong> (for now): accessibility tree bridging,
+platform-native embedded views (texture/platform-view composition), and a non-Skia
+backend. The architecture keeps the renderer behind a <code>Canvas</code> interface
+(§9) so a second backend (a future Impeller-style renderer, or a software rasterizer)
+remains possible, but only Skia is specified.</p>
+
+<!-- =========================================================== -->
+<h2 id="layers">2. The layered architecture</h2>
+
+<p>The framework is five layers on top of the runtime, mirroring Flutter's stack. The
+top two are chapter 28; the bottom three are this chapter. Each layer depends only on
+the one below it, and the renderer is reached through an interface, so the boundary is
+swappable.</p>
+
+<div class="diagram"><pre>
+   ┌─────────────────────────────────────────────────────────────┐
+   │  components      std:ui/material   (buttons, text, scroll…)   │  ch. 28
+   ├─────────────────────────────────────────────────────────────┤
+   │  widgets         std:ui            Widget · Element · State   │  ch. 28
+   │                                    reconciliation · gestures  │
+   ├═════════════════════════════════════════════════════════════┤  ← this chapter
+   │  rendering       std:ui/render     RenderObject tree          │
+   │                                    layout(Constraints)→Size   │
+   │                                    paint(Canvas, Offset)       │
+   ├─────────────────────────────────────────────────────────────┤
+   │  engine          std:ui/engine     pipeline owner · frames    │
+   │                                    layer tree · compositor    │
+   │                                    Canvas (recording) iface    │
+   ├─────────────────────────────────────────────────────────────┤
+   │  skia binding    std:ui/skia       extern fns over the shim   │
+   │  embedder        std:ui/embedder   window · GPU surface · input│
+   └──────────────────────────┬──────────────────────────────────┘
+                              │  C ABI (chapter 19)
+                              ▼
+              libofskia.{a,dylib,so}   ← C shim, compiled separately
+                   ├─ Skia (SkSurface, SkCanvas, SkPicture, …)
+                   ├─ Skia text (SkParagraph / SkShaper)
+                   └─ windowing (GLFW or SDL) + GL/Metal/Vulkan context
+</pre>
+  <div class="diagram-caption">The five framework layers; the C ABI boundary sits
+  below <code>std:ui/skia</code>/<code>std:ui/embedder</code>.</div>
+</div>
+
+<table>
+  <thead><tr><th>Flutter layer</th><th>Otter Fusion module</th><th>Built in</th></tr></thead>
+  <tbody>
+    <tr><td>Material / Cupertino</td><td><code>std:ui/material</code></td><td>portable <code>.otter</code> (ch. 28)</td></tr>
+    <tr><td>widgets</td><td><code>std:ui</code></td><td>portable <code>.otter</code> (ch. 28)</td></tr>
+    <tr><td>rendering</td><td><code>std:ui/render</code></td><td>portable <code>.otter</code> (this ch.)</td></tr>
+    <tr><td>dart:ui / Engine layer tree</td><td><code>std:ui/engine</code></td><td>portable <code>.otter</code> (this ch.)</td></tr>
+    <tr><td>Engine (C++ Skia, embedder)</td><td><code>std:ui/skia</code> + <code>libofskia</code></td><td>FFI + C/C++ shim (this ch.)</td></tr>
+  </tbody>
+</table>
+
+<!-- =========================================================== -->
+<h2 id="boundary">3. The engine boundary — the Flutter lesson</h2>
+
+<p>Flutter does <em>not</em> reach Skia through Dart's public FFI (<code>dart:ffi</code>,
+which exists for app/plugin authors calling third-party C libraries). The framework↔engine
+boundary is the Dart VM's privileged <em>native-hooks</em> mechanism (the <code>tonic</code>
+library + <code>@pragma('vm:external-name')</code>): C++ functions registered into the
+isolate that receive <code>Dart_Handle</code>s and can touch the Dart heap directly.
+Three design choices make that boundary cheap, and all three are independent of the
+binding mechanism — so Otter Fusion adopts them while reaching Skia through an ordinary
+(but co-designed) C shim:</p>
+
+<ol>
+  <li><strong>Record, don't call.</strong> <code>Canvas.drawRect(…)</code> issues no GPU
+  call; it appends to a display list that lives <em>native-side</em>. A frame crosses the
+  ABI a handful of times, not once per primitive (§9).</li>
+  <li><strong>Thin peers, deterministic free.</strong> Heavy objects (surfaces, pictures,
+  paragraphs, images) live in C/Skia; the language holds small handle objects whose
+  destructor unrefs the native peer. Flutter does this with <code>tonic</code>'s
+  weak-persistent-handle finalizers; Otter Fusion does it with <code>@RefCounted</code> +
+  <code>Drop</code> (§11), which is a closer, deterministic match.</li>
+  <li><strong>Rasterize off the build thread.</strong> The thread that builds the frame
+  never calls the GPU. It produces a layer tree that a dedicated raster thread consumes
+  (§7).</li>
+</ol>
+
+<div class="callout">
+  <strong>Why a shim and not direct FFI to Skia.</strong> Skia's real API is C++, which
+  cannot cross the C ABI that chapter 19 speaks. <code>libofskia</code> is a thin
+  <code>extern "C"</code> wrapper over exactly the Skia surface we use — the same pattern
+  Flutter's engine uses internally. The shim
+  is compiled separately and linked into the built program through the system-linker path
+  <code>build</code> already uses. The one capability Flutter's native hooks have that a C
+  shim lacks — touching the managed heap directly — we deliberately forgo: peers are
+  opaque handles and payloads cross by value, exactly the boundary discipline
+  <code>std:engine</code>'s <code>@Bridge</code> already enforces (chapter 26 §5).
+</div>
+
+<p>The practical consequence of using top-level <code>extern</code> symbols (chapter 19
+§8: closures cannot cross the C ABI) is that callbacks <em>into</em> the language —
+vsync, input, lifecycle — are a fixed, small set of top-level <code>extern function</code>s,
+not a callback per widget. This is identical to how Flutter exposes a handful of entry
+points on <code>PlatformDispatcher</code> and is what §6 specifies.</p>
+
+<!-- =========================================================== -->
+<h2 id="shim">4. The C shim — <code>libofskia</code></h2>
+
+<p><code>libofskia</code> is a hand-written C façade (implemented in C++ against Skia,
+exported <code>extern "C"</code>) that exposes only the operations the engine needs.
+Keeping the surface small is deliberate: it is the entire trusted, unsafe boundary, and
+every symbol in it is one the FFI binding layer must declare and the test suite must
+exercise. The shim owns no policy — it is a mechanical 1:1 wrapper. Its surface groups
+into six families:</p>
+
+<table>
+  <thead><tr><th>Family</th><th>Representative symbols</th><th>Purpose</th></tr></thead>
+  <tbody>
+    <tr><td>Context</td><td><code>ofsk_context_make_gl</code>, <code>ofsk_context_release</code></td><td>GPU backend context bound to the embedder's GL/Metal/Vulkan handle</td></tr>
+    <tr><td>Surface</td><td><code>ofsk_surface_make_render_target</code>, <code>ofsk_surface_get_canvas</code>, <code>ofsk_surface_flush</code></td><td>the on-screen render target and its canvas</td></tr>
+    <tr><td>Recorder</td><td><code>ofsk_recorder_begin</code>, <code>ofsk_recorder_finish</code> → <code>SkPicture*</code></td><td>record draw ops into a display list (a <code>Picture</code>)</td></tr>
+    <tr><td>Canvas ops</td><td><code>ofsk_canvas_draw_rect</code>, <code>_draw_rrect</code>, <code>_draw_path</code>, <code>_draw_picture</code>, <code>_draw_paragraph</code>, <code>_clip_rrect</code>, <code>_save_layer</code>, <code>_restore</code>, <code>_concat</code></td><td>the recordable primitive set</td></tr>
+    <tr><td>Paragraph</td><td><code>ofsk_para_build</code>, <code>ofsk_para_layout</code>, <code>ofsk_para_metrics</code></td><td>text shaping &amp; layout (§10)</td></tr>
+    <tr><td>Resources</td><td><code>ofsk_paint_*</code>, <code>ofsk_path_*</code>, <code>ofsk_image_decode</code>, and a matching <code>*_release</code> for every handle</td><td>paints, paths, images, gradients</td></tr>
+  </tbody>
+</table>
+
+<p>Every constructor returns an opaque handle (<code>typedef struct OfSkSurface OfSkSurface;</code>
+&hellip; → <code>OfSkSurface*</code>) and every handle family has a single
+<code>_release</code>/<code>_unref</code> entry. The shim never calls back into Otter
+Fusion (the input direction is the embedder's job, §6), so it has no dependency on the
+language runtime and can be unit-tested in C on its own.</p>
+
+<div class="callout good">
+  <strong>The shim is the only place C++ exceptions / Skia aborts can originate.</strong>
+  Each entry is wrapped so a Skia failure returns a null handle or an error enum, never
+  unwinds across the C ABI into Cranelift frames (which, per the worker-panic-isolation
+  work in <code>goals.txt</code>, cannot be unwound through). Error enums surface in the
+  language as ordinary union returns.
+</div>
+
+<!-- =========================================================== -->
+<h2 id="bindings">5. The FFI binding layer — <code>std:ui/skia</code></h2>
+
+<p><code>std:ui/skia</code> is pure binding: one <code>extern function</code> per shim
+symbol, <code>extern struct</code>s for the POD parameter/return layouts (rects, colors,
+paint params, transform matrices), and a managed handle type per Skia object family.
+Nothing above this module sees a raw pointer.</p>
+
+<pre><code>// std:ui/skia — illustrative (design)
+import { Foreign } from "core:ffi";
+
+// POD layouts cross by value as extern structs (chapter 19).
+extern struct OfRect  { left: f32, top: f32, right: f32, bottom: f32 }
+extern struct OfColor { r: f32, g: f32, b: f32, a: f32 }
+extern struct OfXform { a: f32, b: f32, c: f32, d: f32, e: f32, f: f32 }   // 2-D affine
+
+// Opaque native handles are imported as opaque foreign pointer types.
+extern type OfSkSurface;
+extern type OfSkCanvas;
+extern type OfSkPicture;
+extern type OfSkPaint;
+
+@CallConv("c") extern function ofsk_surface_get_canvas(s: *OfSkSurface): *OfSkCanvas;
+@CallConv("c") extern function ofsk_canvas_draw_rect(c: *OfSkCanvas, r: *OfRect, p: *OfSkPaint);
+@CallConv("c") extern function ofsk_recorder_finish(rec: *OfSkRecorder): *OfSkPicture;
+@CallConv("c") extern function ofsk_picture_release(p: *OfSkPicture);
+</code></pre>
+
+<p>Above the raw <code>extern</code>s sits a thin <em>handle</em> layer that gives every
+native object a managed owner with a deterministic destructor (§11):</p>
+
+<pre><code>// A managed owner for a native SkPicture. Dropping it unrefs the peer — Flutter's
+// tonic peer-finalizer pattern, but deterministic via @RefCounted (chapter 16 §8).
+@RefCounted
+struct Picture { raw: *OfSkPicture }
+
+extend Picture: Drop {
+  function drop(self) { ofsk_picture_release(self.raw); }
+}
+</code></pre>
+
+<!-- =========================================================== -->
+<h2 id="embedder">6. The embedder — window, surface &amp; input</h2>
+
+<p>Skia rasterizes; it does not create windows or deliver input. The embedder
+(<code>std:ui/embedder</code>, also over <code>libofskia</code> which bundles GLFW or
+SDL) owns: a platform window, the GPU context Skia draws into, and the event source.
+It is the <em>only</em> component that crosses the boundary <em>inbound</em> (platform →
+language), and per §3 it does so through a fixed set of top-level <code>extern function</code>
+entry points, not closures.</p>
+
+<h3>The inbound entry points</h3>
+
+<p>The shim drives a native event loop on the platform thread and invokes registered C
+function pointers. On the language side these are top-level <code>extern function</code>s
+(chapter 19 §8). Each recovers the engine instance from a <code>*c_void</code> user-data
+pointer — the conventional C-callback state pattern — pinned for the lifetime of the
+window via the scoped-pin facility (chapter 19 §8, "passing managed state into a
+callback"):</p>
+
+<pre><code>// Top-level extern entry points — the entire inbound surface.
+@CallConv("c") extern function of_on_begin_frame(user: *c_void, nanos: u64) {
+  var engine = Engine.from_user(user);   // recover pinned engine handle
+  engine.request_frame(nanos);            // post into the executor; returns fast
+}
+
+@CallConv("c") extern function of_on_pointer_packet(user: *c_void, buf: *u8, len: usize) {
+  var engine = Engine.from_user(user);
+  engine.enqueue_pointer_packet(buf, len);  // decode a *batch*, not one event
+}
+
+@CallConv("c") extern function of_on_window_metrics(user: *c_void, w: u32, h: u32, dpr: f32) {
+  Engine.from_user(user).set_metrics(w, h, dpr);
+}
+</code></pre>
+
+<div class="callout">
+  <strong>Batched, serialized input — the <code>PointerDataPacket</code> idea.</strong>
+  Pointer/touch events arrive as a packed byte buffer of many events, decoded once on
+  the language side, exactly like Flutter's <code>PointerDataPacket</code>. This keeps
+  boundary crossings rare (one per frame's worth of input, not one per move event) and
+  keeps the hot path off the FFI layer.
+</div>
+
+<p>Each inbound entry point does the minimum — recover the engine, hand the data to the
+runtime, return immediately. The real work happens on the executor, decoupled from the
+platform thread (§7). This is the inverse of the outbound rule: outbound (drawing) is
+recorded and flushed once per frame; inbound (events) is captured and posted once per
+batch.</p>
+
+<!-- =========================================================== -->
+<h2 id="threads">7. The threading model &amp; GC safepoints</h2>
+
+<p>Following Flutter, the engine separates concerns across threads. Otter Fusion maps
+them onto the async runtime (chapters 20–21) and must reconcile them with the GC's
+world-barrier stop-the-world (chapter 16): every thread that touches managed memory is a
+mutator that <strong>must gate at a safepoint</strong> when the collector stops the
+world.</p>
+
+<table>
+  <thead><tr><th>Role</th><th>Flutter name</th><th>Otter Fusion realization</th></tr></thead>
+  <tbody>
+    <tr><td>Platform / event</td><td>Platform thread</td><td>the OS thread <code>libofskia</code>'s native loop runs on; only marshals events inbound via §6</td></tr>
+    <tr><td>Build / layout / paint</td><td>UI thread</td><td>the async executor (the M:N work-stealing pool, in-progress goal); build/layout/paint run as tasks here</td></tr>
+    <tr><td>Rasterize</td><td>Raster thread</td><td>a dedicated thread that owns the GPU context and is the <em>only</em> caller of <code>ofsk_surface_flush</code> / GPU-touching shim ops</td></tr>
+  </tbody>
+</table>
+
+<div class="callout warn">
+  <strong>The pinned-GPU-thread constraint.</strong> A GPU context (GL/Metal/Vulkan) is
+  affine to the thread that created it; Skia must be flushed from that thread. So build
+  and layout may run as ordinary executor tasks, but the <strong>layer-tree flush is
+  marshalled to the raster thread</strong>, which holds the context. The raster thread is
+  a GC mutator: it registers as a safepoint-gating thread and parks at a safepoint during
+  a world-stop, identical to how <code>Thread.spawn</code> workers already participate in
+  the world barrier. A frame must never be left half-flushed across a world-stop — the
+  flush is a single safepoint-bounded region.
+</div>
+
+<p>The frame clock is the executor's reactor/timer: the platform vsync signal
+(<code>of_on_begin_frame</code>) wakes a frame task rather than blocking any thread.
+There is no user-visible <code>block_on</code> anywhere in the loop — consistent with the
+async design (chapter 21).</p>
+
+<!-- =========================================================== -->
+<h2 id="pipeline">8. The frame pipeline</h2>
+
+<p>A frame is a fixed sequence of phases. Phases 1–4 run on the executor (UI role);
+phase 5 is marshalled to the raster thread. Each phase consumes the previous phase's
+<em>retained</em> output, and — crucially for §13 — each phase is allowed to <em>skip</em>
+subtrees that are known-clean.</p>
+
+<div class="diagram"><pre>
+  vsync ──► 1. BUILD     dirty Elements rebuild → updated RenderObject tree   (ch. 28 hook)
+            2. LAYOUT    walk dirty RenderObjects: layout(Constraints)→Size
+            3. PAINT     walk repaint-dirty RenderObjects → record display lists
+            4. COMPOSITE assemble the layer tree (SceneBuilder)
+            ──────────────────────────────── marshal to raster thread ──────
+            5. RASTER    compositor replays layers → Skia → GPU surface flush
+</pre>
+  <div class="diagram-caption">The five frame phases. Phases 1–4 are pure Otter Fusion on
+  the executor; phase 5 owns the GPU context.</div>
+</div>
+
+<p>The pipeline owner (<code>std:ui/engine</code>) holds the three persistent trees
+(element, render, layer) and the dirty sets. A frame is requested by marking a node dirty
+and calling <code>request_frame</code>; multiple marks coalesce into one frame. This is
+the standard Flutter <em>build owner / pipeline owner</em> split, and it is the seam where
+the optimization substrate (§13) lives: the dirty sets decide what each phase may skip.</p>
+
+<!-- =========================================================== -->
+<h2 id="displaylist">9. Recording canvas, pictures &amp; the layer tree</h2>
+
+<p>The paint phase does not draw to the screen. It draws to a <strong>recording
+canvas</strong> whose operations are captured into a <code>Picture</code> (a native
+<code>SkPicture</code> display list, §5). The renderer only ever sees a
+<code>Canvas</code> interface:</p>
+
+<pre><code>interface Canvas {
+  function draw_rect(self, r: Rect, p: Paint);
+  function draw_rrect(self, r: RRect, p: Paint);
+  function draw_path(self, path: Path, p: Paint);
+  function draw_paragraph(self, par: Paragraph, at: Offset);
+  function draw_picture(self, pic: Picture);        // replay a cached sub-list
+  function save_layer(self, bounds: Rect, p: Paint);
+  function clip_rrect(self, r: RRect);
+  function transform(self, m: Xform);
+  function restore(self);
+}
+</code></pre>
+
+<p>Two implementations exist: <code>SkiaCanvas</code> (forwards each op to the shim's
+recorder) and <code>RecordingCanvas</code>/<code>FakeCanvas</code> for tests, which
+records ops into an in-memory list the test suite can assert against without any native
+dependency. Because the renderer is written against the interface, the entire rendering
+and layout layer (§2) is testable with zero Skia linked — important for the project's
+test-density bar.</p>
+
+<h3>The layer tree</h3>
+
+<p>The composite phase assembles a <strong>layer tree</strong>: a tree of composited
+layers (transform, clip, opacity, offset, and <em>picture</em> leaves) that the raster
+thread replays. Layers are the unit of <em>retention across frames</em>: a layer backed by
+a clean subtree is reused verbatim, so an unchanged subtree costs nothing to repaint. This
+is the engine-level mechanism behind "reduce re-renderings" (§13). The layer tree is the
+only artifact handed across the thread boundary to the raster thread; it is immutable once
+handed off.</p>
+
+<!-- =========================================================== -->
+<h2 id="text">10. Text shaping &amp; <code>SkParagraph</code></h2>
+
+<p>Text is the single hardest 2-D problem (shaping, bidi, font fallback, line breaking)
+and the strongest reason to choose Skia over a hand-rolled rasterizer. The framework
+leans entirely on Skia's <code>SkParagraph</code>/<code>SkShaper</code> through the shim's
+paragraph family (§4): a <code>ParagraphBuilder</code> takes styled text runs, produces a
+<code>Paragraph</code> handle, <code>layout(maxWidth)</code> shapes it, and
+<code>draw_paragraph</code> records it onto a canvas.</p>
+
+<p>A laid-out <code>Paragraph</code> is a <code>@RefCounted</code> handle over the native
+paragraph (§11). Because shaping is expensive, a paragraph whose text/style/width are
+unchanged is cached on its render object across frames — a concrete instance of the
+memoization the optimization substrate generalizes (§13).</p>
+
+<!-- =========================================================== -->
+<h2 id="lifetime">11. Lifetime — peers, <code>@RefCounted</code> &amp; the GC backstop</h2>
+
+<p>Every native Skia object (surface, picture, paragraph, paint, path, image) is owned by
+a managed <code>@RefCounted</code> handle whose <code>drop</code> calls the matching shim
+<code>_release</code>. This is precisely Flutter's <code>tonic</code> peer pattern — a
+lightweight managed object fronting a heavy native peer — but with two improvements the
+language gives for free:</p>
+
+<ul>
+  <li><strong>Deterministic release.</strong> <code>@RefCounted</code> drop runs the
+  instant the last strong reference goes away (chapter 16 §8), not at the next GC. Native
+  GPU resources — which are scarce and whose lifetime matters — are freed promptly, the
+  way <code>dispose()</code> works in Flutter, without a manual <code>dispose()</code>
+  call.</li>
+  <li><strong>Cycle safety.</strong> The element/render/layer trees have parent↔child back
+  references (cycles). Reference counting alone leaks cycles; the tracing GC is retained as
+  the cycle-collector backstop (chapter 16 §8), so the framework can hold natural bidirectional
+  links without leaking.</li>
+</ul>
+
+<p>The rule: <em>native handles are deterministic (<code>@RefCounted</code>); pure-language
+tree nodes are ordinary managed objects (GC-traced)</em>. This mirrors Flutter's split
+between engine-owned C++ objects and framework Dart objects, and it means the scarce,
+expensive resources get prompt release while the cheap, cyclic graph gets the convenience
+of tracing GC.</p>
+
+<!-- =========================================================== -->
+<h2 id="optsubstrate">12. The optimization substrate (language leverage)</h2>
+
+<p>This is where the framework departs from a literal Flutter port. Flutter's rebuild
+minimization is largely <em>runtime</em> and <em>convention</em> (const constructors,
+manual <code>RepaintBoundary</code>s, <code>const</code> widgets, the <code>shouldRebuild</code>
+hand-written checks). Otter Fusion can push much of this to <strong>compile time</strong>
+using procedural macros (chapter 22, which run before type-checking and are hygienic) and
+the type system. The user-level API that exposes these is chapter 28; the engine hooks they
+target are specified here.</p>
+
+<h3>12.1 Engine hooks the reactive layer targets</h3>
+<table>
+  <thead><tr><th>Hook</th><th>Phase it gates</th><th>Effect</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Build dirty set</strong></td><td>build</td><td>only marked Elements rebuild; clean subtrees keep their RenderObjects</td></tr>
+    <tr><td><strong>Relayout boundary</strong></td><td>layout</td><td>a node whose size cannot change its parent's size stops layout propagation; only the subtree relayouts</td></tr>
+    <tr><td><strong>Repaint boundary → layer</strong></td><td>paint/composite</td><td>a clean subtree's cached layer is reused verbatim; no display-list re-recording</td></tr>
+    <tr><td><strong>Picture memo</strong></td><td>paint</td><td>a render object with unchanged paint inputs replays its cached <code>Picture</code> instead of re-recording</td></tr>
+    <tr><td><strong>Damage region</strong></td><td>raster</td><td>only changed screen rects are re-rasterized/flushed where the backend supports partial repaint</td></tr>
+  </tbody>
+</table>
+
+<h3>12.2 Compile-time dependency capture (the differentiator)</h3>
+
+<p>Flutter rebuilds a widget when <code>setState</code> is called or an
+<code>InheritedWidget</code> it depends on changes; the dependency set is discovered at
+runtime (<code>dependOnInheritedWidgetOfExactType</code>) and the rebuild rebuilds the
+<em>whole</em> <code>build()</code> method. Otter Fusion can do better at two levels, both
+built on language features that already exist:</p>
+
+<ul>
+  <li><strong>Macro-derived dependency tracking.</strong> A <code>@Component</code>
+  procedural macro can analyze a component's <code>build</code> body at compile time and
+  emit, per reactive field it reads, the exact set of sub-expressions that depend on it —
+  turning a coarse "rebuild on any change" into "recompute only the dependent fragments."
+  Because macros run pre-resolve and are hygienic (chapter 22), the generated dependency
+  graph is sound and invisible to the user. This is the "smarter dependency change
+  detection" goal made structural rather than runtime-heuristic.</li>
+  <li><strong>Compile-time const subtrees.</strong> A subtree the macro proves is built
+  only from compile-time-constant inputs is hoisted to a single cached widget/layer
+  allocated once — the automatic generalization of Flutter's manual <code>const</code>
+  widgets. The macro can detect constness from the resolved HIR (the typed tree, per the
+  README architecture) rather than relying on the author to write <code>const</code>.</li>
+  <li><strong>Value-identity diffing.</strong> Immutable widget config structs get a
+  derived structural-equality + content-hash (a <code>@Derive</code>-style macro, chapter
+  22) so the reconciler can skip an Element subtree when the new widget config is bit-for-bit
+  equal to the old — cheaper and more reliable than Flutter's <code>operator==</code>
+  convention because it is generated, total, and cannot be forgotten.</li>
+</ul>
+
+<div class="callout good">
+  <strong>The principle.</strong> Everything Flutter asks the developer to remember —
+  mark a <code>RepaintBoundary</code>, write <code>const</code>, implement
+  <code>operator==</code>, call <code>dispose()</code> — Otter Fusion derives or enforces:
+  repaint/relayout boundaries from layout properties, constness from the HIR, equality from
+  a derive macro, and disposal from <code>@RefCounted</code> drop. Correctness moves from
+  convention to the compiler.
+</div>
+
+<p>None of §12.2 changes the engine contract; it changes <em>what marks nodes dirty and
+how narrowly</em>. The engine exposes the dirty sets and boundary flags (§12.1); the macros
+and reactive layer (chapter 28) decide how precisely to set them.</p>
+
+<!-- =========================================================== -->
+<h2 id="hotreload">13. Hot reload via isolates</h2>
+
+<p>The embedding engine (chapter 26) hosts guest Otter Fusion in a sandboxed isolate with
+its own heap and GC, selected by a thread-local current-isolate pointer. This is a natural
+hot-reload substrate: run the application's widget code as the guest, keep the embedder,
+GPU context, and persistent trees in the host, and reload the guest's compiled artifact on
+source change while preserving host-side <code>State</code> across the swap (Flutter's
+hot-reload contract). The bridge ABI (<code>@Bridge</code>, chapter 26 §5) already defines
+how data crosses the host/guest boundary by value, which matches the widget-config model
+(immutable, copyable). This is a chapter-28-and-later capability noted here because the
+engine must be designed isolate-aware from the start (the pipeline owner lives host-side;
+the build callback calls into the guest).</p>
+
+<!-- =========================================================== -->
+<h2 id="modules">14. Module layout, build &amp; linking</h2>
+
+<table>
+  <thead><tr><th>Module</th><th>Tier</th><th>Contents</th></tr></thead>
+  <tbody>
+    <tr><td><code>std:ui/skia</code></td><td><span class="pill std">std</span></td><td>FFI bindings + native handle types (§5)</td></tr>
+    <tr><td><code>std:ui/embedder</code></td><td><span class="pill std">std</span></td><td>window, GPU surface, inbound entry points (§6)</td></tr>
+    <tr><td><code>std:ui/engine</code></td><td><span class="pill std">std</span></td><td>pipeline owner, layer tree, compositor, <code>Canvas</code> iface (§8–9)</td></tr>
+    <tr><td><code>std:ui/render</code></td><td><span class="pill std">std</span></td><td><code>RenderObject</code> tree, layout, paint (this ch., types only)</td></tr>
+    <tr><td><code>std:ui</code></td><td><span class="pill std">std</span></td><td>widgets / elements / state (chapter 28)</td></tr>
+    <tr><td><code>std:ui/material</code></td><td><span class="pill std">std</span></td><td>component library (chapter 28)</td></tr>
+  </tbody>
+</table>
+
+<h3>Linking</h3>
+<p><code>libofskia</code> (Skia + text + windowing + GPU bindings) is a prebuilt native
+artifact per target triple. A program importing <code>std:ui</code> links it through the
+same system-linker step <code>build</code> uses for <code>run</code>/<code>build</code>
+(the runtime already links native libc and FFI targets, chapter 19). <code>run</code> (JIT)
+loads it as a shared library; <code>build</code> links the static or dynamic archive. The
+GPU backend is selected per platform: GL/ANGLE on Linux/Windows, Metal on macOS/iOS,
+Vulkan where available — all behind the context family in the shim (§4), invisible above
+<code>std:ui/skia</code>.</p>
+
+<div class="callout good">
+  <strong>Bundling — decided.</strong> <code>libofskia</code> ships <em>with the
+  toolchain</em>, making <code>std:ui</code> a true standard module (Flutter-SDK style).
+  The native blob is part of the per-target distribution; no package fetch is required to
+  build a UI program.
+</div>
+
+<!-- =========================================================== -->
+<h2 id="staging">15. Implementation &amp; staging</h2>
+
+<h3>What exists today (the substrate)</h3>
+<ul>
+  <li>FFI: <code>extern struct</code>/<code>function</code>, <code>@CallConv</code>,
+  function-pointer callbacks, scoped pin for managed callback state, safepoints &amp;
+  trampolines (chapter 19).</li>
+  <li>Deterministic finalization: <code>@RefCounted</code> + <code>Drop</code> with the
+  tracing GC as cycle backstop (chapter 16 §8).</li>
+  <li>Async runtime with reactor/timer; M:N work-stealing executor in progress (chapters
+  20–21, <code>goals.txt</code>).</li>
+  <li>World-barrier STW GC with safepoint gating for worker threads (chapter 16).</li>
+  <li>Procedural macros, hygienic, pre-resolve (chapter 22) — for §12.2.</li>
+  <li>Per-isolate hosting + bridge ABI (chapter 26) — for §13.</li>
+</ul>
+
+<h3>New work, staged (each stage shippable &amp; test-gated)</h3>
+<ol>
+  <li><strong>Shim + bindings.</strong> Write <code>libofskia</code> (context/surface/canvas
+  families) and <code>std:ui/skia</code>; prove a window opens, a rect paints, the surface
+  flushes. Tests: C-side shim unit tests; FFI round-trip tests; a golden-image smoke test.</li>
+  <li><strong>Embedder + event loop.</strong> Window metrics, vsync → frame request, batched
+  pointer packets into the reactor (§6). Tests: synthetic packet decode, vsync-drives-frame,
+  no <code>block_on</code> on the loop.</li>
+  <li><strong>Recording canvas + layer tree.</strong> The <code>Canvas</code> interface, the
+  <code>FakeCanvas</code>, picture recording, layer assembly, raster-thread flush (§8–9).
+  Tests: <code>FakeCanvas</code> op assertions, layer reuse, cross-thread flush + GC-stress.</li>
+  <li><strong>Render layer.</strong> <code>RenderObject</code>, constraints/layout/paint, a
+  box/flex/stack/padding set, relayout &amp; repaint boundaries (§12.1). Tests: layout golden
+  cases, boundary-stops-propagation, paint-skips-clean-subtree.</li>
+  <li><strong>Text.</strong> Paragraph build/layout/draw + caching (§10). Tests: shaping
+  golden images, paragraph-cache-hit on unchanged inputs.</li>
+  <li><strong>(Chapter 28) Widgets, reconciliation, reactive layer, macros</strong> — builds on
+  this chapter's engine; the §12.2 optimizations land with it.</li>
+</ol>
+
+<p>Per the project's bar (<code>CLAUDE.md</code>): every stage carries unit + integration +
+e2e tests, including failure and "should-not-work-but-does" cases; the renderer's
+interface-against-<code>FakeCanvas</code> design means most of the framework is testable
+without a GPU, and the Skia-backed path adds golden-image and native-parity tests on top.</p>
+
+<!-- =========================================================== -->
+<h2 id="open">16. Open design decisions</h2>
+
+<p>These are genuine language/distribution decisions that need a call before
+implementation (per <code>CLAUDE.md</code> — ask before big design changes):</p>
+
+<ol>
+  <li><strong>Module scheme.</strong> <span class="pill spec">decided</span> The framework
+  is <code>std:ui</code> — a standard module bundled with the toolchain (Flutter-SDK style,
+  native <code>libofskia</code> shipped with the distribution). The submodules follow:
+  <code>std:ui/skia</code>, <code>std:ui/embedder</code>, <code>std:ui/engine</code>,
+  <code>std:ui/render</code>, <code>std:ui/material</code>.</li>
+  <li><strong>Windowing dependency.</strong> GLFW vs SDL2 inside <code>libofskia</code>. SDL2
+  brings audio/gamepad/mobile breadth; GLFW is leaner and desktop-focused. Affects mobile
+  reach.</li>
+  <li><strong>GPU backend matrix.</strong> Which of GL/Metal/Vulkan to support at v1, and
+  whether to require ANGLE for a uniform GL path on desktop.</li>
+  <li><strong>Skia vs a future Impeller-style renderer.</strong> Committing the
+  <code>Canvas</code> interface (§9) now keeps a second backend possible; do we want to
+  reserve that seam explicitly or hard-commit to Skia?</li>
+  <li><strong>Hot-reload via isolates (§13).</strong> Whether to design the pipeline owner
+  isolate-aware from day one (recommended) or add it later (cheaper now, costlier to retrofit).</li>
+</ol>
+
+<!-- =========================================================== -->
+<h2 id="summary">17. Summary</h2>
+
+<ul>
+  <li>The framework is five layers (§2); the top two (widgets, components) are chapter 28,
+  the bottom three (render, engine, skia/embedder) are this chapter.</li>
+  <li>Skia is reached through a co-designed C shim (<code>libofskia</code>, §4) and a pure
+  FFI binding layer (<code>std:ui/skia</code>, §5) — the same shape Flutter uses, since the
+  framework↔engine boundary is privileged native code, not generic FFI (§3).</li>
+  <li>The boundary is cheap because of three borrowed tricks: <strong>record don't call</strong>
+  (display lists, §9), <strong>thin peers with deterministic free</strong> (<code>@RefCounted</code>,
+  §11), and <strong>rasterize off the build thread</strong> (raster thread + GC safepoints,
+  §7).</li>
+  <li>Inbound events are a small fixed set of top-level <code>extern</code> entry points with
+  batched, serialized payloads (§6) — closures never cross the C ABI.</li>
+  <li>The frame pipeline (§8) produces retained artifacts each phase can skip; the dirty
+  sets and boundaries (§12.1) are the engine's optimization hooks.</li>
+  <li>The differentiator (§12.2): procedural macros + the typed HIR push Flutter's
+  remember-to-optimize conventions (const widgets, RepaintBoundary, <code>operator==</code>,
+  <code>dispose</code>) into compile-time-derived, enforced behavior — finer-grained rebuild,
+  derived structural equality, automatic const subtrees, deterministic disposal.</li>
+  <li>Open decisions (§16) — module scheme/bundling, windowing lib, GPU matrix, backend seam,
+  isolate-aware hot reload — need a call before implementation.</li>
+</ul>
+
+</body>
+</html>
