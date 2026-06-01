@@ -1,0 +1,41 @@
+//@ kind: run
+//@ serial
+//@ description: drain-then-close — the producer sends every value and the channel is already CLOSED (last sender dropped) before the consumer starts; the `Receiver: Iterator` must still drain all buffered messages, then terminate (docs/20 §2, docs/16 §8)
+//@ stdout:
+//~ joined
+//~ got=10
+//~ got=20
+//~ got=30
+//~ count=3
+import { println } from "std:io";
+import { Future } from "core:prelude";
+import { Thread, JoinHandle, Joined, Panicked } from "std:thread";
+import { Sender, Receiver } from "std:sync";
+import { channel } from "std:sync";
+
+// Sends three values then returns — releasing the captured sender closes the
+// channel while three messages are still buffered in the queue.
+function produce(tx: Sender<i64>) {
+  tx.send(10);
+  tx.send(20);
+  tx.send(30);
+}
+
+function main(): Future<null> async {
+  var ends = channel<i64>();
+  var tx = ends.0;
+  var rx = ends.1;
+  var worker: JoinHandle<i64> = Thread.spawn(() => { produce(tx); 0 });
+  // Join FIRST: the worker has returned, so the last sender is already dropped
+  // and the channel is closed — yet three values sit in the queue.
+  var _r: Joined<i64> | Panicked = await worker.join();
+  println("joined");
+  // The closed-but-non-empty channel must drain every buffered value before the
+  // iterator observes the close and terminates.
+  var count = 0;
+  for n in rx {
+    count = count + 1;
+    println("got=${n}");
+  }
+  println("count=${count}");
+}

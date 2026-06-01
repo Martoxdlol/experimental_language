@@ -1,0 +1,38 @@
+//@ kind: run
+//@ serial
+//@ env: OTTER_FUSION_GC=stress
+//@ description: channel close under aggressive GC — managed (`str`) elements ride the queue pinned as GC roots while a collection runs on every allocation; built heap strings are concatenated in the consumer so the result must survive collections during the hand-off, and the `Receiver: Iterator` drains every message then terminates deterministically when the worker drops its sender (docs/20 §2, docs/16 §8)
+//@ stdout:
+//~ abcdefghi
+import { println } from "std:io";
+import { Thread, JoinHandle } from "std:thread";
+import { Sender, Receiver } from "std:sync";
+import { channel } from "std:sync";
+
+// One worker sends three managed `str` values then returns, releasing its
+// sender — the channel closes the instant that single sender is dropped.
+function produce(tx: Sender<str>) {
+  tx.send("abc");
+  tx.send("def");
+  tx.send("ghi");
+}
+
+// Drains with the synchronous `Receiver: Iterator`, building a fresh heap
+// string each step. Every concatenation allocates; under stress GC a collection
+// fires on each, so the accumulator must stay a live root across the loop and
+// each queued message must survive its hand-off.
+function consume(rx: Receiver<str>): str {
+  var acc: str = "";
+  for s in rx {
+    acc = acc + s;
+  }
+  acc
+}
+
+function main() {
+  var ends = channel<str>();
+  var tx = ends.0;
+  var rx = ends.1;
+  var worker: JoinHandle<i64> = Thread.spawn(() => { produce(tx); 0 });
+  println(consume(rx));   // drained + closed → "abcdefghi"
+}

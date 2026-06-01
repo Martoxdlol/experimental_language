@@ -1452,8 +1452,14 @@ The tracing GC is functionally complete for single-threaded programs.
       now (no deep clone-on-send yet). JIT + native parity; `examples/channels.otter`
       (`for sq in rx`); **7 CLI tests** (iterator-close, recv→ChannelClosed,
       multi-sender clone, send-after-receiver-drop, managed-element GC-stress,
-      native parity, try_recv) + runtime unit tests + e2e cases
-      (`channel_iterator_close`, `channel_multi_sender_close`, `channel_send_recv`).
+      native parity, try_recv) + **4 runtime unit tests** (last-sender-release,
+      drain-then-close, receiver-drop-closes-for-sending, blocking-recv-wakes-on-
+      close cross-thread) + **6 e2e cases** (`channel_send_recv`,
+      `channel_iterator_close`, `channel_multi_sender_close`,
+      `channel_drain_then_close` — closed-before-consume buffered drain,
+      `channel_close_gc_stress` — managed `str` elements across the queue under
+      `OTTER_FUSION_GC=stress`, `channel_send_after_receiver_drop` —
+      `send`→`ChannelClosed`).
       The deterministic-release facility is the seed for a future opt-in
       `@RefCounted` object kind (see goals.txt). TODO: `channel_mpmc`; bounded
       channels; move/deep-clone-on-send for non-immutable `T`; heap-escaping
@@ -1471,7 +1477,6 @@ The tracing GC is functionally complete for single-threaded programs.
       concurrent increments (2×5000 → 10000, deterministic under stress). JIT +
       native parity; `examples/shared.otter`; 2 CLI tests. TODO: lock release on a
       panicking body (needs unwinding); reentrancy is undefined (per spec).
-- [ ] Channel close + `Receiver: Iterator` (needs `Drop`).
 - [x] **Async (`docs/21`) — COMPLETE, with an implicit-async surface.**
       > **SURFACE NOTE (current design, `docs/21` rewritten):** async is now
       > **implicit**. There is **no** user-visible `async` modifier, `await`
