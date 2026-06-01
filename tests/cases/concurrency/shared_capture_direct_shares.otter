@@ -1,28 +1,26 @@
 //@ kind: run
 //@ serial
-//@ description: capturing a `Shared<T>` directly into `Thread.spawn` (no explicit `.clone()`) deep-clones the HANDLE, so all workers lock the same inner cell (docs/20 §4 / §6) — two locked increments deterministically yield 2
+//@ description: capturing a `Shared<T>` directly into a `spawn` async worker (no explicit `.clone()`) deep-clones the HANDLE, so all workers lock the same inner cell (docs/20 §4 / §6, docs/21 §7) — two locked increments deterministically yield 2
 //@ stdout:
 //~ counter after 2 increments = 2
 import { println } from "std:io";
 import { Future } from "core:prelude";
-import { Thread, JoinHandle, Joined, Panicked } from "std:thread";
 import { Shared } from "std:sync";
 struct X { value: i64 }
 struct Counter { x: X }
 function main(): Future<null> async {
   var state: Shared<Counter> = Shared.new(Counter { x: X { value: 0 } });
-  // Each spawn captures `state` directly; the capture clones the handle, which
-  // points at the same shared cell — no lost updates because `lock` serializes.
-  var h1: JoinHandle<i64> = Thread.spawn(() => {
-    state.lock((c) => { c.x.value = c.x.value + 1; 0 });
-    0
-  });
-  var h2: JoinHandle<i64> = Thread.spawn(() => {
-    state.lock((c) => { c.x.value = c.x.value + 1; 0 });
-    0
-  });
-  var r1: Joined<i64> | Panicked = await h1.join();
-  var r2: Joined<i64> | Panicked = await h2.join();
-  var total: i64 = state.lock((c) => c.x.value);
+  // Each `spawn async { … }` captures `state` directly; the capture clones the
+  // handle, which points at the same shared cell — no lost updates because
+  // `lock` serializes. Lock-using workers must be async (`lock` is await-only).
+  var h1: Future<null> = spawn async {
+    await state.lock((c) => { c.x.value = c.x.value + 1; 0 });
+  };
+  var h2: Future<null> = spawn async {
+    await state.lock((c) => { c.x.value = c.x.value + 1; 0 });
+  };
+  await h1;
+  await h2;
+  var total: i64 = await state.lock((c) => c.x.value);
   println("counter after 2 increments = " + (total as str));
 }

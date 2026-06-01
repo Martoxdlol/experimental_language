@@ -840,18 +840,36 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 return self.emit_channel_recv(chan, elem, name, recv_span);
             }
             if def == p.shared_def && p.shared_def != DefId(0) {
-                // `Shared<T>.lock(body)` / `.try_lock(body)`: read the mutex id,
-                // build the closure env, then run it under the lock. `ty` is the
-                // call result (`R` for lock, `R | LockBusy` for try_lock).
+                // `Shared<T>.lock(body)` / `.try_lock(body)` (`docs/20` §4): read
+                // the mutex id and build the body-closure env, then construct the
+                // async lock future (`emit_shared_lock`); the caller's `await`
+                // drives it. An `async` body was desugared (ANF) into a closure
+                // returning an `async { … }` block, so its return type is a
+                // `Future<R>` — detect that, flatten to `R`, and have the runtime
+                // drive the body future to completion under the lock.
+                let body = &args[1];
+                let fret = self.func_ret(body.ty);
+                let (r_ty, body_is_async) = match self
+                    .cx
+                    .analysis
+                    .tcx
+                    .kind(resolve_shallow(self.cx.analysis, fret, &self.subst))
+                {
+                    TyKind::Named { def: fd, args: fargs }
+                        if *fd == p.future_def && !fargs.is_empty() =>
+                    {
+                        (fargs[0], true)
+                    }
+                    _ => (fret, false),
+                };
                 let ptr = self
                     .h_expr(receiver)?
                     .ok_or_else(|| CodegenError::new(recv_span, "`Shared` receiver has no value"))?;
                 let id = self.emit_shared_id(ptr, rty, recv_span)?;
-                let r_ty = self.func_ret(args[1].ty);
                 let env = self
-                    .h_expr(&args[1])?
-                    .ok_or_else(|| CodegenError::new(args[1].span, "lock body has no value"))?;
-                return self.emit_shared_lock(id, elem, name, env, r_ty, ty, recv_span);
+                    .h_expr(body)?
+                    .ok_or_else(|| CodegenError::new(body.span, "lock body has no value"))?;
+                return self.emit_shared_lock(id, elem, name, env, r_ty, body_is_async, recv_span);
             }
         }
         Err(CodegenError::new(recv_span, "HIR codegen: builtin method on this type pending"))

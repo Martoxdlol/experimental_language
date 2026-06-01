@@ -182,7 +182,10 @@ pub struct Panicked  { pub message: str }</code></pre>
   use the <code>spawn</code> keyword from <a href="21-async.html">21-async</a> —
   <code>spawn EXPR</code> schedules a future on a worker and itself evaluates to
   a <code>Future&lt;T&gt;</code>. Joining is the same: <code>await</code> the
-  resulting future.
+  resulting future. Because a <code>Thread.spawn</code> closure is synchronous it
+  cannot <code>await</code> — so a worker that needs to lock a
+  <code>Shared&lt;T&gt;</code> (§4, <code>await</code>-only) must use the
+  <code>spawn</code> keyword, not <code>Thread.spawn</code>.
 </div>
 
 <h3>Cross-thread capture — isolation rules</h3>
@@ -475,10 +478,40 @@ var snapshot = await state.lock { c =&gt; c.value }
 // critical section spans the awaited work (an async-aware mutex).
 var loaded = await state.lock { c async =&gt; { c.value = await fetch(); c.value } }</code></pre>
 
+<div class="callout good">
+  <strong>Always async — acquire suspends the task, it never blocks the thread</strong>
+  There is exactly <strong>one</strong> lock primitive and it is async. Acquiring a
+  contended lock <em>suspends the awaiting task</em> (registers the executor's waker and
+  returns <code>Pending</code>) — it never parks the OS thread, so the worker stays free to
+  run other tasks (<a href="21-async.html">21-async</a> §6). Waiters are served in
+  <strong>FIFO order</strong>, so the lock is fair and starvation-free. The acquire is keyed
+  to the <em>task</em>, not the OS thread, so the semantics are identical however the task is
+  driven. There is no read/write variant — <code>Shared&lt;T&gt;</code> is a mutex (a future
+  <code>RwLock&lt;T&gt;</code> would be a separate primitive).
+  <br><span style="color: var(--muted);">Implementation note: the body is invoked over a
+  uniform integer/pointer ABI, so a <em>float</em>-typed protected value or body result
+  (e.g. <code>Shared&lt;f64&gt;</code> or a body returning <code>f64</code>) is currently
+  rejected with a clear error — wrap the float in a struct.</span>
+</div>
+
+<div class="callout warn">
+  <strong><code>Thread.spawn</code> workers cannot lock</strong>
+  <code>lock</code>/<code>try_lock</code> are <code>await</code>-only, and a
+  <code>Thread.spawn</code> closure is <em>synchronous</em> — it cannot <code>await</code>
+  (§1). Calling <code>lock</code>/<code>try_lock</code> inside a <code>Thread.spawn</code>
+  worker is therefore a <strong>compile error</strong>. Run lock-using workers through the
+  async <code>spawn</code> keyword (<a href="21-async.html">21-async</a> §6) instead, which
+  yields a <code>Future&lt;T&gt;</code> you <code>await</code>:
+  <pre><code>// var h = Thread.spawn(() =&gt; state.lock(...))   // ERROR — sync worker can't await a lock
+var h = spawn async { await state.lock { c =&gt; c.value = c.value + 1 } }   // OK
+await h</code></pre>
+</div>
+
 <div class="callout warn">
   <strong>Detachment rule — references can't escape the lock</strong>
   A reference <em>returned</em> from <code>body</code> is <code>Clone</code>d at the return
-  boundary (no <code>Clone</code> → compile error). The reference passed to <code>body</code> —
+  boundary — <em>while the lock is still held</em>, so the snapshot is consistent (no
+  <code>Clone</code> → compile error). The reference passed to <code>body</code> —
   <em>and any reference reachable through it</em> (e.g. <code>c.x</code>, <code>c.x.y</code>) — is
   valid only inside the lock; storing it where it outlives the lock (an outer-scoped variable, a
   struct field, a collection, or an escaping closure) is rejected by escape analysis. To carry data

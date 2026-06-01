@@ -1,0 +1,37 @@
+//@ kind: run
+//@ serial
+//@ description: the mutex is HELD ACROSS the body's `await` (docs/20 §4). Each worker reads the counter, suspends inside the critical section (await sleep), then writes back. If the lock were released at the suspension (the old footgun) the read-modify-write would race and lose updates; held-across-await serializes them, so 5 workers deterministically yield 5.
+//@ stdout:
+//~ total = 5
+import { List } from "core:collections";
+import { println } from "std:io";
+import { Future } from "core:prelude";
+import { sleep } from "std:async";
+import { Shared } from "std:sync";
+struct Counter { value: i64 }
+// The body is `async` and `await`s INSIDE the critical section: the read and the
+// write straddle a suspension point, so correctness depends on the lock staying
+// held across the `await`.
+function worker(s: Shared<Counter>): Future<null> async {
+  await s.lock((c) async => {
+    var start: i64 = c.value;   // read
+    await sleep(5);             // suspend while holding the lock
+    c.value = start + 1;        // write — must not interleave with another worker
+    0
+  });
+}
+function main(): Future<null> async {
+  var state: Shared<Counter> = Shared.new(Counter { value: 0 });
+  var handles: List<Future<null>> = [];
+  var i: i64 = 0;
+  while i < 5 {
+    var s: Shared<Counter> = state.clone();
+    handles.push(spawn worker(s));
+    i = i + 1;
+  }
+  for h in handles {
+    await h;
+  }
+  var total: i64 = await state.lock((c) => c.value);
+  println("total = " + (total as str));
+}

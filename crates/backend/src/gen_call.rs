@@ -879,8 +879,14 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         Ok(Some(shared))
     }
 
-    /// `Shared<T>.lock(body)` / `.try_lock(body)` over an already-read mutex id
-    /// and already-built closure env. Shared by the AST and HIR walks.
+    /// `Shared<T>.lock(body)` / `.try_lock(body)` (`docs/20` §4): build the async
+    /// lock future over an already-read mutex `id` and already-built body-closure
+    /// `env`. The future acquires the lock (suspending the *task* — never the OS
+    /// thread — while contended for `lock`; resolving to `LockBusy` on a failed
+    /// `try_lock`), runs the body under the lock — driving it to completion if
+    /// `body_is_async`, so the lock is HELD across the body's `await`s — clones the
+    /// result out *while held* (detachment rule), releases, and resolves to `R`
+    /// (or `R | LockBusy`). The caller's `await` drives the returned `Future`.
     pub(crate) fn emit_shared_lock(
         &mut self,
         id: Value,
@@ -888,63 +894,83 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         method: &str,
         env: Value,
         r_ty: Ty,
-        union_ty: Ty,
+        body_is_async: bool,
         span: Span,
     ) -> CgResult<Option<Value>> {
-        let try_lock = method == "try_lock";
-        let r_clty = self.cx_clty(r_ty);
+        let prog = &self.cx.analysis.program;
+        let ready_tid = 1000 + prog.ready_def.index() as i64;
+        let pending_tid = 1000 + prog.pending_def.index() as i64;
+        let busy_def = prog.lock_busy_def;
+        let is_try = method == "try_lock";
 
-        if !try_lock {
-            let raw = self.call_intrinsic("lang_shared_lock", &[types::I64], Some(types::I64), &[id])
-                .expect("lock value");
-            let inner = self.i64_to_elem(raw, elem, span)?;
-            let call_args: Vec<Value> = inner.into_iter().collect();
-            let r = self.emit_closure_call(env, &call_args, r_clty);
-            self.call_intrinsic("lang_shared_unlock", &[types::I64], None, &[id]);
-            return Ok(r);
+        // The body closure is invoked as `fn(env, value) -> R` over a uniform
+        // integer/pointer ABI; a float-typed protected value or body result would
+        // travel in a different register class — reject it with a clear error
+        // rather than miscompile (wrap the float in a struct).
+        let elem_res = resolve_shallow(self.cx.analysis, elem, &self.subst);
+        let r_res = resolve_shallow(self.cx.analysis, r_ty, &self.subst);
+        let is_float = |k: &TyKind| matches!(k, TyKind::Float(_));
+        if is_float(self.cx.analysis.tcx.kind(elem_res)) || is_float(self.cx.analysis.tcx.kind(r_res)) {
+            return Err(CodegenError::new(
+                span,
+                "locking a `Shared` whose value or body result is a float is not yet \
+                 supported; wrap it in a struct",
+            ));
         }
 
-        // try_lock → `R | LockBusy`.
-        let slot = self.b.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, 8, 3));
-        let got_ptr = self.b.ins().stack_addr(PTR, slot, 0);
-        let raw = self.call_intrinsic(
-            "lang_shared_try_lock", &[types::I64, PTR], Some(types::I64), &[id, got_ptr],
-        ).expect("try_lock value");
-        let got = self.b.ins().load(types::I64, MemFlags::trusted(), got_ptr, 0);
-        let zero = self.b.ins().iconst(types::I64, 0);
-        let acquired = self.b.ins().icmp(IntCC::NotEqual, got, zero);
+        let r_is_ptr = is_managed_ptr(self.cx.analysis, r_res);
+        // Clone-out thunk for a managed `R` (the detachment-rule deep copy); a
+        // non-pointer `R` aliases nothing, so no clone is needed.
+        let clone_fn = if r_is_ptr {
+            self.emit_clone_thunk(r_ty, span)?
+        } else {
+            self.b.ins().iconst(PTR, 0)
+        };
+        let r_tid = if is_try { self.type_id_of(r_ty) } else { 0 };
+        let busy_tid = if is_try { 1000 + busy_def.index() as i64 } else { 0 };
 
-        let busy_def = self.cx.analysis.program.lock_busy_def;
-        let busy_ty = self.cx.analysis.tcx.variants(union_ty).into_iter()
-            .find(|t| matches!(self.cx.analysis.tcx.kind(*t), TyKind::Named { def, .. } if *def == busy_def))
-            .unwrap_or(self.cx.analysis.tcx.error);
+        let body_async_v = self.b.ins().iconst(types::I64, body_is_async as i64);
+        let r_is_ptr_v = self.b.ins().iconst(types::I64, r_is_ptr as i64);
+        let is_try_v = self.b.ins().iconst(types::I64, is_try as i64);
+        let r_tid_v = self.b.ins().iconst(types::I64, r_tid);
+        let busy_tid_v = self.b.ins().iconst(types::I64, busy_tid);
+        let ready_v = self.b.ins().iconst(types::I64, ready_tid);
+        let pending_v = self.b.ins().iconst(types::I64, pending_tid);
 
-        let ok_bb = self.b.create_block();
-        let busy_bb = self.b.create_block();
-        let merge = self.b.create_block();
-        self.b.append_block_param(merge, PTR);
-        self.b.ins().brif(acquired, ok_bb, &[], busy_bb, &[]);
-        self.term = true;
+        Ok(self.call_intrinsic(
+            "lang_shared_lock_future",
+            &[
+                types::I64, PTR, PTR, types::I64, types::I64, types::I64, types::I64,
+                types::I64, types::I64, types::I64,
+            ],
+            Some(PTR),
+            &[
+                id, env, clone_fn, body_async_v, r_is_ptr_v, is_try_v, r_tid_v, busy_tid_v,
+                ready_v, pending_v,
+            ],
+        ))
+    }
 
-        self.switch(ok_bb);
-        let inner = self.i64_to_elem(raw, elem, span)?;
-        let call_args: Vec<Value> = inner.into_iter().collect();
-        let r = self.emit_closure_call(env, &call_args, r_clty);
-        self.call_intrinsic("lang_shared_unlock", &[types::I64], None, &[id]);
-        if is_managed_ptr(self.cx.analysis, resolve_shallow(self.cx.analysis, r_ty, &self.subst)) {
-            if let Some(v) = r { self.mark_root(v); }
-        }
-        let boxed_ok = self.box_value(r, r_ty);
-        self.b.ins().jump(merge, &[boxed_ok.into()]);
-        self.term = true;
-
-        self.switch(busy_bb);
-        let busy_box = self.box_value(None, busy_ty);
-        self.b.ins().jump(merge, &[busy_box.into()]);
-        self.term = true;
-
-        self.switch(merge);
-        Ok(Some(self.b.block_params(merge)[0]))
+    /// Declare a `Shared` lock-body clone-out thunk for `r_ty` (`extern "C" fn(R)
+    /// -> R` deep-cloning its argument) and queue its definition; returns its
+    /// address as a value for the lock future to call (`docs/20` §4).
+    pub(crate) fn emit_clone_thunk(&mut self, r_ty: Ty, span: Span) -> CgResult<Value> {
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(PTR));
+        sig.returns.push(AbiParam::new(PTR));
+        let name = format!("clonethunk.{}", DATA_CTR.fetch_add(1, Ordering::Relaxed));
+        let fid = self
+            .module
+            .declare_function(&name, Linkage::Local, &sig)
+            .expect("declare clone thunk");
+        self.clone_thunks.push(crate::CloneThunkJob {
+            func_id: fid,
+            r_ty,
+            subst: self.subst.clone(),
+            span,
+        });
+        let fref = self.module.declare_func_in_func(fid, self.b.func);
+        Ok(self.b.ins().func_addr(PTR, fref))
     }
 
     /// Read the `id` field from an already-evaluated `Shared` struct value.

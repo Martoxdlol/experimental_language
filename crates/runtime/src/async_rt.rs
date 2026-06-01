@@ -34,6 +34,17 @@ pub struct Context {
     wake_fn: extern "C" fn(*mut u8),
 }
 
+impl Context {
+    /// The opaque waker payload to hand back to [`Self::wake_fn`].
+    pub fn waker_data(&self) -> *mut u8 {
+        self.waker_data
+    }
+    /// The callback that schedules a re-poll of the awaiting task.
+    pub fn wake_fn(&self) -> extern "C" fn(*mut u8) {
+        self.wake_fn
+    }
+}
+
 /// A parked-thread waker: a flag the future sets (via [`wake_thunk`]) and a
 /// condvar the blocked executor waits on.
 struct ThreadWaker {

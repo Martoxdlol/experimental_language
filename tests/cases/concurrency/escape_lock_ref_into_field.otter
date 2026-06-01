@@ -1,16 +1,16 @@
 //@ kind: compile-error
-//@ known-bug: docs/20 §4 detachment rule — storing a live lock reference into a heap struct field that outlives the lock is an escape and must be rejected (store a `.clone()` instead). Escape analysis is not yet implemented, so this currently compiles instead of erroring.
 //@ stderr: escape
 import { println } from "std:io";
+import { Future } from "core:prelude";
 import { Shared } from "std:sync";
 struct X { value: i64 }
 struct Counter { x: X }
 struct Holder { r: X | null }
-function main() {
+function main(): Future<null> async {
   var state: Shared<Counter> = Shared.new(Counter { x: X { value: 0 } });
   var holder: Holder = Holder { r: null };
-  state.lock((c) => { c.x.value = 1; holder.r = c.x; 0 }); // alias stored in outer field
+  await state.lock((c) => { c.x.value = 1; holder.r = c.x; 0 }); // alias stored in outer field
   (holder.r as X).value = -1; // mutating the shared cell through the escaped alias
-  var snap: i64 = state.lock((c) => c.x.value);
+  var snap: i64 = await state.lock((c) => c.x.value);
   println("snap = " + (snap as str));
 }

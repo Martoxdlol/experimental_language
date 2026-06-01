@@ -4,20 +4,21 @@
 //~ shared = 1
 //~ escaped = -1
 import { println } from "std:io";
+import { Future } from "core:prelude";
 import { Shared } from "std:sync";
 import { Clone } from "core:prelude";
 @Derive(Clone)
 struct X { value: i64 }
 @Derive(Clone)
 struct Counter { x: X }
-function main() {
+function main(): Future<null> async {
   var state: Shared<Counter> = Shared.new(Counter { x: X { value: 0 } });
   // Corrected form of the racy example: escape a *clone*, not a live alias.
   var escaped: X | null = null;
-  state.lock((c) => { c.x.value = c.x.value + 1; escaped = c.x.clone(); 0 });
+  await state.lock((c) => { c.x.value = c.x.value + 1; escaped = c.x.clone(); 0 });
   // Mutating the detached clone is harmless — it is not aliased into the cell.
   (escaped as X).value = -1;
-  var snap: i64 = state.lock((c) => c.x.value);
+  var snap: i64 = await state.lock((c) => c.x.value);
   println("shared = " + (snap as str));
   println("escaped = " + ((escaped as X).value as str));
 }

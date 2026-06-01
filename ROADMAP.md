@@ -1983,6 +1983,26 @@ feature, JIT≡native byte-identical and GC-stress clean.
    items below one by one, test-gated, docs/LSP/examples kept consistent.
 
 **Recently completed:**
+- **Async `Shared<T>` lock (`docs/20` §4): DONE.** `lock`/`try_lock` are now
+  `lock<R>(self,body):Future<R> async` / `try_lock<R>(self,body):Future<R|LockBusy> async`,
+  awaited by callers. The runtime cell (`crates/runtime/src/shared.rs`) is a task-aware
+  async mutex — a `locked` flag + a **FIFO** waiter queue of `(waker_data, wake_fn)`; a
+  contended acquire registers the executor's waker and returns `Pending` (no OS-thread
+  parking), so the lock is fair and starvation-free. The lock is built as a runtime
+  `Future` (`lang_shared_lock_future`) the caller's `await` drives: acquire → run the body
+  closure under the lock (driving an `async` body's future to completion, so the lock is
+  HELD across the body's `await`s — fixing the release-before-await footgun) → clone the
+  result out *while held* (via a codegen-emitted clone thunk) → release. Cancel/panic
+  release via a per-thread held-lock set (`lang_shared_release_all`) — the worker-panic
+  side fully closes once **worker-panic isolation** lands. `Thread.spawn` workers cannot
+  lock (compile error → use the `spawn` keyword). A new sema escape/detachment taint pass
+  rejects references that outlive the body (`.clone()` detaches; a returned reference is
+  cloned at the boundary). Tests: e2e `tests/cases/concurrency/*` (mutual exclusion under
+  contention, held-across-`await`, `try_lock` busy/free, non-reentrancy, escape rejection
+  ×4, clone hatch, return clone-out, GC-stress) + runtime/sema/backend unit tests.
+  *Limitation:* a float-typed protected value/result is rejected with a clear error
+  (uniform integer/pointer body ABI) — wrap in a struct. *Deferred:* `RwLock<T>` (separate
+  primitive).
 - **`@RefCounted` — opt-in deterministic reference counting (`docs/16` §8.1): DONE.**
   Generalizes the channel-endpoint carve-out into a user-facing object kind: atomic
   strong count, synchronous `Drop` + free at count 0, ARC retain/release across

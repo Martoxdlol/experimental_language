@@ -97,9 +97,11 @@ fn register_runtime_symbols(b: &mut JITBuilder) {
     b.symbol("lang_rc_retain", runtime::gc::lang_rc_retain as *const u8);
     b.symbol("lang_rc_release", runtime::gc::lang_rc_release as *const u8);
     b.symbol("lang_shared_new", runtime::shared::lang_shared_new as *const u8);
-    b.symbol("lang_shared_lock", runtime::shared::lang_shared_lock as *const u8);
-    b.symbol("lang_shared_unlock", runtime::shared::lang_shared_unlock as *const u8);
-    b.symbol("lang_shared_try_lock", runtime::shared::lang_shared_try_lock as *const u8);
+    b.symbol("lang_shared_lock_future", runtime::shared::lang_shared_lock_future as *const u8);
+    b.symbol("lang_shared_try_acquire", runtime::shared::lang_shared_try_acquire as *const u8);
+    b.symbol("lang_shared_read", runtime::shared::lang_shared_read as *const u8);
+    b.symbol("lang_shared_release", runtime::shared::lang_shared_release as *const u8);
+    b.symbol("lang_shared_release_all", runtime::shared::lang_shared_release_all as *const u8);
     b.symbol("lang_exit", runtime::lang_exit as *const u8);
     b.symbol("lang_abort", runtime::lang_abort as *const u8);
     b.symbol("lang_foreign_alloc", runtime::foreign::lang_foreign_alloc as *const u8);
@@ -337,6 +339,7 @@ fn run_codegen<M: Module>(
         worklist: Vec::new(),
         closures: Vec::new(),
         async_jobs: Vec::new(),
+        clone_thunks: Vec::new(),
         safepoints: Vec::new(),
         captured_locals,
         clif: None,
@@ -372,6 +375,7 @@ pub fn compile_clif(analysis: &Analysis) -> CgResult<String> {
         worklist: Vec::new(),
         closures: Vec::new(),
         async_jobs: Vec::new(),
+        clone_thunks: Vec::new(),
         safepoints: Vec::new(),
         captured_locals,
         clif: Some(Vec::new()),
@@ -745,6 +749,18 @@ struct AsyncJob {
     out: Ty,
 }
 
+/// A clone-out thunk awaiting code generation (`docs/20` §4). A
+/// `extern "C" fn(R) -> R` that deep-clones its argument (via `gen_clone_value`),
+/// invoked by the `Shared` lock future to detach the body's returned value from
+/// the cell *while the lock is still held*. One is generated per distinct `R`
+/// type returned from a `lock`/`try_lock` body whose `R` is a managed pointer.
+struct CloneThunkJob {
+    func_id: FuncId,
+    r_ty: Ty,
+    subst: HashMap<DefId, Ty>,
+    span: Span,
+}
+
 /// Per-async-`poll`-function state-machine context (`docs/21`): where the state
 /// struct lives, the slots that hold each saved local, and the suspend/resume
 /// blocks for each `await` site.
@@ -784,6 +800,8 @@ struct Codegen<'a, M: Module> {
     closures: Vec<ClosureJob>,
     /// Async block/closure `poll` functions declared but not yet defined.
     async_jobs: Vec<AsyncJob>,
+    /// `Shared` lock-body clone-out thunks declared but not yet defined.
+    clone_thunks: Vec<CloneThunkJob>,
     /// Captured GC safepoints: `(func, call code offset, frame_to_fp, ref SP
     /// offsets)`, registered with the runtime after linking.
     safepoints: Vec<(FuncId, u32, u32, Vec<u32>)>,
@@ -903,6 +921,10 @@ impl<'a, M: Module> Codegen<'a, M> {
                 self.define_closure(job)?;
                 continue;
             }
+            if let Some(job) = self.clone_thunks.pop() {
+                self.define_clone_thunk(job)?;
+                continue;
+            }
             match self.async_jobs.pop() {
                 Some(job) => self.define_async_job(job)?,
                 None => break,
@@ -974,6 +996,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     worklist: &mut self.worklist,
                     closures: &mut self.closures,
                     async_jobs: &mut self.async_jobs,
+                    clone_thunks: &mut self.clone_thunks,
                     subst,
                     b: &mut b,
                     vars: HashMap::new(),
@@ -1054,6 +1077,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     worklist: &mut self.worklist,
                     closures: &mut self.closures,
                     async_jobs: &mut self.async_jobs,
+                    clone_thunks: &mut self.clone_thunks,
                     subst,
                     b: &mut b,
                     vars: HashMap::new(),
@@ -1115,6 +1139,60 @@ impl<'a, M: Module> Codegen<'a, M> {
         self.record_clif("<closure>", &ctx);
         self.module.define_function(func_id, &mut ctx)
             .map_err(|e| CodegenError::new(span, format!("define closure: {e}")))?;
+        self.capture_safepoints(func_id, &ctx);
+        self.module.clear_context(&mut ctx);
+        Ok(())
+    }
+
+    /// Define a `Shared` lock-body clone-out thunk: `extern "C" fn(R) -> R` that
+    /// deep-clones its argument via [`FnGen::gen_clone_value`] (`docs/20` §4). The
+    /// lock future calls it to detach the body's returned value from the cell
+    /// while the lock is still held. Only generated for a managed (pointer) `R`.
+    fn define_clone_thunk(&mut self, job: CloneThunkJob) -> CgResult<()> {
+        let CloneThunkJob { func_id, r_ty, subst, span } = job;
+        let mut ctx = self.module.make_context();
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(PTR));
+        sig.returns.push(AbiParam::new(PTR));
+        ctx.func.signature = sig;
+        let mut fctx = FunctionBuilderContext::new();
+        {
+            let mut b = FunctionBuilder::new(&mut ctx.func, &mut fctx);
+            let entry = b.create_block();
+            b.append_block_params_for_function_params(entry);
+            b.switch_to_block(entry);
+            let arg = b.block_params(entry)[0];
+            {
+                let mut fg = FnGen {
+                    cx: CgShared { analysis: self.analysis, hir: self.hir, captured_locals: &self.captured_locals },
+                    module: self.module,
+                    funcs: &mut self.funcs,
+                    worklist: &mut self.worklist,
+                    closures: &mut self.closures,
+                    async_jobs: &mut self.async_jobs,
+                    clone_thunks: &mut self.clone_thunks,
+                    subst,
+                    b: &mut b,
+                    vars: HashMap::new(),
+                    cell_content: HashMap::new(),
+                    term: false,
+                    loops: Vec::new(),
+                    ret_ty: r_ty,
+                    async_out: None,
+                    async_ctx: None,
+                    endpoint_releases: Vec::new(),
+                    rc_owned: Vec::new(),
+                };
+                fg.mark_root(arg);
+                let cloned = fg.gen_clone_value(arg, r_ty, span)?;
+                fg.b.ins().return_(&[cloned]);
+            }
+            b.seal_all_blocks();
+            b.finalize();
+        }
+        self.record_clif("<clone thunk>", &ctx);
+        self.module.define_function(func_id, &mut ctx)
+            .map_err(|e| CodegenError::new(span, format!("define clone thunk: {e}")))?;
         self.capture_safepoints(func_id, &ctx);
         self.module.clear_context(&mut ctx);
         Ok(())
@@ -1221,6 +1299,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     worklist: &mut self.worklist,
                     closures: &mut self.closures,
                     async_jobs: &mut self.async_jobs,
+                    clone_thunks: &mut self.clone_thunks,
                     subst: subst.clone(),
                     b: &mut b,
                     vars: HashMap::new(),
@@ -1278,6 +1357,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     worklist: &mut self.worklist,
                     closures: &mut self.closures,
                     async_jobs: &mut self.async_jobs,
+                    clone_thunks: &mut self.clone_thunks,
                     subst: subst.clone(),
                     b: &mut b,
                     vars: HashMap::new(),
@@ -1373,6 +1453,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     worklist: &mut self.worklist,
                     closures: &mut self.closures,
                     async_jobs: &mut self.async_jobs,
+                    clone_thunks: &mut self.clone_thunks,
                     subst: subst.clone(),
                     b: &mut b,
                     vars: HashMap::new(),
@@ -1510,6 +1591,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     worklist: &mut self.worklist,
                     closures: &mut self.closures,
                     async_jobs: &mut self.async_jobs,
+                    clone_thunks: &mut self.clone_thunks,
                     subst: subst.clone(),
                     b: &mut b,
                     vars: HashMap::new(),
@@ -1595,6 +1677,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     worklist: &mut self.worklist,
                     closures: &mut self.closures,
                     async_jobs: &mut self.async_jobs,
+                    clone_thunks: &mut self.clone_thunks,
                     subst,
                     b: &mut b,
                     vars: HashMap::new(),
@@ -1667,6 +1750,8 @@ struct FnGen<'a, 'b, 'f, M: Module> {
     closures: &'a mut Vec<ClosureJob>,
     /// Async block/closure `poll` functions queued for code generation.
     async_jobs: &'a mut Vec<AsyncJob>,
+    /// `Shared` lock-body clone-out thunks queued for code generation.
+    clone_thunks: &'a mut Vec<CloneThunkJob>,
     /// This instance's generic-parameter substitution.
     subst: HashMap<DefId, Ty>,
     b: &'b mut FunctionBuilder<'f>,

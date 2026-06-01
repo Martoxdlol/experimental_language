@@ -2200,10 +2200,12 @@ extend Cat: Sound { function code(self): i64 { 2 } }\n";
     fn hir_channel_new_and_shared_new_build() {
         // Constructing a channel pair and a Shared cell must produce identical
         // results via AST and HIR (exercises the ChannelNew / SharedNew intrinsics).
+        // (Reading a `Shared` is async — `docs/20` §4 — so it is covered by the
+        // e2e suite; here we only exercise construction.)
         let src = "function f(): i64 {\n\
                      var s = Shared.new(40);\n\
-                     var got = s.lock((v: i64): i64 => v + 2);\n\
-                     got\n\
+                     var pair: (Sender<i64>, Receiver<i64>) = channel<i64>();\n\
+                     42\n\
                    }";
         let src = &with_prelude(src);
         let (tokens, _) = lex(src, FileId(0));
@@ -2242,11 +2244,16 @@ extend Cat: Sound { function code(self): i64 { 2 } }\n";
 
     #[test]
     fn hir_shared_lock_and_try_lock() {
-        // `Shared.new` + `.lock(closure)` (sync — the closure runs under the lock
-        // and returns a value). No async needed.
-        let src = "function f(): i64 {\n\
+        // `lock`/`try_lock` are ALWAYS async (`docs/20` §4): awaited inside an
+        // async body, the lock is held across the body, and `try_lock` yields
+        // `R | LockBusy`. Runtime behavior is covered by the e2e suite
+        // (`tests/cases/concurrency/*`); here we assert the HIR codegen lowers
+        // both async lock futures (acquire → body → clone-out → release) without
+        // error.
+        let src = "function f(): Future<i64 | LockBusy> async {\n\
                      var s = Shared.new(40);\n\
-                     s.lock((v: i64): i64 => v + 2)\n\
+                     var x: i64 = await s.lock((v: i64): i64 => v + 2);\n\
+                     await s.try_lock((v: i64): i64 => v + x)\n\
                    }";
         let src = &with_prelude(src);
         let (tokens, _) = lex(src, FileId(0));
@@ -2254,10 +2261,7 @@ extend Cat: Sound { function code(self): i64 { 2 } }\n";
         assert!(pe.is_empty(), "parse: {pe:?}");
         let analysis = analyze(&module);
         assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
-        let a = unsafe { compile(&analysis).unwrap().call_i64("f") };
-        let b = unsafe { compile_hir(&analysis).unwrap().call_i64("f") };
-        assert_eq!(a, b, "AST and HIR codegen disagree on Shared.lock");
-        assert_eq!(b, Some(42));
+        assert!(compile_hir(&analysis).is_ok(), "HIR codegen of async lock/try_lock failed");
     }
 
     #[test]

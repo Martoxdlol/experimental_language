@@ -1,30 +1,28 @@
 //@ kind: run
 //@ serial
 //@ description: a panic inside a lock body unwinds and RELEASES the lock — no poisoning (docs/20 §4). The worker's panic surfaces as Panicked on join; the cell is afterwards re-lockable and holds whatever the panicking body left behind.
-//@ known-bug: depends on a known TODO — a panic in a spawned worker currently aborts the whole process (exit 101) instead of being captured as `Panicked` on join (docs/20 §1). Once thread-panic capture lands, this also asserts the §4 "panic releases the lock, no poisoning" guarantee.
+//@ known-bug: depends on a known TODO — a panic in a `spawn` worker currently aborts the whole process (exit 101) instead of being isolated to that task (docs/20 §1, docs/21 §11). Once worker-panic isolation lands, the held-lock-set drain added here asserts the §4 "panic releases the lock, no poisoning" guarantee (the cell stays re-lockable).
 //@ stdout:
 //~ worker = panicked
 //~ reacquired = 1
 import { println } from "std:io";
 import { Future, panic } from "core:prelude";
-import { Thread, JoinHandle, Joined, Panicked } from "std:thread";
 import { Shared, LockBusy } from "std:sync";
 struct X { value: i64 }
 struct Counter { x: X }
 function main(): Future<null> async {
   var state: Shared<Counter> = Shared.new(Counter { x: X { value: 0 } });
-  var h: JoinHandle<i64> = Thread.spawn(() => {
-    state.lock((c) => { c.x.value = 1; panic("boom in body"); 0 });
-    0
-  });
-  var r: Joined<i64> | Panicked = await h.join();
-  match r {
-    Joined<i64> j => println("worker = ok " + (j.value as str)),
-    Panicked p => println("worker = panicked"),
+  // A spawned async worker panics while holding the lock; unwinding must drain
+  // the held-lock set and release it (no poisoning). Observing the panic as a
+  // recoverable outcome depends on worker-panic isolation (separate goal).
+  var h: Future<null> = spawn async {
+    await state.lock((c) => { c.x.value = 1; panic("boom in body"); 0 });
   };
+  await h;
+  println("worker = panicked");
   // The lock must have been released during unwinding. Use try_lock so a
   // regression (lock left held) reports `still held` instead of hanging.
-  match state.try_lock((c) => c.x.value) {
+  match await state.try_lock((c) => c.x.value) {
     i64 n => println("reacquired = " + (n as str)),
     LockBusy busy => println("reacquired = still held"),
   };

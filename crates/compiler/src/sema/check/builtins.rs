@@ -1133,19 +1133,42 @@ impl<'a> Checker<'a> {
                     self.emit(span, SemaErrorKind::ArgCount { expected: 1, found: args.len() });
                     return self.tcx.error;
                 }
-                // The body is `(T) => R`; `R` is inferred from the closure.
+                // `lock`/`try_lock` are ALWAYS async — they return a `Future<R>` the
+                // caller must `await` (`docs/20` §4). That requires an async context;
+                // a synchronous `Thread.spawn` worker cannot lock (`docs/20` §1/§4).
+                if !self.in_async {
+                    self.emit(name.span, SemaErrorKind::Message(format!(
+                        "`{}` is async and must be `await`ed inside an `async` function, \
+                         `async` closure, or `async {{ … }}` block; a synchronous \
+                         `Thread.spawn` worker cannot lock — run lock-using workers with \
+                         the `spawn` keyword instead",
+                        name.name,
+                    )));
+                }
+                // The body is `(T) => R`. An `async` body has been desugared (by
+                // the ANF pass, before checking) into a plain closure returning an
+                // `async { … }` block, so its value type is `(T) => Future<Output>`.
+                // Flatten so the lock's `R` is the body's final awaited value, never
+                // a nested `Future` (`docs/20` §4); codegen drives such a body to
+                // completion with the lock held across its `await`s.
                 let want = self.tcx.mk_func(vec![elem], self.tcx.error, false);
                 let cty = self.check_expr(&args[0], Some(want));
+                // Detachment rule (`docs/20` §4): a reference handed to the body
+                // may not escape the lock. Run the escape analysis on the checked
+                // body closure.
+                self.check_lock_body_escapes(&args[0]);
                 let r = match self.tcx.kind(cty).clone() {
                     TyKind::Func { ret, .. } => ret,
                     _ => self.tcx.error,
                 };
-                if name.name == "lock" {
+                let r = self.future_output(r).unwrap_or(r);
+                let out = if name.name == "lock" {
                     r
                 } else {
                     let busy = self.tcx.mk_named(self.prog.lock_busy_def, Vec::new());
                     self.tcx.mk_union([r, busy])
-                }
+                };
+                self.tcx.mk_named(self.prog.future_def, vec![out])
             }
             other => {
                 self.emit(name.span, SemaErrorKind::Message(format!(
@@ -1156,6 +1179,285 @@ impl<'a> Checker<'a> {
                 }
                 self.tcx.error
             }
+        }
+    }
+
+    // -- lock-body escape / detachment analysis (`docs/20` §4) ----------------
+    //
+    // The reference passed to a `lock`/`try_lock` body — and any reference
+    // reachable through it (`c.x`, `c.x.y`, a collection element) — is valid only
+    // inside the lock. Storing such a reference where it outlives the body (an
+    // outer-scoped variable, a struct field, a collection, or a call that could
+    // retain it) is an escape and is rejected. `.clone()` detaches (an owned deep
+    // copy may leave freely). A reference *returned* from the body is allowed —
+    // codegen clones it at the return boundary. The analysis is identical for
+    // synchronous and `async` bodies, and (because the lock is held across the
+    // body's `await`s) it needs no async-specific restriction.
+
+    /// Whether a value of type `ty` is an aliasing heap reference — projecting it
+    /// out of the locked cell would let the cell be mutated through the alias.
+    /// Scalars, `str` (immutable), and `null` cannot, so they are not tracked.
+    fn lock_trackable(&self, ty: Ty) -> bool {
+        matches!(
+            self.tcx.kind(ty),
+            TyKind::Named { .. } | TyKind::Tuple(_) | TyKind::Array { .. } | TyKind::Ptr(_)
+        )
+    }
+
+    /// Resolve an expression's span to the local it names, if any.
+    fn escape_local_of(&self, e: &Expr) -> Option<crate::ids::LocalId> {
+        match self.resolution(e.span) {
+            Some(crate::sema::results::ValueRes::Local(id)) => Some(id),
+            _ => None,
+        }
+    }
+
+    /// True if `e` evaluates to a live reference into the locked cell (a
+    /// "lock-borrow"): the tainted parameter, or a managed projection of one.
+    /// `.clone()` and any other call detach.
+    fn escape_is_borrow(&self, e: &Expr, tainted: &std::collections::HashSet<crate::ids::LocalId>) -> bool {
+        use crate::ast::ExprKind as K;
+        match &e.kind {
+            K::Ident(_) | K::SelfExpr => self.escape_local_of(e).is_some_and(|id| tainted.contains(&id)),
+            K::Paren(inner) => self.escape_is_borrow(inner, tainted),
+            K::Field { receiver, .. } | K::TupleIndex { receiver, .. } | K::Index { receiver, .. } => {
+                self.escape_is_borrow(receiver, tainted)
+                    && self.expr_ty(e.span).is_some_and(|t| self.lock_trackable(t))
+            }
+            // `e as T` keeps the borrow (a managed narrowing); `e is T` is a bool.
+            K::Cast { op: crate::ast::CastOp::As, expr, .. } => {
+                self.escape_is_borrow(expr, tainted)
+                    && self.expr_ty(e.span).is_some_and(|t| self.lock_trackable(t))
+            }
+            _ => false, // calls (incl. `.clone()`), literals, arithmetic, … detach
+        }
+    }
+
+    /// Whether `target.name` is a `.clone()` method call (the detachment hatch).
+    fn escape_is_clone_callee(callee: &Expr) -> bool {
+        matches!(&callee.kind, crate::ast::ExprKind::Field { name, .. } if name.name == "clone")
+    }
+
+    /// Whether assigning a lock-borrow into `target` lets it outlive the body.
+    /// An outer-scoped variable, or a store into an aggregate that is not itself a
+    /// borrow (i.e. one that outlives the lock), escapes; writing back through the
+    /// borrowed cell does not.
+    fn escape_assign_escapes(
+        &self,
+        target: &Expr,
+        tainted: &std::collections::HashSet<crate::ids::LocalId>,
+        body_span: crate::span::Span,
+    ) -> bool {
+        use crate::ast::ExprKind as K;
+        match &target.kind {
+            K::Underscore => false,
+            K::Ident(_) | K::SelfExpr => match self.escape_local_of(target) {
+                Some(id) => self.escape_local_is_outer(id, body_span),
+                None => true,
+            },
+            K::Paren(inner) => self.escape_assign_escapes(inner, tainted, body_span),
+            K::Field { receiver, .. } | K::TupleIndex { receiver, .. } | K::Index { receiver, .. } => {
+                !self.escape_is_borrow(receiver, tainted)
+            }
+            _ => true, // `*p = …` and anything else: conservatively an escape
+        }
+    }
+
+    /// Whether `id` was declared outside the lock body (so a value stored in it
+    /// outlives the lock) — determined by whether its declaration site lies
+    /// within the body closure's span.
+    fn escape_local_is_outer(&self, id: crate::ids::LocalId, body_span: crate::span::Span) -> bool {
+        match self.hir.local_decls.get(&id) {
+            Some(decl) => {
+                !(decl.file == body_span.file && body_span.lo <= decl.lo && decl.hi <= body_span.hi)
+            }
+            None => true,
+        }
+    }
+
+    /// Entry point: run the escape analysis on a checked `lock`/`try_lock` body.
+    pub(crate) fn check_lock_body_escapes(&mut self, body: &Expr) {
+        use crate::ast::ExprKind as K;
+        let K::Closure { params, body: cbody, .. } = &body.kind else { return };
+        let body_span = cbody.span;
+        let mut tainted: std::collections::HashSet<crate::ids::LocalId> = std::collections::HashSet::new();
+        for p in params {
+            if let Some(crate::sema::results::ValueRes::Local(id)) = self.resolution(p.name.span) {
+                if let Some(ty) = self.hir.local_types.get(&id).copied() {
+                    if self.lock_trackable(ty) {
+                        tainted.insert(id);
+                    }
+                }
+            }
+        }
+        self.escape_walk_expr(cbody, &mut tainted, body_span);
+    }
+
+    /// Propagate taint to every binding in a `var` pattern (so `var y = c.x`
+    /// makes `y` a lock-borrow too).
+    fn escape_taint_pattern(
+        &self,
+        pat: &crate::ast::Pattern,
+        tainted: &mut std::collections::HashSet<crate::ids::LocalId>,
+    ) {
+        use crate::ast::PatternKind as P;
+        match &pat.kind {
+            P::Binding(id) => {
+                if let Some(crate::sema::results::ValueRes::Local(l)) = self.resolution(id.span) {
+                    tainted.insert(l);
+                }
+            }
+            P::TypeBinding { binding: Some(id), .. } => {
+                if let Some(crate::sema::results::ValueRes::Local(l)) = self.resolution(id.span) {
+                    tainted.insert(l);
+                }
+            }
+            P::Tuple { elems, .. } | P::List { elems, .. } => {
+                for e in elems {
+                    self.escape_taint_pattern(e, tainted);
+                }
+            }
+            P::TupleStruct { fields, .. } => {
+                for f in fields {
+                    self.escape_taint_pattern(f, tainted);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn escape_walk_block(
+        &mut self,
+        b: &crate::ast::Block,
+        tainted: &mut std::collections::HashSet<crate::ids::LocalId>,
+        body_span: crate::span::Span,
+    ) {
+        use crate::ast::{ExprKind as K, StmtKind};
+        for stmt in &b.stmts {
+            match &stmt.kind {
+                StmtKind::Var(lv) => {
+                    self.escape_walk_expr(&lv.init, tainted, body_span);
+                    if self.escape_is_borrow(&lv.init, tainted) {
+                        self.escape_taint_pattern(&lv.pattern, tainted);
+                    }
+                }
+                StmtKind::Assign { target, value } => {
+                    self.escape_walk_expr(value, tainted, body_span);
+                    self.escape_walk_expr(target, tainted, body_span);
+                    if self.escape_is_borrow(value, tainted) {
+                        if self.escape_assign_escapes(target, tainted, body_span) {
+                            self.emit(value.span, SemaErrorKind::Message(
+                                "a reference into the locked value may not escape the lock body \
+                                 (it would outlive the lock); store a `.clone()` instead (`docs/20` §4)"
+                                    .into(),
+                            ));
+                        } else if matches!(&target.kind, K::Ident(_) | K::SelfExpr) {
+                            // Assigned to an inner local — propagate the taint.
+                            if let Some(id) = self.escape_local_of(target) {
+                                tainted.insert(id);
+                            }
+                        }
+                    }
+                }
+                StmtKind::Expr(e) => self.escape_walk_expr(e, tainted, body_span),
+                StmtKind::Item(_) => {}
+            }
+        }
+        if let Some(t) = &b.trailing {
+            self.escape_walk_expr(t, tainted, body_span);
+        }
+    }
+
+    fn escape_walk_expr(
+        &mut self,
+        e: &Expr,
+        tainted: &mut std::collections::HashSet<crate::ids::LocalId>,
+        body_span: crate::span::Span,
+    ) {
+        use crate::ast::ExprKind as K;
+        match &e.kind {
+            K::Block(b) | K::Loop(b) | K::AsyncBlock(b) => self.escape_walk_block(b, tainted, body_span),
+            K::Call { callee, args, trailing_closure, .. } => {
+                self.escape_walk_expr(callee, tainted, body_span);
+                let is_clone = Self::escape_is_clone_callee(callee);
+                for a in args {
+                    if !is_clone && self.escape_is_borrow(a, tainted) {
+                        self.emit(a.span, SemaErrorKind::Message(
+                            "a reference into the locked value may not escape the lock body \
+                             (passing it to a call could retain it past the lock); pass a \
+                             `.clone()` instead (`docs/20` §4)"
+                                .into(),
+                        ));
+                    }
+                    self.escape_walk_expr(a, tainted, body_span);
+                }
+                if let Some(tc) = trailing_closure {
+                    self.escape_walk_expr(tc, tainted, body_span);
+                }
+            }
+            K::If { cond, then_block, else_branch } => {
+                self.escape_walk_expr(cond, tainted, body_span);
+                self.escape_walk_block(then_block, tainted, body_span);
+                if let Some(eb) = else_branch {
+                    match eb {
+                        crate::ast::ElseBranch::Block(b) => self.escape_walk_block(b, tainted, body_span),
+                        crate::ast::ElseBranch::If(x) => self.escape_walk_expr(x, tainted, body_span),
+                    }
+                }
+            }
+            K::Match { scrutinee, arms } => {
+                self.escape_walk_expr(scrutinee, tainted, body_span);
+                for arm in arms {
+                    self.escape_walk_expr(&arm.body, tainted, body_span);
+                }
+            }
+            K::While { cond, body } => {
+                self.escape_walk_expr(cond, tainted, body_span);
+                self.escape_walk_block(body, tainted, body_span);
+            }
+            K::For { iter, body, .. } => {
+                self.escape_walk_expr(iter, tainted, body_span);
+                self.escape_walk_block(body, tainted, body_span);
+            }
+            K::Binary { left, right, .. } => {
+                self.escape_walk_expr(left, tainted, body_span);
+                self.escape_walk_expr(right, tainted, body_span);
+            }
+            K::Index { receiver, index } => {
+                self.escape_walk_expr(receiver, tainted, body_span);
+                self.escape_walk_expr(index, tainted, body_span);
+            }
+            K::Unary { operand, .. } => self.escape_walk_expr(operand, tainted, body_span),
+            K::Field { receiver, .. } | K::TupleIndex { receiver, .. } => {
+                self.escape_walk_expr(receiver, tainted, body_span)
+            }
+            K::Cast { expr, .. }
+            | K::Paren(expr)
+            | K::Await { expr, .. }
+            | K::Spawn { expr, .. }
+            | K::Try { expr, .. }
+            | K::Ref { expr, .. }
+            | K::Deref { expr, .. } => self.escape_walk_expr(expr, tainted, body_span),
+            K::Return(Some(x)) | K::Break(Some(x)) => self.escape_walk_expr(x, tainted, body_span),
+            K::Tuple(xs) | K::List(xs) => {
+                for x in xs {
+                    self.escape_walk_expr(x, tainted, body_span);
+                }
+            }
+            K::StructLit { fields, spread, .. } => {
+                for f in fields {
+                    if let Some(v) = &f.value {
+                        self.escape_walk_expr(v, tainted, body_span);
+                    }
+                }
+                if let Some(s) = spread {
+                    self.escape_walk_expr(s, tainted, body_span);
+                }
+            }
+            // Nested closures/async — walk their bodies so an escape inside is
+            // still caught (their own params shadow and are not tainted here).
+            K::Closure { body, .. } => self.escape_walk_expr(body, tainted, body_span),
+            _ => {}
         }
     }
 

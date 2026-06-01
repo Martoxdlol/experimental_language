@@ -1023,23 +1023,24 @@ fn drop_finalizer_runs_on_collection() {
 
 #[test]
 fn shared_mutex_serializes_concurrent_increments() {
-    // `docs/20` §4: `Shared<T>` is a mutex. Two threads each increment a shared
-    // counter 5000 times under `lock`; no updates are lost. `join()` is async,
-    // so the async main `await`s each handle's `Future<Joined<R> | Panicked>`.
+    // `docs/20` §4: `Shared<T>` is an ASYNC mutex. Two `spawn` workers each
+    // increment a shared counter 5000 times under `await … lock`; the lock
+    // serializes them so no update is lost. Lock-using workers must be async, so
+    // each runs via the `spawn` keyword and is awaited as a `Future`.
     let src = "struct Counter { value: i64 }\n\
-               function bump(s: Shared<Counter>, n: i64) {\n\
+               function bump(s: Shared<Counter>, n: i64): Future<null> async {\n\
                  var i: i64 = 0;\n\
-                 while i < n { s.lock((c) => { c.value = c.value + 1; 0 }); i = i + 1; }\n\
+                 while i < n { await s.lock((c) => { c.value = c.value + 1; 0 }); i = i + 1; }\n\
                }\n\
                function main(): Future<null> async {\n\
                  var state: Shared<Counter> = Shared.new(Counter { value: 0 });\n\
                  var a: Shared<Counter> = state.clone();\n\
                  var b: Shared<Counter> = state.clone();\n\
-                 var h1: JoinHandle<i64> = Thread.spawn(() => { bump(a, 5000); 0 });\n\
-                 var h2: JoinHandle<i64> = Thread.spawn(() => { bump(b, 5000); 0 });\n\
-                 var r1: Joined<i64> | Panicked = await h1.join();\n\
-                 var r2: Joined<i64> | Panicked = await h2.join();\n\
-                 println((state.lock((c) => c.value)) as str);\n\
+                 var h1: Future<null> = spawn bump(a, 5000);\n\
+                 var h2: Future<null> = spawn bump(b, 5000);\n\
+                 await h1;\n\
+                 await h2;\n\
+                 println((await state.lock((c) => c.value)) as str);\n\
                }";
     let (out, err, ok) = lang("run", src);
     assert!(ok, "stderr: {err}");
@@ -1048,11 +1049,12 @@ fn shared_mutex_serializes_concurrent_increments() {
 
 #[test]
 fn shared_try_lock_returns_value_or_lock_busy() {
-    // `try_lock` yields `R | LockBusy`; on an uncontended lock it succeeds.
+    // `try_lock` is async and yields `R | LockBusy`; on an uncontended lock it
+    // succeeds (after `await`).
     let src = "struct Box { v: i64 }\n\
-               function main() {\n\
+               function main(): Future<null> async {\n\
                  var s: Shared<Box> = Shared.new(Box { v: 42 });\n\
-                 match s.try_lock((b) => b.v) {\n\
+                 match await s.try_lock((b) => b.v) {\n\
                    i64 n => println(\"got \" + (n as str)),\n\
                    LockBusy busy => println(\"busy\"),\n\
                  }\n\

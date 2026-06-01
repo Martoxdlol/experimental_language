@@ -4,22 +4,24 @@
 //~ inner = busy
 //~ free = 7
 import { println } from "std:io";
+import { Future } from "core:prelude";
 import { Shared, LockBusy } from "std:sync";
 struct X { value: i64 }
 struct Counter { x: X }
-function main() {
+function main(): Future<null> async {
   var state: Shared<Counter> = Shared.new(Counter { x: X { value: 7 } });
   // Re-entering the same cell from inside its own lock body is not allowed;
   // `try_lock` reports LockBusy rather than deadlocking (which `lock` would).
-  var inner: str = state.lock((c) => {
-    match state.try_lock((c2) => c2.x.value) {
+  // The body is `async`, so the lock is held across its inner `await`.
+  var inner: str = await state.lock((c) async => {
+    match await state.try_lock((c2) => c2.x.value) {
       i64 n => "value " + (n as str),
       LockBusy busy => "busy",
     }
   });
   println("inner = " + inner);
   // Once released, a non-blocking try_lock succeeds and yields the body result.
-  var free: str = match state.try_lock((c) => c.x.value) {
+  var free: str = match await state.try_lock((c) => c.x.value) {
     i64 n => (n as str),
     LockBusy busy => "busy",
   };

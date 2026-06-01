@@ -1,15 +1,15 @@
 //@ kind: compile-error
-//@ known-bug: docs/20 §4 detachment rule — even the root reference `c` handed to the body must not escape; storing it in an outer variable lets the whole locked value be mutated without the lock. Escape analysis is not yet implemented, so this currently compiles instead of erroring.
 //@ stderr: escape
 import { println } from "std:io";
+import { Future } from "core:prelude";
 import { Shared } from "std:sync";
 struct X { value: i64 }
 struct Counter { x: X }
-function main() {
+function main(): Future<null> async {
   var state: Shared<Counter> = Shared.new(Counter { x: X { value: 0 } });
   var leaked: Counter | null = null;
-  state.lock((c) => { leaked = c; 0 }); // the body's reference itself escapes
+  await state.lock((c) => { leaked = c; 0 }); // the body's reference itself escapes
   (leaked as Counter).x.value = 99;     // mutating the cell with no lock held
-  var snap: i64 = state.lock((c) => c.x.value);
+  var snap: i64 = await state.lock((c) => c.x.value);
   println("snap = " + (snap as str));
 }

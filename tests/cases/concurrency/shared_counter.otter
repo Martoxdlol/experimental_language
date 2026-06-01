@@ -1,12 +1,13 @@
 //@ kind: run
 //@ serial
-//@ description: Shared<T> mutual-exclusion lock returns the closure's result
+//@ description: Shared<T> async mutual-exclusion lock — awaiting it yields the closure's result (docs/20 §4)
 //@ stdout:
 //~ 15
 import { println } from "std:io";
+import { Future } from "core:prelude";
 import { Shared, LockBusy } from "std:sync";
-function main() {
+function main(): Future<null> async {
   var cell = Shared.new(10);
-  var r = cell.lock((v: i64): i64 => v + 5);
+  var r = await cell.lock((v: i64): i64 => v + 5);
   println("${r}");
 }

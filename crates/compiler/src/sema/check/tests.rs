@@ -421,3 +421,128 @@
              function f(): Future<i64 | str> async { await inner() }",
         );
     }
+
+    #[test]
+    fn shared_lock_is_async_awaitable() {
+        // `lock` returns `Future<R>`; awaiting it in an async body yields `R`.
+        assert_ok(
+            "function f(): Future<i64> async {\n\
+             \tvar s: Shared<i64> = Shared.new(0);\n\
+             \tawait s.lock((c) => c)\n\
+             }",
+        );
+    }
+
+    #[test]
+    fn shared_try_lock_is_async_union() {
+        // `try_lock` returns `Future<R | LockBusy>`.
+        assert_ok(
+            "function f(): Future<i64 | LockBusy> async {\n\
+             \tvar s: Shared<i64> = Shared.new(0);\n\
+             \tawait s.try_lock((c) => c)\n\
+             }",
+        );
+    }
+
+    #[test]
+    fn shared_lock_async_body_flattens() {
+        // An `async` body's awaited value is the lock's `R` — never a nested
+        // `Future` (docs/20 §4 flattening).
+        assert_ok(
+            "function fetch(): Future<i64> async { 7 }\n\
+             function f(): Future<i64> async {\n\
+             \tvar s: Shared<i64> = Shared.new(0);\n\
+             \tawait s.lock((c) async => { await fetch() })\n\
+             }",
+        );
+    }
+
+    #[test]
+    fn shared_lock_in_sync_function_errors() {
+        // Locking is await-only; a synchronous context cannot lock.
+        let errs = check(
+            "function f() {\n\
+             \tvar s: Shared<i64> = Shared.new(0);\n\
+             \ts.lock((c) => c);\n\
+             }",
+        );
+        assert!(errs.iter().any(|e| matches!(&e.kind,
+            SemaErrorKind::Message(m) if m.contains("async") && m.contains("spawn"))));
+    }
+
+    #[test]
+    fn shared_lock_escape_to_outer_var_rejected() {
+        // Detachment rule (docs/20 §4): a live reference may not be stored where
+        // it outlives the lock body.
+        let errs = check(
+            "struct X { v: i64 }\n\
+             struct C { x: X }\n\
+             function f(): Future<null> async {\n\
+             \tvar s: Shared<C> = Shared.new(C { x: X { v: 0 } });\n\
+             \tvar escaped: X | null = null;\n\
+             \tawait s.lock((c) => { escaped = c.x; 0 });\n\
+             }",
+        );
+        assert!(errs.iter().any(|e| matches!(&e.kind,
+            SemaErrorKind::Message(m) if m.contains("escape"))));
+    }
+
+    #[test]
+    fn shared_lock_escape_into_call_arg_rejected() {
+        // Passing a live reference to a call that could retain it is an escape.
+        let errs = check(
+            "import { List } from \"core:collections\";\n\
+             struct X { v: i64 }\n\
+             struct C { x: X }\n\
+             function f(): Future<null> async {\n\
+             \tvar s: Shared<C> = Shared.new(C { x: X { v: 0 } });\n\
+             \tvar sink: List<X> = [];\n\
+             \tawait s.lock((c) => { sink.push(c.x); 0 });\n\
+             }",
+        );
+        assert!(errs.iter().any(|e| matches!(&e.kind,
+            SemaErrorKind::Message(m) if m.contains("escape"))));
+    }
+
+    #[test]
+    fn shared_lock_clone_escape_hatch_ok() {
+        // A `.clone()` detaches — it may leave the lock freely.
+        assert_ok(
+            "struct X { v: i64 }\n\
+             struct C { x: X }\n\
+             extend X: Clone { function clone(self): X { X { v: self.v } } }\n\
+             function f(): Future<null> async {\n\
+             \tvar s: Shared<C> = Shared.new(C { x: X { v: 0 } });\n\
+             \tvar escaped: X | null = null;\n\
+             \tawait s.lock((c) => { escaped = c.x.clone(); 0 });\n\
+             }",
+        );
+    }
+
+    #[test]
+    fn shared_lock_mutating_cell_and_return_ok() {
+        // Mutating through the borrow (writing into the cell) and returning a
+        // reference (cloned at the boundary by codegen) are both allowed.
+        assert_ok(
+            "struct X { v: i64 }\n\
+             struct C { x: X }\n\
+             function f(): Future<X> async {\n\
+             \tvar s: Shared<C> = Shared.new(C { x: X { v: 0 } });\n\
+             \tawait s.lock((c) => { c.x.v = c.x.v + 1; c.x })\n\
+             }",
+        );
+    }
+
+    #[test]
+    fn shared_lock_in_thread_spawn_worker_errors() {
+        // A `Thread.spawn` closure is synchronous → cannot lock (docs/20 §1/§4).
+        let errs = check(
+            "function f(): Future<null> async {\n\
+             \tvar s: Shared<i64> = Shared.new(0);\n\
+             \tvar h: JoinHandle<i64> = Thread.spawn(() => { s.lock((c) => c); 0 });\n\
+             \tvar _ = await h.join();\n\
+             }",
+        );
+        assert!(errs.iter().any(|e| matches!(&e.kind,
+            SemaErrorKind::Message(m) if m.contains("spawn"))));
+    }
