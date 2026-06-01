@@ -1,0 +1,49 @@
+//@ kind: run
+//@ env: OTTER_FUSION_GC=stress
+//@ description: single-threaded allocation throughput workloads (struct graph + list + string churn) — the deterministic e2e companion to examples/gc_bench.otter; exercises the per-thread TLAB + per-thread object registry under aggressive GC
+//@ stdout:
+//~ structs=5000 lists=10000 strings=17000
+import { println } from "std:io";
+import { List } from "core:collections";
+
+struct Node { v: i64, next: Node | null }
+
+function build_and_walk(n: i64): i64 {
+  var head: Node | null = null;
+  var i = 0;
+  while i < n { head = Node { v: i, next: head }; i = i + 1; }
+  var len = 0;
+  var cur = head;
+  while cur is Node { len = len + 1; cur = (cur as Node).next; }
+  len
+}
+
+function main() {
+  var structs = 0;
+  var k = 0;
+  while k < 100 { structs = structs + build_and_walk(50); k = k + 1; }
+
+  var lists = 0;
+  k = 0;
+  while k < 100 {
+    var xs: List<i64> = [];
+    var j = 0;
+    while j < 100 { xs.push(j * j); j = j + 1; }
+    lists = lists + xs.size();
+    k = k + 1;
+  }
+
+  var strings = 0;
+  k = 0;
+  while k < 50 {
+    var i = 0;
+    while i < 50 {
+      var s = "item-${i}";
+      strings = strings + s.size();
+      i = i + 1;
+    }
+    k = k + 1;
+  }
+
+  println("structs=${structs} lists=${lists} strings=${strings}");
+}

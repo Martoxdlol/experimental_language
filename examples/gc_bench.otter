@@ -1,0 +1,46 @@
+// Allocation-throughput benchmarks (docs/23): `bench "name" { … }` declarations
+// timed by `otter_fusion bench`. They measure managed-heap allocation throughput
+// behind the stable `Gc` abstraction — the per-thread TLAB allocation buffers
+// (gc_alloc) plus the per-thread object registry (docs/16 §9) keep the global
+// heap lock off the allocation hot path.
+//
+//   otter_fusion bench examples/gc_bench.otter
+//
+import { List } from "core:collections";
+
+struct Node { v: i64, next: Node | null }
+
+// Build a linked structure of `n` heap-allocated nodes, then walk it. Each
+// iteration allocates `n` `Node`s (the previous structure becomes garbage the
+// collector reclaims) — a tight allocation/collection churn loop.
+function build_and_walk(n: i64): i64 {
+  var head: Node | null = null;
+  var i = 0;
+  while i < n { head = Node { v: i, next: head }; i = i + 1; }
+  var len = 0;
+  var cur = head;
+  while cur is Node { len = len + 1; cur = (cur as Node).next; }
+  len
+}
+
+bench "struct_alloc_churn" {
+  build_and_walk(50);
+}
+
+bench "list_alloc_churn" {
+  var xs: List<i64> = [];
+  var j = 0;
+  while j < 100 { xs.push(j * j); j = j + 1; }
+}
+
+bench "string_alloc_churn" {
+  var i = 0;
+  var acc = 0;
+  while i < 50 {
+    var s = "item-${i}";
+    acc = acc + s.size();
+    i = i + 1;
+  }
+}
+
+function main() {}

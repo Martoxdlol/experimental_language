@@ -119,23 +119,34 @@ unsafe fn desc_rc_offsets(desc: *const u8) -> Vec<usize> {
         .collect()
 }
 
-/// The registry of live managed objects (base address + total byte size,
-/// including the header). The collector sweeps this list.
+/// The registry of *globally-tracked* managed objects (base address + total
+/// byte size, including the header).
+///
+/// This holds: collection survivors, every `@RefCounted` object (which needs
+/// global findability — see [`alloc_raw`]), and — only transiently, while a
+/// collection runs — the contents drained from every mutator's private alloc
+/// log. Most freshly-allocated objects live in their allocating thread's
+/// [`Mutator::alloc_log`] and are merged in here at the next stop-the-world
+/// collection (see [`drain_alloc_logs_into`]); that is what keeps the global
+/// lock off the allocation hot path (`ROADMAP.md` → "Per-thread TLABs").
 struct Heap {
-    /// Live managed objects: base address → total byte size (including header).
-    /// A map (not a vector) so `lang_rc_release` can remove a deterministically
-    /// freed object in O(1) without a linear scan.
+    /// Globally-tracked managed objects: base address → total byte size
+    /// (including the header). A map (not a vector) so `lang_rc_release` can
+    /// remove a deterministically freed object in O(1) without a linear scan.
     objects: HashMap<usize, usize>,
-    /// Bytes allocated since the last collection (drives the GC trigger).
-    bytes_since_gc: usize,
 }
 
-/// The live-object registry. Behind a `OnceLock` because `HashMap::new` is not
+/// The global object registry. Behind a `OnceLock` because `HashMap::new` is not
 /// `const`; initialized empty on first allocation.
 fn heap() -> &'static Mutex<Heap> {
     static H: OnceLock<Mutex<Heap>> = OnceLock::new();
-    H.get_or_init(|| Mutex::new(Heap { objects: HashMap::new(), bytes_since_gc: 0 }))
+    H.get_or_init(|| Mutex::new(Heap { objects: HashMap::new() }))
 }
+
+/// Bytes allocated since the last collection — the GC trigger. A lock-free
+/// global counter bumped by every allocation (on the hot path, instead of a
+/// field updated under the heap lock) and reset to `0` by each collection.
+static BYTES_SINCE_GC: AtomicUsize = AtomicUsize::new(0);
 
 /// A statically-allocated descriptor (its blob layout matches what the
 /// collector reads: `[size][kind][type_id][n_ptrs]`). Builtin descriptors carry
@@ -202,10 +213,24 @@ unsafe fn alloc_raw(desc: *const u8, size: usize) -> *mut u8 {
     // header.desc at +0; header.mark at +8 (already zero).
     unsafe { (base as *mut *const u8).write(desc) };
 
-    let mut heap = heap().lock().unwrap();
-    heap.objects.insert(base as usize, total);
-    heap.bytes_since_gc += total;
-    drop(heap);
+    // Record the object so the collector can find it later. Two registries:
+    //
+    //  * `@RefCounted` objects go straight into the **global** registry. They are
+    //    freed *deterministically* by `lang_rc_release` from any thread at any
+    //    time (not only at a stop-the-world collection), so they must be globally
+    //    findable for O(1) removal.
+    //  * Every other object is reclaimed only by the collector, and only at a
+    //    stop-the-world point where every mutator's log is drained into the
+    //    global registry first. So it is recorded in **this thread's private
+    //    alloc log** — no global lock on the allocation hot path. The log mutex is
+    //    this thread's own and is read by the collector only while this thread is
+    //    stopped, so it is effectively uncontended.
+    if unsafe { desc_kind(desc) } == KIND_REFCOUNTED {
+        heap().lock().unwrap().objects.insert(base as usize, total);
+    } else {
+        ME.with(|h| h.0.alloc_log.lock().unwrap().push((base as usize, total)));
+    }
+    BYTES_SINCE_GC.fetch_add(total, Ordering::Relaxed);
 
     unsafe { base.add(HEADER) }
 }
@@ -241,6 +266,11 @@ pub unsafe fn alloc_var(desc: *const u8, size: usize) -> *mut u8 {
 /// values are tolerated: only addresses of registered objects are followed.
 pub unsafe fn collect(roots: &[usize]) -> usize {
     let mut heap = heap().lock().unwrap();
+
+    // Merge every mutator's private alloc log into the global registry first, so
+    // `heap.objects` enumerates *every* live object (the precise-root scan and the
+    // sweep both rely on this completeness). Safe because the world is stopped.
+    drain_alloc_logs_into(&mut heap.objects);
 
     // Objects awaiting finalization are kept alive (and their referents kept
     // alive) until their `drop` runs — include them so marking traverses them.
@@ -328,7 +358,7 @@ pub unsafe fn collect(roots: &[usize]) -> usize {
     }
     let kept = survivors.len();
     heap.objects = survivors;
-    heap.bytes_since_gc = 0;
+    BYTES_SINCE_GC.store(0, Ordering::Relaxed);
     drop(heap);
     if !new_pending.is_empty() {
         FINALIZE_PENDING.lock().unwrap().extend(new_pending);
@@ -451,9 +481,14 @@ fn run_finalizers() {
     }
 }
 
-/// Number of live objects (for tests / introspection).
+/// Number of live objects (for tests / introspection): the globally-tracked
+/// objects plus those still sitting in every mutator's not-yet-drained alloc
+/// log (which are equally live — they just haven't been merged into the global
+/// registry by a collection yet).
 pub fn live_count() -> usize {
-    heap().lock().unwrap().objects.len()
+    let global = heap().lock().unwrap().objects.len();
+    let logged: usize = MUTATORS.lock().unwrap().iter().map(|m| m.alloc_log.lock().unwrap().len()).sum();
+    global + logged
 }
 
 // --- precise roots via Cranelift stack maps --------------------------------
@@ -596,6 +631,32 @@ struct Mutator {
     /// scanning its own consistent frame chain is reliable, whereas one thread
     /// reconstructing another's frames is not.
     roots: Mutex<Vec<usize>>,
+    /// This thread's private registry of objects it has allocated since the last
+    /// time the collector drained it: `(base, total)`. Written on the allocation
+    /// hot path (its own, effectively-uncontended mutex), drained into the global
+    /// [`Heap::objects`] at the start of every collection while this thread is
+    /// stopped (see [`drain_alloc_logs_into`]). This is the per-thread allocation
+    /// buffer for the object *registry* (the memory itself comes from a
+    /// `gc_alloc` TLAB), keeping the global heap lock off the hot path.
+    alloc_log: Mutex<Vec<(usize, usize)>>,
+}
+
+/// Drain every mutator's private alloc log into `objects` (the global registry).
+///
+/// Called at the start of a collection. At a stop-the-world collection the world
+/// is quiescent — every other mutator is parked at a safepoint or sitting in a
+/// native call, and the collector is the only running thread — so no thread is
+/// pushing to its log concurrently; for a direct (test-mode) `collect`, the
+/// caller serializes. After this returns, `objects` holds every live managed
+/// object: survivors, `@RefCounted` objects, and everything allocated since the
+/// previous collection.
+fn drain_alloc_logs_into(objects: &mut HashMap<usize, usize>) {
+    let muts = MUTATORS.lock().unwrap();
+    for m in muts.iter() {
+        for (base, total) in m.alloc_log.lock().unwrap().drain(..) {
+            objects.insert(base, total);
+        }
+    }
 }
 
 /// All live mutator threads. Registered on a thread's first GC interaction and
@@ -803,6 +864,18 @@ static RESUME_CV: Condvar = Condvar::new();
 struct MutatorHandle(Arc<Mutator>);
 impl Drop for MutatorHandle {
     fn drop(&mut self) {
+        // Hand off any objects still in this thread's alloc log to the **global**
+        // registry before deregistering. Once this thread is gone, no future
+        // collection would otherwise drain its log, so those objects would be
+        // invisible to the collector forever — neither traced through nor
+        // reclaimed (a leak, and unsound for anything reachable only through
+        // them). A pinned worker result and its graph live exactly here.
+        {
+            let mut heap = heap().lock().unwrap();
+            for (base, total) in self.0.alloc_log.lock().unwrap().drain(..) {
+                heap.objects.insert(base, total);
+            }
+        }
         let mut muts = MUTATORS.lock().unwrap();
         muts.retain(|m| !Arc::ptr_eq(m, &self.0));
     }
@@ -814,6 +887,7 @@ thread_local! {
             state: AtomicU8::new(M_RUNNING),
             fp: AtomicUsize::new(0),
             roots: Mutex::new(Vec::new()),
+            alloc_log: Mutex::new(Vec::new()),
         });
         MUTATORS.lock().unwrap().push(m.clone());
         MutatorHandle(m)
@@ -878,10 +952,7 @@ fn run_collection() {
             return;
         }
     };
-    let still_over = {
-        let heap = heap().lock().unwrap();
-        heap.bytes_since_gc >= gc_threshold()
-    };
+    let still_over = BYTES_SINCE_GC.load(Ordering::Relaxed) >= gc_threshold();
     if !still_over {
         return;
     }
@@ -1077,10 +1148,7 @@ fn maybe_collect() {
         park_self(current_fp());
         return;
     }
-    let over = {
-        let heap = heap().lock().unwrap();
-        heap.bytes_since_gc >= gc_threshold()
-    };
+    let over = BYTES_SINCE_GC.load(Ordering::Relaxed) >= gc_threshold();
     if over {
         run_collection();
     }
@@ -1093,10 +1161,12 @@ fn maybe_collect() {
 /// No managed pointers may be used after this call.
 pub unsafe fn free_all() {
     let mut heap = heap().lock().unwrap();
+    // Include objects still in per-thread alloc logs, so nothing leaks.
+    drain_alloc_logs_into(&mut heap.objects);
     for (base, total) in heap.objects.drain() {
         crate::gc_alloc::free(base, total);
     }
-    heap.bytes_since_gc = 0;
+    BYTES_SINCE_GC.store(0, Ordering::Relaxed);
 }
 
 #[cfg(test)]

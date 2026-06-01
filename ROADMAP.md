@@ -705,8 +705,10 @@ generated code + compiler (see goals.txt), not missing features.
 The precise tracing collector is complete and correct **including concurrent
 reclamation while multiple mutators run** (custom slab allocator `gc_alloc` +
 `WORLD`-mutex stop-the-world barrier — see the concurrent-reclamation entry
-below). Remaining GC work is **throughput only** (per-thread TLABs / MMTk Immix),
-which does not change behavior.
+below). **Per-thread allocation buffers (TLABs) are now implemented** (see the
+"Per-thread TLABs" entry below): allocation no longer touches a global lock on
+the hot path, ~2× multi-thread allocation throughput, behavior unchanged.
+Remaining GC throughput work (the full MMTk Immix move) does not change behavior.
 User chose the spec-exact path (Cranelift `user_stack_maps`). Staged:
 - [x] **Step 1**: two-word object header `[desc | mark]` + per-type descriptor
       blobs (`size`, `kind`, pointer-field offsets = trace map) + a tracked
@@ -919,9 +921,52 @@ The tracing GC is functionally complete for single-threaded programs.
       check). **That is what the world barrier above resolves** — by making the
       `→ RUNNING` transitions themselves block on the lock the collector holds,
       rather than trying to detect them after the fact.
-**Per-thread TLABs** and MMTk/Immix remain a future *throughput* optimization
-(the `gc` interface stays the same), but concurrent reclamation is now correct
-and complete with the world-barrier mark-sweep.
+- [x] **Per-thread TLABs (allocation throughput) — DONE (behavior-neutral).**
+      Allocation used to take **two global mutexes per object** — `gc_alloc`'s
+      slab allocator (free-list `HashMap` lookup) and `gc`'s live-object registry
+      (`HashMap` insert) — so under multiple mutators the allocator serialized all
+      threads (4-thread churn was *slower* than single-thread for the same work).
+      Two complementary per-thread buffers fix this, behind the unchanged `Gc`
+      interface (`alloc`/`alloc_var`/`collect`/`free`), with **zero behavior
+      change**:
+        1. **Memory TLAB (`gc_alloc`).** Each thread owns a `LocalCache`: a
+           private **bump region** carved in `TLAB_CHUNK` (256 KiB) chunks from
+           the global slabs, plus **per-class local free lists** (array-indexed by
+           [`class_index`], no hashing) refilled in `REFILL_BATCH` (64) batches
+           from the global free lists. `alloc` = local-free pop → local bump →
+           refill; the global lock is touched ~once per 64 allocations (or per
+           chunk), not per allocation. Mutators **never** `free` (reclamation is
+           the collector's job), so `free` always returns blocks to the *global*
+           free lists (reusable by every thread, never stranded on the freeing
+           thread); a thread's local frees are flushed back to the global pool on
+           exit via `LocalCache`'s `Drop` (touches only the `'static` global — safe
+           during TLS teardown). Large objects (> 1 MiB) bypass the cache.
+        2. **Object-registry TLAB (`gc`).** The per-object `heap.objects`
+           `HashMap` insert moved off the hot path into a **per-thread alloc log**
+           (`Mutator::alloc_log`, the same proven per-thread-state-unioned-at-STW
+           pattern as `Mutator::roots`). At the start of every collection — world
+           stopped, so no thread is pushing — `drain_alloc_logs_into` merges every
+           thread's log into the global registry, after which the precise-root
+           scan and sweep see a complete object set exactly as before.
+           `@RefCounted` objects still register **globally** at alloc (they are
+           freed deterministically by `lang_rc_release` from any thread, so they
+           need global O(1) findability). On thread exit the log is drained into
+           the global registry **before** deregistering (`MutatorHandle::drop`), so
+           a worker's pinned result graph stays findable. `bytes_since_gc` became a
+           lock-free global atomic (`BYTES_SINCE_GC`).
+      **Measured** (release, struct/list/string churn): single-thread ≈ **20%**
+      faster (810 ms → 650 ms for 4 M allocs); **4-thread ≈ 2×** faster (1.45 s →
+      730 ms) — multi-thread allocation now scales instead of contending. Tests:
+      7 `gc_alloc` unit tests (size classes, distinct/zeroed/aligned, recycle +
+      re-zero, large objects, multi-slab, **concurrent distinct blocks**), all
+      `gc` unit tests green, the full e2e + GC-stress + concurrency suites green,
+      a new `concurrency/worker_returns_heap_graph.otter` (long-lived workers
+      allocating heavily and **returning a heap graph** consumed on the main
+      thread — exercises the thread-exit drain + cross-thread result reachability,
+      historically the breaking scenario; verified 150× under stress + 20× debug),
+      a new `gc/alloc_throughput.otter` deterministic companion, and benches in
+      `examples/gc_bench.otter`. The full **MMTk Immix** move stays the future
+      throughput plan (the `gc` interface is unchanged, so it remains a drop-in).
 - [x] **Methods via `extend`** (inherent): `self` (by-pointer for structs, so
       mutation is visible to the caller), method args, methods calling methods,
       methods returning `Self`-typed values, same method name on different types
@@ -1934,8 +1979,9 @@ and complete with the world-barrier mark-sweep.
       suite.
 - [ ] Remaining: only the advanced deferrals noted inline — git dependency
       *fetching*, feature-gated optional-dep resolution, multi-major coexistence,
-      and the publish metadata-sidecar. Plus throughput follow-ups (per-thread
-      TLABs / MMTk Immix) that do not change behavior.
+      and the publish metadata-sidecar. Per-thread TLABs are now **done** (see the
+      GC section); the full MMTk Immix move is the remaining behavior-neutral
+      throughput follow-up.
 
 ## Current state (verified 2026-05-30)
 
@@ -1957,8 +2003,10 @@ feature, JIT≡native byte-identical and GC-stress clean.
 - **Phase 4 (codegen+runtime): feature-complete** — all language features lower;
   remaining work is *performance optimization* (goals.txt), not features.
 - **GC: DONE**, including **concurrent reclamation while multiple mutators run**
-  (`gc_alloc` slab allocator + `WORLD`-mutex stop-the-world barrier). Remaining GC
-  work is throughput-only (TLABs / MMTk Immix).
+  (`gc_alloc` slab allocator + `WORLD`-mutex stop-the-world barrier) and
+  **per-thread TLABs** (per-thread memory bump cache + per-thread object-registry
+  log, ~2× multi-thread allocation throughput, behavior-neutral). Remaining GC
+  work is throughput-only (the full MMTk Immix move).
 - **Phase 5 (system features):** structs, unions, generics, interfaces (static +
   dynamic + default methods), error handling (`?`/`Try`/`FromResidual`), pattern
   matching (complete), closures (by-ref cells), threads/channels/`Shared<T>`,
@@ -2032,7 +2080,8 @@ feature, JIT≡native byte-identical and GC-stress clean.
   metadata-sidecar.
 - **LSP follow-ups:** reverse references (files that *import* the open doc),
   body-position type goto (`var x: T`, `e as T`, pattern type names).
-- **GC throughput:** per-thread TLABs / MMTk Immix (behavior-neutral).
+- **GC throughput:** per-thread TLABs **done** (~2× multi-thread alloc); the full
+  MMTk Immix move remains (behavior-neutral).
 - **`fmt` follow-up:** token-level intra-line spacing + line wrapping (currently
   whitespace/indentation only, comment-preserving infra permitting).
 

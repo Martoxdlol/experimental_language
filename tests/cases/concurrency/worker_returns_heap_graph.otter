@@ -1,0 +1,58 @@
+//@ kind: run
+//@ serial
+//@ env: OTTER_FUSION_GC=stress
+//@ description: long-lived workers allocate heavily and RETURN a heap graph (List) consumed on the main thread; exercises thread-exit alloc-log drain + cross-thread result reachability across collections under the world-barrier STW
+//@ stdout:
+//~ total=6000
+import { println } from "std:io";
+import { List } from "core:collections";
+import { Future } from "core:prelude";
+import { Thread, JoinHandle, Joined, Panicked } from "std:thread";
+
+// Build a list of `n` numbers after churning a lot of garbage first, so a
+// collection almost certainly runs mid-build (stress mode) AND the returned
+// list (allocated in this worker's alloc log) must survive this thread's exit
+// and stay reachable on the main thread across later collections.
+function work(n: i64): List<i64> {
+  var sink = 0;
+  var g = 0;
+  while g < 500 {
+    var tmp: List<i64> = [];
+    var k = 0;
+    while k < 8 { tmp.push(g + k); k = k + 1; }
+    sink = sink + tmp.size();
+    g = g + 1;
+  }
+  var out: List<i64> = [];
+  var i = 0;
+  while i < n { out.push(i); i = i + 1; }
+  out
+}
+
+function sum_of(r: Joined<List<i64>> | Panicked): i64 {
+  match r {
+    Joined<List<i64>> j => {
+      var s = 0;
+      for x in j.value { s = s + 1; }
+      s
+    },
+    Panicked p => 0 - 1,
+  }
+}
+
+function gather(handles: List<JoinHandle<List<i64>>>): Future<i64> async {
+  var total = 0;
+  for h in handles {
+    var r: Joined<List<i64>> | Panicked = await h.join();
+    total = total + sum_of(r);
+  }
+  total
+}
+
+function main(): Future<null> async {
+  var handles: List<JoinHandle<List<i64>>> = [];
+  var t = 0;
+  while t < 6 { handles.push(Thread.spawn(() => work(1000))); t = t + 1; }
+  var total: i64 = await gather(handles);
+  println("total=${total}");
+}
