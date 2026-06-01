@@ -2213,9 +2213,18 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         by_value: bool,
     ) -> CgResult<Option<Value>> {
         if is_async {
+            // Unreachable in practice: `sema::anf` desugars every async closure
+            // `(p) async => E` into a *sync* closure returning a bare async block
+            // — `(p) => async { E }` (`docs/21` §7) — before codegen runs, so a
+            // `Closure` node always arrives here with `is_async == false`. The
+            // async surface is the async block (`h_async_block` + the state
+            // machine), reused verbatim; there is no separate async-closure
+            // lowering. A live `is_async` here means the desugar pass was skipped
+            // or regressed — an internal invariant violation, not a user limit.
             return Err(CodegenError::new(
                 span,
-                "`async` closure code generation is not yet implemented",
+                "internal error: an `async` closure reached codegen un-desugared \
+                 (sema::anf should have rewritten it to `(p) => async { … }`)",
             ));
         }
         let info = compiler::sema::results::ClosureInfo {
@@ -2404,7 +2413,17 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         span: Span,
     ) -> CgResult<Option<Value>> {
         if !params.is_empty() {
-            return Err(CodegenError::new(span, "async closure lowering is not yet implemented"));
+            // Unreachable in practice: an `async { … }` block is always a
+            // *zero-arg* inline future literal (`docs/21` §6–§7). An async
+            // closure's parameters live on the enclosing (desugared, sync)
+            // closure — `(p) => async { E }` — never on the block, so the block's
+            // param list is always empty here. A non-empty list means the
+            // async-closure desugar (`sema::anf`) produced a malformed shape.
+            return Err(CodegenError::new(
+                span,
+                "internal error: an `async { … }` block reached codegen with \
+                 parameters (async-closure params belong to the enclosing closure)",
+            ));
         }
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(PTR));

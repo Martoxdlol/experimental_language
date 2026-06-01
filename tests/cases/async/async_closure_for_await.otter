@@ -1,0 +1,26 @@
+//@ kind: run
+//@ description: `for await` over an async stream inside an async closure body, folding 0..n into a captured `bonus` (docs/21 §7, §10)
+//@ stdout:
+//~ t=1010
+import { println } from "std:io";
+import { Item, Done, Future } from "core:prelude";
+import { AsyncIterator, sleep } from "std:async";
+struct Range { current: i64, end: i64 }
+extend Range: AsyncIterator<i64> {
+  function next_async(self): Future<Item<i64> | Done> {
+    async {
+      if self.current >= self.end { Done {} }
+      else { var _ = await sleep(1); var v = self.current; self.current = self.current + 1; Item { value: v } }
+    }
+  }
+}
+function main(): Future<null> async {
+  var bonus: i64 = 1000;
+  var run = function(n: i64): Future<i64> async {
+    var r = Range { current: 0, end: n };
+    var total: i64 = bonus;
+    for await x in r { total = total + x; }
+    total
+  };
+  println("t=${await run(5)}");
+}

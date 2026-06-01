@@ -2324,3 +2324,150 @@ extend Cat: Sound { function code(self): i64 { 2 } }\n";
         crate::gen_hir::h_collect_block_locals(&body_of("chain").block, &mut locals, &mut seen);
         assert!(locals.len() >= 2, "expected ≥2 body locals, got {}", locals.len());
     }
+
+    /// Find the `Closure` expression bound by the first `let f = <closure>` in a
+    /// body, returning a reference to that `Closure` HIR node.
+    fn first_closure(b: &compiler::hir::Block) -> &compiler::hir::Expr {
+        use compiler::hir::{ExprKind, StmtKind};
+        b.stmts
+            .iter()
+            .find_map(|s| match &s.kind {
+                StmtKind::Let { init, .. } if matches!(init.kind, ExprKind::Closure { .. }) => {
+                    Some(init)
+                }
+                _ => None,
+            })
+            .expect("a `let f = <closure>` binding")
+    }
+
+    #[test]
+    fn async_closure_desugars_to_sync_closure_over_async_block() {
+        // `sema::anf` rewrites an async closure `(x) async => E` into a *sync*
+        // closure returning a bare async block — `(x) => async { E }` (`docs/21`
+        // §7). The closure carries the parameters; the async block is always
+        // zero-arg. This is the invariant the codegen `is_async`/`params`
+        // rejection branches rely on (they are unreachable while it holds).
+        use compiler::hir::ExprKind;
+        let src = "function host(): Future<i64> async {\n\
+                     var base: i64 = 7;\n\
+                     var f = function(x: i64): Future<i64> async {\n\
+                       var _ = await sleep(1);\n\
+                       base + x\n\
+                     };\n\
+                     await f(3)\n\
+                   }";
+        let src = &with_prelude(src);
+        let (tokens, _) = lex(src, FileId(0));
+        let (module, pe) = parse(src, &tokens);
+        assert!(pe.is_empty(), "parse: {pe:?}");
+        let analysis = analyze(&module);
+        assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+        let host = analysis
+            .hir
+            .bodies
+            .iter()
+            .find(|(d, _)| analysis.program.def(**d).name == "host")
+            .map(|(_, b)| b)
+            .expect("host body");
+        let closure = first_closure(&host.block);
+        let ExprKind::Closure { params, is_async, body, .. } = &closure.kind else {
+            panic!("expected a Closure node");
+        };
+        assert!(!is_async, "anf must desugar async closures to sync closures");
+        assert_eq!(params.len(), 1, "the closure keeps its parameter `x`");
+        let ExprKind::AsyncBlock { params: blk_params, body: blk_body, .. } = &body.kind else {
+            panic!("a desugared async closure's body is an async block");
+        };
+        assert!(blk_params.is_empty(), "an async block is always zero-arg");
+        // The block (not the closure) is where suspension happens — and it does
+        // suspend (the `await sleep`).
+        assert!(
+            crate::gen_hir::h_block_has_await(blk_body),
+            "the async block body awaits and so suspends",
+        );
+    }
+
+    #[test]
+    fn async_closure_state_layout_holds_captures_and_saves_them() {
+        // The desugared async block's state struct ALSO holds the closure's
+        // captured environment (`docs/21` §7): every captured local is cell-backed
+        // (`docs/09` §7), so its state slot is a *pointer* slot that the GC traces
+        // and the state machine saves/restores across each suspend. Here `base`
+        // (outer capture) and `x` (the closure parameter, free inside the block)
+        // are both captured by the block.
+        use compiler::hir::ExprKind;
+        use compiler::ids::LocalId;
+        use crate::support::{async_state_layout, BodyView, ASYNC_INNER_OFF};
+        let src = "function host(): Future<i64> async {\n\
+                     var base: i64 = 7;\n\
+                     var f = function(x: i64): Future<i64> async {\n\
+                       var acc: i64 = base + x;\n\
+                       var _ = await sleep(1);\n\
+                       acc + 1\n\
+                     };\n\
+                     await f(3)\n\
+                   }";
+        let src = &with_prelude(src);
+        let (tokens, _) = lex(src, FileId(0));
+        let (module, pe) = parse(src, &tokens);
+        assert!(pe.is_empty(), "parse: {pe:?}");
+        let analysis = analyze(&module);
+        assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+        let host = analysis
+            .hir
+            .bodies
+            .iter()
+            .find(|(d, _)| analysis.program.def(**d).name == "host")
+            .map(|(_, b)| b)
+            .expect("host body");
+        let closure = first_closure(&host.block);
+        let ExprKind::Closure { body, .. } = &closure.kind else { panic!("Closure") };
+        let ExprKind::AsyncBlock { captures, body: blk_body, .. } = &body.kind else {
+            panic!("AsyncBlock");
+        };
+        // The block captures both the outer `base` and the closure parameter `x`.
+        assert!(captures.len() >= 2, "block captures ≥2 locals, got {}", captures.len());
+        let captured = analysis.hir.captured_locals();
+        for (l, _) in captures {
+            assert!(captured.contains(l), "captured local {l:?} must be cell-backed");
+        }
+
+        let subst = std::collections::HashMap::new();
+        let cap_ids: Vec<LocalId> = captures.iter().map(|(l, _)| *l).collect();
+        let layout =
+            async_state_layout(&analysis, &subst, &cap_ids, BodyView(blk_body), &captured);
+
+        // The suspended-inner-future slot is at the fixed offset and is traced.
+        assert!(
+            layout.ptr_offsets.contains(&(ASYNC_INNER_OFF as u32)),
+            "the inner-future slot must be a GC root",
+        );
+        // Every capture is in the save/restore `live` set as a *pointer* slot
+        // (the cell pointer), and that slot is GC-traced. `build_stateful_poll`
+        // saves and reloads exactly the `live` set at each suspend/resume, so
+        // this is precisely "captures survive across an await".
+        for cap in &cap_ids {
+            let (l, off, ct) = layout
+                .live
+                .iter()
+                .find(|(l, _, _)| l == cap)
+                .copied()
+                .unwrap_or_else(|| panic!("capture {cap:?} missing from the save/restore set"));
+            assert_eq!(l, *cap);
+            assert_eq!(ct, crate::PTR, "a cell-backed capture occupies a pointer slot");
+            assert!(
+                layout.ptr_offsets.contains(&(off as u32)),
+                "the capture's cell-pointer slot must be GC-traced",
+            );
+            assert!(off >= 16, "captures live past the state word + inner slot");
+        }
+        // The body's `var _` temporary also gets a saved slot distinct from the
+        // captures and the inner slot.
+        assert!(
+            layout.live.len() > cap_ids.len(),
+            "the body's own locals are saved alongside the captures",
+        );
+        // The struct is at least the state word + inner slot + one 8-byte slot
+        // per captured local.
+        assert!(layout.state_size as usize >= 16 + cap_ids.len() * 8);
+    }

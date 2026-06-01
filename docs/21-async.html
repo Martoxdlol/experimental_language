@@ -413,7 +413,11 @@ exception — a zero-arg inline future literal kept for ergonomics with
 <p>Captures follow ordinary closure rules. When passed to <code>spawn</code>,
 the captured set is subject to cross-thread isolation
 (<a href="20-concurrency.html#threads">20 §1</a>) — captured references are
-deep-cloned at spawn time. Async closures cannot be <code>extern</code>.</p>
+deep-cloned at spawn time. Async closures cannot be <code>extern</code> — and,
+more generally, no <code>async</code> body can: an <code>async</code> body is a
+<code>Future</code> state machine, whereas an <code>extern</code> declaration is
+a body-less FFI symbol with the C ABI, so <code>extern function f(): Future&lt;T&gt; async;</code>
+is rejected just as an extern async closure would be.</p>
 
 <!-- =========================================================== -->
 <h2 id="cancel">8. Cancellation</h2>

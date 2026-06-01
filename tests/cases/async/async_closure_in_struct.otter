@@ -1,0 +1,14 @@
+//@ kind: run
+//@ description: an async closure stored in a struct field `(i64) => Future<i64>`, read back and driven (docs/21 §7)
+//@ stdout:
+//~ r=42
+import { println } from "std:io";
+import { Future } from "core:prelude";
+import { sleep } from "std:async";
+struct Holder { job: (i64) => Future<i64> }
+function main(): Future<null> async {
+  var k: i64 = 7;
+  var h = Holder { job: function(x: i64): Future<i64> async { var _ = await sleep(1); k * x } };
+  var f = h.job;
+  println("r=${await f(6)}");
+}

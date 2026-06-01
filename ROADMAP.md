@@ -1560,16 +1560,32 @@ The tracing GC is functionally complete for single-threaded programs.
       `||` in a `while` condition (+ a managed-value GC-stress case). 7 ANF unit
       tests + 13 CLI integration tests + 9 e2e cases (`tests/cases/async/`); JIT +
       native + GC-stress parity.
-- [x] **Async closures** (`docs/21` §7): `(p) async => E` is desugared by
-      `sema/anf.rs` into a plain closure returning an async block —
+- [x] **Async closures** (`docs/21` §7): both the arrow form `(p) async => E`
+      and the anonymous-function form `function(p): Future<T> async { … }` are
+      desugared by `sema/anf.rs` into a plain closure returning an async block —
       `(p) => async { E }` — reusing the closure-environment + async-block
-      state-machine codegen with no special case. Calling it builds the future
-      (capturing `p` + the outer environment) without running `E`; `await`
-      drives it. Works with captures, suspension inside the body, and as a
-      higher-order argument (`(i64) => Future<i64>`). 2 CLI tests; JIT + native +
-      GC-stress parity; `examples/async.otter`. (Async *anonymous functions*
-      `function(..) async { }` as expressions remain unsupported — anonymous-fn
-      expressions are not yet accepted by the checker at all, async or not.)
+      state-machine codegen with **no special case** (the `is_async` branch of
+      `h_closure_kind` and the non-empty-`params` branch of `h_async_block` are
+      therefore unreachable, kept only as internal-invariant guards). Calling it
+      builds the future (capturing `p` + the outer environment by reference,
+      `docs/09` §7) without running `E`; `await` (or `spawn`) drives it. The
+      closure's value type is `(p) => Future<T>` — a callable, not a bare
+      `Future` — so it stores in a struct/list and passes as a higher-order
+      argument. Capture-by-reference mutations made inside the body (across an
+      `await`) are visible to the next drive and to the enclosing scope. An
+      `async` body is a `Future` state machine and so **cannot be `extern`**:
+      `record_extern_sig` rejects `extern function … async;` (the same rule that
+      forbids extern async closures). Coverage: 12 CLI tests (arrow + `function`
+      forms, capture mutation visibility, value typed as `(…) => Future<T>`,
+      struct/list storage, `for await` inside the body, `spawn`-ed call, extern
+      rejection, JIT + native + GC-stress parity), 2 backend unit tests (desugar
+      shape; state-struct layout holds captures as traced cell-pointer slots in
+      the save/restore set), 1 LSP hover test (`(i64) => Future<i64>`), 8 e2e
+      cases under `tests/cases/async/` + `spawn_async_closure` under
+      `tests/cases/concurrency/`; `examples/async.otter`. Async *anonymous
+      function* expressions (`function(..) async { }` bound to a `var`) work too
+      — `sema/anf.rs` desugars a non-generic `AnonFn` into the equivalent
+      closure, which then composes with the async-closure desugar.
 - [x] **`for await` over a non-variable stream**: `for await x in make()` now
       works — `sema/anf.rs` hoists a non-`Ident`/`self` stream expression into a
       preceding `var` (gaining a state-machine slot so it survives the

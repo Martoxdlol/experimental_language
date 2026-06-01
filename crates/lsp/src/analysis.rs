@@ -1554,6 +1554,35 @@ function main(): Future<null> async {
     }
 
     #[test]
+    fn async_closure_hovers_as_future_returning_callable() {
+        // An async closure `(p) async => E` / `function(p): Future<T> async { … }`
+        // has the value type `(p) => Future<T>`: hovering it surfaces a callable
+        // returning a `Future`, not a bare `Future` (docs/21 §7). The LSP walks the
+        // post-desugar HIR, so both surface forms render identically.
+        let src = "\
+import { Future } from \"core:prelude\";
+import { sleep } from \"std:async\";
+function main(): Future<null> async {
+  var base: i64 = 1;
+  var f = function(x: i64): Future<i64> async { var _ = await sleep(1); base + x };
+  var g = (n: i64): Future<i64> async => base * n;
+  var _ = await f(2);
+  var _ = await g(3);
+}
+";
+        let c = Compiled::new(src.into());
+        assert!(c.diagnostics.is_empty(), "unexpected: {:?}", c.diagnostics);
+        // The `function(..) async { }` form.
+        let foff = find_at(src, "function(x: i64)");
+        let (_, fty) = c.expr_ty_at(foff).expect("expr type at async closure");
+        assert_eq!(c.display_ty(fty), "(i64) => Future<i64>");
+        // The arrow `(p) async => E` form renders identically.
+        let goff = find_at(src, "(n: i64): Future<i64> async =>");
+        let (_, gty) = c.expr_ty_at(goff).expect("expr type at async arrow closure");
+        assert_eq!(c.display_ty(gty), "(i64) => Future<i64>");
+    }
+
+    #[test]
     fn semantic_tokens_classify_prelude_types_and_primitives_in_type_position() {
         // Mirrors a realistic snippet (see examples/threads.otter): in type
         // position, `JoinHandle`, `Future`, `i64`, and `Thread` must all emit

@@ -5456,3 +5456,224 @@ fn macro_generated_parse_error_is_reported() {
     assert!(!ok, "generated parse error must surface");
     assert!(err.contains("parse_expr"), "stderr: {err}");
 }
+
+// ===========================================================================
+// Async closures (`docs/21` §7). An async closure `(p) async => E` /
+// `function(p): Future<T> async { … }` is desugared by `sema::anf` into a sync
+// closure returning a bare async block — `(p) => async { E }` — so it reuses
+// the closure-environment + async-block state-machine codegen verbatim. Calling
+// it builds an inert `Future<T>` capturing `p` + the outer environment; `await`
+// (or `spawn`) drives it. These tests pin every surface: arrow + `function`
+// forms, capture-by-reference (incl. mutation visibility), the closure value
+// typed as `(…) => Future<T>`, storage in a struct/list, `for await` inside the
+// body, `spawn`-ing the produced future, the `extern` rejection, and JIT/native
+// + GC-stress parity.
+// ===========================================================================
+
+#[test]
+fn async_closure_bound_and_awaited() {
+    // The `function(p): Future<T> async { … }` form, capturing an outer local
+    // and suspending on `await sleep` before producing its value.
+    let src = "function main(): Future<null> async {\n\
+                 var base: i64 = 100;\n\
+                 var f = function(x: i64): Future<i64> async {\n\
+                   var _ = await sleep(1);\n\
+                   base + x\n\
+                 };\n\
+                 var v: i64 = await f(5);\n\
+                 println(\"v=${v}\");\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "v=105\n");
+}
+
+#[test]
+fn async_closure_arrow_form() {
+    // The `(p) async => E` arrow form (no `await` in the body — an immediately
+    // ready future), capturing `base`.
+    let src = "function main(): Future<null> async {\n\
+                 var base: i64 = 10;\n\
+                 var g = (n: i64): Future<i64> async => base * n;\n\
+                 println(\"g=${await g(4)}\");\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "g=40\n");
+}
+
+#[test]
+fn async_closure_capture_by_reference_mutation_visible() {
+    // Captures follow ordinary closure rules (`docs/09` §7 — by reference): the
+    // async closure and the outer scope share the captured cell, so a mutation
+    // inside the body (across an `await`) is visible to the next call and to the
+    // enclosing function. Two drives bump the shared counter to 2.
+    let src = "function main(): Future<null> async {\n\
+                 var counter: i64 = 0;\n\
+                 var bump = function(): Future<i64> async {\n\
+                   var _ = await sleep(1);\n\
+                   counter = counter + 1;\n\
+                   counter\n\
+                 };\n\
+                 var a: i64 = await bump();\n\
+                 var b: i64 = await bump();\n\
+                 println(\"a=${a} b=${b} counter=${counter}\");\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "a=1 b=2 counter=2\n");
+}
+
+#[test]
+fn async_closure_typed_as_future_returning_callable() {
+    // The async closure's *value* type is `(i64) => Future<i64>`: it can be bound
+    // to a function-typed annotation and called to produce a `Future<i64>`.
+    let src = "function main(): Future<null> async {\n\
+                 var base: i64 = 3;\n\
+                 var f: (i64) => Future<i64> =\n\
+                   function(x: i64): Future<i64> async { var _ = await sleep(1); base + x };\n\
+                 var v: i64 = await f(9);\n\
+                 println(\"v=${v}\");\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "v=12\n");
+}
+
+#[test]
+fn extern_async_function_rejected() {
+    // `docs/21` §7: an `async` body is a `Future` state machine and so cannot be
+    // `extern` (a body-less FFI symbol). The checker rejects it.
+    let src = "extern function ext(x: i64): Future<i64> async;\n\
+               function main() {}";
+    let (_, err, ok) = lang("check", src);
+    assert!(!ok, "expected an extern-async rejection");
+    assert!(
+        err.contains("cannot be `async`") && err.contains("extern"),
+        "stderr: {err}",
+    );
+}
+
+#[test]
+fn async_closure_stored_in_struct_and_driven() {
+    // An async closure stored in a struct field (`(i64) => Future<i64>`), read
+    // back out, and driven with `await`.
+    let src = "struct Holder { job: (i64) => Future<i64> }\n\
+               function main(): Future<null> async {\n\
+                 var k: i64 = 7;\n\
+                 var h = Holder {\n\
+                   job: function(x: i64): Future<i64> async { var _ = await sleep(1); k * x }\n\
+                 };\n\
+                 var f = h.job;\n\
+                 println(\"r=${await f(6)}\");\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "r=42\n");
+}
+
+#[test]
+fn async_closure_stored_in_list_and_driven() {
+    // A list of async closures, each driven in turn. The first suspends on
+    // `await sleep`; the second is immediately ready. base + 2 = 102, base * 2 = 200.
+    let src = "function main(): Future<null> async {\n\
+                 var base: i64 = 100;\n\
+                 var jobs: List<(i64) => Future<i64>> = [];\n\
+                 jobs.push(function(x: i64): Future<i64> async { var _ = await sleep(1); base + x });\n\
+                 jobs.push(function(x: i64): Future<i64> async { base * x });\n\
+                 var total: i64 = 0;\n\
+                 for j in jobs { total = total + await j(2); }\n\
+                 println(\"total=${total}\");\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "total=302\n");
+}
+
+#[test]
+fn async_closure_for_await_inside_body() {
+    // `for await` over an async stream *inside* an async closure body: the
+    // closure captures `bonus`, then folds the stream 0..n into it.
+    let src = "struct Range { current: i64, end: i64 }\n\
+               extend Range: AsyncIterator<i64> {\n\
+                 function next_async(self): Future<Item<i64> | Done> {\n\
+                   async {\n\
+                     if self.current >= self.end { Done {} }\n\
+                     else { var _ = await sleep(1); var v = self.current; self.current = self.current + 1; Item { value: v } }\n\
+                   }\n\
+                 }\n\
+               }\n\
+               function main(): Future<null> async {\n\
+                 var bonus: i64 = 1000;\n\
+                 var run = function(n: i64): Future<i64> async {\n\
+                   var r = Range { current: 0, end: n };\n\
+                   var total: i64 = bonus;\n\
+                   for await x in r { total = total + x; }\n\
+                   total\n\
+                 };\n\
+                 println(\"t=${await run(5)}\");\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "t=1010\n");
+}
+
+#[test]
+fn spawn_async_closure_call() {
+    // `spawn EXPR` over an async-closure call: calling `work(7)` builds the
+    // future (capturing `base`), which `spawn` hands to a worker; awaiting the
+    // returned handle resolves to the worker's result.
+    let src = "function main(): Future<null> async {\n\
+                 var base: i64 = 50;\n\
+                 var work = function(x: i64): Future<i64> async { var _ = await sleep(1); base + x };\n\
+                 var h: Future<i64> = spawn work(7);\n\
+                 println(\"v=${await h}\");\n\
+               }";
+    let (out, err, ok) = lang("run", src);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "v=57\n");
+}
+
+#[test]
+fn native_build_async_closure_matches_jit() {
+    // An async closure capturing an outer local and suspending on `await sleep`
+    // must produce identical output whether JIT-run or compiled to a native
+    // executable (`docs/21` + `docs/23`).
+    let src = "function main(): Future<null> async {\n\
+                 var base: i64 = 21;\n\
+                 var f = function(x: i64): Future<i64> async { var _ = await sleep(1); base + x };\n\
+                 var v: i64 = await f(21);\n\
+                 println(\"v=${v}\");\n\
+               }";
+    let (jit_out, jerr, jok) = lang("run", src);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(jit_out, nat_out, "native build diverged from JIT");
+    assert_eq!(nat_out, "v=42\n");
+}
+
+#[test]
+fn async_closure_gc_stress_keeps_captures_live() {
+    // Under `OTTER_FUSION_GC=stress` (collect on every allocation), the captured
+    // cell and the state machine's saved slots must stay live across the
+    // suspends — the closure's repeated drives still see the shared counter.
+    let src = "function main(): Future<null> async {\n\
+                 var counter: i64 = 0;\n\
+                 var s: str = \"seed\";\n\
+                 var bump = function(tag: str): Future<str> async {\n\
+                   var _ = await sleep(1);\n\
+                   counter = counter + 1;\n\
+                   s = s + \"-\" + tag;\n\
+                   s + \"#\" + (counter as str)\n\
+                 };\n\
+                 var a: str = await bump(\"a\");\n\
+                 var b: str = await bump(\"b\");\n\
+                 println(a);\n\
+                 println(b);\n\
+                 println(\"counter=${counter}\");\n\
+               }";
+    let (out, err, ok) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "seed-a#1\nseed-a-b#2\ncounter=2\n");
+}

@@ -269,6 +269,23 @@ impl<'a> Checker<'a> {
         else {
             return;
         };
+        // An `extern function` is a body-less FFI symbol with the C ABI — it
+        // cannot be `async`. An `async` body lowers to a `Future` state machine
+        // (`docs/21`), which requires a body to suspend/resume; there is nothing
+        // to compile for an extern declaration, and no C function returns one of
+        // our `Future` boxes. This is the same rule that makes async *closures*
+        // un-`extern`-able (`docs/21` §7): the two `async` surfaces (functions
+        // and closures) are both genuine state machines, never FFI.
+        if f.is_async {
+            self.emit(
+                self.prog.def(def).span,
+                SemaErrorKind::Message(
+                    "an `extern function` cannot be `async`: extern functions are FFI \
+                     symbols with no body, not `Future` state machines (`docs/21` §7)"
+                        .into(),
+                ),
+            );
+        }
         let mut ptys = Vec::new();
         for p in &f.params {
             if let ParamKind::Normal { ty, .. } = &p.kind {

@@ -1,0 +1,6 @@
+//@ kind: compile-error
+//@ description: an `async` body is a `Future` state machine, so it cannot be `extern` (a body-less FFI symbol) — same rule that forbids extern async closures (docs/21 §7)
+//@ stderr: cannot be `async`
+import { Future } from "core:prelude";
+extern function ext(x: i64): Future<i64> async;
+function main() {}
