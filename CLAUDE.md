@@ -32,3 +32,4 @@ We keep track goals in goals.txt. You can read it for more context. Goals that a
 - Follow docs and keep them updated, don't deviate unless is necessary, in this case ask me first. You are allowed to make design decisions but ask me first if it is a big thing that will change the language itself
 - Keep test suite up to date with many many test cases. We test all, not oly happy paths but compilation error, panics, memory things, things that should not compile or work but they do!
 - See the bigger pictures, features are not isolated. Ensure implementations are consistent with the rest of the language and ecosystem, and that they work well together.
+- DO NOT USE FEATURE BRANCHES UNLESS APPROVED EXPLICITLY. THERE IS NO SUCH THING AS IMPLICIT APPROVE. 
