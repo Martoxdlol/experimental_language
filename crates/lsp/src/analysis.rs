@@ -1305,6 +1305,44 @@ function main() {
     }
 
     #[test]
+    fn generic_interface_default_has_no_diagnostics() {
+        // A generic-interface default method is expanded (with `T` substituted)
+        // and type-checks cleanly through the LSP analysis path.
+        let src = "interface Boxed<T> { function get(self): T; function dup(self): T { self.get() } }\n\
+                   struct Cell { v: i64 }\n\
+                   extend Cell: Boxed<i64> { function get(self): i64 { self.v } }\n\
+                   function main() { var x: i64 = Cell { v: 1 }.dup(); }";
+        let c = Compiled::new(src.into());
+        assert!(c.diagnostics.is_empty(), "unexpected: {:?}", c.diagnostics);
+    }
+
+    #[test]
+    fn cross_module_interface_default_resolves() {
+        // A `pub` interface default declared in a sibling module is inherited by
+        // an `extend` in the entry file — no "no method" diagnostic.
+        let main = "mod traits;\n\
+                    import { Greeter } from \"self:traits\";\n\
+                    struct P { who: str }\n\
+                    extend P: Greeter { function name(self): str { self.who } }\n\
+                    function main() { var s: str = P { who: \"o\" }.greet(); }";
+        let traits = "pub interface Greeter { function name(self): str; function greet(self): str { self.name() } }";
+        let read = |p: &Path| -> Option<String> {
+            if p.ends_with("traits.otter") {
+                Some(traits.to_string())
+            } else {
+                None
+            }
+        };
+        let c = Compiled::new_multi(
+            main.into(),
+            std::path::PathBuf::from("/proj/src"),
+            "main".to_string(),
+            &read,
+        );
+        assert!(c.diagnostics.is_empty(), "unexpected: {:?}", c.diagnostics);
+    }
+
+    #[test]
     fn missing_submodule_does_not_panic() {
         // A `mod` whose file cannot be read leaves the import unresolved (a
         // diagnostic against the open doc) but must not crash the server.

@@ -166,6 +166,42 @@ pub interface Clone {
   function clone(self): Self
 }</code></pre>
 
+<h3 id="defaults">Default methods</h3>
+
+<p>
+  A method with a body is a <strong>default</strong>: an implementer that omits it
+  inherits the default, and one that provides it overrides. The default body is
+  checked in the implementer's context, so <code>Self</code> and every required
+  method resolve against the implementing type. A default that calls a required
+  method the type never provides is an ordinary "no such method" error.
+</p>
+
+<pre><code>// Generic interface — the parameter `T` flows into the default body.
+pub interface Bounded&lt;T&gt; {
+  function value(self): T
+  function or_value(self, fallback: T): T {   // default
+    self.value()
+  }
+}
+
+extend Cell: Bounded&lt;i64&gt; {                    // `T` → `i64` in the copied default
+  function value(self): i64 { self.v }
+}</code></pre>
+
+<div class="callout good">
+  <strong>Where defaults come from</strong>
+  Three forms are supported, all equivalent at the use site:
+  <ul>
+    <li><strong>Same module</strong> — the interface is declared alongside the <code>extend</code>.</li>
+    <li><strong>Generic interface</strong> — the interface's type parameters are
+      substituted with the <code>extend</code>'s arguments (<code>Bounded&lt;T&gt;</code>
+      implemented as <code>Bounded&lt;i64&gt;</code> ⇒ <code>T</code> becomes
+      <code>i64</code>) throughout the inherited signature and body.</li>
+    <li><strong>Cross-module</strong> — a <code>pub</code> interface imported from
+      another module supplies its defaults just as a local one would.</li>
+  </ul>
+</div>
+
 <!-- =========================================================== -->
 <h2 id="compose">2. Interface composition</h2>
 

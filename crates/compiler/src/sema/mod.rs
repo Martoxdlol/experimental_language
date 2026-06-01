@@ -87,22 +87,52 @@ pub fn analyze_multi_ctx(
     // on the root and every loaded submodule.
     let mut root = root.clone();
     derive::expand_derives(&mut root);
-    // Copy interface default-method bodies into implementing `extend` blocks
-    // (`docs/10`) before collection.
-    defaults::expand_default_methods(&mut root);
-    // Hoist nested `await`s into statement-level `var` bindings so the async
-    // state machine can suspend at every surviving `await` (`docs/21`).
-    anf::hoist_awaits(&mut root);
-    let externals: symbols::Externals = externals
+    let mut externals: symbols::Externals = externals
         .iter()
         .map(|(path, m)| {
             let mut m = m.clone();
             derive::expand_derives(&mut m);
-            defaults::expand_default_methods(&mut m);
-            anf::hoist_awaits(&mut m);
             (path.clone(), m)
         })
         .collect();
+    // Build a program-wide index of every `pub` interface (root + externals) so
+    // cross-module interface default methods (`docs/10`) resolve. Each module is
+    // then expanded against the *foreign* interfaces — those declared in the
+    // other modules — while its own declarations shadow them by name.
+    let mut root_pub = defaults::ForeignIfaces::default();
+    defaults::collect_pub_interfaces(&root, &mut root_pub);
+    let ext_pub: std::collections::HashMap<Vec<String>, defaults::ForeignIfaces> = externals
+        .iter()
+        .map(|(path, m)| {
+            let mut f = defaults::ForeignIfaces::default();
+            defaults::collect_pub_interfaces(m, &mut f);
+            (path.clone(), f)
+        })
+        .collect();
+    // Foreign set for the root = the union of every external's `pub` interfaces.
+    let mut root_foreign = defaults::ForeignIfaces::default();
+    for f in ext_pub.values() {
+        f.extend_into(&mut root_foreign);
+    }
+    // Copy interface default-method bodies into implementing `extend` blocks
+    // (`docs/10`) before collection.
+    defaults::expand_default_methods(&mut root, &root_foreign);
+    // Hoist nested `await`s into statement-level `var` bindings so the async
+    // state machine can suspend at every surviving `await` (`docs/21`).
+    anf::hoist_awaits(&mut root);
+    for (path, m) in externals.iter_mut() {
+        // Foreign set for this module = the root's `pub` interfaces plus every
+        // *other* external's (a module never treats its own as foreign).
+        let mut foreign = defaults::ForeignIfaces::default();
+        root_pub.extend_into(&mut foreign);
+        for (other_path, f) in &ext_pub {
+            if other_path != path {
+                f.extend_into(&mut foreign);
+            }
+        }
+        defaults::expand_default_methods(m, &foreign);
+        anf::hoist_awaits(m);
+    }
     let program = Program::collect_multi_ctx(&root, &externals, ctx);
     let mut tcx = TyCtxt::new();
     let mut errors = program.errors.clone();

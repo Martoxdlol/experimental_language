@@ -245,6 +245,17 @@ pub(crate) fn clty_of(analysis: &Analysis, ty: Ty) -> Option<ClType> {
     }
 }
 
+/// Base for the per-instance type ids of **generic** `Drop` types (`docs/16`
+/// §8). A non-generic `Drop` type uses `1000 + def.index()` for its object-
+/// header drop slot, but every monomorphization of a generic `Drop` type shares
+/// one `def` while needing its *own* `drop` glue — so each instance is keyed by
+/// its compiled `drop` method's `FuncId` instead, offset past this base to keep
+/// it disjoint from the `1000 + def` space (def indices never approach `2^40`).
+/// These ids live only in the GC drop registry / object descriptors; union and
+/// dynamic boxes carry their own separately-written `type_id` words, so this
+/// never affects `is`/`as` matching.
+pub(crate) const GENERIC_DROP_TID_BASE: i64 = 1 << 40;
+
 /// A stable runtime type id for a (non-union) type, stored in a union/dynamic
 /// box so `is`/`as` can identify the inhabited variant. Conceptually the
 /// "type pointer" of `docs/16` §3, collapsed to an integer for now.

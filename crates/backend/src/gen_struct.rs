@@ -68,8 +68,8 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     /// `@RefCounted` type (`docs/16` §8.1) is allocated as a `KIND_REFCOUNTED`
     /// object and its hidden strong-count word is stamped to `1` (the creating
     /// binding owns the one reference).
-    pub(crate) fn alloc_struct_typed(&mut self, layout: &Layout, ty: Ty) -> Value {
-        let tid = if self.ty_has_drop(ty) { self.type_id_of(ty) } else { 0 };
+    pub(crate) fn alloc_struct_typed(&mut self, layout: &Layout, ty: Ty) -> CgResult<Value> {
+        let tid = self.drop_type_id(ty)?;
         let refcounted = is_refcounted_ty(self.cx.analysis, resolve_shallow(self.cx.analysis, ty, &self.subst));
         let kind = if refcounted { GC_KIND_REFCOUNTED } else { GC_KIND_PLAIN };
         let desc = self.emit_descriptor_full(
@@ -84,7 +84,78 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             let one = self.b.ins().iconst(types::I64, 1);
             self.b.ins().store(MemFlags::trusted(), one, ptr, 0);
         }
-        ptr
+        Ok(ptr)
+    }
+
+    /// The object-header drop type id to stamp into `ty`'s descriptor (`docs/16`
+    /// §8), or `0` when `ty` has no `Drop` impl.
+    ///
+    /// * No `Drop` ⇒ `0` (the collector skips finalization).
+    /// * Non-generic `Drop` ⇒ `1000 + def.index()` — the stable per-`def` id that
+    ///   [`Codegen::collect_drops`] registers against the type's `drop` method.
+    /// * Generic `Drop` (`extend<T> S<T>: Drop`) ⇒ a per-instance id derived from
+    ///   the *monomorphized* `drop` method's `FuncId`. Every `S<int>` shares one
+    ///   `def` but needs its own `drop` glue, so the id must distinguish instances.
+    ///   Declaring the instance here both pins down its `FuncId` (so the id
+    ///   matches what `collect_drops` registers) and enqueues the `drop` body for
+    ///   code generation — it is never reached through an ordinary call.
+    fn drop_type_id(&mut self, ty: Ty) -> CgResult<i64> {
+        let drop_def = self.cx.analysis.program.drop_def;
+        if drop_def == DefId(0) {
+            return Ok(0);
+        }
+        let resolved = resolve_shallow(self.cx.analysis, ty, &self.subst);
+        let TyKind::Named { def, args } = self.cx.analysis.tcx.kind(resolved).clone() else {
+            return Ok(0);
+        };
+        let Some(&ext) = self.cx.hir.iface_impls.get(&(def, drop_def)) else {
+            return Ok(0);
+        };
+        if self.cx.analysis.program.def(ext).generics.is_empty() {
+            // Non-generic `Drop` impl: stable per-`def` id (existing scheme).
+            return Ok(1000 + def.index() as i64);
+        }
+        // Generic `Drop` impl: resolve the `drop` method and instantiate it for
+        // this concrete receiver, keying the id on its `FuncId`.
+        let method = self.drop_method_of(ext).ok_or_else(|| {
+            CodegenError::new(
+                self.cx.analysis.program.def(ext).span,
+                "generic `Drop` impl has no `drop` method",
+            )
+        })?;
+        let targs: Vec<Ty> = args
+            .iter()
+            .map(|a| resolve_shallow(self.cx.analysis, *a, &self.subst))
+            .collect();
+        let fid = match self.funcs.get(&(method, targs.clone())).copied() {
+            Some(f) => f,
+            None => declare_instance(
+                self.module,
+                self.funcs,
+                self.worklist,
+                self.cx.analysis,
+                method,
+                targs,
+            )?
+            .ok_or_else(|| {
+                CodegenError::new(
+                    self.cx.analysis.program.def(method).span,
+                    "generic `Drop` method is not lowerable",
+                )
+            })?,
+        };
+        Ok(GENERIC_DROP_TID_BASE + fid.as_u32() as i64)
+    }
+
+    /// Find the `drop` method `DefId` declared under `extend_def` (a `Drop` impl).
+    pub(crate) fn drop_method_of(&self, extend_def: DefId) -> Option<DefId> {
+        let prog = &self.cx.analysis.program;
+        (0..prog.defs.len() as u32).map(DefId).find(|&d| {
+            let def = prog.def(d);
+            def.kind == DefKind::ExtendMethod
+                && def.parent == Some(extend_def)
+                && def.name == "drop"
+        })
     }
 
     /// Allocate an `extern struct` instance on the stack (`docs/19` §3): a
@@ -236,19 +307,6 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             }
         }
         field_size_align(self.cx.analysis, r).0
-    }
-
-    /// Whether `ty` (after substitution) has a `Drop` implementation.
-    pub(crate) fn ty_has_drop(&self, ty: Ty) -> bool {
-        let drop_def = self.cx.analysis.program.drop_def;
-        if drop_def == DefId(0) {
-            return false;
-        }
-        let resolved = resolve_shallow(self.cx.analysis, ty, &self.subst);
-        if let TyKind::Named { def, .. } = self.cx.analysis.tcx.kind(resolved) {
-            return self.cx.hir.iface_impls.contains_key(&(*def, drop_def));
-        }
-        false
     }
 
     /// The field-block layout of a struct named-type, with its generic

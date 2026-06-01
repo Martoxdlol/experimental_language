@@ -1839,6 +1839,134 @@ fn multi_file_named_imports() {
 }
 
 #[test]
+fn cross_module_interface_default() {
+    // An interface declared `pub` in one module carries a default body; a type
+    // in another module that imports it and omits the method inherits the
+    // default (`docs/10` — cross-module interface defaults).
+    let main = "mod traits;\n\
+                 import { Greeter } from \"self:traits\";\n\
+                 struct Person { who: str }\n\
+                 extend Person: Greeter { function name(self): str { self.who } }\n\
+                 function main() {\n\
+                   var p: Person = Person { who: \"Otter\" };\n\
+                   println(p.greet());\n\
+                 }";
+    let traits = "pub interface Greeter {\n\
+                    function name(self): str;\n\
+                    function greet(self): str { \"Hello, \" + self.name() }\n\
+                  }";
+    let (out, err, ok) = lang_run_project(
+        "",
+        &[
+            ("project.toml", "[package]\nname = \"app\"\nkind = \"binary\"\n"),
+            ("src/main.otter", main),
+            ("src/traits.otter", traits),
+        ],
+    );
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "Hello, Otter\n");
+}
+
+#[test]
+fn cross_module_generic_interface_default() {
+    // A *generic* `pub` interface from another module: its type parameter is
+    // substituted with the impl's argument in the copied default body.
+    let main = "mod traits;\n\
+                 import { Boxed } from \"self:traits\";\n\
+                 struct Cell { v: i64 }\n\
+                 extend Cell: Boxed<i64> { function get(self): i64 { self.v } }\n\
+                 function main() {\n\
+                   var c: Cell = Cell { v: 42 };\n\
+                   println(\"dup=${c.dup()}\");\n\
+                 }";
+    let traits = "pub interface Boxed<T> {\n\
+                    function get(self): T;\n\
+                    function dup(self): T { self.get() }\n\
+                  }";
+    let (out, err, ok) = lang_run_project(
+        "",
+        &[
+            ("project.toml", "[package]\nname = \"app\"\nkind = \"binary\"\n"),
+            ("src/main.otter", main),
+            ("src/traits.otter", traits),
+        ],
+    );
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "dup=42\n");
+}
+
+#[test]
+fn cross_module_default_is_overridable() {
+    // A local override of a cross-module default wins over the copied body.
+    let main = "mod traits;\n\
+                 import { Greeter } from \"self:traits\";\n\
+                 struct Person { who: str }\n\
+                 extend Person: Greeter {\n\
+                   function name(self): str { self.who }\n\
+                   function greet(self): str { \"Yo \" + self.who }\n\
+                 }\n\
+                 function main() {\n\
+                   println(Person { who: \"O\" }.greet());\n\
+                 }";
+    let traits = "pub interface Greeter {\n\
+                    function name(self): str;\n\
+                    function greet(self): str { \"Hello, \" + self.name() }\n\
+                  }";
+    let (out, err, ok) = lang_run_project(
+        "",
+        &[
+            ("project.toml", "[package]\nname = \"app\"\nkind = \"binary\"\n"),
+            ("src/main.otter", main),
+            ("src/traits.otter", traits),
+        ],
+    );
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "Yo O\n");
+}
+
+#[test]
+fn generic_drop_gc_managed_runs_under_stress() {
+    // A GC-managed (non-`@RefCounted`) generic Drop type: each monomorphization
+    // gets its own finalizer. Under stress GC every loop temporary becomes
+    // unreachable and is finalized; both `Tracked<i64>` and `Tracked<str>` fire
+    // their `drop` the expected number of times (order is unspecified, so we
+    // count occurrences).
+    let src = "import { Drop } from \"core:prelude\";\n\
+               struct Tracked<T> { kind: i64 }\n\
+               extend<T> Tracked<T>: Drop {\n\
+                 function drop(self) {\n\
+                   if self.kind == 0 { println(\"drop-int\"); }\n\
+                   if self.kind == 1 { println(\"drop-str\"); }\n\
+                 }\n\
+               }\n\
+               function spin() {\n\
+                 var i: i64 = 0;\n\
+                 while i < 4 {\n\
+                   var a: Tracked<i64> = Tracked<i64> { kind: 0 };\n\
+                   var b: Tracked<str> = Tracked<str> { kind: 1 };\n\
+                   i = i + 1;\n\
+                 }\n\
+               }\n\
+               // Allocate churn (kind 2 ⇒ silent drop) after `spin` returns so a\n\
+               // collection finalizes every now-unreachable tracked object before\n\
+               // the program exits (exit-time finalization is best-effort).\n\
+               function churn() {\n\
+                 var i: i64 = 0;\n\
+                 while i < 100 {\n\
+                   var t: Tracked<bool> = Tracked<bool> { kind: 2 };\n\
+                   i = i + 1;\n\
+                 }\n\
+               }\n\
+               function main() { spin(); churn(); }";
+    let (out, err, ok) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
+    assert!(ok, "stderr: {err}");
+    let ints = out.lines().filter(|l| *l == "drop-int").count();
+    let strs = out.lines().filter(|l| *l == "drop-str").count();
+    assert_eq!(ints, 4, "expected 4 int drops, got {ints}:\n{out}");
+    assert_eq!(strs, 4, "expected 4 str drops, got {strs}:\n{out}");
+}
+
+#[test]
 fn multi_file_rejects_private_import() {
     // A non-`pub` item cannot be imported across modules (`docs/17` §3).
     let main = "mod util;\n\

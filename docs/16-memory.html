@@ -399,6 +399,16 @@ collector determines an object is unreachable, its descriptor's <em>drop slot</e
 enqueued to the finalizer queue. A dedicated finalizer thread pops the queue and runs each
 <code>drop</code> in turn.</p>
 
+<div class="callout good">
+  <strong>Generic types implement <code>Drop</code> too</strong>
+  <code>extend&lt;T&gt; Box&lt;T&gt;: Drop</code> gives <em>every</em> instantiation a finalizer.
+  Because each monomorphization compiles its own <code>drop</code> body (the field
+  layout and any <code>T</code>-specific calls differ per <code>T</code>), the drop slot
+  is keyed <em>per instantiation</em>, not per generic type — <code>Box&lt;i64&gt;</code> and
+  <code>Box&lt;str&gt;</code> run distinct <code>drop</code> glue. A generic <code>@RefCounted</code>
+  type keeps the same deterministic, scope-bound release as a non-generic one (§8.1).
+</div>
+
 <div class="diagram">
   <svg viewBox="0 0 920 270" role="img" aria-label="Drop lifecycle">
     <defs>

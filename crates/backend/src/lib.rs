@@ -836,33 +836,56 @@ struct Codegen<'a, M: Module> {
 }
 
 impl<'a, M: Module> Codegen<'a, M> {
-    /// Declare every non-generic function/method as a `[]`-instance; generic
-    /// templates are instantiated on demand from their call sites.
-    /// Collect `(type_id, drop FuncId)` for every non-generic type with a `Drop`
-    /// impl (`docs/16` §8). `seed` already compiled their `drop` methods as
-    /// `[]`-instances. (Generic `Drop` types are a follow-up.)
+    /// Collect `(type_id, drop FuncId)` for every type with a `Drop` impl
+    /// (`docs/16` §8), to register as GC finalizers.
+    ///
+    /// * **Non-generic** `Drop` types use the stable per-`def` id
+    ///   `1000 + type_def.index()`; `seed` already compiled their `drop` methods
+    ///   as `[]`-instances, so we look them up directly.
+    /// * **Generic** `Drop` types (`extend<T> S<T>: Drop`) need one finalizer
+    ///   *per monomorphization* — every `S<int>` shares a `def` but compiles its
+    ///   own `drop` body. Each such instance was instantiated and keyed by its
+    ///   `FuncId` at the allocation site (see `drop_type_id`), so we scan the
+    ///   instance table for every compiled `drop`-method instance of a generic
+    ///   `Drop` impl and register it under the matching per-instance id.
     fn collect_drops(&self) -> Vec<(i64, FuncId)> {
         let drop_def = self.analysis.program.drop_def;
         if drop_def == DefId(0) {
             return Vec::new();
         }
+        let prog = &self.analysis.program;
         let mut out = Vec::new();
+        // `drop` methods of generic `Drop` extends — registered per instance.
+        let mut generic_drop_methods: HashSet<DefId> = HashSet::new();
         for (&(type_def, iface_def), &extend_def) in &self.hir.iface_impls {
             if iface_def != drop_def {
                 continue;
             }
-            let drop_method = (0..self.analysis.program.defs.len() as u32).map(DefId).find(|&d| {
-                let def = self.analysis.program.def(d);
+            let drop_method = (0..prog.defs.len() as u32).map(DefId).find(|&d| {
+                let def = prog.def(d);
                 def.kind == DefKind::ExtendMethod
                     && def.parent == Some(extend_def)
                     && def.name == "drop"
             });
-            if let Some(dm) = drop_method {
+            let Some(dm) = drop_method else { continue };
+            if prog.def(extend_def).generics.is_empty() {
+                // Non-generic: the single `[]`-instance keyed by the type's def.
                 if let Some(&fid) = self.funcs.get(&(dm, Vec::new())) {
                     out.push((1000 + type_def.index() as i64, fid));
                 }
+            } else {
+                generic_drop_methods.insert(dm);
             }
         }
+        // Every compiled instance of a generic `Drop` method, keyed by `FuncId`.
+        for (&(def, ref args), &fid) in &self.funcs {
+            if !args.is_empty() && generic_drop_methods.contains(&def) {
+                out.push((GENERIC_DROP_TID_BASE + fid.as_u32() as i64, fid));
+            }
+        }
+        // Deterministic order (the maps iterated above are unordered); ids are
+        // unique, so a sort by id is a stable total order for reproducible output.
+        out.sort_by_key(|&(tid, _)| tid);
         out
     }
 

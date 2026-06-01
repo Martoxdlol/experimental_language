@@ -1,0 +1,40 @@
+//@ kind: run
+//@ description: generic-interface default method (docs/10) — the interface's type parameter is substituted into the copied default body (`T` → the impl's argument), so an implementer that omits the method inherits a fully concrete version; multiple instantiations each get their own.
+//@ stdout:
+//~ i=7
+//~ s=hi
+//~ pair=7
+import { println } from "std:io";
+
+// `dup` carries a default whose body and signature mention the interface's
+// type parameter `T`. Each `extend ... : Boxed<Arg>` substitutes `T` -> `Arg`.
+interface Boxed<T> {
+  function get(self): T;
+  function dup(self): T { self.get() }
+}
+
+struct IntCell { v: i64 }
+extend IntCell: Boxed<i64> {
+  function get(self): i64 { self.v }
+}
+
+struct StrCell { v: str }
+extend StrCell: Boxed<str> {
+  function get(self): str { self.v }
+}
+
+// An implementer may still override the default.
+struct Pair { a: i64, b: i64 }
+extend Pair: Boxed<i64> {
+  function get(self): i64 { self.a }
+  function dup(self): i64 { self.a + self.b - self.b }
+}
+
+function main() {
+  var i: IntCell = IntCell { v: 7 };
+  var s: StrCell = StrCell { v: "hi" };
+  var p: Pair = Pair { a: 7, b: 2 };
+  println("i=${i.dup()}");
+  println("s=${s.dup()}");
+  println("pair=${p.dup()}");
+}

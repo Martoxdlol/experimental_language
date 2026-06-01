@@ -1,0 +1,13 @@
+//@ kind: compile-error
+//@ description: a generic-interface default's substituted signature is enforced — implementing `Boxed<str>` but defining `get` to return `i64` is a type error (the inherited `dup` default's return type is `str`).
+//@ stderr: expected `str`, found `i64`
+import { println } from "std:io";
+interface Boxed<T> {
+  function get(self): T;
+  function dup(self): T { self.get() }
+}
+struct C { v: i64 }
+extend C: Boxed<str> {
+  function get(self): i64 { self.v }
+}
+function main() { println("x"); }

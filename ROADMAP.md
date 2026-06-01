@@ -772,8 +772,15 @@ The tracing GC is functionally complete for single-threaded programs.
       reference-counted runtime handles released *deterministically* at worker
       scope exit, so a channel closes on the last-sender drop without a collection
       — see the Channels entry below (`recv` → `ChannelClosed`, `Receiver:
-      Iterator` terminates). TODO: generic `Drop` types; `Shared` lock release on a
-      panicking body.
+      Iterator` terminates).
+      **Generic `Drop` types — DONE:** `extend<T> S<T>: Drop` registers a finalizer
+      *per monomorphization*. The object-header drop slot is keyed by the compiled
+      `drop` method's `FuncId` (offset past `GENERIC_DROP_TID_BASE`) rather than the
+      shared `def`, so `S<int>` and `S<str>` run distinct `drop` glue; the allocation
+      site declares the instance (pinning its `FuncId` and enqueueing the body) and
+      `collect_drops` registers every compiled generic-`drop` instance. Works for both
+      GC-managed (best-effort) and `@RefCounted` (deterministic) generic types.
+      TODO: `Shared` lock release on a panicking body.
       **`@RefCounted` — opt-in deterministic reference counting (`docs/16` §8.1) — DONE:**
       the channel-endpoint carve-out is now generalized into a real, user-facing
       object kind. A `@RefCounted struct` carries a hidden **atomic strong-count**
@@ -1158,9 +1165,15 @@ The tracing GC is functionally complete for single-threaded programs.
       span-keyed HIR collision-free across implementers (the `derive` rule).
       Works with overrides, defaults calling other (possibly overridden) methods
       through `self`, multiple implementers, and dynamic dispatch (the synthesised
-      method is in the vtable). 1 CLI test; JIT + native + GC-stress parity.
-      Scope: the interface must be non-generic and declared in the same module
-      (generic / cross-module interface defaults are a follow-up).
+      method is in the vtable). JIT + native + GC-stress parity.
+      **Generic & cross-module defaults — DONE:** a generic interface
+      (`interface Bounded<T> { … default … }`) has its type parameters substituted
+      with the `extend`'s interface arguments (`T` → `i32`) throughout the copied
+      signature and body (method-local generics shadow them); a `pub` interface from
+      another module supplies its defaults via a program-wide index of every `pub`
+      interface (built in `analyze_multi_ctx`), with locals shadowing foreigns and
+      ambiguous cross-module names left unresolved (never a wrong body). 8 unit tests
+      (`sema/defaults`), 5 e2e cases, 3 CLI cross-module tests, 2 LSP tests.
 - [x] **Generic `extend` method resolution** (`docs/11`): `resolve_method` now
       unifies a generic `extend<…> Target<…>`'s target against the receiver and
       returns the solved substitution; method param/return types are substituted,

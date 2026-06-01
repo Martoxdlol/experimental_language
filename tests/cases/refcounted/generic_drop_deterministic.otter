@@ -1,0 +1,23 @@
+//@ kind: run
+//@ description: generic Drop type (docs/16 §8) — `extend<T> Holder<T>: Drop` runs each monomorphization's own `drop`. As `@RefCounted` locals these drop deterministically at scope exit in reverse bind order, across two distinct instantiations.
+//@ stdout:
+//~ start
+//~ end
+//~ drop 2
+//~ drop 1
+import { println } from "std:io";
+import { Drop } from "core:prelude";
+
+@RefCounted
+struct Holder<T> { value: T, tag: i64 }
+
+extend<T> Holder<T>: Drop {
+  function drop(self) { println("drop ${self.tag}"); }
+}
+
+function main() {
+  println("start");
+  var a: Holder<i64> = Holder<i64> { value: 100, tag: 1 };
+  var b: Holder<str> = Holder<str> { value: "x", tag: 2 };
+  println("end");
+}

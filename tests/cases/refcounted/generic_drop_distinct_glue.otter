@@ -1,0 +1,24 @@
+//@ kind: run
+//@ description: a single `extend<T: ToStr> Cell<T>: Drop` whose `drop` body calls `T`'s `to_str` proves each monomorphization gets its *own* drop glue — the `i64` instance calls the builtin conversion, the `Tag` instance calls the user impl — not one shared finalizer.
+//@ stdout:
+//~ made
+//~ drop=tag7
+//~ drop=99
+import { println } from "std:io";
+import { Drop, ToStr } from "core:prelude";
+
+@RefCounted
+struct Cell<T> { value: T }
+
+extend<T: ToStr> Cell<T>: Drop {
+  function drop(self) { println("drop=" + self.value.to_str()); }
+}
+
+struct Tag { n: i64 }
+extend Tag: ToStr { function to_str(self): str { "tag${self.n}" } }
+
+function main() {
+  var i: Cell<i64> = Cell<i64> { value: 99 };
+  var t: Cell<Tag> = Cell<Tag> { value: Tag { n: 7 } };
+  println("made");
+}

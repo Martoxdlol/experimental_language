@@ -1,0 +1,11 @@
+//@ kind: compile-error
+//@ description: a default body that calls a required method the implementer never provides is still an error — the default is copied, but `name` is unresolved on the implementing type.
+//@ stderr: no method `name` on type `P`
+import { println } from "std:io";
+interface Named {
+  function name(self): str;
+  function greet(self): str { "Hi " + self.name() }
+}
+struct P { x: i64 }
+extend P: Named {}
+function main() { println("x"); }

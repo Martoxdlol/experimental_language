@@ -1135,7 +1135,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         let ptr = if self.is_extern_struct_def(def) {
             self.alloc_extern(&layout)
         } else {
-            self.alloc_struct_typed(&layout, sty)
+            self.alloc_struct_typed(&layout, sty)?
         };
         // A spread base fills every field first; explicit fields override.
         if let Some(base) = spread {

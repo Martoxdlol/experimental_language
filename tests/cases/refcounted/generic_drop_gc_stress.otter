@@ -1,0 +1,28 @@
+//@ kind: run
+//@ env: OTTER_FUSION_GC=stress
+//@ description: generic `@RefCounted` Drop type drops deterministically per loop iteration even under aggressive GC (collect on every allocation) — the per-instance finalizer is correctly registered for each monomorphization and the determinism boundary (docs/16 §8.1) holds.
+//@ stdout:
+//~ iter 0
+//~ drop 0
+//~ iter 1
+//~ done
+//~ drop 1
+import { println } from "std:io";
+import { Drop } from "core:prelude";
+
+@RefCounted
+struct Res<T> { value: T, tag: i64 }
+
+extend<T> Res<T>: Drop {
+  function drop(self) { println("drop ${self.tag}"); }
+}
+
+function main() {
+  var i: i64 = 0;
+  while i < 2 {
+    var r: Res<i64> = Res<i64> { value: 0, tag: i };
+    println("iter ${i}");
+    i = i + 1;
+  }
+  println("done");
+}

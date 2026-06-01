@@ -1,0 +1,45 @@
+//@ kind: run
+//@ description: example program — generic interface default methods (docs/10) and generic Drop (docs/16 §8) working together on a generic, @RefCounted type.
+//@ stdout:
+//~ first=1
+//~ first=10
+//~ closing 20
+//~ closing 10
+import { println } from "std:io";
+import { Drop } from "core:prelude";
+
+// A generic interface with a default method. `peek` has no body and must be
+// provided; `describe` carries a default whose signature and body mention the
+// interface parameter `T` — substituted with each impl's argument.
+interface Holder<T> {
+  function peek(self): T;
+  function describe(self): T {
+    self.peek()
+  }
+}
+
+// A generic, reference-counted resource with a Drop finalizer. Every
+// instantiation (`Resource<i64>`, `Resource<str>`, …) gets its own `drop`
+// glue, and as a @RefCounted local it is released deterministically.
+@RefCounted
+struct Resource<T> {
+  value: T,
+  id: i64,
+}
+
+extend<T> Resource<T>: Holder<T> {
+  function peek(self): T { self.value }
+}
+
+extend<T> Resource<T>: Drop {
+  function drop(self) { println("closing ${self.id}"); }
+}
+
+function main() {
+  // The inherited generic default works across instantiations.
+  var a: Resource<i64> = Resource<i64> { value: 1, id: 10 };
+  var b: Resource<i64> = Resource<i64> { value: 10, id: 20 };
+  println("first=${a.describe()}");
+  println("first=${b.describe()}");
+  // `a` and `b` drop here in reverse bind order: 20 then 10.
+}

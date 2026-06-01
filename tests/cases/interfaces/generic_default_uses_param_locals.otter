@@ -1,0 +1,32 @@
+//@ kind: run
+//@ description: generic-interface default whose body uses the interface type parameter in a local binding, a cast, and the return type — all positions are substituted with the impl's argument.
+//@ stdout:
+//~ 42
+//~ 5
+import { println } from "std:io";
+
+interface Wrap<T> {
+  function unwrap(self): T;
+  // `T` appears in a `var: T` annotation and the return type.
+  function echo(self): T {
+    var x: T = self.unwrap();
+    x
+  }
+}
+
+struct Num { n: i64 }
+extend Num: Wrap<i64> {
+  function unwrap(self): i64 { self.n }
+}
+
+struct Count { c: i64 }
+extend Count: Wrap<i64> {
+  function unwrap(self): i64 { self.c }
+}
+
+function main() {
+  var a: Num = Num { n: 42 };
+  var b: Count = Count { c: 5 };
+  println("${a.echo()}");
+  println("${b.echo()}");
+}
