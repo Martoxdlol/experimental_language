@@ -1,0 +1,38 @@
+//@ kind: run
+//@ serial
+//@ description: Task.spawn JoinHandle.abort uses the same cooperative cancellation path as cancel(), dropping suspended state and releasing held Shared locks
+//@ stdout:
+//~ join = cancelled
+//~ after abort = 1
+import { println } from "std:io";
+import { Future } from "core:prelude";
+import { Task, JoinHandle, Joined, Panicked, Cancelled } from "std:task";
+import { Shared, LockBusy } from "std:sync";
+import { sleep } from "std:async";
+
+struct C { value: i64 }
+
+function main(): Future<null> async {
+  var state: Shared<C> = Shared.new(C { value: 0 });
+  var s: Shared<C> = state.clone();
+  var h: JoinHandle<i64> = Task.spawn(() async => {
+    await s.lock((c) async => {
+      c.value = 1;
+      var _ = await sleep(1000);
+      c.value = 2;
+      c.value
+    })
+  });
+
+  var _started = await sleep(20);
+  h.abort();
+  match await h.join() {
+    Joined<i64> j => println("join = joined ${j.value}"),
+    Panicked p => println("join = panicked"),
+    Cancelled c => println("join = cancelled"),
+  };
+  match await state.try_lock((c) => c.value) {
+    i64 n => println("after abort = ${n}"),
+    LockBusy b => println("after abort = still locked"),
+  };
+}

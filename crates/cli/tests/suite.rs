@@ -50,7 +50,11 @@ fn end_to_end_suite() {
     let otter = otter_bin();
 
     let paths = framework::discover(&root);
-    assert!(!paths.is_empty(), "no test cases found under {}", root.display());
+    assert!(
+        !paths.is_empty(),
+        "no test cases found under {}",
+        root.display()
+    );
 
     // Parse every case up front so malformed directives fail loudly.
     let mut cases: Vec<Case> = Vec::new();
@@ -69,7 +73,10 @@ fn end_to_end_suite() {
     let parallel_idx: Vec<usize> = (0..cases.len()).filter(|&i| !cases[i].serial).collect();
     let serial_idx: Vec<usize> = (0..cases.len()).filter(|&i| cases[i].serial).collect();
 
-    let workers = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(8);
+    let workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .min(8);
     let (tx, rx) = mpsc::channel();
     let cases = std::sync::Arc::new(cases);
     let pidx = std::sync::Arc::new(parallel_idx);
@@ -81,14 +88,16 @@ fn end_to_end_suite() {
             let pidx = pidx.clone();
             let next = next.clone();
             let otter = otter.clone();
-            scope.spawn(move || loop {
-                let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                if k >= pidx.len() {
-                    break;
+            scope.spawn(move || {
+                loop {
+                    let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if k >= pidx.len() {
+                        break;
+                    }
+                    let i = pidx[k];
+                    let outcome = framework::run_case(&otter, &cases[i]);
+                    tx.send((i, outcome)).unwrap();
                 }
-                let i = pidx[k];
-                let outcome = framework::run_case(&otter, &cases[i]);
-                tx.send((i, outcome)).unwrap();
             });
         }
         drop(tx);
@@ -128,13 +137,21 @@ fn end_to_end_suite() {
     // unexpectedly started passing (XPass) — both mean the catalog is stale.
     let failed: Vec<&framework::Outcome> = outcomes.iter().filter(|o| !o.ok()).collect();
     if !failed.is_empty() {
-        let mut msg = format!("\n{} of {} test case(s) FAILED:\n", failed.len(), outcomes.len());
+        let mut msg = format!(
+            "\n{} of {} test case(s) FAILED:\n",
+            failed.len(),
+            outcomes.len()
+        );
         for o in &failed {
             let tag = match o.status {
                 Status::XPass => "XPASS (known-bug now passes — remove marker)",
                 _ => "FAIL",
             };
-            msg.push_str(&format!("\n=== {} [{tag}] ===\n{}\n", o.name, o.failure.as_deref().unwrap_or("")));
+            msg.push_str(&format!(
+                "\n=== {} [{tag}] ===\n{}\n",
+                o.name,
+                o.failure.as_deref().unwrap_or("")
+            ));
         }
         panic!("{msg}");
     }
@@ -158,9 +175,22 @@ fn report(cases: &[Case], outcomes: &[framework::Outcome]) {
     // The known-bug catalog: the documented, still-present gaps in the language.
     if xfail > 0 || xpass > 0 {
         println!("├─ known bugs / unimplemented (spec says these should work) ──");
-        for o in outcomes.iter().filter(|o| matches!(o.status, Status::XFail | Status::XPass)) {
-            let mark = if o.status == Status::XPass { "✗ now-passing" } else { "•" };
-            let note = o.failure.as_deref().unwrap_or("").lines().next().unwrap_or("");
+        for o in outcomes
+            .iter()
+            .filter(|o| matches!(o.status, Status::XFail | Status::XPass))
+        {
+            let mark = if o.status == Status::XPass {
+                "✗ now-passing"
+            } else {
+                "•"
+            };
+            let note = o
+                .failure
+                .as_deref()
+                .unwrap_or("")
+                .lines()
+                .next()
+                .unwrap_or("");
             println!("│ {mark} {:<34} {note}", o.name);
         }
     }
@@ -180,8 +210,13 @@ fn report(cases: &[Case], outcomes: &[framework::Outcome]) {
     }
     for (cat, (n, sum)) in &by_cat {
         let avg = *sum / (*n as u32).max(1);
-        println!("│ {:<22} {:>4} cases   Σ {:>10}   avg {:>10}",
-            cat, n, framework::fmt_duration(*sum), framework::fmt_duration(avg));
+        println!(
+            "│ {:<22} {:>4} cases   Σ {:>10}   avg {:>10}",
+            cat,
+            n,
+            framework::fmt_duration(*sum),
+            framework::fmt_duration(avg)
+        );
     }
     slowest.sort_by(|a, b| b.1.cmp(&a.1));
     if !slowest.is_empty() {

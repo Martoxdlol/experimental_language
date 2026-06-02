@@ -1,0 +1,59 @@
+//@ kind: run
+//@ serial
+//@ env: OTTER_FUSION_GC=stress
+//@ description: detached async Thread.spawn workers keep managed List locals live across awaits under stress GC and release captured channel endpoints
+//@ stdout:
+//~ count=64 total=6240 closed=1
+
+import { println } from "std:io";
+import { Future } from "core:prelude";
+import { List } from "core:collections";
+import { Thread } from "std:thread";
+import { Receiver, ChannelClosed, channel } from "std:sync";
+import { yield_now } from "std:async";
+
+function spawn_detached_thread_fanout(): Receiver<i64> {
+  var ends = channel<i64>();
+  var tx = ends.0;
+  var rx = ends.1;
+
+  var i: i64 = 0;
+  while i < 64 {
+    var tx_i = tx.clone();
+    var n = i;
+    Thread.spawn(() async => {
+      var local: i64 = 0;
+      var round: i64 = 0;
+      while round < 3 {
+        var junk: List<i64> = [n, round, n + round];
+        var _ = await yield_now();
+        local = local + junk[0] + junk[1];
+        round = round + 1;
+      }
+      tx_i.send(local);
+      0
+    }).detach();
+    i = i + 1;
+  }
+
+  rx
+}
+
+function main(): Future<null> async {
+  var rx = spawn_detached_thread_fanout();
+  var count: i64 = 0;
+  var total: i64 = 0;
+  var closed: i64 = 0;
+  while closed == 0 {
+    match await rx.recv() {
+      i64 value => {
+        count = count + 1;
+        total = total + value;
+      },
+      ChannelClosed c => {
+        closed = 1;
+      },
+    }
+  }
+  println("count=${count} total=${total} closed=${closed}");
+}

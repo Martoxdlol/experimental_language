@@ -12,7 +12,11 @@ pub enum SemaErrorKind {
     /// A name used in value position that resolves to nothing.
     UnknownValue { name: String },
     /// A generic type applied with the wrong number of arguments.
-    GenericArity { name: String, expected: usize, found: usize },
+    GenericArity {
+        name: String,
+        expected: usize,
+        found: usize,
+    },
     /// A type alias (directly or through a cycle of aliases/unions) that
     /// references itself in a way that does not reduce — see `docs/03` §3.
     RecursiveAlias { name: String },
@@ -61,7 +65,10 @@ impl SemaError {
     }
 
     pub fn message(span: Span, msg: impl Into<String>) -> Self {
-        Self { kind: SemaErrorKind::Message(msg.into()), span }
+        Self {
+            kind: SemaErrorKind::Message(msg.into()),
+            span,
+        }
     }
 
     /// The stable diagnostic code (e.g. `E0007`) for this error, if it has a
@@ -106,11 +113,18 @@ impl fmt::Display for SemaErrorKind {
         use SemaErrorKind::*;
         match self {
             DuplicateDefinition { name, kind } => {
-                write!(f, "the {kind} `{name}` is defined multiple times in this module")
+                write!(
+                    f,
+                    "the {kind} `{name}` is defined multiple times in this module"
+                )
             }
             UnknownType { name } => write!(f, "cannot find type `{name}` in scope"),
             UnknownValue { name } => write!(f, "cannot find value `{name}` in scope"),
-            GenericArity { name, expected, found } => write!(
+            GenericArity {
+                name,
+                expected,
+                found,
+            } => write!(
                 f,
                 "`{name}` expects {expected} generic argument(s), found {found}"
             ),

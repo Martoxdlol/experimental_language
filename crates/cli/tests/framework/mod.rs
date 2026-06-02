@@ -69,8 +69,8 @@
 //! resulting diff.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::Duration;
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 /// The expected outcome kind of a test case.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -157,10 +157,7 @@ impl Case {
                         }
                     }
                     "exit" => {
-                        exit = Some(
-                            val.parse()
-                                .map_err(|_| format!("bad exit code `{val}`"))?,
-                        )
+                        exit = Some(val.parse().map_err(|_| format!("bad exit code `{val}`"))?)
                     }
                     "stderr" => stderr_contains.push(val),
                     "release" => release = true,
@@ -266,12 +263,27 @@ pub fn run_case(otter: &Path, case: &Case) -> Outcome {
     if matches!(case.kind, Kind::Run | Kind::Panic) {
         cmd.arg("--time");
     }
-    let out = cmd.output();
+    let out = output_with_timeout(&mut cmd, case_timeout());
     let _ = std::fs::remove_file(&file);
 
     let out = match out {
         Ok(o) => o,
-        Err(e) => return fail(case, format!("could not invoke `otter_fusion`: {e}")),
+        Err(CaseRunError::Spawn(e)) => {
+            return fail(case, format!("could not invoke `otter_fusion`: {e}"));
+        }
+        Err(CaseRunError::Timeout { after, output }) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return fail(
+                case,
+                format!(
+                    "case timed out after {}\n--- stdout ---\n{}\n--- stderr ---\n{}",
+                    fmt_duration(after),
+                    stdout,
+                    stderr
+                ),
+            );
+        }
     };
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
@@ -299,7 +311,9 @@ pub fn run_case(otter: &Path, case: &Case) -> Outcome {
                 errs.push("expected a compile error but the program ran successfully".into());
             }
             if !stdout.trim().is_empty() {
-                errs.push(format!("expected no stdout from a compile error, got:\n{stdout}"));
+                errs.push(format!(
+                    "expected no stdout from a compile error, got:\n{stdout}"
+                ));
             }
             check_stderr(case, &stderr, &mut errs);
         }
@@ -332,7 +346,13 @@ pub fn run_case(otter: &Path, case: &Case) -> Outcome {
         ),
     };
 
-    Outcome { name: case.name.clone(), status, exec_time, failure, actual_stdout: stdout }
+    Outcome {
+        name: case.name.clone(),
+        status,
+        exec_time,
+        failure,
+        actual_stdout: stdout,
+    }
 }
 
 /// Compare actual stdout against the case's `//~` lines (trailing newlines are
@@ -368,6 +388,40 @@ fn fail(case: &Case, msg: String) -> Outcome {
         exec_time: None,
         failure: Some(msg),
         actual_stdout: String::new(),
+    }
+}
+
+enum CaseRunError {
+    Spawn(std::io::Error),
+    Timeout { after: Duration, output: Output },
+}
+
+fn case_timeout() -> Duration {
+    std::env::var("OTTER_TEST_CASE_TIMEOUT_SECS")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .filter(|secs| *secs > 0)
+        .map(Duration::from_secs)
+        .unwrap_or_else(|| Duration::from_secs(30))
+}
+
+fn output_with_timeout(cmd: &mut Command, timeout: Duration) -> Result<Output, CaseRunError> {
+    let start = Instant::now();
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = cmd.spawn().map_err(CaseRunError::Spawn)?;
+    loop {
+        match child.try_wait().map_err(CaseRunError::Spawn)? {
+            Some(_) => return child.wait_with_output().map_err(CaseRunError::Spawn),
+            None if start.elapsed() >= timeout => {
+                let _ = child.kill();
+                let output = child.wait_with_output().map_err(CaseRunError::Spawn)?;
+                return Err(CaseRunError::Timeout {
+                    after: start.elapsed(),
+                    output,
+                });
+            }
+            None => std::thread::sleep(Duration::from_millis(10)),
+        }
     }
 }
 
@@ -445,7 +499,9 @@ pub fn discover(root: &Path) -> Vec<PathBuf> {
 }
 
 fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for e in entries.flatten() {
         let p = e.path();
         if p.is_dir() {

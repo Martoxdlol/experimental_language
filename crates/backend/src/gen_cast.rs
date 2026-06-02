@@ -40,12 +40,19 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             .expect("declare data");
         let mut desc = DataDescription::new();
         desc.define(bytes.into_boxed_slice());
-        self.module.define_data(data_id, &desc).expect("define data");
+        self.module
+            .define_data(data_id, &desc)
+            .expect("define data");
         let gv = self.module.declare_data_in_func(data_id, self.b.func);
         let addr = self.b.ins().global_value(PTR, gv);
         let len_val = self.b.ins().iconst(PTR, len as i64);
-        self.call_intrinsic("lang_str_from_utf8", &[PTR, PTR], Some(PTR), &[addr, len_val])
-            .expect("from_utf8 returns a value")
+        self.call_intrinsic(
+            "lang_str_from_utf8",
+            &[PTR, PTR],
+            Some(PTR),
+            &[addr, len_val],
+        )
+        .expect("from_utf8 returns a value")
     }
 
     /// A `str` value for a compile-time-known message (e.g. a panic reason).
@@ -54,23 +61,32 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     }
 
     /// Apply an `as` cast to an already-evaluated operand value.
-    pub(crate) fn emit_cast(&mut self, opv: Option<Value>, from: Ty, to: Ty, span: Span)
-        -> CgResult<Option<Value>>
-    {
+    pub(crate) fn emit_cast(
+        &mut self,
+        opv: Option<Value>,
+        from: Ty,
+        to: Ty,
+        span: Span,
+    ) -> CgResult<Option<Value>> {
         // `*T | null` (NPO) casts are no-ops on the raw pointer (`docs/19` §2):
         // `(*T | null) as *T` reinterprets, and `*T as (*T | null)` is identity.
-        if npo_union(self.cx.analysis, from).is_some() || npo_union(self.cx.analysis, to).is_some() {
+        if npo_union(self.cx.analysis, from).is_some() || npo_union(self.cx.analysis, to).is_some()
+        {
             return Ok(Some(opv.unwrap_or_else(|| self.b.ins().iconst(PTR, 0))));
         }
         // Narrowing a union/`dynamic`: the operand is a box; check its type id.
-        if matches!(self.cx.analysis.tcx.kind(from), TyKind::Union(_) | TyKind::Dynamic) {
+        if matches!(
+            self.cx.analysis.tcx.kind(from),
+            TyKind::Union(_) | TyKind::Dynamic
+        ) {
             let ptr = opv.ok_or_else(|| CodegenError::new(span, "union operand has no value"))?;
             return self.gen_union_narrow(ptr, to);
         }
         // Downcast an interface object to a concrete type: verify the stored
         // type id, then return the data pointer (panic on mismatch).
         if self.is_interface_ty(from) && !self.is_interface_ty(to) {
-            let ptr = opv.ok_or_else(|| CodegenError::new(span, "interface operand has no value"))?;
+            let ptr =
+                opv.ok_or_else(|| CodegenError::new(span, "interface operand has no value"))?;
             return self.gen_dyn_downcast(ptr, to);
         }
         // Upcast a concrete value to an interface object (build its vtable box).
@@ -86,7 +102,9 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         let from_k = tcx.kind(from).clone();
         let to_k = tcx.kind(to).clone();
         let out = match (&from_k, &to_k) {
-            (TyKind::Int(a), TyKind::Int(b)) => self.convert_int(v, *a, int_clty(*b), a.is_signed()),
+            (TyKind::Int(a), TyKind::Int(b)) => {
+                self.convert_int(v, *a, int_clty(*b), a.is_signed())
+            }
             // char is a 32-bit unsigned scalar; the integer must be a valid
             // Unicode scalar value or the cast panics (`docs/14` §2).
             (TyKind::Int(a), TyKind::Char) => {
@@ -97,8 +115,11 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             (TyKind::Char, TyKind::Int(b)) => self.resize_int(v, false, types::I32, int_clty(*b)),
             (TyKind::Int(a), TyKind::Float(f)) => {
                 let ft = float_clty(*f);
-                if a.is_signed() { self.b.ins().fcvt_from_sint(ft, v) }
-                else { self.b.ins().fcvt_from_uint(ft, v) }
+                if a.is_signed() {
+                    self.b.ins().fcvt_from_sint(ft, v)
+                } else {
+                    self.b.ins().fcvt_from_uint(ft, v)
+                }
             }
             // float → int panics on NaN or out-of-range (`docs/14` §2/§6).
             (TyKind::Float(f), TyKind::Int(b)) => self.gen_float_to_int(v, *f, *b),
@@ -120,7 +141,11 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         let result = match from_k {
             TyKind::Int(it) => {
                 let widened = self.resize_int(v, it.is_signed(), int_clty(it), types::I64);
-                let func = if it.is_signed() { "lang_int_to_str" } else { "lang_uint_to_str" };
+                let func = if it.is_signed() {
+                    "lang_int_to_str"
+                } else {
+                    "lang_uint_to_str"
+                };
                 self.call_intrinsic(func, &[types::I64], Some(PTR), &[widened])
             }
             TyKind::Float(f) => {
@@ -143,18 +168,34 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     }
 
     /// Resize an integer value between two Cranelift int types per signedness.
-    pub(crate) fn resize_int(&mut self, v: Value, signed: bool, fromc: ClType, toc: ClType) -> Value {
+    pub(crate) fn resize_int(
+        &mut self,
+        v: Value,
+        signed: bool,
+        fromc: ClType,
+        toc: ClType,
+    ) -> Value {
         use std::cmp::Ordering::*;
         match toc.bits().cmp(&fromc.bits()) {
             Greater => {
-                if signed { self.b.ins().sextend(toc, v) } else { self.b.ins().uextend(toc, v) }
+                if signed {
+                    self.b.ins().sextend(toc, v)
+                } else {
+                    self.b.ins().uextend(toc, v)
+                }
             }
             Less => self.b.ins().ireduce(toc, v),
             Equal => v,
         }
     }
 
-    pub(crate) fn convert_int(&mut self, v: Value, from: IntTy, toc: ClType, signed: bool) -> Value {
+    pub(crate) fn convert_int(
+        &mut self,
+        v: Value,
+        from: IntTy,
+        toc: ClType,
+        signed: bool,
+    ) -> Value {
         self.resize_int(v, signed, int_clty(from), toc)
     }
 
@@ -199,7 +240,10 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
 
         self.switch(cont);
         // Narrowing to a sub-union keeps the box; to a single variant unboxes.
-        if matches!(self.cx.analysis.tcx.kind(to), TyKind::Union(_) | TyKind::Dynamic) {
+        if matches!(
+            self.cx.analysis.tcx.kind(to),
+            TyKind::Union(_) | TyKind::Dynamic
+        ) {
             return Ok(Some(ptr));
         }
         match clty_of(self.cx.analysis, to) {
@@ -244,9 +288,13 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     /// Apply an `is` type-test to an already-evaluated operand value: a runtime
     /// tag check on a union/`dynamic`, an interface object's stored type id, or
     /// a static answer for a concrete operand.
-    pub(crate) fn emit_is(&mut self, opv: Option<Value>, from: Ty, to: Ty, span: Span)
-        -> CgResult<Option<Value>>
-    {
+    pub(crate) fn emit_is(
+        &mut self,
+        opv: Option<Value>,
+        from: Ty,
+        to: Ty,
+        span: Span,
+    ) -> CgResult<Option<Value>> {
         // `*T | null` (NPO): the value is a raw pointer, so `is null` is a null
         // test and `is *T` is a non-null test (`docs/19` §2).
         if npo_union(self.cx.analysis, from).is_some() {
@@ -259,7 +307,10 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             };
             return Ok(Some(self.b.ins().icmp(cc, p, zero)));
         }
-        if matches!(self.cx.analysis.tcx.kind(from), TyKind::Union(_) | TyKind::Dynamic) {
+        if matches!(
+            self.cx.analysis.tcx.kind(from),
+            TyKind::Union(_) | TyKind::Dynamic
+        ) {
             let ptr = opv.ok_or_else(|| CodegenError::new(span, "`is` operand has no value"))?;
             let id = self.b.ins().load(types::I64, MemFlags::trusted(), ptr, 0);
             return Ok(Some(self.tag_in_target(id, to)));
@@ -279,5 +330,4 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     }
 
     // -- name resolution helpers --------------------------------------------
-
 }

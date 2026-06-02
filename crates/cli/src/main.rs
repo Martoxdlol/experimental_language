@@ -21,7 +21,7 @@ use compiler::ast::{Item, ItemKind, Module, Visibility};
 use compiler::lexer::lex;
 use compiler::sema::resolve_ctx::normalize;
 use compiler::sema::symbols::Externals;
-use compiler::sema::{analyze_multi_ctx, Analysis, ResolveContext};
+use compiler::sema::{Analysis, ResolveContext, analyze_multi_ctx};
 use compiler::span::{FileId, SourceMap, Span};
 use pkg::loader::{self, LoadDiag};
 use pkg::project::ProjectContext;
@@ -276,24 +276,36 @@ enum EmitIr {
 /// What to do after a successful check.
 enum Stage {
     Check,
-    Build { output: Option<PathBuf> },
+    Build {
+        output: Option<PathBuf>,
+    },
     Run,
     /// Run exactly one `test` body by its internal symbol (a `otter_fusion test`
     /// child process; `docs/23`). The body panics → process exit 101 = failure.
-    Test { symbol: String },
+    Test {
+        symbol: String,
+    },
     /// Time one `bench` body by its symbol (a `otter_fusion bench` child): run an
     /// adaptive number of iterations and print `ns/iter (<n> iters)` to stdout.
-    Bench { symbol: String },
+    Bench {
+        symbol: String,
+    },
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
         Command::Check { file } => drive(&Input::Auto(file), Stage::Check, false, false),
-        Command::Build { file, output, release } => {
-            drive(&Input::Auto(file), Stage::Build { output }, release, false)
-        }
-        Command::Run { file, release, time } => {
+        Command::Build {
+            file,
+            output,
+            release,
+        } => drive(&Input::Auto(file), Stage::Build { output }, release, false),
+        Command::Run {
+            file,
+            release,
+            time,
+        } => {
             let input = match file {
                 Some(f) => Input::Auto(f),
                 // `otter_fusion run` with no path: the project in the cwd.
@@ -301,7 +313,11 @@ fn main() -> ExitCode {
             };
             drive(&input, Stage::Run, release, time)
         }
-        Command::Exec { file, release, time } => drive(&Input::Exec(file), Stage::Run, release, time),
+        Command::Exec {
+            file,
+            release,
+            time,
+        } => drive(&Input::Exec(file), Stage::Run, release, time),
         Command::Emit { ir, file } => emit(&Input::Auto(file), ir),
         Command::Expand { file } => run_expand(&Input::Auto(file)),
         Command::Doc { file } => gen_doc(&Input::Auto(file)),
@@ -323,16 +339,20 @@ fn main() -> ExitCode {
         }
         Command::Explain { code } => run_explain(&code),
         Command::Repl => repl::run(),
-        Command::Fmt { file, check } => {
-            run_fmt(&file.unwrap_or_else(|| PathBuf::from(".")), check)
-        }
+        Command::Fmt { file, check } => run_fmt(&file.unwrap_or_else(|| PathBuf::from(".")), check),
         Command::Lint { file } => {
             run_lint(&Input::Auto(file.unwrap_or_else(|| PathBuf::from("."))))
         }
-        Command::Fix { file, check } => {
-            run_fix(&Input::Auto(file.unwrap_or_else(|| PathBuf::from("."))), check)
-        }
-        Command::Add { name, version, path, git } => deps::add(&name, version, path, git),
+        Command::Fix { file, check } => run_fix(
+            &Input::Auto(file.unwrap_or_else(|| PathBuf::from("."))),
+            check,
+        ),
+        Command::Add {
+            name,
+            version,
+            path,
+            git,
+        } => deps::add(&name, version, path, git),
         Command::Remove { name } => deps::remove(&name),
         Command::Lock { check } => deps::lock(check),
         Command::Update => deps::update(),
@@ -353,7 +373,11 @@ fn main() -> ExitCode {
 fn run_serve(dir: PathBuf, bind: &str, token: Option<String>) -> ExitCode {
     match pkg::server::serve_on(bind, dir.clone(), token.clone()) {
         Ok(handle) => {
-            println!("registry serving `{}` at {}", dir.display(), handle.base_url());
+            println!(
+                "registry serving `{}` at {}",
+                dir.display(),
+                handle.base_url()
+            );
             if token.is_some() {
                 println!("writes require the configured bearer token; reads are open");
             } else {
@@ -427,10 +451,13 @@ fn prepare_inner(input: &Input) -> Result<Prepared, String> {
         Input::Exec(file) => Ok(prepare_loose(file)),
         Input::Auto(path) => {
             // A directory or a `project.toml` names a project directly.
-            let is_manifest =
-                path.file_name().and_then(|n| n.to_str()) == Some(pkg::MANIFEST_NAME);
+            let is_manifest = path.file_name().and_then(|n| n.to_str()) == Some(pkg::MANIFEST_NAME);
             if path.is_dir() || is_manifest {
-                let manifest = if path.is_dir() { path.join(pkg::MANIFEST_NAME) } else { path.clone() };
+                let manifest = if path.is_dir() {
+                    path.join(pkg::MANIFEST_NAME)
+                } else {
+                    path.clone()
+                };
                 let proj = ProjectContext::load(&manifest).map_err(|e| e.to_string())?;
                 return Ok(prepare_project(&proj));
             }
@@ -440,8 +467,11 @@ fn prepare_inner(input: &Input) -> Result<Prepared, String> {
                 Some(proj) if proj.contains_source(path) => {
                     let prepared = prepare_project(&proj);
                     let target = normalize(path);
-                    let reachable =
-                        prepared.ctx.file_of.values().any(|f| normalize(f) == target);
+                    let reachable = prepared
+                        .ctx
+                        .file_of
+                        .values()
+                        .any(|f| normalize(f) == target);
                     if reachable {
                         Ok(prepared)
                     } else {
@@ -576,7 +606,9 @@ fn gen_doc(input: &Input) -> ExitCode {
         if !matches!(item.visibility, Visibility::Public(_)) {
             continue;
         }
-        let Some((label, name)) = doc_item_label(item) else { continue };
+        let Some((label, name)) = doc_item_label(item) else {
+            continue;
+        };
         any = true;
         println!("## {label} `{name}`\n");
         println!("```otter\n{}\n```\n", doc_signature(&src, item));
@@ -616,7 +648,10 @@ fn doc_signature(src: &str, item: &Item) -> String {
         .max()
         .unwrap_or(item.span.lo.to_usize());
     let end = if let ItemKind::Function(f) = &item.kind {
-        f.body.as_ref().map(|b| b.span.lo.to_usize()).unwrap_or(item.span.hi.to_usize())
+        f.body
+            .as_ref()
+            .map(|b| b.span.lo.to_usize())
+            .unwrap_or(item.span.hi.to_usize())
     } else {
         item.span.hi.to_usize()
     };
@@ -630,7 +665,10 @@ fn render_doc_comments(item: &Item) -> String {
         .iter()
         .map(|d| {
             let t = d.text.trim_start();
-            let t = t.strip_prefix("///").or_else(|| t.strip_prefix("//!")).unwrap_or(t);
+            let t = t
+                .strip_prefix("///")
+                .or_else(|| t.strip_prefix("//!"))
+                .unwrap_or(t);
             t.strip_prefix(' ').unwrap_or(t).trim_end()
         })
         .collect::<Vec<_>>()
@@ -891,7 +929,10 @@ fn run_tests(path: &Path, bench: bool) -> ExitCode {
         .collect();
 
     if items.is_empty() {
-        println!("no {kind}es found", kind = if bench { "bench" } else { "test" });
+        println!(
+            "no {kind}es found",
+            kind = if bench { "bench" } else { "test" }
+        );
         return ExitCode::SUCCESS;
     }
 
@@ -1019,7 +1060,9 @@ fn collect_otter_files(path: &Path, out: &mut Vec<PathBuf>) {
         }
         return;
     }
-    let Ok(entries) = std::fs::read_dir(path) else { return };
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return;
+    };
     for entry in entries.flatten() {
         let p = entry.path();
         let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
@@ -1110,7 +1153,10 @@ fn run_fix(input: &Input, check: bool) -> ExitCode {
     let mut by_file: HashMap<u32, Vec<usize>> = HashMap::new();
     for (span, _name) in &lints.unused_locals {
         if (span.file.0 as usize) < map.file_count() {
-            by_file.entry(span.file.0).or_default().push(span.lo.0 as usize);
+            by_file
+                .entry(span.file.0)
+                .or_default()
+                .push(span.lo.0 as usize);
         }
     }
     let mut total = 0usize;
@@ -1168,9 +1214,7 @@ fn build_executable(map: &SourceMap, analysis: &Analysis, exe: &Path) -> ExitCod
     let obj = exe.with_extension("o");
     // The main source file (FileId 0) backs DWARF line tables.
     let main_file = map.file(compiler::span::FileId(0));
-    if let Err(e) =
-        backend::compile_object(analysis, &obj, &main_file.src, &main_file.name)
-    {
+    if let Err(e) = backend::compile_object(analysis, &obj, &main_file.src, &main_file.name) {
         render(map, e.span, "error", &format!("codegen: {}", e.message));
         return ExitCode::FAILURE;
     }
@@ -1189,7 +1233,13 @@ fn build_executable(map: &SourceMap, analysis: &Analysis, exe: &Path) -> ExitCod
     let mut cmd = ProcCommand::new("cc");
     cmd.arg(&obj).arg(&runtime_lib).arg("-o").arg(exe);
     if cfg!(target_os = "macos") {
-        cmd.args(["-framework", "CoreFoundation", "-framework", "Security", "-liconv"]);
+        cmd.args([
+            "-framework",
+            "CoreFoundation",
+            "-framework",
+            "Security",
+            "-liconv",
+        ]);
     } else {
         cmd.args(["-lpthread", "-ldl", "-lm"]);
     }
@@ -1229,93 +1279,236 @@ fn build_executable(map: &SourceMap, analysis: &Analysis, exe: &Path) -> ExitCod
     }
 }
 
-/// Find `libruntime.a` — the runtime static library cargo emits alongside the
-/// `otter_fusion` binary (`target/<profile>/`), checking the executable's own directory
-/// and its `deps/` sibling.
+/// Find the freshest runtime static library Cargo emitted for this profile.
+///
+/// Cargo may leave both `target/<profile>/libruntime.a` and hashed
+/// `target/<profile>/deps/libruntime-*.a` archives behind. Prefer the newest
+/// archive so `otter_fusion build` cannot silently link an older runtime after a
+/// runtime-only rebuild.
 fn find_runtime_lib() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let dir = exe.parent()?;
-    let candidates = [
-        dir.join("libruntime.a"),
-        dir.join("deps").join("libruntime.a"),
-        dir.parent().map(|d| d.join("libruntime.a")).unwrap_or_default(),
-    ];
-    candidates.into_iter().find(|p| p.exists())
+    let mut search_dirs = vec![dir.to_path_buf(), dir.join("deps")];
+    if let Some(parent) = dir.parent() {
+        search_dirs.push(parent.to_path_buf());
+        search_dirs.push(parent.join("deps"));
+    }
+    freshest_runtime_lib_in_dirs(search_dirs)
+}
+
+fn freshest_runtime_lib_in_dirs(search_dirs: Vec<PathBuf>) -> Option<PathBuf> {
+    let mut newest: Option<(std::time::SystemTime, PathBuf)> = None;
+    for search_dir in search_dirs {
+        let Ok(entries) = std::fs::read_dir(search_dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if !name.starts_with("libruntime") || !name.ends_with(".a") {
+                continue;
+            }
+            let Ok(meta) = entry.metadata() else {
+                continue;
+            };
+            let modified = meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            if newest
+                .as_ref()
+                .is_none_or(|(newest_modified, _)| modified > *newest_modified)
+            {
+                newest = Some((modified, path));
+            }
+        }
+    }
+    newest.map(|(_, path)| path)
+}
+
+#[cfg(test)]
+mod native_runtime_link_tests {
+    use super::freshest_runtime_lib_in_dirs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn runtime_library_lookup_prefers_newest_archive() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "otter_runtime_lib_lookup_{}_{}",
+            std::process::id(),
+            nonce
+        ));
+        let deps = root.join("deps");
+        std::fs::create_dir_all(&deps).unwrap();
+
+        let stale = root.join("libruntime.a");
+        let fresh = deps.join("libruntime-newer.a");
+        std::fs::write(&stale, b"stale").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&fresh, b"fresh").unwrap();
+
+        let found = freshest_runtime_lib_in_dirs(vec![root.clone(), deps.clone()]);
+        assert_eq!(found.as_ref(), Some(&fresh));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_library_lookup_ignores_non_archives() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "otter_runtime_lib_ignore_{}_{}",
+            std::process::id(),
+            nonce
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("libruntime.rlib"), b"rlib").unwrap();
+        std::fs::write(root.join("notruntime.a"), b"archive").unwrap();
+
+        let found = freshest_runtime_lib_in_dirs(vec![PathBuf::from(&root)]);
+        assert!(found.is_none());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
 }
 
 /// Diagnostic codes and their long-form explanations, keyed by the codes
 /// [`compiler::sema::SemaErrorKind::code`] assigns. Each entry is `(code, title,
 /// explanation)`.
 const EXPLANATIONS: &[(&str, &str, &str)] = &[
-    ("E0001", "duplicate definition",
-     "Two items share a name in the same namespace and module. Each type and each\n\
+    (
+        "E0001",
+        "duplicate definition",
+        "Two items share a name in the same namespace and module. Each type and each\n\
       value must have a unique name within its module; rename one, or move it to a\n\
-      different module."),
-    ("E0002", "unknown type",
-     "A name used in type position does not resolve to any type in scope. Check the\n\
+      different module.",
+    ),
+    (
+        "E0002",
+        "unknown type",
+        "A name used in type position does not resolve to any type in scope. Check the\n\
       spelling, and ensure the type is declared or `import`ed (the prelude is\n\
-      near-empty: even `List`/`Map` must be imported — see `docs/17`)."),
-    ("E0003", "unknown value",
-     "A name used in value position does not resolve to any binding, function, or\n\
-      import in scope. Check the spelling, declare it with `var`, or `import` it."),
-    ("E0004", "wrong number of generic arguments",
-     "A generic type was applied with the wrong number of type arguments — e.g.\n\
-      `Map<i64>` when `Map<K, V>` takes two. Supply exactly the declared count."),
-    ("E0005", "recursive type alias",
-     "A `type` alias refers to itself without an intervening indirection, so it has\n\
+      near-empty: even `List`/`Map` must be imported — see `docs/17`).",
+    ),
+    (
+        "E0003",
+        "unknown value",
+        "A name used in value position does not resolve to any binding, function, or\n\
+      import in scope. Check the spelling, declare it with `var`, or `import` it.",
+    ),
+    (
+        "E0004",
+        "wrong number of generic arguments",
+        "A generic type was applied with the wrong number of type arguments — e.g.\n\
+      `Map<i64>` when `Map<K, V>` takes two. Supply exactly the declared count.",
+    ),
+    (
+        "E0005",
+        "recursive type alias",
+        "A `type` alias refers to itself without an intervening indirection, so it has\n\
       no finite expansion. Break the cycle (e.g. via a struct/pointer), per\n\
-      `docs/03` §3."),
-    ("E0006", "type mismatch",
-     "A value of one type was used where another is required. Otter Fusion has no\n\
+      `docs/03` §3.",
+    ),
+    (
+        "E0006",
+        "type mismatch",
+        "A value of one type was used where another is required. Otter Fusion has no\n\
       implicit conversions: convert explicitly with `as`, adjust the value, or fix\n\
-      the annotation so the types agree."),
-    ("E0007", "operator not supported for this type",
-     "An operator was applied to operand type(s) that do not support it (e.g. `<` on\n\
+      the annotation so the types agree.",
+    ),
+    (
+        "E0007",
+        "operator not supported for this type",
+        "An operator was applied to operand type(s) that do not support it (e.g. `<` on\n\
       a type without `Ord`). Use a type that implements the operator's interface,\n\
-      or implement it via `extend`."),
-    ("E0008", "non-boolean condition",
-     "A condition (`if`/`while`/…) must be exactly `bool` — there is no implicit\n\
+      or implement it via `extend`.",
+    ),
+    (
+        "E0008",
+        "non-boolean condition",
+        "A condition (`if`/`while`/…) must be exactly `bool` — there is no implicit\n\
       truthiness (`docs/07` §2). Compare explicitly, e.g. `if n != 0` instead of\n\
-      `if n`."),
-    ("E0009", "expression is not callable",
-     "A call `e(...)` was applied to something that is not a function, closure, or\n\
-      constructor. Check that `e` names a callable value."),
-    ("E0010", "wrong number of arguments",
-     "A call passed the wrong number of arguments for the callee's parameter list.\n\
-      Pass exactly the declared count (trailing closures count as the final arg)."),
-    ("E0011", "`return` outside a function",
-     "`return` appears where there is no enclosing function to return from. (Normally\n\
-      unreachable after parsing.)"),
-    ("E0012", "invalid cast",
-     "An `as` cast was requested between two types with no defined conversion\n\
+      `if n`.",
+    ),
+    (
+        "E0009",
+        "expression is not callable",
+        "A call `e(...)` was applied to something that is not a function, closure, or\n\
+      constructor. Check that `e` names a callable value.",
+    ),
+    (
+        "E0010",
+        "wrong number of arguments",
+        "A call passed the wrong number of arguments for the callee's parameter list.\n\
+      Pass exactly the declared count (trailing closures count as the final arg).",
+    ),
+    (
+        "E0011",
+        "`return` outside a function",
+        "`return` appears where there is no enclosing function to return from. (Normally\n\
+      unreachable after parsing.)",
+    ),
+    (
+        "E0012",
+        "invalid cast",
+        "An `as` cast was requested between two types with no defined conversion\n\
       (`docs/12` §2). Only the documented numeric/`str`/pointer/interface\n\
-      conversions are permitted."),
-    ("E0013", "no such method",
-     "A method call `recv.name(...)` named a method that the receiver's type does\n\
+      conversions are permitted.",
+    ),
+    (
+        "E0013",
+        "no such method",
+        "A method call `recv.name(...)` named a method that the receiver's type does\n\
       not have (directly, via `extend`, or through an interface bound). Check the\n\
       spelling, ensure the relevant `extend`/`import` is in scope, and confirm the\n\
-      receiver's type is what you expect."),
-    ("E0014", "no such field",
-     "A field access `recv.name` named a field the receiver's type does not\n\
+      receiver's type is what you expect.",
+    ),
+    (
+        "E0014",
+        "no such field",
+        "A field access `recv.name` named a field the receiver's type does not\n\
       declare. Check the spelling and the receiver's type; only `struct` record\n\
-      fields (and tuple positions via `.0`/`.1`) are accessible this way."),
-    ("E0015", "unknown field in struct literal",
-     "A struct literal `T { ... }` set a field that `T` does not declare. Remove\n\
-      the field or fix its name; the literal may only mention declared fields."),
-    ("E0016", "missing field in struct literal",
-     "A struct literal `T { ... }` omitted a field that `T` requires. Record\n\
+      fields (and tuple positions via `.0`/`.1`) are accessible this way.",
+    ),
+    (
+        "E0015",
+        "unknown field in struct literal",
+        "A struct literal `T { ... }` set a field that `T` does not declare. Remove\n\
+      the field or fix its name; the literal may only mention declared fields.",
+    ),
+    (
+        "E0016",
+        "missing field in struct literal",
+        "A struct literal `T { ... }` omitted a field that `T` requires. Record\n\
       structs must initialize every field (a `..base` spread can supply the rest);\n\
-      supply the missing field's value."),
-    ("E0017", "duplicate field in struct literal",
-     "A struct literal set the same field more than once. Each field may be\n\
-      initialized at most once; remove the redundant assignment."),
-    ("E0018", "non-exhaustive match",
-     "A `match` does not cover every possible value of the scrutinee (`docs/08`\n\
+      supply the missing field's value.",
+    ),
+    (
+        "E0017",
+        "duplicate field in struct literal",
+        "A struct literal set the same field more than once. Each field may be\n\
+      initialized at most once; remove the redundant assignment.",
+    ),
+    (
+        "E0018",
+        "non-exhaustive match",
+        "A `match` does not cover every possible value of the scrutinee (`docs/08`\n\
       §4). Add arms for the missing cases, or a `_` wildcard arm to catch the\n\
-      rest. There is no implicit fall-through."),
-    ("E0019", "`break`/`continue` outside a loop",
-     "`break` or `continue` was used where there is no enclosing `loop`, `while`,\n\
-      or `for`. Move it inside a loop, or remove it."),
+      rest. There is no implicit fall-through.",
+    ),
+    (
+        "E0019",
+        "`break`/`continue` outside a loop",
+        "`break` or `continue` was used where there is no enclosing `loop`, `while`,\n\
+      or `for`. Move it inside a loop, or remove it.",
+    ),
 ];
 
 /// Run `otter_fusion explain <code>` (`docs/23`): print the long-form explanation
@@ -1353,7 +1546,10 @@ fn render(map: &SourceMap, span: Span, severity: &str, message: &str) {
     }
     let sf = map.file(span.file);
     let start = sf.line_col(span.lo);
-    eprintln!("{}:{}:{}: {severity}: {message}", sf.name, start.line, start.col);
+    eprintln!(
+        "{}:{}:{}: {severity}: {message}",
+        sf.name, start.line, start.col
+    );
 
     // Show the offending line and underline the span (single-line spans only).
     let line_idx = (start.line - 1) as usize;
@@ -1377,7 +1573,7 @@ mod deps {
     use pkg::lockfile::Lockfile;
     use pkg::project::ProjectContext;
     use pkg::registry::{HttpRegistry, Registry};
-    use pkg::resolve::{resolve, Registries, Resolved};
+    use pkg::resolve::{Registries, Resolved, resolve};
     use pkg::store::Store;
 
     /// Discover the project rooted at (or above) the current directory.
@@ -1396,7 +1592,9 @@ mod deps {
 
     /// Read the existing lockfile, if any.
     fn existing_lock(proj: &ProjectContext) -> Option<Lockfile> {
-        std::fs::read_to_string(lock_path(proj)).ok().and_then(|t| Lockfile::parse(&t).ok())
+        std::fs::read_to_string(lock_path(proj))
+            .ok()
+            .and_then(|t| Lockfile::parse(&t).ok())
     }
 
     /// Resolve the project's dependency graph, connecting any declared
@@ -1411,15 +1609,33 @@ mod deps {
                 Err(e) => eprintln!("warning: registry `{name}` is unavailable: {e}"),
             }
         }
-        let by_name = owned.iter().map(|r| (r.name().to_string(), r as &dyn Registry)).collect();
-        let default = proj.manifest.default_registry.clone().unwrap_or_else(|| "public".to_string());
+        let by_name = owned
+            .iter()
+            .map(|r| (r.name().to_string(), r as &dyn Registry))
+            .collect();
+        let default = proj
+            .manifest
+            .default_registry
+            .clone()
+            .unwrap_or_else(|| "public".to_string());
         let registries = Registries { by_name, default };
         let existing = existing_lock(proj);
-        resolve(&proj.manifest, &proj.root, &registries, &store, existing.as_ref())
-            .map_err(|e| e.to_string())
+        resolve(
+            &proj.manifest,
+            &proj.root,
+            &registries,
+            &store,
+            existing.as_ref(),
+        )
+        .map_err(|e| e.to_string())
     }
 
-    pub fn add(name: &str, version: Option<String>, path: Option<String>, git: Option<String>) -> ExitCode {
+    pub fn add(
+        name: &str,
+        version: Option<String>,
+        path: Option<String>,
+        git: Option<String>,
+    ) -> ExitCode {
         let proj = match project() {
             Ok(p) => p,
             Err(e) => return fail(&e),
@@ -1513,8 +1729,15 @@ mod deps {
                 owned.push(r);
             }
         }
-        let by_name = owned.iter().map(|r| (r.name().to_string(), r as &dyn Registry)).collect();
-        let default = proj.manifest.default_registry.clone().unwrap_or_else(|| "public".to_string());
+        let by_name = owned
+            .iter()
+            .map(|r| (r.name().to_string(), r as &dyn Registry))
+            .collect();
+        let default = proj
+            .manifest
+            .default_registry
+            .clone()
+            .unwrap_or_else(|| "public".to_string());
         let registries = Registries { by_name, default };
         match resolve(&proj.manifest, &proj.root, &registries, &store, None) {
             Ok(resolved) => {
@@ -1576,7 +1799,11 @@ mod deps {
                 return fail(&format!("vendoring `{}`: {e}", rp.name));
             }
         }
-        println!("vendored {} package(s) into {}", resolved.packages.len(), vendor_dir.display());
+        println!(
+            "vendored {} package(s) into {}",
+            resolved.packages.len(),
+            vendor_dir.display()
+        );
         ExitCode::SUCCESS
     }
 
@@ -1632,7 +1859,9 @@ mod deps {
             .registries
             .get(&name)
             .ok_or_else(|| format!("no registry `{name}` declared under `[registries]`"))?;
-        let token = pkg::credentials::Credentials::load().token(&name).map(str::to_string);
+        let token = pkg::credentials::Credentials::load()
+            .token(&name)
+            .map(str::to_string);
         HttpRegistry::connect(&name, &reg.index, token).map_err(|e| e.to_string())
     }
 
@@ -1681,9 +1910,16 @@ mod deps {
             Ok(r) => r,
             Err(e) => return fail(&e),
         };
-        match reg.publish(&proj.manifest.package.name, &proj.manifest.package.version, &tarball) {
+        match reg.publish(
+            &proj.manifest.package.name,
+            &proj.manifest.package.version,
+            &tarball,
+        ) {
             Ok(()) => {
-                println!("published {} v{}", proj.manifest.package.name, proj.manifest.package.version);
+                println!(
+                    "published {} v{}",
+                    proj.manifest.package.name, proj.manifest.package.version
+                );
                 ExitCode::SUCCESS
             }
             Err(e) => fail(&e.to_string()),
@@ -1722,7 +1958,10 @@ mod deps {
         // what would be audited and surface a clear error when offline.
         match connect(&proj, None) {
             Ok(_reg) => {
-                println!("audited {} package(s); no known advisories", resolved.packages.len());
+                println!(
+                    "audited {} package(s); no known advisories",
+                    resolved.packages.len()
+                );
                 ExitCode::SUCCESS
             }
             Err(e) => fail(&format!("audit needs registry access: {e}")),
@@ -1747,7 +1986,13 @@ mod deps {
 
     /// Compare lockfiles ignoring the leading generated-by comment + whitespace.
     fn normalize_lock(text: &str) -> String {
-        text.lines().filter(|l| !l.trim_start().starts_with('#')).map(str::trim_end).collect::<Vec<_>>().join("\n").trim().to_string()
+        text.lines()
+            .filter(|l| !l.trim_start().starts_with('#'))
+            .map(str::trim_end)
+            .collect::<Vec<_>>()
+            .join("\n")
+            .trim()
+            .to_string()
     }
 
     fn fail(msg: &str) -> ExitCode {

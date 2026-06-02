@@ -66,7 +66,10 @@ struct Printer {
 
 impl Printer {
     fn new() -> Self {
-        Printer { out: String::new(), indent: 0 }
+        Printer {
+            out: String::new(),
+            indent: 0,
+        }
     }
 
     fn push(&mut self, s: &str) {
@@ -734,7 +737,11 @@ impl Printer {
                 }
                 self.push(" }");
             }
-            ExprKind::StructLit { path, fields, spread } => {
+            ExprKind::StructLit {
+                path,
+                fields,
+                spread,
+            } => {
                 self.type_path(path);
                 if fields.is_empty() && spread.is_none() {
                     self.push(" {}");
@@ -765,7 +772,9 @@ impl Printer {
                 self.push(unary_op(*op));
                 self.sub(operand);
             }
-            ExprKind::Binary { op, left, right, .. } => {
+            ExprKind::Binary {
+                op, left, right, ..
+            } => {
                 self.sub(left);
                 self.push(" ");
                 self.push(binary_op(*op));
@@ -786,12 +795,19 @@ impl Printer {
                 self.push(".");
                 self.push(&name.name);
             }
-            ExprKind::TupleIndex { receiver, index, .. } => {
+            ExprKind::TupleIndex {
+                receiver, index, ..
+            } => {
                 self.sub(receiver);
                 self.push(".");
                 self.push(&index.to_string());
             }
-            ExprKind::Call { callee, generics, args, trailing_closure } => {
+            ExprKind::Call {
+                callee,
+                generics,
+                args,
+                trailing_closure,
+            } => {
                 self.sub(callee);
                 self.type_args(generics);
                 self.push("(");
@@ -834,7 +850,11 @@ impl Printer {
                 self.sub(expr);
             }
 
-            ExprKind::If { cond, then_block, else_branch } => {
+            ExprKind::If {
+                cond,
+                then_block,
+                else_branch,
+            } => {
                 self.push("if ");
                 self.head(cond);
                 self.push(" ");
@@ -878,7 +898,12 @@ impl Printer {
                 self.push(" ");
                 self.block(body);
             }
-            ExprKind::For { pattern, in_async, iter, body } => {
+            ExprKind::For {
+                pattern,
+                in_async,
+                iter,
+                body,
+            } => {
                 self.push("for ");
                 if *in_async {
                     self.push("await ");
@@ -905,7 +930,12 @@ impl Printer {
             }
             ExprKind::Continue => self.push("continue"),
 
-            ExprKind::Closure { params, return_type, is_async, body } => {
+            ExprKind::Closure {
+                params,
+                return_type,
+                is_async,
+                body,
+            } => {
                 self.push("(");
                 for (i, p) in params.iter().enumerate() {
                     if i > 0 {
@@ -933,7 +963,9 @@ impl Printer {
                 self.push("async ");
                 self.block(b);
             }
-            ExprKind::MacroCall { name, args, block, .. } => {
+            ExprKind::MacroCall {
+                name, args, block, ..
+            } => {
                 self.push("@");
                 self.push(&name.name);
                 if !args.is_empty() {
@@ -1073,7 +1105,11 @@ impl Printer {
                 }
                 self.push(")");
             }
-            PatternKind::RecordStruct { path, fields, has_rest } => {
+            PatternKind::RecordStruct {
+                path,
+                fields,
+                has_rest,
+            } => {
                 self.type_path(path);
                 if fields.is_empty() && !has_rest {
                     self.push(" {}");
@@ -1236,7 +1272,7 @@ fn binary_op(op: BinaryOp) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{lex, parse, FileId};
+    use crate::{FileId, lex, parse};
 
     /// Parse `src`, print the AST, and return `(printed, parse_errors)`.
     fn print_once(src: &str) -> (String, usize) {
@@ -1251,13 +1287,19 @@ mod tests {
     /// the same text — i.e. the printer is idempotent on its own output.
     fn assert_round_trip(src: &str) {
         let (first, errs1) = print_once(src);
-        assert_eq!(errs1, 0, "first parse of source had errors\n--- src ---\n{src}");
+        assert_eq!(
+            errs1, 0,
+            "first parse of source had errors\n--- src ---\n{src}"
+        );
         let (second, errs2) = print_once(&first);
         assert_eq!(
             errs2, 0,
             "re-parsing printed output produced {errs2} error(s)\n--- printed ---\n{first}"
         );
-        assert_eq!(first, second, "printer is not idempotent\n--- first ---\n{first}\n--- second ---\n{second}");
+        assert_eq!(
+            first, second,
+            "printer is not idempotent\n--- first ---\n{first}\n--- second ---\n{second}"
+        );
     }
 
     #[test]
@@ -1480,8 +1522,6 @@ mod tests {
 
     #[test]
     fn doc_comments_and_attributes() {
-        assert_round_trip(
-            "/// A documented function.\n@inline\nfunction f(): i64 { 1 }\n",
-        );
+        assert_round_trip("/// A documented function.\n@inline\nfunction f(): i64 { 1 }\n");
     }
 }

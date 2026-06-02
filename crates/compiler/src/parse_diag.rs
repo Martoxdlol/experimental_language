@@ -60,7 +60,9 @@ impl fmt::Display for ParseErrorKind {
                 } else {
                     write!(f, "expected one of: ")?;
                     for (i, name) in expected.iter().enumerate() {
-                        if i > 0 { write!(f, ", ")?; }
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
                         write!(f, "{}", name)?;
                     }
                     write!(f, "; found {:?}", found)
@@ -68,11 +70,15 @@ impl fmt::Display for ParseErrorKind {
             }
             Message(m) => f.write_str(m),
             NonAssociativeChain { op } => {
-                write!(f, "operator `{}` is not associative; parenthesize one side", op)
+                write!(
+                    f,
+                    "operator `{}` is not associative; parenthesize one side",
+                    op
+                )
             }
-            AssignmentInExpression => f.write_str(
-                "assignment `=` is only valid as a statement; wrap in `{ }` to discard",
-            ),
+            AssignmentInExpression => {
+                f.write_str("assignment `=` is only valid as a statement; wrap in `{ }` to discard")
+            }
             MissingArrowInMatch => f.write_str("expected `=>` after match-arm pattern"),
             DanglingElse => f.write_str("`else` without a matching `if`"),
             UnexpectedFatArrow => f.write_str("`=>` is not valid here"),
@@ -80,15 +86,15 @@ impl fmt::Display for ParseErrorKind {
                 f.write_str("`..` can only appear once in a tuple or list pattern")
             }
             UnexpectedVisibility => f.write_str("`pub` is not allowed on this item"),
-            NestedExternalMod => f.write_str(
-                "external `mod foo` cannot appear inside an inline module",
-            ),
-            UnitLiteralIsInvalid => f.write_str(
-                "`()` is not a value in this language — use `null` instead",
-            ),
-            InvalidTupleIndex => f.write_str(
-                "tuple index must be a plain non-negative integer literal",
-            ),
+            NestedExternalMod => {
+                f.write_str("external `mod foo` cannot appear inside an inline module")
+            }
+            UnitLiteralIsInvalid => {
+                f.write_str("`()` is not a value in this language — use `null` instead")
+            }
+            InvalidTupleIndex => {
+                f.write_str("tuple index must be a plain non-negative integer literal")
+            }
             UnexpectedEof { expected } => {
                 write!(f, "unexpected end of input; expected {}", expected)
             }

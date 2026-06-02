@@ -201,9 +201,9 @@ fn find_expr_pattern(p: &Pattern, span: crate::span::Span) -> Option<&Expr> {
         PatternKind::TupleStruct { fields, .. } => {
             fields.iter().find_map(|f| find_expr_pattern(f, span))
         }
-        PatternKind::RecordStruct { fields, .. } => {
-            fields.iter().find_map(|f| find_expr_pattern(&f.pattern, span))
-        }
+        PatternKind::RecordStruct { fields, .. } => fields
+            .iter()
+            .find_map(|f| find_expr_pattern(&f.pattern, span)),
         PatternKind::Tuple { elems, .. } | PatternKind::List { elems, .. } => {
             elems.iter().find_map(|e| find_expr_pattern(e, span))
         }
@@ -220,9 +220,7 @@ fn find_expr(e: &Expr, span: crate::span::Span) -> Option<&Expr> {
     match &e.kind {
         K::Tuple(xs) | K::List(xs) => xs.iter().find_map(|x| find_expr(x, span)),
         K::Unary { operand, .. } => find_expr(operand, span),
-        K::Binary { left, right, .. } => {
-            find_expr(left, span).or_else(|| find_expr(right, span))
-        }
+        K::Binary { left, right, .. } => find_expr(left, span).or_else(|| find_expr(right, span)),
         K::Cast { expr, .. }
         | K::Ref(expr)
         | K::Deref(expr)
@@ -254,12 +252,14 @@ fn find_expr(e: &Expr, span: crate::span::Span) -> Option<&Expr> {
             _ => None,
         }),
         K::Map(items) => items.iter().find_map(|it| match it {
-            MapEntry::Kv { key, value } => {
-                find_expr(key, span).or_else(|| find_expr(value, span))
-            }
+            MapEntry::Kv { key, value } => find_expr(key, span).or_else(|| find_expr(value, span)),
             MapEntry::Spread(e) => find_expr(e, span),
         }),
-        K::If { cond, then_block, else_branch } => find_expr(cond, span)
+        K::If {
+            cond,
+            then_block,
+            else_branch,
+        } => find_expr(cond, span)
             .or_else(|| find_expr_block(then_block, span))
             .or_else(|| else_branch.as_deref().and_then(|x| find_expr(x, span))),
         K::Match { scrutinee, arms } => find_expr(scrutinee, span).or_else(|| {
@@ -270,16 +270,26 @@ fn find_expr(e: &Expr, span: crate::span::Span) -> Option<&Expr> {
             })
         }),
         K::Block(b) | K::Loop(b) => find_expr_block(b, span),
-        K::While { cond, body } => {
-            find_expr(cond, span).or_else(|| find_expr_block(body, span))
-        }
-        K::For { pattern, iter, body, .. } => find_expr_pattern(pattern, span)
+        K::While { cond, body } => find_expr(cond, span).or_else(|| find_expr_block(body, span)),
+        K::For {
+            pattern,
+            iter,
+            body,
+            ..
+        } => find_expr_pattern(pattern, span)
             .or_else(|| find_expr(iter, span))
             .or_else(|| find_expr_block(body, span)),
         K::Closure { body, .. } => find_expr(body, span),
         K::AsyncBlock { body, .. } => find_expr_block(body, span),
-        K::Int(_) | K::Float(_) | K::Bool(_) | K::Null | K::Char(_) | K::Name(_)
-        | K::Discard | K::Continue | K::Error => None,
+        K::Int(_)
+        | K::Float(_)
+        | K::Bool(_)
+        | K::Null
+        | K::Char(_)
+        | K::Name(_)
+        | K::Discard
+        | K::Continue
+        | K::Error => None,
     }
 }
 
@@ -347,7 +357,9 @@ fn collect_captures_expr(e: &Expr, out: &mut std::collections::HashSet<LocalId>)
         }
         K::Intrinsic { args, .. } => args.iter().for_each(|a| collect_captures_expr(a, out)),
         K::Struct { fields, spread, .. } => {
-            fields.iter().for_each(|f| collect_captures_expr(&f.value, out));
+            fields
+                .iter()
+                .for_each(|f| collect_captures_expr(&f.value, out));
             if let Some(s) = spread {
                 collect_captures_expr(s, out);
             }
@@ -364,7 +376,11 @@ fn collect_captures_expr(e: &Expr, out: &mut std::collections::HashSet<LocalId>)
             }
             MapEntry::Spread(e) => collect_captures_expr(e, out),
         }),
-        K::If { cond, then_block, else_branch } => {
+        K::If {
+            cond,
+            then_block,
+            else_branch,
+        } => {
             collect_captures_expr(cond, out);
             collect_captures_block(then_block, out);
             if let Some(e) = else_branch {
@@ -390,8 +406,15 @@ fn collect_captures_expr(e: &Expr, out: &mut std::collections::HashSet<LocalId>)
             collect_captures_block(body, out);
         }
         // Leaves with no sub-expressions.
-        K::Int(_) | K::Float(_) | K::Bool(_) | K::Null | K::Char(_) | K::Name(_)
-        | K::Discard | K::Continue | K::Error => {}
+        K::Int(_)
+        | K::Float(_)
+        | K::Bool(_)
+        | K::Null
+        | K::Char(_)
+        | K::Name(_)
+        | K::Discard
+        | K::Continue
+        | K::Error => {}
     }
 }
 
@@ -534,12 +557,21 @@ pub enum ExprKind {
 
     // -- accesses -----------------------------------------------------------
     /// `recv.field` — a struct field access, resolved to a field index.
-    Field { receiver: Box<Expr>, field: FieldRef },
+    Field {
+        receiver: Box<Expr>,
+        field: FieldRef,
+    },
     /// `recv.0` — a tuple element access.
-    TupleIndex { receiver: Box<Expr>, index: u32 },
+    TupleIndex {
+        receiver: Box<Expr>,
+        index: u32,
+    },
     /// `recv[index]` — a builtin index into a `List`/`Map`/`str`/pointer
     /// (resolved by the receiver's type in codegen).
-    Index { receiver: Box<Expr>, index: Box<Expr> },
+    Index {
+        receiver: Box<Expr>,
+        index: Box<Expr>,
+    },
 
     // -- calls --------------------------------------------------------------
     /// A call. The dispatch [`CallKind`] carries the resolved target and any
@@ -551,25 +583,46 @@ pub enum ExprKind {
     /// the receiver type for a builtin method) — provenance the IDE needs for
     /// go-to-definition and hover on the call name, which the desugared dispatch
     /// would otherwise drop. Codegen ignores both.
-    Call { kind: CallKind, args: Vec<Expr>, callee_span: Span, callee_ty: Ty },
+    Call {
+        kind: CallKind,
+        args: Vec<Expr>,
+        callee_span: Span,
+        callee_ty: Ty,
+    },
 
     /// A compiler intrinsic: numeric-namespace ops, collection constructors,
     /// `clone`, foreign memory, channels/threads/`Shared`, async builtins —
     /// everything that was a dedicated marker set keyed by span. `args` are the
     /// operands (empty for a constant like `i32.MAX`).
-    Intrinsic { intrinsic: Intrinsic, args: Vec<Expr> },
+    Intrinsic {
+        intrinsic: Intrinsic,
+        args: Vec<Expr>,
+    },
 
     // -- operators ----------------------------------------------------------
     /// A unary operator. `overload` is `Some(..)` when the operand is a user
     /// type whose `extend` provides the operator (was `operator_methods`).
-    Unary { op: UnaryOp, operand: Box<Expr>, overload: Option<OpOverload> },
+    Unary {
+        op: UnaryOp,
+        operand: Box<Expr>,
+        overload: Option<OpOverload>,
+    },
     /// A binary operator. `overload` as in [`ExprKind::Unary`]. Short-circuit
     /// `&&`/`||` keep their structure here and are lowered to branches in codegen.
-    Binary { op: BinaryOp, left: Box<Expr>, right: Box<Expr>, overload: Option<OpOverload> },
+    Binary {
+        op: BinaryOp,
+        left: Box<Expr>,
+        right: Box<Expr>,
+        overload: Option<OpOverload>,
+    },
     /// `expr as T` or `expr is T`. `target` is the lowered cast target (was
     /// `cast_targets`); the result type (`T` for `as`, `bool` for `is`) is on
     /// [`Expr::ty`].
-    Cast { op: CastOp, expr: Box<Expr>, target: Ty },
+    Cast {
+        op: CastOp,
+        expr: Box<Expr>,
+        target: Ty,
+    },
 
     // -- pointers / FFI -----------------------------------------------------
     /// `&expr` — address-of.
@@ -587,17 +640,33 @@ pub enum ExprKind {
         residual_conversions: Vec<(Ty, DefId, Ty)>,
     },
     /// `await expr` — `output` is the awaited future's `Output` (was `awaits`).
-    Await { expr: Box<Expr>, output: Ty },
+    Await {
+        expr: Box<Expr>,
+        output: Ty,
+    },
     /// `spawn expr` — schedule a future-producing expression; `output` is the
     /// inner future's `Output` (was `async_spawns`).
-    Spawn { expr: Box<Expr>, output: Ty },
+    Spawn {
+        expr: Box<Expr>,
+        output: Ty,
+    },
 
     // -- control flow -------------------------------------------------------
-    If { cond: Box<Expr>, then_block: Block, else_branch: Option<Box<Expr>> },
-    Match { scrutinee: Box<Expr>, arms: Vec<MatchArm> },
+    If {
+        cond: Box<Expr>,
+        then_block: Block,
+        else_branch: Option<Box<Expr>>,
+    },
+    Match {
+        scrutinee: Box<Expr>,
+        arms: Vec<MatchArm>,
+    },
     Block(Block),
     Loop(Block),
-    While { cond: Box<Expr>, body: Block },
+    While {
+        cond: Box<Expr>,
+        body: Block,
+    },
     /// `for pat in iter { … }`. `driver` records how the loop is driven (List
     /// fast path, `Iterator`, `Map`, or `AsyncIterator`) — was the `for_iters` /
     /// `for_maps` / `for_async_iters` tables.
@@ -634,7 +703,10 @@ pub enum ExprKind {
     /// An implicit coercion the checker inserted (was `adjustments`). The target
     /// type is [`Expr::ty`]; `adjust` says how (widen into a union/`dynamic`,
     /// unbox a known variant, or wrap into an interface object).
-    Adjust { adjust: Adjust, expr: Box<Expr> },
+    Adjust {
+        adjust: Adjust,
+        expr: Box<Expr>,
+    },
 
     /// `_` in lvalue position — a discard target for assignment.
     Discard,
@@ -696,7 +768,11 @@ pub enum StrPart {
     /// `stringify_methods`); `None` for builtin-typed holes codegen formats
     /// directly. `stringify_targs` are the (unresolved) generic arguments to
     /// monomorphize that `to_str` (was `call_type_args` at the hole span).
-    Interp { expr: Box<Expr>, stringify: Option<DefId>, stringify_targs: Vec<Ty> },
+    Interp {
+        expr: Box<Expr>,
+        stringify: Option<DefId>,
+        stringify_targs: Vec<Ty>,
+    },
 }
 
 /// The dispatch kind of a [`ExprKind::Call`].
@@ -758,11 +834,23 @@ pub enum Intrinsic {
     /// the future to completion and the handle joins on the awaited `R` (`docs/20`
     /// §1); `output` is then the awaited `R`, not `Future<R>`. Was `thread_spawns`.
     ThreadSpawn { output: Ty, is_async: bool },
+    /// `Task.spawn { … }` — same surface and handle type as `Thread.spawn`, but
+    /// scheduled on the async executor instead of a dedicated OS thread.
+    TaskSpawn { output: Ty, is_async: bool },
     /// `JoinHandle<R>.join()` — `output` is `R`. Was `thread_joins`.
     ThreadJoin { output: Ty },
     /// `JoinHandle<R>.detach()` — relinquish the worker, fire-and-forget
     /// (`docs/20` §1). Yields `null`.
     ThreadDetach,
+    /// `std:task::JoinHandle<R>.join()` — resolves to
+    /// `Joined<R> | Panicked | Cancelled`.
+    TaskJoin { output: Ty },
+    /// `std:task::JoinHandle<R>.detach()` — relinquish the executor task.
+    TaskDetach,
+    /// `std:task::JoinHandle<R>.cancel()` / `.abort()` — request cooperative
+    /// cancellation and release suspended task state at the next suspension
+    /// boundary.
+    TaskCancel,
     /// `yield_now()`. Was `yield_nows`.
     YieldNow,
     /// `sleep(ms)`. Was `async_sleeps`.
@@ -770,7 +858,9 @@ pub enum Intrinsic {
     /// `timeout(fut, ms): Future<T | TimedOut>` — `output` is the success type
     /// `T` (so codegen can pass its type id + pointer-ness to the runtime).
     AsyncTimeout { output: Ty },
-    /// `fut.cancel()` — a no-op for compute-only futures. Was `future_cancels`.
+    /// `fut.cancel()` — cancels runtime futures that expose cancellation
+    /// metadata (currently `spawn EXPR` futures), otherwise a safe no-op. Was
+    /// `future_cancels`.
     FutureCancel,
     /// `Foreign.alloc<T>()` / `alloc_zeroed<T>()`. Was `foreign_allocs`.
     ForeignAlloc { ty: Ty, zeroed: bool },
@@ -824,11 +914,24 @@ pub enum UnaryOp {
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum BinaryOp {
-    Add, Sub, Mul, Div, Rem,
-    Eq, Ne, Lt, Le, Gt, Ge,
-    And, Or,
-    BitAnd, BitOr, BitXor,
-    Shl, Shr,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Rem,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    And,
+    Or,
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    Shr,
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
@@ -864,14 +967,28 @@ pub enum PatternKind {
     /// `Red` — a unit-struct / unit-variant pattern. `test_ty` is the variant.
     UnitPath { def: DefId, test_ty: Ty },
     /// `Some(a, b)` — positional destructuring of a tuple struct.
-    TupleStruct { def: DefId, fields: Vec<Pattern>, rest: Option<RestPattern> },
+    TupleStruct {
+        def: DefId,
+        fields: Vec<Pattern>,
+        rest: Option<RestPattern>,
+    },
     /// `Person { name, age, .. }` — record destructuring; each field is resolved
     /// to its index in the struct layout.
-    RecordStruct { def: DefId, fields: Vec<FieldPattern>, has_rest: bool },
+    RecordStruct {
+        def: DefId,
+        fields: Vec<FieldPattern>,
+        has_rest: bool,
+    },
     /// `(a, b)` / `(a, ..rest, b)` — tuple destructuring.
-    Tuple { elems: Vec<Pattern>, rest: Option<(usize, RestPattern)> },
+    Tuple {
+        elems: Vec<Pattern>,
+        rest: Option<(usize, RestPattern)>,
+    },
     /// `[a, b]` / `[head, ..tail]` — list destructuring.
-    List { elems: Vec<Pattern>, rest: Option<(usize, RestPattern)> },
+    List {
+        elems: Vec<Pattern>,
+        rest: Option<(usize, RestPattern)>,
+    },
     /// `P1 | P2 | …`
     Or(Vec<Pattern>),
 }
@@ -904,7 +1021,10 @@ pub fn collect_link_libs(prog: &crate::sema::symbols::Program) -> Vec<String> {
     use crate::ast;
     let mut libs: Vec<String> = Vec::new();
     for def in &prog.defs {
-        if !matches!(def.item, Some(ast::ItemKind::Extern(ast::ExternItem::Function(_)))) {
+        if !matches!(
+            def.item,
+            Some(ast::ItemKind::Extern(ast::ExternItem::Function(_)))
+        ) {
             continue;
         }
         for attr in &def.attrs {
@@ -958,7 +1078,11 @@ pub(crate) fn parse_char_lit(raw: &str) -> Option<u32> {
     let mut chars = inner.chars();
     let first = chars.next()?;
     if first != '\\' {
-        return if chars.next().is_none() { Some(first as u32) } else { None };
+        return if chars.next().is_none() {
+            Some(first as u32)
+        } else {
+            None
+        };
     }
     let esc = chars.next()?;
     let val = match esc {
@@ -976,7 +1100,11 @@ pub(crate) fn parse_char_lit(raw: &str) -> Option<u32> {
         }
         _ => return None,
     };
-    if chars.next().is_none() { Some(val) } else { None }
+    if chars.next().is_none() {
+        Some(val)
+    } else {
+        None
+    }
 }
 
 pub(crate) fn lower_unop(op: crate::ast::UnaryOp) -> UnaryOp {

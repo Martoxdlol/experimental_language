@@ -55,7 +55,9 @@ pub fn pack(proj: &ProjectContext) -> std::io::Result<(Vec<u8>, String)> {
 }
 
 fn collect_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for e in entries.flatten() {
         let p = e.path();
         if p.is_dir() {
@@ -107,7 +109,11 @@ mod tests {
     #[test]
     fn packing_is_deterministic() {
         let root = temp_dir("det");
-        std::fs::write(root.join("project.toml"), "[package]\nname = \"x\"\nkind = \"library\"\n").unwrap();
+        std::fs::write(
+            root.join("project.toml"),
+            "[package]\nname = \"x\"\nkind = \"library\"\n",
+        )
+        .unwrap();
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(root.join("src/lib.otter"), "pub function f(): i64 { 1 }\n").unwrap();
         let proj = ProjectContext::load(&root.join("project.toml")).unwrap();

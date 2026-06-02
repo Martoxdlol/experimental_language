@@ -46,8 +46,10 @@ fn escape_message(parsed: &crate::imports::ImportPath, ctx: &ResolveContext) -> 
 fn path_matches_allow(root: &std::path::Path, entry: &str, target: &std::path::Path) -> bool {
     use crate::sema::resolve_ctx::normalize;
     // Take the literal prefix up to the first glob component.
-    let prefix: std::path::PathBuf =
-        entry.split('/').take_while(|seg| !seg.contains('*')).collect();
+    let prefix: std::path::PathBuf = entry
+        .split('/')
+        .take_while(|seg| !seg.contains('*'))
+        .collect();
     let allowed = normalize(&root.join(prefix));
     target.starts_with(&allowed)
 }
@@ -63,7 +65,9 @@ pub type Externals = HashMap<Vec<String>, Module>;
 /// Whether a method's parameter list begins with (or contains) a `self`
 /// parameter. A method without `self` is a *static* method (`docs/09`/`docs/10`).
 fn has_self_param(params: &[Param]) -> bool {
-    params.iter().any(|p| matches!(p.kind, ParamKind::SelfParam))
+    params
+        .iter()
+        .any(|p| matches!(p.kind, ParamKind::SelfParam))
 }
 
 fn import_path_string(lit: &StringLit) -> String {
@@ -257,10 +261,16 @@ pub struct Program {
     pub drop_def: DefId,
     /// Prelude `struct JoinHandle<R>` — `Thread.spawn`'s result (`docs/20`).
     pub join_handle_def: DefId,
+    /// Prelude `struct TaskJoinHandle<R>` — `Task.spawn`'s result (`docs/20`,
+    /// `docs/21`). Exposed from `std:task` under the public name
+    /// `JoinHandle` so OS-thread handles do not grow task-only cancellation.
+    pub task_join_handle_def: DefId,
     /// Prelude `struct Joined<R>` — a worker's value after `join` (`docs/20`).
     pub joined_def: DefId,
     /// Prelude `struct Panicked` — a worker that panicked (`docs/20`).
     pub panicked_def: DefId,
+    /// Prelude `struct Cancelled` — a cooperatively cancelled executor task.
+    pub cancelled_def: DefId,
     /// Prelude `struct Sender<T>` — a channel's sending end (`docs/20` §2).
     pub sender_def: DefId,
     /// Prelude `struct Receiver<T>` — a channel's receiving end (`docs/20` §2).
@@ -458,8 +468,10 @@ interface Drop {
   function drop(self);
 }
 struct JoinHandle<R> { id: i64 }
+struct TaskJoinHandle<R> { id: i64 }
 struct Joined<R> { value: R }
 struct Panicked { message: str }
+struct Cancelled {}
 struct Sender<T> { chan: i64 }
 struct Receiver<T> { chan: i64 }
 struct ChannelClosed {}
@@ -482,6 +494,7 @@ struct Set<T> {}
 struct MpmcSender<T> { chan: i64 }
 struct MpmcReceiver<T> { chan: i64 }
 struct Thread {}
+struct Task {}
 struct Foreign {}
 @RefCounted
 struct CString { ptr: *u8 }
@@ -630,8 +643,10 @@ impl Program {
             clone_def: DefId(0),
             drop_def: DefId(0),
             join_handle_def: DefId(0),
+            task_join_handle_def: DefId(0),
             joined_def: DefId(0),
             panicked_def: DefId(0),
+            cancelled_def: DefId(0),
             sender_def: DefId(0),
             receiver_def: DefId(0),
             channel_closed_def: DefId(0),
@@ -737,7 +752,10 @@ impl Program {
         let (tokens, lex_errs) = crate::lexer::lex(PRELUDE_SRC, file);
         debug_assert!(lex_errs.is_empty(), "prelude lex errors: {lex_errs:?}");
         let (module, parse_errs) = crate::parser::parse(PRELUDE_SRC, &tokens);
-        debug_assert!(parse_errs.is_empty(), "prelude parse errors: {parse_errs:?}");
+        debug_assert!(
+            parse_errs.is_empty(),
+            "prelude parse errors: {parse_errs:?}"
+        );
         // The prelude has no file-backed submodules.
         self.collect_items(target, &module.items, &Externals::new(), &[]);
         let types = &self.modules[target.index()].types;
@@ -750,8 +768,10 @@ impl Program {
         self.clone_def = types.get("Clone").copied().unwrap_or(DefId(0));
         self.drop_def = types.get("Drop").copied().unwrap_or(DefId(0));
         self.join_handle_def = types.get("JoinHandle").copied().unwrap_or(DefId(0));
+        self.task_join_handle_def = types.get("TaskJoinHandle").copied().unwrap_or(DefId(0));
         self.joined_def = types.get("Joined").copied().unwrap_or(DefId(0));
         self.panicked_def = types.get("Panicked").copied().unwrap_or(DefId(0));
+        self.cancelled_def = types.get("Cancelled").copied().unwrap_or(DefId(0));
         self.sender_def = types.get("Sender").copied().unwrap_or(DefId(0));
         self.receiver_def = types.get("Receiver").copied().unwrap_or(DefId(0));
         self.channel_closed_def = types.get("ChannelClosed").copied().unwrap_or(DefId(0));
@@ -803,7 +823,9 @@ impl Program {
             return false;
         }
         let Some(parent) = d.parent else { return false };
-        let Some(crate::ast::ItemKind::Extend(e)) = &self.def(parent).item else { return false };
+        let Some(crate::ast::ItemKind::Extend(e)) = &self.def(parent).item else {
+            return false;
+        };
         matches!(
             &e.target.kind,
             crate::ast::TypeKind::Named { name, .. }
@@ -834,24 +856,58 @@ impl Program {
             (
                 &["core", "prelude"],
                 &[
-                    "Iterator", "Item", "Done", "FromResidual", "Try", "Clone", "Drop", "Eq",
-                    "Ord", "ToStr", "Hash", "Future", "Ready", "Pending", "Context",
-                    "panic", "panic_with", "exit", "abort",
+                    "Iterator",
+                    "Item",
+                    "Done",
+                    "FromResidual",
+                    "Try",
+                    "Clone",
+                    "Drop",
+                    "Eq",
+                    "Ord",
+                    "ToStr",
+                    "Hash",
+                    "Future",
+                    "Ready",
+                    "Pending",
+                    "Context",
+                    "panic",
+                    "panic_with",
+                    "exit",
+                    "abort",
                 ],
             ),
             (&["core", "collections"], &["List", "Map", "Set", "Entry"]),
             (&["core", "ffi"], &["Foreign", "CString", "CStr", "Buffer"]),
             (&["std", "io"], &["print", "println"]),
-            (&["std", "thread"], &["Thread", "JoinHandle", "Joined", "Panicked"]),
+            (
+                &["std", "thread"],
+                &["Thread", "JoinHandle", "Joined", "Panicked"],
+            ),
+            (
+                &["std", "task"],
+                &["Task", "TaskJoinHandle", "Joined", "Panicked", "Cancelled"],
+            ),
             (
                 &["std", "sync"],
                 &[
-                    "Sender", "Receiver", "ChannelClosed", "Shared", "LockBusy", "MpmcSender",
-                    "MpmcReceiver", "channel", "channel_bounded", "channel_mpmc",
+                    "Sender",
+                    "Receiver",
+                    "ChannelClosed",
+                    "Shared",
+                    "LockBusy",
+                    "MpmcSender",
+                    "MpmcReceiver",
+                    "channel",
+                    "channel_bounded",
+                    "channel_mpmc",
                     "channel_mpmc_bounded",
                 ],
             ),
-            (&["std", "async"], &["AsyncIterator", "TimedOut", "yield_now", "sleep", "timeout"]),
+            (
+                &["std", "async"],
+                &["AsyncIterator", "TimedOut", "yield_now", "sleep", "timeout"],
+            ),
             // Procedural-macro authoring surface (`docs/22`). Imported by
             // `@ProcMacro` functions; the methods are backed by host functions
             // registered into the macro JIT (`crates/macros`).
@@ -863,11 +919,20 @@ impl Program {
             let leaf = path.last().copied().unwrap_or("");
             let view = self.new_module(format!("__view_{}", path.join("_")), ModId::ROOT, true);
             for name in *names {
+                let public_name = if *path == ["std", "task"] && *name == "TaskJoinHandle" {
+                    "JoinHandle"
+                } else {
+                    *name
+                };
                 if let Some(d) = self.modules[b].types.get(*name).copied() {
-                    self.modules[view.index()].types.insert(name.to_string(), d);
+                    self.modules[view.index()]
+                        .types
+                        .insert(public_name.to_string(), d);
                 }
                 if let Some(d) = self.modules[b].values.get(*name).copied() {
-                    self.modules[view.index()].values.insert(name.to_string(), d);
+                    self.modules[view.index()]
+                        .values
+                        .insert(public_name.to_string(), d);
                 }
             }
             self.modules[view.index()].path = path_vec.clone();
@@ -880,16 +945,43 @@ impl Program {
     /// no AST item; their behavior is special-cased in the checker and code
     /// generator. Injected before user items so they get stable low ids.
     fn inject_builtins(&mut self, target: ModId) {
-        let span = Span::new(crate::span::FileId(0), crate::span::BytePos(0), crate::span::BytePos(0));
+        let span = Span::new(
+            crate::span::FileId(0),
+            crate::span::BytePos(0),
+            crate::span::BytePos(0),
+        );
         let list = self.add_def(DefKind::Struct, "List".into(), target, None, true, span);
-        let t = self.add_def(DefKind::GenericParam, "T".into(), target, Some(list), false, span);
+        let t = self.add_def(
+            DefKind::GenericParam,
+            "T".into(),
+            target,
+            Some(list),
+            false,
+            span,
+        );
         self.defs[list.index()].generics = vec![t];
-        self.modules[target.index()].types.insert("List".into(), list);
+        self.modules[target.index()]
+            .types
+            .insert("List".into(), list);
         self.list_def = list;
 
         let map = self.add_def(DefKind::Struct, "Map".into(), target, None, true, span);
-        let k = self.add_def(DefKind::GenericParam, "K".into(), target, Some(map), false, span);
-        let v = self.add_def(DefKind::GenericParam, "V".into(), target, Some(map), false, span);
+        let k = self.add_def(
+            DefKind::GenericParam,
+            "K".into(),
+            target,
+            Some(map),
+            false,
+            span,
+        );
+        let v = self.add_def(
+            DefKind::GenericParam,
+            "V".into(),
+            target,
+            Some(map),
+            false,
+            span,
+        );
         self.defs[map.index()].generics = vec![k, v];
         self.modules[target.index()].types.insert("Map".into(), map);
         self.map_def = map;
@@ -943,14 +1035,22 @@ impl Program {
     pub fn visible_extends(&self, module: ModId) -> Vec<DefId> {
         let mut out = self.modules[module.index()].extends.clone();
         if module != self.builtin_module {
-            out.extend(self.modules[self.builtin_module.index()].extends.iter().copied());
+            out.extend(
+                self.modules[self.builtin_module.index()]
+                    .extends
+                    .iter()
+                    .copied(),
+            );
         }
         out
     }
 
     /// The module an `import … as alias` brings into scope in `module`.
     pub fn namespace_target(&self, module: ModId, alias: &str) -> Option<ModId> {
-        self.modules[module.index()].namespace_imports.get(alias).copied()
+        self.modules[module.index()]
+            .namespace_imports
+            .get(alias)
+            .copied()
     }
 
     /// Walk the module tree from the root along `segments` (e.g.
@@ -977,7 +1077,8 @@ impl Program {
                 let parsed = match crate::imports::classify(&raw) {
                     Ok(p) => p,
                     Err(e) => {
-                        self.errors.push(SemaError::new(SemaErrorKind::Message(e.to_string()), span));
+                        self.errors
+                            .push(SemaError::new(SemaErrorKind::Message(e.to_string()), span));
                         continue;
                     }
                 };
@@ -1022,14 +1123,16 @@ impl Program {
                     }
                     Scheme::SelfRoot => match self.resolve_self_root(&parsed.segments) {
                         Ok(target) => self.bind_import(mid, target, imp, false),
-                        Err(msg) => self.errors.push(SemaError::new(SemaErrorKind::Message(msg), span)),
+                        Err(msg) => self
+                            .errors
+                            .push(SemaError::new(SemaErrorKind::Message(msg), span)),
                     },
                     Scheme::SelfRel => {
                         match self.resolve_self_rel(&mod_path, &parsed, ctx, &file_to_module) {
                             Ok(target) => self.bind_import(mid, target, imp, false),
-                            Err(msg) => {
-                                self.errors.push(SemaError::new(SemaErrorKind::Message(msg), span))
-                            }
+                            Err(msg) => self
+                                .errors
+                                .push(SemaError::new(SemaErrorKind::Message(msg), span)),
                         }
                     }
                     Scheme::Pkg => {
@@ -1058,10 +1161,9 @@ impl Program {
                         };
                         match self.resolve_pkg_subpath(pkg_root, parsed.package_subpath(), &name) {
                             Ok(target) => self.bind_import(mid, target, imp, false),
-                            Err(msg) => self.errors.push(SemaError::new(
-                                SemaErrorKind::Message(msg),
-                                span,
-                            )),
+                            Err(msg) => self
+                                .errors
+                                .push(SemaError::new(SemaErrorKind::Message(msg), span)),
                         }
                     }
                     Scheme::File => {
@@ -1079,9 +1181,9 @@ impl Program {
                                     span,
                                 )),
                             },
-                            Err(msg) => {
-                                self.errors.push(SemaError::new(SemaErrorKind::Message(msg), span))
-                            }
+                            Err(msg) => self
+                                .errors
+                                .push(SemaError::new(SemaErrorKind::Message(msg), span)),
                         }
                     }
                 }
@@ -1095,7 +1197,10 @@ impl Program {
             .module_by_path(segments)
             .ok_or_else(|| format!("cannot find module `self:{}`", segments.join("/")))?;
         if self.modules[target.index()].external_unloaded {
-            return Err(format!("module `self:{}` was not loaded", segments.join("/")));
+            return Err(format!(
+                "module `self:{}` was not loaded",
+                segments.join("/")
+            ));
         }
         Ok(target)
     }
@@ -1111,9 +1216,16 @@ impl Program {
     ) -> Result<ModId, String> {
         let mut cur = pkg_root;
         for seg in subpath {
-            let child = self.modules[cur.index()].children.get(seg).copied().ok_or_else(|| {
-                format!("`pkg:{name}/{}` is not a module in `{name}`", subpath.join("/"))
-            })?;
+            let child = self.modules[cur.index()]
+                .children
+                .get(seg)
+                .copied()
+                .ok_or_else(|| {
+                    format!(
+                        "`pkg:{name}/{}` is not a module in `{name}`",
+                        subpath.join("/")
+                    )
+                })?;
             if !self.modules[child.index()].public {
                 return Err(format!(
                     "`pkg:{name}/{}` is not publicly exported (its module is not `pub mod`)",
@@ -1140,12 +1252,15 @@ impl Program {
             .file_of
             .get(importing_mod_path)
             .ok_or_else(|| "relative `self:` import has no source location".to_string())?;
-        let mut dir =
-            importing_file.parent().unwrap_or_else(|| std::path::Path::new(".")).to_path_buf();
+        let mut dir = importing_file
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .to_path_buf();
         for _ in 0..parsed.up {
-            dir = dir.parent().map(|p| p.to_path_buf()).ok_or_else(|| {
-                escape_message(parsed, ctx)
-            })?;
+            dir = dir
+                .parent()
+                .map(|p| p.to_path_buf())
+                .ok_or_else(|| escape_message(parsed, ctx))?;
         }
         // The resolved file = dir / segments... + `.otter`.
         let mut target_file = dir;
@@ -1169,7 +1284,10 @@ impl Program {
                 // `mp == []` is the root entry, which `module_by_path` returns
                 // directly.
                 self.module_by_path(mp).ok_or_else(|| {
-                    format!("`{}` does not resolve to a declared module", parsed.display_source())
+                    format!(
+                        "`{}` does not resolve to a declared module",
+                        parsed.display_source()
+                    )
                 })
             }),
             None => Err(format!(
@@ -1196,10 +1314,15 @@ impl Program {
             .file_of
             .get(importing_mod_path)
             .ok_or_else(|| "`file:` import has no source location".to_string())?;
-        let mut dir =
-            importing_file.parent().unwrap_or_else(|| std::path::Path::new(".")).to_path_buf();
+        let mut dir = importing_file
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .to_path_buf();
         for _ in 0..parsed.up {
-            dir = dir.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| dir.clone());
+            dir = dir
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| dir.clone());
         }
         for seg in &parsed.segments {
             dir.push(seg);
@@ -1210,13 +1333,18 @@ impl Program {
         let target = normalize(&dir);
 
         // Direct mode (no source root): `file:` is unrestricted.
-        let Some(source_root) = &ctx.source_root else { return Ok(target) };
+        let Some(source_root) = &ctx.source_root else {
+            return Ok(target);
+        };
         let source_root = normalize(source_root);
         if target.starts_with(&source_root) {
             return Ok(target); // inside the package — always allowed
         }
         // Escaping the package: must match an allowlist entry.
-        let root = ctx.package_root.clone().unwrap_or_else(|| source_root.clone());
+        let root = ctx
+            .package_root
+            .clone()
+            .unwrap_or_else(|| source_root.clone());
         for entry in &ctx.file_import_allow {
             if path_matches_allow(&root, entry, &target) {
                 return Ok(target);
@@ -1241,7 +1369,9 @@ impl Program {
             // `import "path" as M` — bind the alias to the module so `M.foo`
             // resolves against its public definitions.
             ImportKind::Namespace(alias) => {
-                self.modules[mid].namespace_imports.insert(alias.name.clone(), target);
+                self.modules[mid]
+                    .namespace_imports
+                    .insert(alias.name.clone(), target);
             }
             // Ambient (extension-only) imports: extensions are module-bound and
             // already active program-wide; no names are bound.
@@ -1288,7 +1418,8 @@ impl Program {
 
     fn new_module(&mut self, name: String, parent: ModId, public: bool) -> ModId {
         let id = ModId(self.modules.len() as u32);
-        self.modules.push(ModuleInfo::new(id, name, Some(parent), public));
+        self.modules
+            .push(ModuleInfo::new(id, name, Some(parent), public));
         id
     }
 
@@ -1357,7 +1488,13 @@ impl Program {
         }
     }
 
-    fn collect_items(&mut self, module: ModId, items: &[Item], externals: &Externals, path: &[String]) {
+    fn collect_items(
+        &mut self,
+        module: ModId,
+        items: &[Item],
+        externals: &Externals,
+        path: &[String],
+    ) {
         for item in items {
             self.collect_item(module, item, externals, path);
         }
@@ -1379,7 +1516,11 @@ impl Program {
                 self.attach_item(def, item, &f.generics, None);
             }
             ItemKind::Struct(s) => {
-                let kind = if s.is_extern { DefKind::ExternStruct } else { DefKind::Struct };
+                let kind = if s.is_extern {
+                    DefKind::ExternStruct
+                } else {
+                    DefKind::Struct
+                };
                 let def = self.add_def(kind, s.name.name.clone(), module, None, public, item.span);
                 self.register_name(module, &s.name.name, def, kind, s.name.span);
                 self.attach_item(def, item, &s.generics, None);
@@ -1629,7 +1770,13 @@ impl Program {
                     public,
                     item.span,
                 );
-                self.register_name(module, &f.name.name, def, DefKind::ExternFunction, f.name.span);
+                self.register_name(
+                    module,
+                    &f.name.name,
+                    def,
+                    DefKind::ExternFunction,
+                    f.name.span,
+                );
                 self.attach_item(def, item, &f.generics, None);
             }
             ExternItem::Struct(s) => {
@@ -1641,7 +1788,13 @@ impl Program {
                     public,
                     item.span,
                 );
-                self.register_name(module, &s.name.name, def, DefKind::ExternStruct, s.name.span);
+                self.register_name(
+                    module,
+                    &s.name.name,
+                    def,
+                    DefKind::ExternStruct,
+                    s.name.span,
+                );
                 // Store the bare `StructItem` (not the `Extern(..)` wrapper) so the
                 // existing struct machinery — `record_fields`, `tuple_fields`,
                 // `collect_struct_layouts` — works on extern structs transparently;
@@ -1749,9 +1902,7 @@ mod tests {
 
     #[test]
     fn inline_modules_nest() {
-        let p = program(
-            "mod math {\n  pub function add(a: i64, b: i64): i64 { a + b }\n}\n",
-        );
+        let p = program("mod math {\n  pub function add(a: i64, b: i64): i64 { a + b }\n}\n");
         assert!(p.errors.is_empty(), "{:?}", p.errors);
         let math = p.module(ModId::ROOT).children.get("math").copied().unwrap();
         assert!(lookup_value(&p, math, "add").is_some());
@@ -1795,13 +1946,15 @@ mod tests {
             .extends
             .iter()
             .filter(|&&e| {
-                p.def(e).item.as_ref().is_some_and(|it| matches!(
-                    it,
-                    ItemKind::Extend(e) if matches!(
-                        &e.target.kind,
-                        TypeKind::Named { name, .. } if name.name == "P"
+                p.def(e).item.as_ref().is_some_and(|it| {
+                    matches!(
+                        it,
+                        ItemKind::Extend(e) if matches!(
+                            &e.target.kind,
+                            TypeKind::Named { name, .. } if name.name == "P"
+                        )
                     )
-                ))
+                })
             })
             .count();
         assert_eq!(user_extends, 1);
@@ -1826,10 +1979,18 @@ mod tests {
     /// A project context with one resolved dependency package.
     fn pkg_ctx(dep: &str) -> ResolveContext {
         let mut packages = HashMap::new();
-        packages.insert(dep.to_string(), vec!["__pkg__".to_string(), dep.to_string()]);
+        packages.insert(
+            dep.to_string(),
+            vec!["__pkg__".to_string(), dep.to_string()],
+        );
         let mut dependencies = std::collections::HashSet::new();
         dependencies.insert(dep.to_string());
-        ResolveContext { project: true, dependencies, packages, ..Default::default() }
+        ResolveContext {
+            project: true,
+            dependencies,
+            packages,
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -1853,14 +2014,29 @@ mod tests {
         let mut externals = Externals::new();
         externals.insert(vec!["__pkg__".into(), "greeter".into()], dep);
         let p = Program::collect_multi_ctx(&root, &externals, &pkg_ctx("greeter"));
-        assert!(p.errors.iter().any(|e| e.kind.to_string().contains("private")), "{:?}", p.errors);
+        assert!(
+            p.errors
+                .iter()
+                .any(|e| e.kind.to_string().contains("private")),
+            "{:?}",
+            p.errors
+        );
     }
 
     #[test]
     fn pkg_import_of_undeclared_dependency_is_rejected() {
         let root = parse_module("import { x } from \"pkg:unknown\";\nfunction main() {}");
-        let ctx = ResolveContext { project: true, ..Default::default() };
+        let ctx = ResolveContext {
+            project: true,
+            ..Default::default()
+        };
         let p = Program::collect_multi_ctx(&root, &Externals::new(), &ctx);
-        assert!(p.errors.iter().any(|e| e.kind.to_string().contains("no dependency named")), "{:?}", p.errors);
+        assert!(
+            p.errors
+                .iter()
+                .any(|e| e.kind.to_string().contains("no dependency named")),
+            "{:?}",
+            p.errors
+        );
     }
 }

@@ -56,18 +56,27 @@ fn full_publish_index_download_search_yank_round_trip() {
 
     // Search finds the package by substring, reporting its max version.
     let hits = reg.search("wid", 10).expect("search");
-    let hit = hits.iter().find(|h| h.name == "widget").expect("widget in search");
+    let hit = hits
+        .iter()
+        .find(|h| h.name == "widget")
+        .expect("widget in search");
     assert_eq!(hit.max_version, "1.2.0");
 
     // Yank 1.2.0; the index reflects it.
     reg.yank("widget", "1.2.0").expect("yank 1.2.0");
     let after = reg.index("widget").expect("index after yank");
-    let e12 = after.iter().find(|e| e.vers.to_string() == "1.2.0").unwrap();
+    let e12 = after
+        .iter()
+        .find(|e| e.vers.to_string() == "1.2.0")
+        .unwrap();
     assert!(e12.yanked, "1.2.0 should be yanked");
 
     // After yanking the max, search reports the remaining version.
     let hits = reg.search("widget", 10).expect("search after yank");
-    let hit = hits.iter().find(|h| h.name == "widget").expect("widget still searchable");
+    let hit = hits
+        .iter()
+        .find(|h| h.name == "widget")
+        .expect("widget still searchable");
     assert_eq!(hit.max_version, "1.0.0", "search ignores yanked versions");
 
     handle.shutdown();
@@ -90,7 +99,8 @@ fn writes_require_the_token() {
 
     // The right token succeeds.
     let good = HttpRegistry::connect("local", &base, Some("the-token".into())).expect("connect");
-    good.publish("anything", "1.0.0", b"x").expect("publish with valid token");
+    good.publish("anything", "1.0.0", b"x")
+        .expect("publish with valid token");
     assert_eq!(good.index("anything").expect("index").len(), 1);
 
     handle.shutdown();

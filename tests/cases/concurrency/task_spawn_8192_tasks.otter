@@ -1,0 +1,42 @@
+//@ kind: run
+//@ serial
+//@ env: OTTER_FUSION_TASK_WORKERS=4
+//@ description: Task.spawn sustains 8192 yielding async workers and joins every handle without quadratic GC root churn
+//@ stdout:
+//~ total=33550336
+import { println } from "std:io";
+import { Future } from "core:prelude";
+import { List } from "core:collections";
+import { Task, JoinHandle, Joined, Panicked, Cancelled } from "std:task";
+import { yield_now } from "std:async";
+
+function joined_value(r: Joined<i64> | Panicked | Cancelled): i64 {
+  match r {
+    Joined<i64> j => j.value,
+    Panicked p => -1,
+    Cancelled c => -2,
+  }
+}
+
+function main(): Future<null> async {
+  var handles: List<JoinHandle<i64>> = [];
+  var i: i64 = 0;
+  while i < 8192 {
+    var n = i;
+    handles.push(Task.spawn(() async => {
+      var _a = await yield_now();
+      var _b = await yield_now();
+      n
+    }));
+    i = i + 1;
+  }
+
+  var total: i64 = 0;
+  var j: i64 = 0;
+  while j < handles.size() {
+    total = total + joined_value(await handles[j].join());
+    j = j + 1;
+  }
+
+  println("total=${total}");
+}

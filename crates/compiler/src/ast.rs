@@ -28,7 +28,10 @@ pub struct Ident {
 
 impl Ident {
     pub fn new(name: impl Into<String>, span: Span) -> Self {
-        Self { name: name.into(), span }
+        Self {
+            name: name.into(),
+            span,
+        }
     }
 }
 
@@ -65,7 +68,11 @@ pub struct Attribute {
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub enum AttrArg {
     Positional(Expr),
-    Named { name: Ident, value: Expr, span: Span },
+    Named {
+        name: Ident,
+        value: Expr,
+        span: Span,
+    },
 }
 
 // ===========================================================================
@@ -160,7 +167,10 @@ pub enum ParamKind {
     /// `self` — only valid as first parameter inside an `extend`/`interface`
     /// method.
     SelfParam,
-    Normal { name: Ident, ty: Type },
+    Normal {
+        name: Ident,
+        ty: Type,
+    },
 }
 
 // ---- generic params ---------------------------------------------------------
@@ -302,7 +312,10 @@ pub enum ExternItem {
     /// `extern type Name`
     OpaqueType(Ident),
     /// `extern var name: T`
-    Var { name: Ident, ty: Type },
+    Var {
+        name: Ident,
+        ty: Type,
+    },
 }
 
 // ---- import -----------------------------------------------------------------
@@ -349,7 +362,10 @@ pub enum TypeKind {
     /// `(T1, T2) => R`
     Function { params: Vec<Type>, ret: Box<Type> },
     /// `extern (name: T, …) => R`
-    ExternFunction { params: Vec<ExternParamType>, ret: Box<Type> },
+    ExternFunction {
+        params: Vec<ExternParamType>,
+        ret: Box<Type>,
+    },
     /// `T | U | V` — never empty, never single-element (single ⇒ collapse to inner).
     Union(Vec<Type>),
     /// `*T`
@@ -456,14 +472,35 @@ pub enum ExprKind {
     },
 
     // Operators --------------------------------------------------------------
-    Unary { op: UnaryOp, op_span: Span, operand: Box<Expr> },
-    Binary { op: BinaryOp, op_span: Span, left: Box<Expr>, right: Box<Expr> },
+    Unary {
+        op: UnaryOp,
+        op_span: Span,
+        operand: Box<Expr>,
+    },
+    Binary {
+        op: BinaryOp,
+        op_span: Span,
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
     /// `expr as T` / `expr is T`
-    Cast { op: CastOp, op_span: Span, expr: Box<Expr>, ty: Box<Type> },
+    Cast {
+        op: CastOp,
+        op_span: Span,
+        expr: Box<Expr>,
+        ty: Box<Type>,
+    },
 
     // Postfix accesses -------------------------------------------------------
-    Field { receiver: Box<Expr>, name: Ident },
-    TupleIndex { receiver: Box<Expr>, index: u32, index_span: Span },
+    Field {
+        receiver: Box<Expr>,
+        name: Ident,
+    },
+    TupleIndex {
+        receiver: Box<Expr>,
+        index: u32,
+        index_span: Span,
+    },
     Call {
         callee: Box<Expr>,
         /// Explicit generic args: `id<i64>(42)`.
@@ -472,16 +509,34 @@ pub enum ExprKind {
         /// `xs.map { it * 2 }` — closure given as trailing block.
         trailing_closure: Option<Box<Expr>>,
     },
-    Index { receiver: Box<Expr>, index: Box<Expr> },
-    Try { expr: Box<Expr>, q_span: Span },
+    Index {
+        receiver: Box<Expr>,
+        index: Box<Expr>,
+    },
+    Try {
+        expr: Box<Expr>,
+        q_span: Span,
+    },
     /// `&expr` — address-of (FFI).
-    Ref { expr: Box<Expr>, amp_span: Span },
+    Ref {
+        expr: Box<Expr>,
+        amp_span: Span,
+    },
     /// `*expr` — pointer dereference.
-    Deref { expr: Box<Expr>, star_span: Span },
-    Await { expr: Box<Expr>, kw_span: Span },
+    Deref {
+        expr: Box<Expr>,
+        star_span: Span,
+    },
+    Await {
+        expr: Box<Expr>,
+        kw_span: Span,
+    },
     /// `spawn EXPR` — schedule `EXPR` (a future-producing call/expr) on the
     /// async executor; evaluates to a `Future<T>`.
-    Spawn { expr: Box<Expr>, kw_span: Span },
+    Spawn {
+        expr: Box<Expr>,
+        kw_span: Span,
+    },
 
     // Control flow ----------------------------------------------------------
     If {
@@ -495,7 +550,10 @@ pub enum ExprKind {
     },
     Block(Block),
     Loop(Block),
-    While { cond: Box<Expr>, body: Block },
+    While {
+        cond: Box<Expr>,
+        body: Block,
+    },
     For {
         pattern: Pattern,
         in_async: bool,
@@ -552,7 +610,11 @@ pub struct FieldInit {
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub enum MapItem {
     /// `key: value`
-    Entry { key: Box<Expr>, value: Box<Expr>, span: Span },
+    Entry {
+        key: Box<Expr>,
+        value: Box<Expr>,
+        span: Span,
+    },
     /// `..base` — merge another map; rightmost wins on collision.
     Spread(Box<Expr>),
 }
@@ -583,11 +645,24 @@ pub enum UnaryOp {
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug)]
 pub enum BinaryOp {
-    Add, Sub, Mul, Div, Rem,
-    Eq, Ne, Lt, Le, Gt, Ge,
-    And, Or,
-    BitAnd, BitOr, BitXor,
-    Shl, Shr,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Rem,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    And,
+    Or,
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    Shr,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug)]
@@ -670,13 +745,27 @@ pub enum PatternKind {
     /// `Red`
     UnitPath(TypePath),
     /// `Some(a, b)` — positional destructuring.
-    TupleStruct { path: TypePath, fields: Vec<Pattern>, rest: Option<RestPattern> },
+    TupleStruct {
+        path: TypePath,
+        fields: Vec<Pattern>,
+        rest: Option<RestPattern>,
+    },
     /// `Person { name, age }`, `Person { name, .. }`
-    RecordStruct { path: TypePath, fields: Vec<FieldPattern>, has_rest: bool },
+    RecordStruct {
+        path: TypePath,
+        fields: Vec<FieldPattern>,
+        has_rest: bool,
+    },
     /// `(a, b)`, `(a, ..rest, b)`
-    Tuple { elems: Vec<Pattern>, rest: Option<(usize, RestPattern)> },
+    Tuple {
+        elems: Vec<Pattern>,
+        rest: Option<(usize, RestPattern)>,
+    },
     /// `[a, b, c]`, `[head, ..tail]`
-    List { elems: Vec<Pattern>, rest: Option<(usize, RestPattern)> },
+    List {
+        elems: Vec<Pattern>,
+        rest: Option<(usize, RestPattern)>,
+    },
     /// `P1 | P2 | P3`
     Or(Vec<Pattern>),
 }

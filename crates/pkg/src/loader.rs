@@ -52,10 +52,16 @@ pub struct LoadDiag {
 
 impl LoadDiag {
     fn msg(message: impl Into<String>) -> Self {
-        LoadDiag { message: message.into(), span: None }
+        LoadDiag {
+            message: message.into(),
+            span: None,
+        }
     }
     fn at(span: Span, message: impl Into<String>) -> Self {
-        LoadDiag { message: message.into(), span: Some(span) }
+        LoadDiag {
+            message: message.into(),
+            span: Some(span),
+        }
     }
 }
 
@@ -149,7 +155,7 @@ impl Loader {
     /// it (`docs/17` §17.4). Allowlist/escape gating is the compiler's job; the
     /// loader just makes the target available (best-effort).
     fn load_file_imports(&mut self) {
-        use compiler::imports::{classify, Scheme};
+        use compiler::imports::{Scheme, classify};
         // Collect (importing file, raw path) pairs without holding a borrow.
         let mut work: Vec<(PathBuf, String)> = Vec::new();
         let scan = |module: &Module, file: &Path, work: &mut Vec<(PathBuf, String)>| {
@@ -179,7 +185,9 @@ impl Loader {
             if self.file_targets.contains_key(&target) {
                 continue;
             }
-            let Some(module) = self.parse_file(&target) else { continue };
+            let Some(module) = self.parse_file(&target) else {
+                continue;
+            };
             self.mark_reached(&target);
             let key = vec!["__file__".to_string(), next.to_string()];
             next += 1;
@@ -191,7 +199,9 @@ impl Loader {
 
     fn load_entries(&mut self, entries: &[PathBuf]) {
         for (i, entry) in entries.iter().enumerate() {
-            let Some(module) = self.parse_file(entry) else { continue };
+            let Some(module) = self.parse_file(entry) else {
+                continue;
+            };
             self.mark_reached(entry);
             if i == 0 {
                 self.file_of.insert(Vec::new(), entry.clone());
@@ -221,12 +231,15 @@ impl Loader {
     /// `["__pkg__", <name>]` key prefix (its entry is itself a top-level entry,
     /// so its `mod` children are siblings).
     fn load_package(&mut self, name: &str, entry: &Path) {
-        let Some(module) = self.parse_file(entry) else { return };
+        let Some(module) = self.parse_file(entry) else {
+            return;
+        };
         self.mark_reached(entry);
         let mut prefix = vec!["__pkg__".to_string(), name.to_string()];
         self.file_of.insert(prefix.clone(), entry.to_path_buf());
         self.descend(entry, &module, &mut prefix, /* is_entry = */ true);
-        self.externals.insert(vec!["__pkg__".to_string(), name.to_string()], module);
+        self.externals
+            .insert(vec!["__pkg__".to_string(), name.to_string()], module);
     }
 
     /// Lex + parse one file, recording its source and any front-end errors.
@@ -234,19 +247,23 @@ impl Loader {
         let src = match std::fs::read_to_string(path) {
             Ok(s) => s,
             Err(e) => {
-                self.diagnostics
-                    .push(LoadDiag::msg(format!("cannot read `{}`: {e}", path.display())));
+                self.diagnostics.push(LoadDiag::msg(format!(
+                    "cannot read `{}`: {e}",
+                    path.display()
+                )));
                 return None;
             }
         };
         let file = self.map.add_file(path.display().to_string(), src.clone());
         let (tokens, lex_errors) = lex(&src, file);
         for er in &lex_errors {
-            self.diagnostics.push(LoadDiag::at(er.span, er.kind.to_string()));
+            self.diagnostics
+                .push(LoadDiag::at(er.span, er.kind.to_string()));
         }
         let (module, parse_errors) = parse(&src, &tokens);
         for er in &parse_errors {
-            self.diagnostics.push(LoadDiag::at(er.span, er.kind.to_string()));
+            self.diagnostics
+                .push(LoadDiag::at(er.span, er.kind.to_string()));
         }
         Some(module)
     }
@@ -254,17 +271,27 @@ impl Loader {
     /// Recursively follow external `mod` declarations from `module` (whose file
     /// is `file`, at module path `mod_path`). `is_entry` selects the sibling vs.
     /// child-directory file-resolution rule (`docs/17` §17.2).
-    fn descend(&mut self, file: &Path, module: &Module, mod_path: &mut Vec<String>, is_entry: bool) {
+    fn descend(
+        &mut self,
+        file: &Path,
+        module: &Module,
+        mod_path: &mut Vec<String>,
+        is_entry: bool,
+    ) {
         // Child files live beside an entry, else under `<parent-stem>/`.
         let dir = if is_entry {
-            file.parent().unwrap_or_else(|| Path::new(".")).to_path_buf()
+            file.parent()
+                .unwrap_or_else(|| Path::new("."))
+                .to_path_buf()
         } else {
             file.parent()
                 .unwrap_or_else(|| Path::new("."))
                 .join(file.file_stem().unwrap_or_default())
         };
         for item in &module.items {
-            let ItemKind::Module(m) = &item.kind else { continue };
+            let ItemKind::Module(m) = &item.kind else {
+                continue;
+            };
             if !matches!(m.kind, ModuleKind::External) {
                 continue;
             }
@@ -295,7 +322,8 @@ impl Loader {
     }
 
     fn mark_reached(&mut self, path: &Path) {
-        self.reached.insert(path.canonicalize().unwrap_or_else(|_| path.to_path_buf()));
+        self.reached
+            .insert(path.canonicalize().unwrap_or_else(|_| path.to_path_buf()));
     }
 
     /// Enforce that every `.otter` under `source_root` is reachable from an entry
@@ -342,9 +370,14 @@ fn import_path_text(lit: &compiler::ast::StringLit) -> String {
 /// Compute the normalized target file of a `file:` import relative to the
 /// importing file's directory (`.otter` appended when no extension is given).
 /// Must match the compiler's `file:` resolution.
-pub fn file_import_target(importing_file: &Path, parsed: &compiler::imports::ImportPath) -> PathBuf {
-    let mut dir =
-        importing_file.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+pub fn file_import_target(
+    importing_file: &Path,
+    parsed: &compiler::imports::ImportPath,
+) -> PathBuf {
+    let mut dir = importing_file
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
     for _ in 0..parsed.up {
         if let Some(p) = dir.parent() {
             dir = p.to_path_buf();
@@ -361,7 +394,9 @@ pub fn file_import_target(importing_file: &Path, parsed: &compiler::imports::Imp
 
 /// Recursively collect every `.otter` file under `dir` (sorted for determinism).
 fn collect_otter_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     let mut paths: Vec<PathBuf> = entries.filter_map(|e| e.ok().map(|e| e.path())).collect();
     paths.sort();
     for p in paths {
@@ -379,8 +414,7 @@ mod tests {
     use std::fs;
 
     fn temp_dir(tag: &str) -> PathBuf {
-        let base =
-            std::env::temp_dir().join(format!("otter_loader_{tag}_{}", nonce()));
+        let base = std::env::temp_dir().join(format!("otter_loader_{tag}_{}", nonce()));
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(&base).unwrap();
         base
@@ -404,16 +438,27 @@ mod tests {
         fs::write(src.join("util/helpers.otter"), "// leaf\n").unwrap();
 
         let tree = load_project(&[src.join("main.otter")], &src);
-        assert!(!tree.has_errors(), "diags: {:?}", tree.diagnostics.iter().map(|d| &d.message).collect::<Vec<_>>());
-        assert_eq!(tree.file_of[&vec!["util".to_string()]], src.join("util.otter"));
+        assert!(
+            !tree.has_errors(),
+            "diags: {:?}",
+            tree.diagnostics
+                .iter()
+                .map(|d| &d.message)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            tree.file_of[&vec!["util".to_string()]],
+            src.join("util.otter")
+        );
         assert_eq!(
             tree.file_of[&vec!["util".to_string(), "helpers".to_string()]],
             src.join("util/helpers.otter")
         );
         assert!(tree.externals.contains_key(&vec!["util".to_string()]));
-        assert!(tree
-            .externals
-            .contains_key(&vec!["util".to_string(), "helpers".to_string()]));
+        assert!(
+            tree.externals
+                .contains_key(&vec!["util".to_string(), "helpers".to_string()])
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -427,8 +472,12 @@ mod tests {
 
         let tree = load_project(&[src.join("main.otter")], &src);
         assert!(tree.has_errors());
-        assert!(tree.diagnostics.iter().any(|d| d.message.contains("unreferenced source file")
-            && d.message.contains("dead.otter")));
+        assert!(
+            tree.diagnostics
+                .iter()
+                .any(|d| d.message.contains("unreferenced source file")
+                    && d.message.contains("dead.otter"))
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -440,7 +489,11 @@ mod tests {
         fs::write(src.join("main.otter"), "mod ghost;\nfunction main() {}\n").unwrap();
 
         let tree = load_project(&[src.join("main.otter")], &src);
-        assert!(tree.diagnostics.iter().any(|d| d.message.contains("cannot find module `ghost`")));
+        assert!(
+            tree.diagnostics
+                .iter()
+                .any(|d| d.message.contains("cannot find module `ghost`"))
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -452,10 +505,11 @@ mod tests {
         fs::write(&f, "mod helper;\nfunction main() {}\n").unwrap();
 
         let tree = load_loose(&f);
-        assert!(tree
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("requires a project")));
+        assert!(
+            tree.diagnostics
+                .iter()
+                .any(|d| d.message.contains("requires a project"))
+        );
         let _ = fs::remove_dir_all(&root);
     }
 

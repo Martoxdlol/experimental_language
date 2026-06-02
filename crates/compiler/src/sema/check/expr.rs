@@ -55,24 +55,34 @@ impl<'a> Checker<'a> {
             // this span so `expr_ty` (which reads `node_hir`) resolves either span.
             ExprKind::Paren(inner) => return self.hir_child(inner),
             // Composites: buildable once every child's HIR node exists.
-            ExprKind::Tuple(elems) => {
-                H::Tuple(elems.iter().map(|e| self.hir_child(e)).collect::<Option<_>>()?)
-            }
-            ExprKind::List(elems) => {
-                H::List(elems.iter().map(|e| self.hir_child(e)).collect::<Option<_>>()?)
-            }
+            ExprKind::Tuple(elems) => H::Tuple(
+                elems
+                    .iter()
+                    .map(|e| self.hir_child(e))
+                    .collect::<Option<_>>()?,
+            ),
+            ExprKind::List(elems) => H::List(
+                elems
+                    .iter()
+                    .map(|e| self.hir_child(e))
+                    .collect::<Option<_>>()?,
+            ),
             ExprKind::Unary { op, operand, .. } => H::Unary {
                 op: crate::hir::lower_unop(*op),
                 operand: Box::new(self.hir_child(operand)?),
                 overload: self.hir_overload(),
             },
-            ExprKind::Binary { op, left, right, .. } => H::Binary {
+            ExprKind::Binary {
+                op, left, right, ..
+            } => H::Binary {
                 op: crate::hir::lower_binop(*op),
                 left: Box::new(self.hir_child(left)?),
                 right: Box::new(self.hir_child(right)?),
                 overload: self.hir_overload(),
             },
-            ExprKind::Cast { op, expr: inner, .. } => H::Cast {
+            ExprKind::Cast {
+                op, expr: inner, ..
+            } => H::Cast {
                 op: crate::hir::lower_castop(*op),
                 expr: Box::new(self.hir_child(inner)?),
                 // `check_cast` stashed the resolved target; otherwise the node's
@@ -81,7 +91,9 @@ impl<'a> Checker<'a> {
             },
             ExprKind::Ref { expr: inner, .. } => H::Ref(Box::new(self.hir_child(inner)?)),
             ExprKind::Deref { expr: inner, .. } => H::Deref(Box::new(self.hir_child(inner)?)),
-            ExprKind::TupleIndex { receiver, index, .. } => H::TupleIndex {
+            ExprKind::TupleIndex {
+                receiver, index, ..
+            } => H::TupleIndex {
                 receiver: Box::new(self.hir_child(receiver)?),
                 index: *index,
             },
@@ -124,7 +136,10 @@ impl<'a> Checker<'a> {
                 }
                 let recv_ty = self.expr_ty(receiver.span)?;
                 let field = self.hir_field_ref(recv_ty, &name.name);
-                H::Field { receiver: Box::new(self.hir_child(receiver)?), field }
+                H::Field {
+                    receiver: Box::new(self.hir_child(receiver)?),
+                    field,
+                }
             }
             ExprKind::Call { .. } => self.build_call_kind(expr, ty)?,
             ExprKind::Continue => H::Continue,
@@ -136,7 +151,11 @@ impl<'a> Checker<'a> {
                 Some(e) => Some(Box::new(self.hir_child(e)?)),
                 None => None,
             }),
-            ExprKind::If { cond, then_block, else_branch } => H::If {
+            ExprKind::If {
+                cond,
+                then_block,
+                else_branch,
+            } => H::If {
                 cond: Box::new(self.hir_child(cond)?),
                 then_block: self.build_block(then_block),
                 else_branch: self.build_else(else_branch.as_ref()),
@@ -154,7 +173,10 @@ impl<'a> Checker<'a> {
                         span: a.span,
                     });
                 }
-                H::Match { scrutinee: Box::new(self.hir_child(scrutinee)?), arms: hir_arms }
+                H::Match {
+                    scrutinee: Box::new(self.hir_child(scrutinee)?),
+                    arms: hir_arms,
+                }
             }
             ExprKind::Block(b) => H::Block(self.build_block(b)),
             ExprKind::Loop(b) => H::Loop(self.build_block(b)),
@@ -162,7 +184,12 @@ impl<'a> Checker<'a> {
                 cond: Box::new(self.hir_child(cond)?),
                 body: self.build_block(body),
             },
-            ExprKind::For { pattern, in_async, iter, body } => H::For {
+            ExprKind::For {
+                pattern,
+                in_async,
+                iter,
+                body,
+            } => H::For {
                 pattern: self.build_pattern(pattern),
                 iter: Box::new(self.hir_child(iter)?),
                 body: self.build_block(body),
@@ -226,10 +253,19 @@ impl<'a> Checker<'a> {
                     Some(e) => Some(Box::new(self.hir_child(e)?)),
                     None => None,
                 };
-                H::Struct { def, type_args, fields: hir_fields, spread }
+                H::Struct {
+                    def,
+                    type_args,
+                    fields: hir_fields,
+                    spread,
+                }
             }
         };
-        Some(hir::Expr { kind, ty, span: expr.span })
+        Some(hir::Expr {
+            kind,
+            ty,
+            span: expr.span,
+        })
     }
 
     /// The already-built HIR node for a child expression (skipping `Paren`
@@ -254,11 +290,14 @@ impl<'a> Checker<'a> {
         while let ExprKind::Paren(inner) = &e.kind {
             e = inner;
         }
-        self.node_hir.get(&e.span).cloned().unwrap_or_else(|| crate::hir::Expr {
-            kind: crate::hir::ExprKind::Error,
-            ty: self.expr_ty(e.span).unwrap_or(self.tcx.error),
-            span: e.span,
-        })
+        self.node_hir
+            .get(&e.span)
+            .cloned()
+            .unwrap_or_else(|| crate::hir::Expr {
+                kind: crate::hir::ExprKind::Error,
+                ty: self.expr_ty(e.span).unwrap_or(self.tcx.error),
+                span: e.span,
+            })
     }
 
     /// Build a value-name HIR node, baking in a flow-narrowing `Unbox` coercion
@@ -272,12 +311,7 @@ impl<'a> Checker<'a> {
     /// storing its `Name` HIR node in `node_hir` (was `resolutions.insert`).
     /// `results.resolution(span)` reads it back. The node also serves as the
     /// expression's HIR node for a value-name use.
-    pub(crate) fn record_res(
-        &mut self,
-        span: Span,
-        res: crate::sema::results::ValueRes,
-        ty: Ty,
-    ) {
+    pub(crate) fn record_res(&mut self, span: Span, res: crate::sema::results::ValueRes, ty: Ty) {
         let node = self.build_name_node(res, ty, span);
         self.node_hir.insert(span, node);
     }
@@ -289,7 +323,11 @@ impl<'a> Checker<'a> {
         span: Span,
     ) -> crate::hir::Expr {
         use crate::sema::results::{Adjust, ValueRes};
-        let name = crate::hir::Expr { kind: crate::hir::ExprKind::Name(res), ty, span };
+        let name = crate::hir::Expr {
+            kind: crate::hir::ExprKind::Name(res),
+            ty,
+            span,
+        };
         if let ValueRes::Local(id) = res {
             if let Some(wide) = self.hir.local_ty(id) {
                 let was_boxed = (matches!(self.tcx.kind(wide), TyKind::Union(_) | TyKind::Dynamic)
@@ -320,7 +358,9 @@ impl<'a> Checker<'a> {
     /// last-write-wins `HashMap`.
     pub(crate) fn bake_coercion(&mut self, span: Span, adjust: crate::sema::results::Adjust) {
         use crate::sema::results::Adjust;
-        let Some(node) = self.node_hir.get(&span) else { return };
+        let Some(node) = self.node_hir.get(&span) else {
+            return;
+        };
         let raw = match &node.kind {
             crate::hir::ExprKind::Adjust { expr, .. } => (**expr).clone(),
             _ => node.clone(),
@@ -331,7 +371,10 @@ impl<'a> Checker<'a> {
         self.node_hir.insert(
             span,
             crate::hir::Expr {
-                kind: crate::hir::ExprKind::Adjust { adjust, expr: Box::new(raw) },
+                kind: crate::hir::ExprKind::Adjust {
+                    adjust,
+                    expr: Box::new(raw),
+                },
                 ty,
                 span,
             },
@@ -380,13 +423,23 @@ impl<'a> Checker<'a> {
                     // variant inside an `is` branch) — `build_name_node` bakes the
                     // `Unbox` in, just as a `${expr}` hole gets it via `hir_child`.
                     let expr = self.build_name_node(res, self.expr_ty(id.span)?, id.span);
-                    let (stringify, stringify_targs) = holes.pop_front().unwrap_or((None, Vec::new()));
-                    StrPart::Interp { expr: Box::new(expr), stringify, stringify_targs }
+                    let (stringify, stringify_targs) =
+                        holes.pop_front().unwrap_or((None, Vec::new()));
+                    StrPart::Interp {
+                        expr: Box::new(expr),
+                        stringify,
+                        stringify_targs,
+                    }
                 }
                 StringPart::Expr(e) => {
                     let expr = Box::new(self.hir_child(e)?);
-                    let (stringify, stringify_targs) = holes.pop_front().unwrap_or((None, Vec::new()));
-                    StrPart::Interp { expr, stringify, stringify_targs }
+                    let (stringify, stringify_targs) =
+                        holes.pop_front().unwrap_or((None, Vec::new()));
+                    StrPart::Interp {
+                        expr,
+                        stringify,
+                        stringify_targs,
+                    }
                 }
             });
         }
@@ -419,13 +472,21 @@ impl<'a> Checker<'a> {
                 stmts.push(stmt);
             }
         }
-        let trailing = b.trailing.as_ref().map(|e| Box::new(self.hir_child_or_error(e)));
+        let trailing = b
+            .trailing
+            .as_ref()
+            .map(|e| Box::new(self.hir_child_or_error(e)));
         let ty = b
             .trailing
             .as_ref()
             .map(|e| self.expr_ty(e.span).unwrap_or(self.tcx.error))
             .unwrap_or(self.tcx.null);
-        crate::hir::Block { stmts, trailing, ty, span: b.span }
+        crate::hir::Block {
+            stmts,
+            trailing,
+            ty,
+            span: b.span,
+        }
     }
 
     /// Build a statement. `None` only for a block-level item with no def (which
@@ -490,7 +551,10 @@ impl<'a> Checker<'a> {
                 let ty = inner.ty;
                 (PK::Literal(Box::new(inner)), ty)
             }
-            PatternKind::TypeBinding { ty: ast_ty, binding } => {
+            PatternKind::TypeBinding {
+                ty: ast_ty,
+                binding,
+            } => {
                 let env = self.local_env();
                 let test_ty = self.lower_ty(ast_ty, &env);
                 let bind = binding.as_ref().map(|i| self.hir_local_at(i.span));
@@ -504,30 +568,64 @@ impl<'a> Checker<'a> {
             PatternKind::TupleStruct { path, fields, rest } => {
                 let def = self.hir_path_def(path);
                 let fields = fields.iter().map(|f| self.build_pattern(f)).collect();
-                (PK::TupleStruct { def, fields, rest: rest.as_ref().map(|r| self.build_rest(r)) },
-                 self.tcx.error)
+                (
+                    PK::TupleStruct {
+                        def,
+                        fields,
+                        rest: rest.as_ref().map(|r| self.build_rest(r)),
+                    },
+                    self.tcx.error,
+                )
             }
-            PatternKind::RecordStruct { path, fields, has_rest } => {
+            PatternKind::RecordStruct {
+                path,
+                fields,
+                has_rest,
+            } => {
                 let def = self.hir_path_def(path);
-                let fs = fields.iter().map(|f| self.build_field_pattern(def, f)).collect();
-                (PK::RecordStruct { def, fields: fs, has_rest: *has_rest }, self.tcx.error)
+                let fs = fields
+                    .iter()
+                    .map(|f| self.build_field_pattern(def, f))
+                    .collect();
+                (
+                    PK::RecordStruct {
+                        def,
+                        fields: fs,
+                        has_rest: *has_rest,
+                    },
+                    self.tcx.error,
+                )
             }
             PatternKind::Tuple { elems, rest } => {
                 let elems = elems.iter().map(|e| self.build_pattern(e)).collect();
-                (PK::Tuple { elems, rest: rest.as_ref().map(|(i, r)| (*i, self.build_rest(r))) },
-                 self.tcx.error)
+                (
+                    PK::Tuple {
+                        elems,
+                        rest: rest.as_ref().map(|(i, r)| (*i, self.build_rest(r))),
+                    },
+                    self.tcx.error,
+                )
             }
             PatternKind::List { elems, rest } => {
                 let elems = elems.iter().map(|e| self.build_pattern(e)).collect();
-                (PK::List { elems, rest: rest.as_ref().map(|(i, r)| (*i, self.build_rest(r))) },
-                 self.tcx.error)
+                (
+                    PK::List {
+                        elems,
+                        rest: rest.as_ref().map(|(i, r)| (*i, self.build_rest(r))),
+                    },
+                    self.tcx.error,
+                )
             }
             PatternKind::Or(ps) => {
                 let ps = ps.iter().map(|p| self.build_pattern(p)).collect();
                 (PK::Or(ps), self.tcx.error)
             }
         };
-        crate::hir::Pattern { kind, ty, span: p.span }
+        crate::hir::Pattern {
+            kind,
+            ty,
+            span: p.span,
+        }
     }
 
     fn build_field_pattern(
@@ -639,9 +737,15 @@ impl<'a> Checker<'a> {
     fn build_call_kind(&self, ce: &Expr, raw_ty: Ty) -> Option<crate::hir::ExprKind> {
         use crate::hir::{CallKind, ExprKind as H, Intrinsic};
         use crate::ids::DefId;
-        use crate::sema::results::{num_method_of, ValueRes};
+        use crate::sema::results::{ValueRes, num_method_of};
         use crate::ty::TyKind;
-        let ExprKind::Call { callee, args, trailing_closure, .. } = &ce.kind else {
+        let ExprKind::Call {
+            callee,
+            args,
+            trailing_closure,
+            ..
+        } = &ce.kind
+        else {
             unreachable!("build_call_kind on non-call");
         };
         // A trailing closure is the call's final argument.
@@ -652,7 +756,10 @@ impl<'a> Checker<'a> {
         // Build an `Intrinsic` node from the given operand expressions.
         let intrinsic = |intr: Intrinsic, ops: &[&Expr]| -> Option<H> {
             let args: Option<Vec<_>> = ops.iter().map(|e| self.hir_child(e)).collect();
-            Some(H::Intrinsic { intrinsic: intr, args: args? })
+            Some(H::Intrinsic {
+                intrinsic: intr,
+                args: args?,
+            })
         };
         // Finish a `Call`, attaching callee provenance.
         let finish = |kind: CallKind, cargs: Vec<crate::hir::Expr>| -> Option<H> {
@@ -664,7 +771,12 @@ impl<'a> Checker<'a> {
             // method-callee `Field` span) falls back to the error type rather
             // than bailing the whole node out to table-driven lowering.
             let callee_ty = self.expr_ty(callee.span).unwrap_or(self.tcx.error);
-            Some(H::Call { kind, args: cargs, callee_span, callee_ty })
+            Some(H::Call {
+                kind,
+                args: cargs,
+                callee_span,
+                callee_ty,
+            })
         };
         // Consume the call-classification facts the check methods stashed for
         // this node (was the `clone_kinds` / `static_calls`+`static_recv` /
@@ -712,7 +824,7 @@ impl<'a> Checker<'a> {
                         ("Shared", "new") => return intrinsic(Intrinsic::SharedNew, &all),
                         ("Foreign", "free") => return intrinsic(Intrinsic::ForeignFree, head1),
                         ("Foreign", "realloc") => {
-                            return intrinsic(Intrinsic::ForeignRealloc, &all[..2.min(all.len())])
+                            return intrinsic(Intrinsic::ForeignRealloc, &all[..2.min(all.len())]);
                         }
                         ("Foreign", "alloc") | ("Foreign", "alloc_zeroed") => {
                             let ty = self.hir_npo_pointee(raw_ty);
@@ -724,12 +836,19 @@ impl<'a> Checker<'a> {
                 }
             }
         }
-        // `Thread.spawn { … }`.
+        // `Thread.spawn { … }` / `Task.spawn { … }`.
         if let ExprKind::Field { receiver, name } = &callee.kind {
             if name.name == "spawn" && self.resolution(callee.span).is_none() {
-                if matches!(&receiver.kind, ExprKind::Ident(rn) if rn.name == "Thread") {
+                let spawn_ns = match &receiver.kind {
+                    ExprKind::Ident(rn) if rn.name == "Thread" => Some("Thread"),
+                    ExprKind::Ident(rn) if rn.name == "Task" => Some("Task"),
+                    _ => None,
+                };
+                if let Some(spawn_ns) = spawn_ns {
                     let out = match self.tcx.kind(raw_ty) {
-                        TyKind::Named { args, .. } => args.first().copied().unwrap_or(self.tcx.error),
+                        TyKind::Named { args, .. } => {
+                            args.first().copied().unwrap_or(self.tcx.error)
+                        }
                         _ => self.tcx.error,
                     };
                     // An async worker: the closure's value type is
@@ -749,13 +868,27 @@ impl<'a> Checker<'a> {
                             _ => false,
                         })
                         .unwrap_or(false);
-                    return intrinsic(Intrinsic::ThreadSpawn { output: out, is_async }, &all);
+                    let spawn_intrinsic = if spawn_ns == "Task" {
+                        Intrinsic::TaskSpawn {
+                            output: out,
+                            is_async,
+                        }
+                    } else {
+                        Intrinsic::ThreadSpawn {
+                            output: out,
+                            is_async,
+                        }
+                    };
+                    return intrinsic(spawn_intrinsic, &all);
                 }
             }
         }
         // --- marker-set intrinsics keyed by the call span -------------------
         if let Some((t, e)) = pending_flex {
-            return intrinsic(Intrinsic::ForeignFlex { ty: t, elem: e }, &all[..1.min(all.len())]);
+            return intrinsic(
+                Intrinsic::ForeignFlex { ty: t, elem: e },
+                &all[..1.min(all.len())],
+            );
         }
         // `fut.cancel()`.
         if let ExprKind::Field { receiver, name } = &callee.kind {
@@ -783,28 +916,61 @@ impl<'a> Checker<'a> {
         if let ExprKind::Field { receiver, name } = &callee.kind {
             if name.name == "join" && self.resolution(callee.span).is_none() {
                 let rty = self.expr_ty(receiver.span)?;
-                let jh = self.prog.join_handle_def;
-                let out = match self.tcx.kind(rty) {
-                    TyKind::Named { def, args } if jh != DefId(0) && *def == jh => {
-                        Some(args.first().copied().unwrap_or(self.tcx.error))
+                match self.tcx.kind(rty) {
+                    TyKind::Named { def, args }
+                        if self.prog.join_handle_def != DefId(0)
+                            && *def == self.prog.join_handle_def =>
+                    {
+                        let out = args.first().copied().unwrap_or(self.tcx.error);
+                        return intrinsic(Intrinsic::ThreadJoin { output: out }, &[receiver]);
                     }
-                    _ => None,
-                };
-                if let Some(out) = out {
-                    return intrinsic(Intrinsic::ThreadJoin { output: out }, &[receiver]);
+                    TyKind::Named { def, args }
+                        if self.prog.task_join_handle_def != DefId(0)
+                            && *def == self.prog.task_join_handle_def =>
+                    {
+                        let out = args.first().copied().unwrap_or(self.tcx.error);
+                        return intrinsic(Intrinsic::TaskJoin { output: out }, &[receiver]);
+                    }
+                    _ => {}
                 }
             }
         }
         // `JoinHandle<R>.detach()`.
         if let ExprKind::Field { receiver, name } = &callee.kind {
             if name.name == "detach" && self.resolution(callee.span).is_none() {
-                let jh = self.prog.join_handle_def;
-                if jh != DefId(0)
-                    && self
-                        .expr_ty(receiver.span)
-                        .is_some_and(|rty| matches!(self.tcx.kind(rty), TyKind::Named { def, .. } if *def == jh))
-                {
-                    return intrinsic(Intrinsic::ThreadDetach, &[receiver]);
+                if let Some(rty) = self.expr_ty(receiver.span) {
+                    match self.tcx.kind(rty) {
+                        TyKind::Named { def, .. }
+                            if self.prog.join_handle_def != DefId(0)
+                                && *def == self.prog.join_handle_def =>
+                        {
+                            return intrinsic(Intrinsic::ThreadDetach, &[receiver]);
+                        }
+                        TyKind::Named { def, .. }
+                            if self.prog.task_join_handle_def != DefId(0)
+                                && *def == self.prog.task_join_handle_def =>
+                        {
+                            return intrinsic(Intrinsic::TaskDetach, &[receiver]);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        // `std:task::JoinHandle<R>.cancel()` / `.abort()`.
+        if let ExprKind::Field { receiver, name } = &callee.kind {
+            if matches!(name.name.as_str(), "cancel" | "abort")
+                && self.resolution(callee.span).is_none()
+            {
+                if let Some(rty) = self.expr_ty(receiver.span) {
+                    if matches!(
+                        self.tcx.kind(rty),
+                        TyKind::Named { def, .. }
+                            if self.prog.task_join_handle_def != DefId(0)
+                                && *def == self.prog.task_join_handle_def
+                    ) {
+                        return intrinsic(Intrinsic::TaskCancel, &[receiver]);
+                    }
                 }
             }
         }
@@ -836,16 +1002,29 @@ impl<'a> Checker<'a> {
             if self.resolution(callee.span).is_none() && self.hir_is_builtin_recv(receiver)? {
                 let mut cargs = vec![self.hir_child(receiver)?];
                 cargs.extend(self.hir_args(&all)?);
-                return finish(CallKind::BuiltinMethod { name: name.name.clone() }, cargs);
+                return finish(
+                    CallKind::BuiltinMethod {
+                        name: name.name.clone(),
+                    },
+                    cargs,
+                );
             }
         }
         // --- a call through a closure / function-pointer value --------------
         let res = self.resolution(callee.span);
-        let is_value =
-            matches!(res, Some(ValueRes::Local(_)) | Some(ValueRes::Global(_)) | None);
+        let is_value = matches!(
+            res,
+            Some(ValueRes::Local(_)) | Some(ValueRes::Global(_)) | None
+        );
         if is_value {
             let cty = self.expr_ty(callee.span)?;
-            if matches!(self.tcx.kind(cty), TyKind::Func { is_extern: false, .. }) {
+            if matches!(
+                self.tcx.kind(cty),
+                TyKind::Func {
+                    is_extern: false,
+                    ..
+                }
+            ) {
                 let callee_hir = Box::new(self.hir_child(callee)?);
                 let cargs = self.hir_args(&all)?;
                 return finish(CallKind::Closure { callee: callee_hir }, cargs);
@@ -857,7 +1036,10 @@ impl<'a> Checker<'a> {
                 let kind = if self.prog.def(d).kind == DefKind::ExternFunction {
                     CallKind::Extern { def: d }
                 } else {
-                    CallKind::Direct { def: d, type_args: pending_targs.clone() }
+                    CallKind::Direct {
+                        def: d,
+                        type_args: pending_targs.clone(),
+                    }
                 };
                 finish(kind, self.hir_args(&all)?)
             }
@@ -867,7 +1049,10 @@ impl<'a> Checker<'a> {
                     TyKind::Named { args, .. } => args.clone(),
                     _ => Vec::new(),
                 };
-                finish(CallKind::TupleCtor { def: d, type_args }, self.hir_args(&all)?)
+                finish(
+                    CallKind::TupleCtor { def: d, type_args },
+                    self.hir_args(&all)?,
+                )
             }
             Some(ValueRes::Method(d)) => {
                 let type_args = pending_targs;
@@ -882,8 +1067,12 @@ impl<'a> Checker<'a> {
                 } else if let ExprKind::Field { receiver, .. } = &callee.kind {
                     let mut cargs = vec![self.hir_child(receiver)?];
                     cargs.extend(self.hir_args(&all)?);
-                    let kind =
-                        CallKind::Method { def: d, type_args, recv_static: None, is_static: false };
+                    let kind = CallKind::Method {
+                        def: d,
+                        type_args,
+                        recv_static: None,
+                        is_static: false,
+                    };
                     finish(kind, cargs)
                 } else {
                     Some(H::Error)
@@ -945,10 +1134,13 @@ impl<'a> Checker<'a> {
                         } else {
                             holes.push_back((None, Vec::new()));
                             let t = self.display(pty);
-                            self.emit(pspan, SemaErrorKind::Message(format!(
-                                "cannot interpolate `{t}`: it has no `to_str(): str` \
+                            self.emit(
+                                pspan,
+                                SemaErrorKind::Message(format!(
+                                    "cannot interpolate `{t}`: it has no `to_str(): str` \
                                  method (add one or `@Derive(ToStr)`)"
-                            )));
+                                )),
+                            );
                         }
                     } else {
                         // A builtin-typed hole — codegen formats it directly.
@@ -968,9 +1160,10 @@ impl<'a> Checker<'a> {
                     ty
                 }
                 _ => {
-                    self.emit(expr.span, SemaErrorKind::Message(
-                        "`self` is only valid inside a method".into(),
-                    ));
+                    self.emit(
+                        expr.span,
+                        SemaErrorKind::Message("`self` is only valid inside a method".into()),
+                    );
                     self.tcx.error
                 }
             },
@@ -990,16 +1183,23 @@ impl<'a> Checker<'a> {
                     .collect();
                 self.tcx.mk_tuple(tys)
             }
-            ExprKind::Unary { op, operand, op_span } => {
-                self.check_unary(*op, operand, *op_span)
-            }
-            ExprKind::Binary { op, left, right, op_span } => {
-                self.check_binary(*op, left, right, *op_span)
-            }
+            ExprKind::Unary {
+                op,
+                operand,
+                op_span,
+            } => self.check_unary(*op, operand, *op_span),
+            ExprKind::Binary {
+                op,
+                left,
+                right,
+                op_span,
+            } => self.check_binary(*op, left, right, *op_span),
             ExprKind::Block(b) => self.check_block(b, expected),
-            ExprKind::If { cond, then_block, else_branch } => {
-                self.check_if(cond, then_block, else_branch.as_ref(), expected)
-            }
+            ExprKind::If {
+                cond,
+                then_block,
+                else_branch,
+            } => self.check_if(cond, then_block, else_branch.as_ref(), expected),
             ExprKind::Return(value) => {
                 let rty = self.ret_ty;
                 match value {
@@ -1011,30 +1211,61 @@ impl<'a> Checker<'a> {
                 }
                 self.tcx.never
             }
-            ExprKind::Call { callee, args, generics, trailing_closure } => {
-                self.check_call(callee, args, generics, trailing_closure.as_deref(), expr.span)
-            }
-            ExprKind::StructLit { path, fields, spread } => {
-                self.check_struct_lit(path, fields, spread.as_deref(), expected, expr.span)
-            }
+            ExprKind::Call {
+                callee,
+                args,
+                generics,
+                trailing_closure,
+            } => self.check_call(
+                callee,
+                args,
+                generics,
+                trailing_closure.as_deref(),
+                expr.span,
+            ),
+            ExprKind::StructLit {
+                path,
+                fields,
+                spread,
+            } => self.check_struct_lit(path, fields, spread.as_deref(), expected, expr.span),
             ExprKind::Field { receiver, name } => self.check_field(receiver, name, expr.span),
-            ExprKind::TupleIndex { receiver, index, index_span } => {
-                self.check_tuple_index(receiver, *index, *index_span)
-            }
+            ExprKind::TupleIndex {
+                receiver,
+                index,
+                index_span,
+            } => self.check_tuple_index(receiver, *index, *index_span),
             ExprKind::List(elems) => self.check_list_lit(elems, expected, expr.span),
             ExprKind::MapLit(items) => self.check_map_lit(items, expected, expr.span),
             ExprKind::Index { receiver, index } => self.check_index(receiver, index),
-            ExprKind::Cast { op, expr: inner, ty, .. } => {
-                self.check_cast(*op, inner, ty, expr.span)
-            }
+            ExprKind::Cast {
+                op,
+                expr: inner,
+                ty,
+                ..
+            } => self.check_cast(*op, inner, ty, expr.span),
             ExprKind::Match { scrutinee, arms } => {
                 self.check_match(scrutinee, arms, expr.span, expected)
             }
-            ExprKind::Try { expr: inner, q_span } => self.check_try(inner, *q_span),
-            ExprKind::Ref { expr: inner, amp_span } => self.check_ref(inner, *amp_span),
-            ExprKind::Deref { expr: inner, star_span } => self.check_deref(inner, *star_span),
-            ExprKind::Await { expr: inner, kw_span } => self.check_await(inner, *kw_span),
-            ExprKind::Spawn { expr: inner, kw_span } => self.check_spawn(inner, *kw_span),
+            ExprKind::Try {
+                expr: inner,
+                q_span,
+            } => self.check_try(inner, *q_span),
+            ExprKind::Ref {
+                expr: inner,
+                amp_span,
+            } => self.check_ref(inner, *amp_span),
+            ExprKind::Deref {
+                expr: inner,
+                star_span,
+            } => self.check_deref(inner, *star_span),
+            ExprKind::Await {
+                expr: inner,
+                kw_span,
+            } => self.check_await(inner, *kw_span),
+            ExprKind::Spawn {
+                expr: inner,
+                kw_span,
+            } => self.check_spawn(inner, *kw_span),
             ExprKind::AsyncBlock(block) => self.check_async_block(block, expected, expr.span),
             ExprKind::While { cond, body } => {
                 let cty = self.check_expr(cond, Some(self.tcx.bool));
@@ -1042,18 +1273,29 @@ impl<'a> Checker<'a> {
                     let found = self.display(cty);
                     self.emit(cond.span, SemaErrorKind::NonBoolCondition { found });
                 }
-                self.loops.push(LoopFrame { is_loop: false, break_types: Vec::new() });
+                self.loops.push(LoopFrame {
+                    is_loop: false,
+                    break_types: Vec::new(),
+                });
                 self.check_block(body, None);
                 self.loops.pop();
                 self.tcx.null
             }
-            ExprKind::For { pattern, in_async, iter, body } if *in_async => {
+            ExprKind::For {
+                pattern,
+                in_async,
+                iter,
+                body,
+            } if *in_async => {
                 // `for await x in stream` (`docs/21` §10): drive an
                 // `AsyncIterator<T>` by awaiting `next_async()` each step.
                 if !self.in_async {
-                    self.emit(expr.span, SemaErrorKind::Message(
-                        "`for await` is only allowed inside an async body".into(),
-                    ));
+                    self.emit(
+                        expr.span,
+                        SemaErrorKind::Message(
+                            "`for await` is only allowed inside an async body".into(),
+                        ),
+                    );
                 }
                 let ity = self.check_expr(iter, None);
                 let (elem, driver) = match self.async_iterator_elem(ity) {
@@ -1063,18 +1305,24 @@ impl<'a> Checker<'a> {
                     }
                     None => {
                         if !self.tcx.is_error(ity) {
-                            self.emit(iter.span, SemaErrorKind::Message(format!(
-                                "`{}` is not an async stream: it has no \
+                            self.emit(
+                                iter.span,
+                                SemaErrorKind::Message(format!(
+                                    "`{}` is not an async stream: it has no \
                                  `next_async(self): Future<Item<T> | Done>` method",
-                                self.display(ity)
-                            )));
+                                    self.display(ity)
+                                )),
+                            );
                         }
                         (self.tcx.error, None)
                     }
                 };
                 self.push_scope();
                 self.bind_pattern(pattern, elem);
-                self.loops.push(LoopFrame { is_loop: false, break_types: Vec::new() });
+                self.loops.push(LoopFrame {
+                    is_loop: false,
+                    break_types: Vec::new(),
+                });
                 self.check_block(body, None);
                 self.loops.pop();
                 self.pop_scope();
@@ -1083,7 +1331,12 @@ impl<'a> Checker<'a> {
                 self.pending_for_driver.set(driver);
                 self.tcx.null
             }
-            ExprKind::For { pattern, iter, body, .. } => {
+            ExprKind::For {
+                pattern,
+                iter,
+                body,
+                ..
+            } => {
                 let ity = self.check_expr(iter, None);
                 let (elem, driver) = match self.list_elem(ity) {
                     Some(e) => (e, Some(crate::hir::ForDriver::ListFast { elem: e })),
@@ -1092,7 +1345,14 @@ impl<'a> Checker<'a> {
                         // `for entry in map` yields `Entry<K, V>` (docs/18 §6).
                         let (kt, vt) = self.map_kv(ity).unwrap();
                         let entry_ty = self.tcx.mk_named(self.prog.entry_def, vec![kt, vt]);
-                        (entry_ty, Some(crate::hir::ForDriver::Map { key: kt, value: vt, entry: entry_ty }))
+                        (
+                            entry_ty,
+                            Some(crate::hir::ForDriver::Map {
+                                key: kt,
+                                value: vt,
+                                entry: entry_ty,
+                            }),
+                        )
                     }
                     None if matches!(self.tcx.kind(ity), TyKind::Str) => {
                         // `for ch in s` ≡ `for ch in s.chars()` (docs/18 §4).
@@ -1107,23 +1367,34 @@ impl<'a> Checker<'a> {
                     None => match self.iterator_elem(ity) {
                         Some((elem, next, next_targs, item_ty, done_ty)) => {
                             let info = crate::sema::results::ForIter {
-                                elem, next, next_targs, iter_ty: ity, done_ty, item_ty,
+                                elem,
+                                next,
+                                next_targs,
+                                iter_ty: ity,
+                                done_ty,
+                                item_ty,
                             };
                             (elem, Some(crate::hir::ForDriver::Iter(info)))
                         }
                         None => {
-                            self.emit(iter.span, SemaErrorKind::Message(format!(
-                                "`{}` is not iterable: it is not a `List` and has no \
+                            self.emit(
+                                iter.span,
+                                SemaErrorKind::Message(format!(
+                                    "`{}` is not iterable: it is not a `List` and has no \
                                  `next(self): Item<T> | Done` method",
-                                self.display(ity)
-                            )));
+                                    self.display(ity)
+                                )),
+                            );
                             (self.tcx.error, None)
                         }
                     },
                 };
                 self.push_scope();
                 self.bind_pattern(pattern, elem);
-                self.loops.push(LoopFrame { is_loop: false, break_types: Vec::new() });
+                self.loops.push(LoopFrame {
+                    is_loop: false,
+                    break_types: Vec::new(),
+                });
                 self.check_block(body, None);
                 self.loops.pop();
                 self.pop_scope();
@@ -1134,7 +1405,10 @@ impl<'a> Checker<'a> {
                 self.tcx.null
             }
             ExprKind::Loop(body) => {
-                self.loops.push(LoopFrame { is_loop: true, break_types: Vec::new() });
+                self.loops.push(LoopFrame {
+                    is_loop: true,
+                    break_types: Vec::new(),
+                });
                 self.check_block(body, None);
                 let frame = self.loops.pop().unwrap();
                 // The loop's value is the union of its `break` values; with no
@@ -1151,14 +1425,18 @@ impl<'a> Checker<'a> {
                     None => self.tcx.null,
                 };
                 match self.loops.last_mut() {
-                    None => self.emit(expr.span, SemaErrorKind::LoopControlOutsideLoop {
-                        kw: "break",
-                    }),
+                    None => self.emit(
+                        expr.span,
+                        SemaErrorKind::LoopControlOutsideLoop { kw: "break" },
+                    ),
                     Some(frame) => {
                         if value.is_some() && !frame.is_loop {
-                            self.emit(expr.span, SemaErrorKind::Message(
-                                "only `loop` can `break` with a value".into(),
-                            ));
+                            self.emit(
+                                expr.span,
+                                SemaErrorKind::Message(
+                                    "only `loop` can `break` with a value".into(),
+                                ),
+                            );
                         } else {
                             frame.break_types.push(vty);
                         }
@@ -1168,21 +1446,33 @@ impl<'a> Checker<'a> {
             }
             ExprKind::Continue => {
                 if self.loops.is_empty() {
-                    self.emit(expr.span, SemaErrorKind::LoopControlOutsideLoop {
-                        kw: "continue",
-                    });
+                    self.emit(
+                        expr.span,
+                        SemaErrorKind::LoopControlOutsideLoop { kw: "continue" },
+                    );
                 }
                 self.tcx.never
             }
-            ExprKind::Closure { params, return_type, is_async, body } => {
-                self.check_closure(
-                    params, return_type.as_ref(), body, *is_async, expected, expr.span,
-                )
-            }
+            ExprKind::Closure {
+                params,
+                return_type,
+                is_async,
+                body,
+            } => self.check_closure(
+                params,
+                return_type.as_ref(),
+                body,
+                *is_async,
+                expected,
+                expr.span,
+            ),
             _ => {
-                self.emit(expr.span, SemaErrorKind::Message(
-                    "this expression form is not yet supported by the type checker".into(),
-                ));
+                self.emit(
+                    expr.span,
+                    SemaErrorKind::Message(
+                        "this expression form is not yet supported by the type checker".into(),
+                    ),
+                );
                 self.tcx.error
             }
         }
@@ -1222,7 +1512,10 @@ impl<'a> Checker<'a> {
         };
         let env = self.local_env();
         let first_local = self.next_local;
-        self.closure_stack.push(ClosureFrame { first_local, captures: Vec::new() });
+        self.closure_stack.push(ClosureFrame {
+            first_local,
+            captures: Vec::new(),
+        });
         self.push_scope();
 
         // Implicit `it`: a parameterless closure with a one-parameter expected
@@ -1230,7 +1523,10 @@ impl<'a> Checker<'a> {
         let mut synth_it: Vec<ClosureParam> = Vec::new();
         let params: &[ClosureParam] = if params.is_empty() && exp_params.len() == 1 {
             synth_it.push(ClosureParam {
-                name: Ident { name: "it".into(), span },
+                name: Ident {
+                    name: "it".into(),
+                    span,
+                },
                 ty: None,
                 span,
             });
@@ -1244,10 +1540,13 @@ impl<'a> Checker<'a> {
             let pty = match &p.ty {
                 Some(t) => self.lower_ty(t, &env),
                 None => exp_params.get(i).copied().unwrap_or_else(|| {
-                    self.emit(p.span, SemaErrorKind::Message(format!(
-                        "cannot infer the type of closure parameter `{}`; annotate it",
-                        p.name.name
-                    )));
+                    self.emit(
+                        p.span,
+                        SemaErrorKind::Message(format!(
+                            "cannot infer the type of closure parameter `{}`; annotate it",
+                            p.name.name
+                        )),
+                    );
                     self.tcx.error
                 }),
             };
@@ -1281,19 +1580,21 @@ impl<'a> Checker<'a> {
             // recorded `AsyncInfo` drives state-machine lowering.
             let fut_ty = self.tcx.mk_named(self.prog.future_def, vec![body_out]);
             let _ = span;
-            self.pending_async.set(Some(crate::sema::results::AsyncInfo {
-                output: body_out,
-                params: param_locals,
-                captures: frame.captures,
-            }));
+            self.pending_async
+                .set(Some(crate::sema::results::AsyncInfo {
+                    output: body_out,
+                    params: param_locals,
+                    captures: frame.captures,
+                }));
             return self.tcx.mk_func(param_tys, fut_ty, false);
         }
         let _ = span;
-        self.pending_closure.set(Some(crate::sema::results::ClosureInfo {
-            params: param_locals,
-            captures: frame.captures,
-            ret: body_out,
-        }));
+        self.pending_closure
+            .set(Some(crate::sema::results::ClosureInfo {
+                params: param_locals,
+                captures: frame.captures,
+                ret: body_out,
+            }));
         self.tcx.mk_func(param_tys, body_out, false)
     }
 
@@ -1304,11 +1605,14 @@ impl<'a> Checker<'a> {
     pub(crate) fn check_await(&mut self, inner: &Expr, kw_span: Span) -> Ty {
         let fty = self.check_expr(inner, None);
         if !self.in_async {
-            self.emit(kw_span, SemaErrorKind::Message(
-                "`await` is only allowed inside an `async` function, `async` closure, \
+            self.emit(
+                kw_span,
+                SemaErrorKind::Message(
+                    "`await` is only allowed inside an `async` function, `async` closure, \
                  or `async { … }` block"
-                    .into(),
-            ));
+                        .into(),
+                ),
+            );
         }
         if self.tcx.is_error(fty) {
             return self.tcx.error;
@@ -1321,9 +1625,12 @@ impl<'a> Checker<'a> {
             }
             None => {
                 let t = self.display(fty);
-                self.emit(inner.span, SemaErrorKind::Message(format!(
-                    "`await` requires a `Future`, but `{t}` is not one"
-                )));
+                self.emit(
+                    inner.span,
+                    SemaErrorKind::Message(format!(
+                        "`await` requires a `Future`, but `{t}` is not one"
+                    )),
+                );
                 self.tcx.error
             }
         }
@@ -1346,9 +1653,12 @@ impl<'a> Checker<'a> {
             }
             None => {
                 let t = self.display(fty);
-                self.emit(inner.span, SemaErrorKind::Message(format!(
-                    "`spawn` requires a `Future`, but `{t}` is not one"
-                )));
+                self.emit(
+                    inner.span,
+                    SemaErrorKind::Message(format!(
+                        "`spawn` requires a `Future`, but `{t}` is not one"
+                    )),
+                );
                 self.tcx.error
             }
         }
@@ -1357,21 +1667,30 @@ impl<'a> Checker<'a> {
     /// Type-check a bare `async { … }` block (`docs/21` §6): a zero-argument
     /// inline future literal. Captures enclosing locals (like a closure) and
     /// yields `Future<Output>` where `Output` is the block's trailing type.
-    pub(crate) fn check_async_block(&mut self, block: &Block, expected: Option<Ty>, span: Span) -> Ty {
+    pub(crate) fn check_async_block(
+        &mut self,
+        block: &Block,
+        expected: Option<Ty>,
+        span: Span,
+    ) -> Ty {
         let out_expected = expected.and_then(|e| self.future_output(e));
         let first_local = self.next_local;
-        self.closure_stack.push(ClosureFrame { first_local, captures: Vec::new() });
+        self.closure_stack.push(ClosureFrame {
+            first_local,
+            captures: Vec::new(),
+        });
         let prev_async = self.in_async;
         self.in_async = true;
         let out = self.check_block(block, out_expected);
         self.in_async = prev_async;
         let frame = self.closure_stack.pop().expect("async block frame");
         let _ = span;
-        self.pending_async.set(Some(crate::sema::results::AsyncInfo {
-            output: out,
-            params: Vec::new(),
-            captures: frame.captures,
-        }));
+        self.pending_async
+            .set(Some(crate::sema::results::AsyncInfo {
+                output: out,
+                params: Vec::new(),
+                captures: frame.captures,
+            }));
         self.tcx.mk_named(self.prog.future_def, vec![out])
     }
 
@@ -1450,7 +1769,12 @@ impl<'a> Checker<'a> {
             self.record_res(span, res, t);
             return t;
         }
-        self.emit(span, SemaErrorKind::UnknownValue { name: name.to_string() });
+        self.emit(
+            span,
+            SemaErrorKind::UnknownValue {
+                name: name.to_string(),
+            },
+        );
         self.tcx.error
     }
 
@@ -1488,7 +1812,13 @@ impl<'a> Checker<'a> {
 
     /// Check `expr as T` / `expr is T`. `is` always yields `bool`; `as` yields
     /// `T` when the conversion is defined (`docs/12` §2, `docs/02` §1).
-    pub(crate) fn check_cast(&mut self, op: CastOp, inner: &Expr, target: &Type, cast_span: Span) -> Ty {
+    pub(crate) fn check_cast(
+        &mut self,
+        op: CastOp,
+        inner: &Expr,
+        target: &Type,
+        cast_span: Span,
+    ) -> Ty {
         let env = self.local_env();
         let to = self.lower_ty(target, &env);
         let from = self.check_expr(inner, None);
@@ -1550,7 +1880,8 @@ impl<'a> Checker<'a> {
         if from_ptr && to_ptr {
             return true;
         }
-        let is_ptr_int = |t: Ty| matches!(self.tcx.kind(t), TyKind::Int(IntTy::Usize | IntTy::Isize));
+        let is_ptr_int =
+            |t: Ty| matches!(self.tcx.kind(t), TyKind::Int(IntTy::Usize | IntTy::Isize));
         if (from_ptr && is_ptr_int(to)) || (to_ptr && is_ptr_int(from)) {
             return true;
         }
@@ -1587,9 +1918,7 @@ impl<'a> Checker<'a> {
             DefKind::ExternVar => {
                 let env = self.def_env(def, None);
                 match self.prog.def(def).item.clone() {
-                    Some(ItemKind::Extern(ExternItem::Var { ty, .. })) => {
-                        self.lower_ty(&ty, &env)
-                    }
+                    Some(ItemKind::Extern(ExternItem::Var { ty, .. })) => self.lower_ty(&ty, &env),
                     _ => self.tcx.error,
                 }
             }
@@ -1606,9 +1935,7 @@ impl<'a> Checker<'a> {
         let env = self.def_env(def, None);
         let (params, ret, is_extern) = match self.prog.def(def).item.clone() {
             Some(ItemKind::Function(f)) => (f.params, f.return_type, false),
-            Some(ItemKind::Extern(ExternItem::Function(f))) => {
-                (f.params, f.return_type, true)
-            }
+            Some(ItemKind::Extern(ExternItem::Function(f))) => (f.params, f.return_type, true),
             _ => return self.tcx.error,
         };
         let mut ptys = Vec::new();
@@ -1639,7 +1966,9 @@ impl<'a> Checker<'a> {
         let type_name = match &callee.kind {
             ExprKind::Ident(name) => &name.name,
             ExprKind::Field { receiver, name } if name.name == "new" => {
-                let ExprKind::Ident(recv) = &receiver.kind else { return None };
+                let ExprKind::Ident(recv) = &receiver.kind else {
+                    return None;
+                };
                 &recv.name
             }
             _ => return None,
@@ -1657,22 +1986,34 @@ impl<'a> Checker<'a> {
         let tys: Vec<Ty> = if generics.len() == arity {
             generics.iter().map(|t| self.lower_ty(t, &env)).collect()
         } else {
-            self.emit(span, SemaErrorKind::Message(format!(
-                "`{kind}` constructor needs {arity} explicit type argument(s)"
-            )));
+            self.emit(
+                span,
+                SemaErrorKind::Message(format!(
+                    "`{kind}` constructor needs {arity} explicit type argument(s)"
+                )),
+            );
             return Some(self.tcx.error);
         };
         if !args.is_empty() {
-            self.emit(span, SemaErrorKind::ArgCount { expected: 0, found: args.len() });
+            self.emit(
+                span,
+                SemaErrorKind::ArgCount {
+                    expected: 0,
+                    found: args.len(),
+                },
+            );
             for a in args {
                 self.check_expr(a, None);
             }
         }
         if is_map && !self.is_valid_map_key(tys[0]) && !self.tcx.is_error(tys[0]) {
-            self.emit(span, SemaErrorKind::Message(format!(
-                "`{}` cannot be used as a map key (expected `str` or an integer type)",
-                self.display(tys[0])
-            )));
+            self.emit(
+                span,
+                SemaErrorKind::Message(format!(
+                    "`{}` cannot be used as a map key (expected `str` or an integer type)",
+                    self.display(tys[0])
+                )),
+            );
         }
         let ty = self.tcx.mk_named(def, tys);
         Some(ty)
@@ -1720,7 +2061,10 @@ impl<'a> Checker<'a> {
         // function path (`panic_with<T>` is generic), unless shadowed by a local.
         if let ExprKind::Ident(name) = &callee.kind {
             if self.lookup(&name.name).is_none() {
-                if let Some(def) = self.prog.resolve_value_in(self.current_module(), &name.name) {
+                if let Some(def) = self
+                    .prog
+                    .resolve_value_in(self.current_module(), &name.name)
+                {
                     if let Some(b) = self.prog.builtin_of_def(def) {
                         let t = self.builtin_ty(b);
                         self.record_res(callee.span, ValueRes::Builtin(b), t);
@@ -1739,14 +2083,26 @@ impl<'a> Checker<'a> {
         if let ExprKind::Ident(name) = &callee.kind {
             if name.name == "yield_now" && self.intr_fn("yield_now") {
                 if !args.is_empty() {
-                    self.emit(span, SemaErrorKind::ArgCount { expected: 0, found: args.len() });
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 0,
+                            found: args.len(),
+                        },
+                    );
                 }
                 return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.null]);
             }
             // `sleep(ms)` (`docs/21` §9): a `Future<null>` completing after a delay.
             if name.name == "sleep" && self.intr_fn("sleep") {
                 if args.len() != 1 {
-                    self.emit(span, SemaErrorKind::ArgCount { expected: 1, found: args.len() });
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 1,
+                            found: args.len(),
+                        },
+                    );
                 } else {
                     let i64t = self.tcx.int(IntTy::I64);
                     let a = self.check_expr(&args[0], Some(i64t));
@@ -1758,7 +2114,13 @@ impl<'a> Checker<'a> {
             // future against a deadline.
             if name.name == "timeout" && self.intr_fn("timeout") {
                 if args.len() != 2 {
-                    self.emit(span, SemaErrorKind::ArgCount { expected: 2, found: args.len() });
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 2,
+                            found: args.len(),
+                        },
+                    );
                     return self.tcx.error;
                 }
                 let ft = self.check_expr(&args[0], None);
@@ -1767,10 +2129,13 @@ impl<'a> Checker<'a> {
                 self.expect(m, i64t, args[1].span);
                 let Some(out) = self.future_output(ft) else {
                     if !self.tcx.is_error(ft) {
-                        self.emit(args[0].span, SemaErrorKind::Message(format!(
-                            "`timeout` expects a future as its first argument, found `{}`",
-                            self.display(ft)
-                        )));
+                        self.emit(
+                            args[0].span,
+                            SemaErrorKind::Message(format!(
+                                "`timeout` expects a future as its first argument, found `{}`",
+                                self.display(ft)
+                            )),
+                        );
                     }
                     return self.tcx.error;
                 };
@@ -1816,8 +2181,7 @@ impl<'a> Checker<'a> {
         if let ExprKind::Field { receiver, name } = &callee.kind {
             if let ExprKind::Ident(m) = &receiver.kind {
                 if self.lookup(&m.name).is_none() {
-                    if let Some(target) =
-                        self.prog.namespace_target(self.current_module(), &m.name)
+                    if let Some(target) = self.prog.namespace_target(self.current_module(), &m.name)
                     {
                         return self.check_namespaced_call(
                             target, &m.name, callee, name, args, _generics, trailing, span,
@@ -1826,13 +2190,19 @@ impl<'a> Checker<'a> {
                 }
             }
         }
-        // `Thread.spawn { … }` (`docs/20` §1): a builtin that runs a closure on
-        // a new OS thread. `Thread` is not a real binding, so this is recognised
-        // before the method-call path.
+        // `Thread.spawn { … }` / `Task.spawn { … }`: builtin spawn namespaces.
+        // Recognised before the method-call path.
         if let ExprKind::Field { receiver, name } = &callee.kind {
             if let ExprKind::Ident(m) = &receiver.kind {
-                if m.name == "Thread" && name.name == "spawn" && self.intr_ns(&m.name) {
-                    return self.check_thread_spawn(args, trailing, span);
+                if matches!(m.name.as_str(), "Thread" | "Task")
+                    && name.name == "spawn"
+                    && self.intr_ns(&m.name)
+                {
+                    return if m.name == "Task" {
+                        self.check_task_spawn(args, trailing, span)
+                    } else {
+                        self.check_thread_spawn(args, trailing, span)
+                    };
                 }
             }
         }
@@ -1843,11 +2213,20 @@ impl<'a> Checker<'a> {
         if let ExprKind::Field { receiver, name } = &callee.kind {
             if let ExprKind::Ident(recv_id) = &receiver.kind {
                 if self.lookup(&recv_id.name).is_none()
-                    && self.prog.namespace_target(self.current_module(), &recv_id.name).is_none()
+                    && self
+                        .prog
+                        .namespace_target(self.current_module(), &recv_id.name)
+                        .is_none()
                 {
-                    if let Some(ty) =
-                        self.try_static_call(&recv_id.name, callee, name, args, _generics, trailing, span)
-                    {
+                    if let Some(ty) = self.try_static_call(
+                        &recv_id.name,
+                        callee,
+                        name,
+                        args,
+                        _generics,
+                        trailing,
+                        span,
+                    ) {
                         return ty;
                     }
                 }
@@ -1864,9 +2243,8 @@ impl<'a> Checker<'a> {
                     callee, receiver, name, &all, _generics, span,
                 );
             }
-            return self.check_method_call_with_generics(
-                callee, receiver, name, args, _generics, span,
-            );
+            return self
+                .check_method_call_with_generics(callee, receiver, name, args, _generics, span);
         }
         // `Pair(a, b)` on a tuple struct is direct construction, not a call
         // (docs/09 §10 — tuple structs are not rewritten to `.new`).
@@ -1874,14 +2252,19 @@ impl<'a> Checker<'a> {
             if self.lookup(&name.name).is_none() {
                 let module = self.current_module();
                 if let Some(def) = self.prog.resolve_type_in(module, &name.name) {
-                    if matches!(self.prog.def(def).kind, DefKind::Struct | DefKind::ExternStruct) {
+                    if matches!(
+                        self.prog.def(def).kind,
+                        DefKind::Struct | DefKind::ExternStruct
+                    ) {
                         return self.check_tuple_ctor(def, callee, args, span);
                     }
                 }
                 // A generic free function: infer/substitute its type arguments.
                 if let Some(def) = self.prog.resolve_value_in(module, &name.name) {
-                    if matches!(self.prog.def(def).kind, DefKind::Function | DefKind::ExternFunction)
-                        && !self.prog.def(def).generics.is_empty()
+                    if matches!(
+                        self.prog.def(def).kind,
+                        DefKind::Function | DefKind::ExternFunction
+                    ) && !self.prog.def(def).generics.is_empty()
                     {
                         return self.check_generic_call(def, callee, args, _generics, span);
                     }
@@ -1895,9 +2278,17 @@ impl<'a> Checker<'a> {
         // function pointer over its fixed prefix — handled by the normal path.)
         if let ExprKind::Ident(name) = &callee.kind {
             if self.lookup(&name.name).is_none() {
-                if let Some(def) = self.prog.resolve_value_in(self.current_module(), &name.name) {
+                if let Some(def) = self
+                    .prog
+                    .resolve_value_in(self.current_module(), &name.name)
+                {
                     if self.prog.def(def).kind == DefKind::ExternFunction
-                        && self.prog.def(def).attrs.iter().any(|a| a.name.name == "Variadic")
+                        && self
+                            .prog
+                            .def(def)
+                            .attrs
+                            .iter()
+                            .any(|a| a.name.name == "Variadic")
                     {
                         return self.check_variadic_call(callee, args, trailing, span);
                     }
@@ -1932,14 +2323,24 @@ impl<'a> Checker<'a> {
         let n_fixed = params.len();
         // A trailing closure is never a C variadic argument.
         if let Some(tc) = trailing {
-            self.emit(tc.span, SemaErrorKind::Message(
-                "a trailing closure cannot be passed to a variadic `extern function` \
-                 (`docs/19` §13)".into(),
-            ));
+            self.emit(
+                tc.span,
+                SemaErrorKind::Message(
+                    "a trailing closure cannot be passed to a variadic `extern function` \
+                 (`docs/19` §13)"
+                        .into(),
+                ),
+            );
         }
         // At least the fixed prefix must be supplied.
         if args.len() < n_fixed {
-            self.emit(span, SemaErrorKind::ArgCount { expected: n_fixed, found: args.len() });
+            self.emit(
+                span,
+                SemaErrorKind::ArgCount {
+                    expected: n_fixed,
+                    found: args.len(),
+                },
+            );
         }
         for (i, arg) in args.iter().enumerate() {
             if i < n_fixed {
@@ -1953,12 +2354,15 @@ impl<'a> Checker<'a> {
                 let aty = self.check_expr(arg, None);
                 if !self.tcx.is_error(aty) && !self.is_variadic_passable(aty) {
                     let found = self.display(aty);
-                    self.emit(arg.span, SemaErrorKind::Message(format!(
-                        "`{found}` cannot be passed as a variadic argument to an `extern \
+                    self.emit(
+                        arg.span,
+                        SemaErrorKind::Message(format!(
+                            "`{found}` cannot be passed as a variadic argument to an `extern \
                          function`; only numeric, `bool`, `char`, raw pointer (`*T`), and \
                          C-function-pointer types may cross the C variadic boundary — pass a \
                          C string (`*u8`) rather than a `str` (`docs/19` §13)"
-                    )));
+                        )),
+                    );
                 }
             }
         }
@@ -1980,7 +2384,10 @@ impl<'a> Checker<'a> {
                 | TyKind::Bool
                 | TyKind::Char
                 | TyKind::Ptr(_)
-                | TyKind::Func { is_extern: true, .. }
+                | TyKind::Func {
+                    is_extern: true,
+                    ..
+                }
         )
     }
 
@@ -1992,9 +2399,17 @@ impl<'a> Checker<'a> {
         use crate::sema::results::StructFields as SF;
         let mut ty = ty;
         loop {
-            let TyKind::Named { def, .. } = self.tcx.kind(ty) else { return ty };
+            let TyKind::Named { def, .. } = self.tcx.kind(ty) else {
+                return ty;
+            };
             let def = *def;
-            if !self.prog.def(def).attrs.iter().any(|a| a.name.name == "Transparent") {
+            if !self
+                .prog
+                .def(def)
+                .attrs
+                .iter()
+                .any(|a| a.name.name == "Transparent")
+            {
                 return ty;
             }
             match self.hir.structs.get(&def) {
@@ -2020,10 +2435,13 @@ impl<'a> Checker<'a> {
         };
         let total_args = args.len() + usize::from(trailing.is_some());
         if total_args != params.len() {
-            self.emit(span, SemaErrorKind::ArgCount {
-                expected: params.len(),
-                found: total_args,
-            });
+            self.emit(
+                span,
+                SemaErrorKind::ArgCount {
+                    expected: params.len(),
+                    found: total_args,
+                },
+            );
         }
         for (i, arg) in args.iter().enumerate() {
             let exp = params.get(i).copied();
@@ -2056,14 +2474,20 @@ impl<'a> Checker<'a> {
         span: Span,
     ) -> Ty {
         let Some(def) = self.prog.resolve_pub_value_in(target, &name.name) else {
-            self.emit(name.span, SemaErrorKind::Message(format!(
-                "no public value `{}` in module `{alias}`", name.name
-            )));
+            self.emit(
+                name.span,
+                SemaErrorKind::Message(format!(
+                    "no public value `{}` in module `{alias}`",
+                    name.name
+                )),
+            );
             return self.tcx.error;
         };
         // A generic free function: infer/substitute its type arguments.
-        if matches!(self.prog.def(def).kind, DefKind::Function | DefKind::ExternFunction)
-            && !self.prog.def(def).generics.is_empty()
+        if matches!(
+            self.prog.def(def).kind,
+            DefKind::Function | DefKind::ExternFunction
+        ) && !self.prog.def(def).generics.is_empty()
         {
             return self.check_generic_call(def, callee, args, generics, span);
         }
@@ -2071,5 +2495,4 @@ impl<'a> Checker<'a> {
         let callee_ty = self.value_def_ty(def);
         self.check_args_against(callee_ty, args, trailing, span)
     }
-
 }

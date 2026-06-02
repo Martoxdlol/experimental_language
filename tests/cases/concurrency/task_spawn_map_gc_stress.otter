@@ -1,0 +1,65 @@
+//@ kind: run
+//@ serial
+//@ env: OTTER_FUSION_TASK_WORKERS=4
+//@ env: OTTER_FUSION_GC=stress
+//@ description: Task.spawn workers keep Map locals alive across async loop safepoints and await suspensions under stress GC
+//@ stdout:
+//~ weights=1240 joined=7440
+import { println } from "std:io";
+import { Future } from "core:prelude";
+import { List, Map } from "core:collections";
+import { Task, JoinHandle, Joined, Panicked, Cancelled } from "std:task";
+import { yield_now } from "std:async";
+
+function joined_value(r: Joined<i64> | Panicked | Cancelled): i64 {
+  match r {
+    Joined<i64> j => j.value,
+    Panicked p => -1,
+    Cancelled c => -2,
+  }
+}
+
+function main(): Future<null> async {
+  var weights: Map<i64, i64> = Map<i64, i64>();
+  var handles: List<JoinHandle<i64>> = [];
+
+  var i: i64 = 0;
+  while i < 16 {
+    var n = i;
+    weights.set(i, i * i);
+    handles.push(Task.spawn(() async => {
+      var seen: Map<i64, i64> = Map<i64, i64>();
+      var j: i64 = 0;
+      while j < 6 {
+        seen.set(j, n * 10 + j);
+        var _ = await yield_now();
+        j = j + 1;
+      }
+
+      var total: i64 = 0;
+      var k: i64 = 0;
+      while k < 6 {
+        total = total + seen[k];
+        k = k + 1;
+      }
+      total
+    }));
+    i = i + 1;
+  }
+
+  var weight_total: i64 = 0;
+  var wi: i64 = 0;
+  while wi < 16 {
+    weight_total = weight_total + weights[wi];
+    wi = wi + 1;
+  }
+
+  var joined: i64 = 0;
+  var hi: i64 = 0;
+  while hi < handles.size() {
+    joined = joined + joined_value(await handles[hi].join());
+    hi = hi + 1;
+  }
+
+  println("weights=${weight_total} joined=${joined}");
+}

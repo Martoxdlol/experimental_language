@@ -65,7 +65,11 @@ impl<'a> Checker<'a> {
     ) -> Vec<Ty> {
         let mut map: HashMap<DefId, Ty> = HashMap::new();
         if let Some(exp) = expected {
-            if let TyKind::Named { def: edef, args: eargs } = self.tcx.kind(exp).clone() {
+            if let TyKind::Named {
+                def: edef,
+                args: eargs,
+            } = self.tcx.kind(exp).clone()
+            {
                 if edef == def && eargs.len() == gens.len() {
                     for (g, a) in gens.iter().zip(&eargs) {
                         map.insert(*g, *a);
@@ -92,10 +96,13 @@ impl<'a> Checker<'a> {
                 Some(t) => args.push(t),
                 None => {
                     let gname = self.prog.def(*g).name.clone();
-                    self.emit(span, SemaErrorKind::Message(format!(
-                        "cannot infer generic argument `{}` for `{}`; annotate it",
-                        gname, path.name.name
-                    )));
+                    self.emit(
+                        span,
+                        SemaErrorKind::Message(format!(
+                            "cannot infer generic argument `{}` for `{}`; annotate it",
+                            gname, path.name.name
+                        )),
+                    );
                     args.push(self.tcx.error);
                 }
             }
@@ -113,18 +120,33 @@ impl<'a> Checker<'a> {
     ) -> Ty {
         let module = self.current_module();
         let Some(def) = self.prog.resolve_type_in(module, &path.name.name) else {
-            self.emit(path.span, SemaErrorKind::UnknownType { name: path.name.name.clone() });
+            self.emit(
+                path.span,
+                SemaErrorKind::UnknownType {
+                    name: path.name.name.clone(),
+                },
+            );
             return self.tcx.error;
         };
-        if !matches!(self.prog.def(def).kind, DefKind::Struct | DefKind::ExternStruct) {
-            self.emit(path.span, SemaErrorKind::Message(format!(
-                "`{}` is not a struct and cannot be constructed with `{{ }}`",
-                path.name.name
-            )));
+        if !matches!(
+            self.prog.def(def).kind,
+            DefKind::Struct | DefKind::ExternStruct
+        ) {
+            self.emit(
+                path.span,
+                SemaErrorKind::Message(format!(
+                    "`{}` is not a struct and cannot be constructed with `{{ }}`",
+                    path.name.name
+                )),
+            );
             return self.tcx.error;
         }
         let env = self.local_env();
-        let explicit: Vec<Ty> = path.generics.iter().map(|g| self.lower_ty(g, &env)).collect();
+        let explicit: Vec<Ty> = path
+            .generics
+            .iter()
+            .map(|g| self.lower_ty(g, &env))
+            .collect();
         let gens = self.prog.def(def).generics.clone();
         // When the generic arguments are not written out, infer them from the
         // field values (seeded by the expected type), mirroring generic calls.
@@ -135,9 +157,10 @@ impl<'a> Checker<'a> {
             explicit
         };
         let Some(declared) = self.record_fields(def, &args) else {
-            self.emit(span, SemaErrorKind::Message(format!(
-                "`{}` is not a record struct", path.name.name
-            )));
+            self.emit(
+                span,
+                SemaErrorKind::Message(format!("`{}` is not a record struct", path.name.name)),
+            );
             return self.tcx.error;
         };
 
@@ -147,10 +170,13 @@ impl<'a> Checker<'a> {
                 Some((_, fty)) => {
                     let fty = *fty;
                     if !seen.insert(fi.name.name.clone()) {
-                        self.emit(fi.name.span, SemaErrorKind::DuplicateField {
-                            struct_name: path.name.name.clone(),
-                            name: fi.name.name.clone(),
-                        });
+                        self.emit(
+                            fi.name.span,
+                            SemaErrorKind::DuplicateField {
+                                struct_name: path.name.name.clone(),
+                                name: fi.name.name.clone(),
+                            },
+                        );
                     }
                     match &fi.value {
                         Some(v) => {
@@ -179,10 +205,13 @@ impl<'a> Checker<'a> {
                         }
                     }
                 }
-                None => self.emit(fi.span, SemaErrorKind::UnknownStructField {
-                    struct_name: path.name.name.clone(),
-                    name: fi.name.name.clone(),
-                }),
+                None => self.emit(
+                    fi.span,
+                    SemaErrorKind::UnknownStructField {
+                        struct_name: path.name.name.clone(),
+                        name: fi.name.name.clone(),
+                    },
+                ),
             }
         }
 
@@ -198,11 +227,15 @@ impl<'a> Checker<'a> {
                 // active), so the all-fields-present rule does not apply.
                 if self.is_union_extern_struct(def) {
                     if seen.len() != 1 {
-                        self.emit(span, SemaErrorKind::Message(format!(
-                            "a `@Union` extern struct literal must initialize exactly one \
+                        self.emit(
+                            span,
+                            SemaErrorKind::Message(format!(
+                                "a `@Union` extern struct literal must initialize exactly one \
                              field, but `{}` initializes {}",
-                            path.name.name, seen.len()
-                        )));
+                                path.name.name,
+                                seen.len()
+                            )),
+                        );
                     }
                 } else if self.prog.def(def).kind == DefKind::ExternStruct {
                     // A (non-union) extern struct literal may omit fields; the
@@ -212,10 +245,13 @@ impl<'a> Checker<'a> {
                 } else {
                     for (n, _) in &declared {
                         if !seen.contains(n) {
-                            self.emit(span, SemaErrorKind::MissingField {
-                                struct_name: path.name.name.clone(),
-                                name: n.clone(),
-                            });
+                            self.emit(
+                                span,
+                                SemaErrorKind::MissingField {
+                                    struct_name: path.name.name.clone(),
+                                    name: n.clone(),
+                                },
+                            );
                         }
                     }
                 }
@@ -224,23 +260,36 @@ impl<'a> Checker<'a> {
         result
     }
 
-    pub(crate) fn check_tuple_ctor(&mut self, def: DefId, callee: &Expr, args: &[Expr], span: Span) -> Ty {
+    pub(crate) fn check_tuple_ctor(
+        &mut self,
+        def: DefId,
+        callee: &Expr,
+        args: &[Expr],
+        span: Span,
+    ) -> Ty {
         self.record_res(callee.span, ValueRes::StructCtor(def), self.tcx.error);
         let gens = self.prog.def(def).generics.clone();
 
         // Non-generic tuple struct: check args against the declared field types.
         if gens.is_empty() {
             let Some(field_tys) = self.tuple_fields(def, &[]) else {
-                self.emit(span, SemaErrorKind::Message(
-                    "only tuple structs are constructed by call".into(),
-                ));
+                self.emit(
+                    span,
+                    SemaErrorKind::Message("only tuple structs are constructed by call".into()),
+                );
                 for a in args {
                     self.check_expr(a, None);
                 }
                 return self.tcx.error;
             };
             if args.len() != field_tys.len() {
-                self.emit(span, SemaErrorKind::ArgCount { expected: field_tys.len(), found: args.len() });
+                self.emit(
+                    span,
+                    SemaErrorKind::ArgCount {
+                        expected: field_tys.len(),
+                        found: args.len(),
+                    },
+                );
             }
             for (a, fty) in args.iter().zip(&field_tys) {
                 let at = self.check_expr(a, Some(*fty));
@@ -253,16 +302,23 @@ impl<'a> Checker<'a> {
         // argument types (mirroring `infer_struct_args` for record literals).
         let param_args: Vec<Ty> = gens.iter().map(|g| self.tcx.mk_param(*g)).collect();
         let Some(declared) = self.tuple_fields(def, &param_args) else {
-            self.emit(span, SemaErrorKind::Message(
-                "only tuple structs are constructed by call".into(),
-            ));
+            self.emit(
+                span,
+                SemaErrorKind::Message("only tuple structs are constructed by call".into()),
+            );
             for a in args {
                 self.check_expr(a, None);
             }
             return self.tcx.error;
         };
         if args.len() != declared.len() {
-            self.emit(span, SemaErrorKind::ArgCount { expected: declared.len(), found: args.len() });
+            self.emit(
+                span,
+                SemaErrorKind::ArgCount {
+                    expected: declared.len(),
+                    found: args.len(),
+                },
+            );
         }
         let mut map: HashMap<DefId, Ty> = HashMap::new();
         for (a, pfty) in args.iter().zip(&declared) {
@@ -275,11 +331,14 @@ impl<'a> Checker<'a> {
                 Some(t) => targs.push(t),
                 None => {
                     let gname = self.prog.def(*g).name.clone();
-                    self.emit(span, SemaErrorKind::Message(format!(
-                        "cannot infer generic argument `{}` for `{}`; annotate it",
-                        gname,
-                        self.prog.def(def).name
-                    )));
+                    self.emit(
+                        span,
+                        SemaErrorKind::Message(format!(
+                            "cannot infer generic argument `{}` for `{}`; annotate it",
+                            gname,
+                            self.prog.def(def).name
+                        )),
+                    );
                     targs.push(self.tcx.error);
                 }
             }
@@ -315,10 +374,13 @@ impl<'a> Checker<'a> {
                 }
             }
         }
-        self.emit(name.span, SemaErrorKind::NoField {
-            ty: self.display(rty),
-            name: name.name.clone(),
-        });
+        self.emit(
+            name.span,
+            SemaErrorKind::NoField {
+                ty: self.display(rty),
+                name: name.name.clone(),
+            },
+        );
         self.tcx.error
     }
 
@@ -330,9 +392,13 @@ impl<'a> Checker<'a> {
         let i = index as usize;
         match self.tcx.kind(rty).clone() {
             TyKind::Tuple(elems) => elems.get(i).copied().unwrap_or_else(|| {
-                self.emit(span, SemaErrorKind::Message(format!(
-                    "tuple index {index} out of range for `{}`", self.display(rty)
-                )));
+                self.emit(
+                    span,
+                    SemaErrorKind::Message(format!(
+                        "tuple index {index} out of range for `{}`",
+                        self.display(rty)
+                    )),
+                );
                 self.tcx.error
             }),
             TyKind::Named { def, args } => {
@@ -341,18 +407,25 @@ impl<'a> Checker<'a> {
                         return *fty;
                     }
                 }
-                self.emit(span, SemaErrorKind::Message(format!(
-                    "tuple index {index} out of range for `{}`", self.display(rty)
-                )));
+                self.emit(
+                    span,
+                    SemaErrorKind::Message(format!(
+                        "tuple index {index} out of range for `{}`",
+                        self.display(rty)
+                    )),
+                );
                 self.tcx.error
             }
             _ => {
-                self.emit(span, SemaErrorKind::Message(format!(
-                    "type `{}` cannot be indexed by position", self.display(rty)
-                )));
+                self.emit(
+                    span,
+                    SemaErrorKind::Message(format!(
+                        "type `{}` cannot be indexed by position",
+                        self.display(rty)
+                    )),
+                );
                 self.tcx.error
             }
         }
     }
-
 }

@@ -54,14 +54,22 @@ impl Span {
     /// A zero-length span at `pos` — useful for end-of-file or insertion points.
     #[inline]
     pub fn empty(file: FileId, pos: BytePos) -> Self {
-        Self { file, lo: pos, hi: pos }
+        Self {
+            file,
+            lo: pos,
+            hi: pos,
+        }
     }
 
     /// A placeholder span with no real source location, for diagnostics that
     /// originate outside any source file (e.g. backend/link driver errors).
     #[inline]
     pub fn dummy() -> Self {
-        Self { file: FileId(0), lo: BytePos::ZERO, hi: BytePos::ZERO }
+        Self {
+            file: FileId(0),
+            lo: BytePos::ZERO,
+            hi: BytePos::ZERO,
+        }
     }
 
     #[inline]
@@ -115,7 +123,12 @@ pub struct SourceFile {
 impl SourceFile {
     fn new(id: FileId, name: String, src: String) -> Self {
         let line_starts = compute_line_starts(&src);
-        Self { id, name, src, line_starts }
+        Self {
+            id,
+            name,
+            src,
+            line_starts,
+        }
     }
 
     /// The text covered by `span`. Panics if `span` belongs to another file.
@@ -163,7 +176,8 @@ impl SourceMap {
 
     pub fn add_file(&mut self, name: impl Into<String>, src: impl Into<String>) -> FileId {
         let id = FileId(self.files.len() as u32);
-        self.files.push(SourceFile::new(id, name.into(), src.into()));
+        self.files
+            .push(SourceFile::new(id, name.into(), src.into()));
         id
     }
 

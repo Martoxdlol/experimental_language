@@ -1,7 +1,9 @@
 //! End-to-end tests: write a `.otter` file, invoke the `otter_fusion` binary, and check
 //! its stdout/exit status. Exercises the full pipeline including `print`.
 
-use std::process::Command;
+use std::process::{Child, Command, Output, Stdio};
+use std::sync::{Condvar, Mutex, MutexGuard, OnceLock};
+use std::time::{Duration, Instant};
 
 /// Toolchain imports prepended to single-file test programs (near-empty prelude,
 /// `docs/17` §17.8): the former magic builtins plus common interfaces/std types.
@@ -31,6 +33,117 @@ fn pre_file(rel: &str, src: &str) -> String {
     }
 }
 
+fn native_build_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn native_build_guard() -> MutexGuard<'static, ()> {
+    native_build_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+struct ProcessSlots {
+    in_use: Mutex<usize>,
+    available: Condvar,
+    limit: usize,
+}
+
+struct ProcessSlotGuard(&'static ProcessSlots);
+
+impl Drop for ProcessSlotGuard {
+    fn drop(&mut self) {
+        let mut in_use = self.0.in_use.lock().unwrap_or_else(|err| err.into_inner());
+        *in_use = in_use.saturating_sub(1);
+        self.0.available.notify_one();
+    }
+}
+
+fn cli_process_slots() -> &'static ProcessSlots {
+    static SLOTS: OnceLock<ProcessSlots> = OnceLock::new();
+    SLOTS.get_or_init(|| {
+        let default_limit = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+            .clamp(1, 4);
+        let limit = std::env::var("OTTER_CLI_TEST_PROCESS_SLOTS")
+            .ok()
+            .and_then(|raw| raw.trim().parse::<usize>().ok())
+            .filter(|slots| *slots > 0)
+            .unwrap_or(default_limit);
+        ProcessSlots {
+            in_use: Mutex::new(0),
+            available: Condvar::new(),
+            limit,
+        }
+    })
+}
+
+fn cli_process_slot() -> ProcessSlotGuard {
+    let slots = cli_process_slots();
+    let mut in_use = slots.in_use.lock().unwrap_or_else(|err| err.into_inner());
+    while *in_use >= slots.limit {
+        in_use = slots
+            .available
+            .wait(in_use)
+            .unwrap_or_else(|err| err.into_inner());
+    }
+    *in_use += 1;
+    ProcessSlotGuard(slots)
+}
+
+fn native_test_timeout() -> Duration {
+    std::env::var("OTTER_NATIVE_TEST_TIMEOUT_SECS")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .filter(|secs| *secs > 0)
+        .map(Duration::from_secs)
+        .unwrap_or_else(|| Duration::from_secs(30))
+}
+
+fn cli_test_timeout() -> Duration {
+    std::env::var("OTTER_CLI_TEST_TIMEOUT_SECS")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .filter(|secs| *secs > 0)
+        .map(Duration::from_secs)
+        .unwrap_or_else(|| Duration::from_secs(30))
+}
+
+fn output_with_timeout(cmd: &mut Command, timeout: Duration) -> Result<Output, String> {
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let _slot = cli_process_slot();
+    let child = cmd.spawn().map_err(|e| format!("spawn command: {e}"))?;
+    output_from_child_with_timeout(child, timeout)
+}
+
+fn output_from_child_with_timeout(mut child: Child, timeout: Duration) -> Result<Output, String> {
+    let start = Instant::now();
+    loop {
+        match child.try_wait().map_err(|e| format!("wait command: {e}"))? {
+            Some(_) => {
+                return child
+                    .wait_with_output()
+                    .map_err(|e| format!("collect command output: {e}"));
+            }
+            None if start.elapsed() >= timeout => {
+                let _ = child.kill();
+                let output = child
+                    .wait_with_output()
+                    .map_err(|e| format!("collect timed-out command output: {e}"))?;
+                let mut stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+                stderr.push_str(&format!(
+                    "\ncommand timed out after {:.3}s\n",
+                    start.elapsed().as_secs_f64()
+                ));
+                return Err(stderr);
+            }
+            None => std::thread::sleep(Duration::from_millis(10)),
+        }
+    }
+}
+
 /// Run `otter_fusion <cmd> <file>` with `src` written to a temp file; return
 /// (stdout, stderr, success).
 fn lang(cmd: &str, src: &str) -> (String, String, bool) {
@@ -48,7 +161,13 @@ fn lang_flag(cmd: &str, src: &str, flags: &[&str]) -> (String, String, bool) {
     for f in flags {
         command.arg(f);
     }
-    let out = command.output().expect("run lang");
+    let out = match output_with_timeout(&mut command, cli_test_timeout()) {
+        Ok(out) => out,
+        Err(err) => {
+            let _ = std::fs::remove_file(&path);
+            return (String::new(), err, false);
+        }
+    };
     let _ = std::fs::remove_file(&path);
     (
         String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -67,7 +186,13 @@ fn lang_env(cmd: &str, src: &str, env: &[(&str, &str)]) -> (String, String, bool
     for (k, v) in env {
         command.env(k, v);
     }
-    let out = command.output().expect("run lang");
+    let out = match output_with_timeout(&mut command, cli_test_timeout()) {
+        Ok(out) => out,
+        Err(err) => {
+            let _ = std::fs::remove_file(&path);
+            return (String::new(), err, false);
+        }
+    };
     let _ = std::fs::remove_file(&path);
     (
         String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -79,15 +204,22 @@ fn lang_env(cmd: &str, src: &str, env: &[(&str, &str)]) -> (String, String, bool
 /// Compile `src` to a native executable with `lang build -o`, run it, and
 /// return (stdout, stderr, success). Exercises the object-emit + link path.
 fn lang_build_run(src: &str, env: &[(&str, &str)]) -> (String, String, bool) {
+    let _native_guard = native_build_guard();
     let dir = std::env::temp_dir();
     let n = nonce();
     let path = dir.join(format!("lang_test_{n}.otter"));
     let exe = dir.join(format!("lang_test_bin_{n}"));
     std::fs::write(&path, pre(src)).unwrap();
-    let build = Command::new(env!("CARGO_BIN_EXE_otter_fusion"))
-        .arg("build").arg(&path).arg("-o").arg(&exe)
-        .output()
-        .expect("run lang build");
+    let mut build_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    build_cmd.arg("build").arg(&path).arg("-o").arg(&exe);
+    let build = match output_with_timeout(&mut build_cmd, native_test_timeout()) {
+        Ok(out) => out,
+        Err(err) => {
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_file(&exe);
+            return (String::new(), err, false);
+        }
+    };
     let _ = std::fs::remove_file(&path);
     if !build.status.success() {
         return (
@@ -100,7 +232,101 @@ fn lang_build_run(src: &str, env: &[(&str, &str)]) -> (String, String, bool) {
     for (k, v) in env {
         run.env(k, v);
     }
-    let out = run.output().expect("run native executable");
+    let out = match output_with_timeout(&mut run, native_test_timeout()) {
+        Ok(out) => out,
+        Err(err) => {
+            let _ = std::fs::remove_file(&exe);
+            return (String::new(), err, false);
+        }
+    };
+    let _ = std::fs::remove_file(&exe);
+    (
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+        out.status.success(),
+    )
+}
+
+/// Like [`lang`], but do not prepend the test prelude. Use this for module
+/// surfaces whose names intentionally overlap with the prelude imports.
+fn lang_raw(cmd: &str, src: &str) -> (String, String, bool) {
+    lang_raw_env(cmd, src, &[])
+}
+
+fn lang_raw_env(cmd: &str, src: &str, env: &[(&str, &str)]) -> (String, String, bool) {
+    lang_raw_env_with_timeout(cmd, src, env, cli_test_timeout())
+}
+
+fn lang_raw_env_with_timeout(
+    cmd: &str,
+    src: &str,
+    env: &[(&str, &str)],
+    timeout: Duration,
+) -> (String, String, bool) {
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!("lang_test_raw_{}.otter", nonce()));
+    std::fs::write(&path, src).unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    command.arg(cmd).arg(&path);
+    for (k, v) in env {
+        command.env(k, v);
+    }
+    let out = match output_with_timeout(&mut command, timeout) {
+        Ok(out) => out,
+        Err(err) => {
+            let _ = std::fs::remove_file(&path);
+            return (String::new(), err, false);
+        }
+    };
+    let _ = std::fs::remove_file(&path);
+    (
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+        out.status.success(),
+    )
+}
+
+/// Native-build counterpart of [`lang_raw`].
+fn lang_build_run_raw(src: &str, env: &[(&str, &str)]) -> (String, String, bool) {
+    let _native_guard = native_build_guard();
+    lang_build_run_raw_unlocked(src, env)
+}
+
+fn lang_build_run_raw_unlocked(src: &str, env: &[(&str, &str)]) -> (String, String, bool) {
+    let dir = std::env::temp_dir();
+    let n = nonce();
+    let path = dir.join(format!("lang_test_raw_{n}.otter"));
+    let exe = dir.join(format!("lang_test_raw_bin_{n}"));
+    std::fs::write(&path, src).unwrap();
+    let mut build_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    build_cmd.arg("build").arg(&path).arg("-o").arg(&exe);
+    let build = match output_with_timeout(&mut build_cmd, native_test_timeout()) {
+        Ok(out) => out,
+        Err(err) => {
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_file(&exe);
+            return (String::new(), err, false);
+        }
+    };
+    let _ = std::fs::remove_file(&path);
+    if !build.status.success() {
+        return (
+            String::new(),
+            String::from_utf8_lossy(&build.stderr).into_owned(),
+            false,
+        );
+    }
+    let mut run = Command::new(&exe);
+    for (k, v) in env {
+        run.env(k, v);
+    }
+    let out = match output_with_timeout(&mut run, native_test_timeout()) {
+        Ok(out) => out,
+        Err(err) => {
+            let _ = std::fs::remove_file(&exe);
+            return (String::new(), err, false);
+        }
+    };
     let _ = std::fs::remove_file(&exe);
     (
         String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -119,11 +345,15 @@ fn lang_run_project(entry: &str, files: &[(&str, &str)]) -> (String, String, boo
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, pre_file(rel, src)).unwrap();
     }
-    let out = Command::new(env!("CARGO_BIN_EXE_otter_fusion"))
-        .arg("run")
-        .arg(root.join(entry))
-        .output()
-        .expect("run lang");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    command.arg("run").arg(root.join(entry));
+    let out = match output_with_timeout(&mut command, cli_test_timeout()) {
+        Ok(out) => out,
+        Err(err) => {
+            let _ = std::fs::remove_dir_all(&root);
+            return (String::new(), err, false);
+        }
+    };
     let _ = std::fs::remove_dir_all(&root);
     (
         String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -133,19 +363,19 @@ fn lang_run_project(entry: &str, files: &[(&str, &str)]) -> (String, String, boo
 }
 
 fn nonce() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
     static C: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = C.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64 ^ (n << 32)
+    ((std::process::id() as u64) << 32) | n
 }
 
 /// Run `otter_fusion <args...>` with the working directory set to `dir`.
 fn lang_in_dir(dir: &std::path::Path, args: &[&str]) -> (String, String, bool) {
-    let out = Command::new(env!("CARGO_BIN_EXE_otter_fusion"))
-        .current_dir(dir)
-        .args(args)
-        .output()
-        .expect("run lang");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    command.current_dir(dir).args(args);
+    let out = match output_with_timeout(&mut command, cli_test_timeout()) {
+        Ok(out) => out,
+        Err(err) => return (String::new(), err, false),
+    };
     (
         String::from_utf8_lossy(&out.stdout).into_owned(),
         String::from_utf8_lossy(&out.stderr).into_owned(),
@@ -164,7 +394,10 @@ fn lang_in_dir_env(
     for (k, v) in env {
         command.env(k, v);
     }
-    let out = command.output().expect("run lang");
+    let out = match output_with_timeout(&mut command, cli_test_timeout()) {
+        Ok(out) => out,
+        Err(err) => return (String::new(), err, false),
+    };
     (
         String::from_utf8_lossy(&out.stdout).into_owned(),
         String::from_utf8_lossy(&out.stderr).into_owned(),
@@ -189,12 +422,15 @@ fn emit_ir(ir: &str, src: &str) -> (String, String, bool) {
     let dir = std::env::temp_dir();
     let path = dir.join(format!("lang_test_{}.otter", nonce()));
     std::fs::write(&path, src).unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_otter_fusion"))
-        .arg("emit")
-        .arg(ir)
-        .arg(&path)
-        .output()
-        .expect("run emit");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    command.arg("emit").arg(ir).arg(&path);
+    let out = match output_with_timeout(&mut command, cli_test_timeout()) {
+        Ok(out) => out,
+        Err(err) => {
+            let _ = std::fs::remove_file(&path);
+            return (String::new(), err, false);
+        }
+    };
     let _ = std::fs::remove_file(&path);
     (
         String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -218,7 +454,10 @@ fn emit_hir_is_typed_resolved_and_dispatched() {
     // Names are resolved; the call's dispatch kind is explicit.
     assert!(out.contains("name local"), "no resolved local:\n{out}");
     assert!(out.contains("call direct"), "no direct dispatch:\n{out}");
-    assert!(out.contains("call builtin Println"), "no builtin dispatch:\n{out}");
+    assert!(
+        out.contains("call builtin Println"),
+        "no builtin dispatch:\n{out}"
+    );
 }
 
 #[test]
@@ -234,13 +473,16 @@ fn emit_hir_shows_baked_coercions_and_match_dispatch() {
     assert!(ok, "stderr: {err}");
     assert!(out.contains("match"), "no match in HIR:\n{out}");
     // The narrowed `n` (a union variant matched as `i64`) is used as an `i64`.
-    assert!(out.contains("(binary Add"), "narrowed arithmetic missing:\n{out}");
-    // A widening coercion is printed as an explicit adjust wrapper somewhere.
-    let (w, _, _) = emit_ir(
-        "hir",
-        "function g(): i64 | str { var u: i64 | str = 5; u }",
+    assert!(
+        out.contains("(binary Add"),
+        "narrowed arithmetic missing:\n{out}"
     );
-    assert!(w.contains("widen") || w.contains("adjust"), "no baked widen adjust:\n{w}");
+    // A widening coercion is printed as an explicit adjust wrapper somewhere.
+    let (w, _, _) = emit_ir("hir", "function g(): i64 | str { var u: i64 | str = 5; u }");
+    assert!(
+        w.contains("widen") || w.contains("adjust"),
+        "no baked widen adjust:\n{w}"
+    );
 }
 
 #[test]
@@ -250,7 +492,10 @@ fn emit_hir_is_deterministic() {
     let a = emit_ir("hir", src).0;
     let b = emit_ir("hir", src).0;
     assert_eq!(a, b, "emit hir must be byte-for-byte deterministic");
-    assert!(a.contains("record(x: i64, y: i64)"), "no struct layout:\n{a}");
+    assert!(
+        a.contains("record(x: i64, y: i64)"),
+        "no struct layout:\n{a}"
+    );
 }
 
 #[test]
@@ -304,11 +549,15 @@ fn expand_src(src: &str) -> (String, String, bool) {
     let dir = std::env::temp_dir();
     let path = dir.join(format!("lang_expand_{}.otter", nonce()));
     std::fs::write(&path, src).unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_otter_fusion"))
-        .arg("expand")
-        .arg(&path)
-        .output()
-        .expect("run expand");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    command.arg("expand").arg(&path);
+    let out = match output_with_timeout(&mut command, cli_test_timeout()) {
+        Ok(out) => out,
+        Err(err) => {
+            let _ = std::fs::remove_file(&path);
+            return (String::new(), err, false);
+        }
+    };
     let _ = std::fs::remove_file(&path);
     (
         String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -342,7 +591,10 @@ fn expand_output_reparses_and_runs() {
     let src = "function main(){var xs=[1,2,3];var t=0;for n in xs{t=t+n;};println(t as str)}";
     let expanded = expand_src(src).0;
     let (out, err, ok) = lang("run", &expanded);
-    assert!(ok, "expanded source failed to run; stderr: {err}\n--- expanded ---\n{expanded}");
+    assert!(
+        ok,
+        "expanded source failed to run; stderr: {err}\n--- expanded ---\n{expanded}"
+    );
     assert_eq!(out, "6\n");
 }
 
@@ -688,6 +940,23 @@ fn native_build_async_thread_spawn_matches_jit() {
 }
 
 #[test]
+fn native_build_thread_spawn_detach_gc_many_live_lists_matches_jit() {
+    let src = include_str!(
+        "../../../tests/cases/concurrency/thread_spawn_detach_gc_many_live_lists.otter"
+    );
+    let env = &[("OTTER_FUSION_GC", "stress")];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native detached GC-stress Thread.spawn output diverged from JIT"
+    );
+    assert_eq!(nat_out, "count=64 total=6240 closed=1\n");
+}
+
+#[test]
 fn native_build_panic_exits_101() {
     // A runtime panic (divide by zero) in a native binary must exit with 101,
     // the same code the runtime uses under the JIT.
@@ -840,7 +1109,10 @@ fn float_nan_to_int_panics() {
                }";
     let (_, err, ok) = lang("run", src);
     assert!(!ok, "expected a NaN cast panic");
-    assert!(err.contains("out of range") || err.contains("NaN"), "stderr: {err}");
+    assert!(
+        err.contains("out of range") || err.contains("NaN"),
+        "stderr: {err}"
+    );
 }
 
 #[test]
@@ -1018,10 +1290,7 @@ fn numeric_neg_family() {
                }";
     let (out, err, ok) = lang("run", src);
     assert!(ok, "stderr: {err}");
-    assert_eq!(
-        out,
-        "-2147483648\n2147483647\nof\n-7\n-2147483648 true\n"
-    );
+    assert_eq!(out, "-2147483648\n2147483647\nof\n-7\n-2147483648 true\n");
 }
 
 #[test]
@@ -1483,8 +1752,10 @@ fn static_method_on_generic_struct_uninferable_errors() {
                function main() { var m = Marker.blank(); println(\"${m.tag}\"); }";
     let (_, err, ok) = lang("check", src);
     assert!(!ok, "expected an unsolved-generic error");
-    assert!(err.contains("cannot infer generic argument") && err.contains("Marker"),
-        "stderr: {err}");
+    assert!(
+        err.contains("cannot infer generic argument") && err.contains("Marker"),
+        "stderr: {err}"
+    );
 }
 
 #[test]
@@ -1494,7 +1765,10 @@ fn calling_instance_method_statically_errors() {
                extend P { function get(self): i64 { self.x } }\n\
                function main() { println(P.get() as str); }";
     let (_, err, ok) = lang("check", src);
-    assert!(!ok, "expected an error calling an instance method statically");
+    assert!(
+        !ok,
+        "expected an error calling an instance method statically"
+    );
     assert!(err.contains("instance method"), "stderr: {err}");
 }
 
@@ -1552,7 +1826,10 @@ fn many_threads_under_gc_stress() {
     assert!(ok, "stderr: {err}");
     let (out2, _, ok2) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
     assert!(ok2);
-    assert_eq!(out1, out2, "GC stress changed the result (memory corruption)");
+    assert_eq!(
+        out1, out2,
+        "GC stress changed the result (memory corruption)"
+    );
 }
 
 #[test]
@@ -1624,9 +1901,18 @@ fn spawn_await_repropagates_worker_panic() {
                  println(\"unreachable\");\n\
                }";
     let (out, err, ok) = lang("run", src);
-    assert!(!ok, "awaiting a panicked spawn must propagate (non-zero exit)");
-    assert!(err.contains("rejected"), "message should propagate; stderr: {err}");
-    assert!(out.is_empty(), "nothing after the propagated panic; stdout: {out}");
+    assert!(
+        !ok,
+        "awaiting a panicked spawn must propagate (non-zero exit)"
+    );
+    assert!(
+        err.contains("rejected"),
+        "message should propagate; stderr: {err}"
+    );
+    assert!(
+        out.is_empty(),
+        "nothing after the propagated panic; stdout: {out}"
+    );
 }
 
 #[test]
@@ -1656,7 +1942,10 @@ fn worker_panic_isolation_is_stable_under_gc_stress() {
     let (out2, _, ok2) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
     assert!(ok2);
     assert_eq!(out1, "doom 0\nok\ndoom 2\n");
-    assert_eq!(out1, out2, "GC stress changed the result (memory corruption)");
+    assert_eq!(
+        out1, out2,
+        "GC stress changed the result (memory corruption)"
+    );
 }
 
 #[test]
@@ -1671,7 +1960,10 @@ fn spawn_rejects_mutable_capture() {
                }";
     let (_, err, ok) = lang("check", src);
     assert!(!ok, "expected a capture rejection");
-    assert!(err.contains("immutable") || err.contains("clone"), "stderr: {err}");
+    assert!(
+        err.contains("immutable") || err.contains("clone"),
+        "stderr: {err}"
+    );
 }
 
 #[test]
@@ -1875,7 +2167,10 @@ fn clone_rejects_list_of_non_clone_elements() {
                }";
     let (_, err, ok) = lang("check", src);
     assert!(!ok, "expected a clone rejection");
-    assert!(err.contains("clone") && err.contains("Clone"), "stderr: {err}");
+    assert!(
+        err.contains("clone") && err.contains("Clone"),
+        "stderr: {err}"
+    );
 }
 
 #[test]
@@ -1958,7 +2253,10 @@ fn multi_file_named_imports() {
     let (out, err, ok) = lang_run_project(
         "",
         &[
-            ("project.toml", "[package]\nname = \"app\"\nkind = \"binary\"\n"),
+            (
+                "project.toml",
+                "[package]\nname = \"app\"\nkind = \"binary\"\n",
+            ),
             ("src/main.otter", main),
             ("src/util.otter", util),
         ],
@@ -1987,7 +2285,10 @@ fn cross_module_interface_default() {
     let (out, err, ok) = lang_run_project(
         "",
         &[
-            ("project.toml", "[package]\nname = \"app\"\nkind = \"binary\"\n"),
+            (
+                "project.toml",
+                "[package]\nname = \"app\"\nkind = \"binary\"\n",
+            ),
             ("src/main.otter", main),
             ("src/traits.otter", traits),
         ],
@@ -2015,7 +2316,10 @@ fn cross_module_generic_interface_default() {
     let (out, err, ok) = lang_run_project(
         "",
         &[
-            ("project.toml", "[package]\nname = \"app\"\nkind = \"binary\"\n"),
+            (
+                "project.toml",
+                "[package]\nname = \"app\"\nkind = \"binary\"\n",
+            ),
             ("src/main.otter", main),
             ("src/traits.otter", traits),
         ],
@@ -2044,7 +2348,10 @@ fn cross_module_default_is_overridable() {
     let (out, err, ok) = lang_run_project(
         "",
         &[
-            ("project.toml", "[package]\nname = \"app\"\nkind = \"binary\"\n"),
+            (
+                "project.toml",
+                "[package]\nname = \"app\"\nkind = \"binary\"\n",
+            ),
             ("src/main.otter", main),
             ("src/traits.otter", traits),
         ],
@@ -2105,7 +2412,10 @@ fn multi_file_rejects_private_import() {
     let (_, err, ok) = lang_run_project(
         "",
         &[
-            ("project.toml", "[package]\nname = \"app\"\nkind = \"binary\"\n"),
+            (
+                "project.toml",
+                "[package]\nname = \"app\"\nkind = \"binary\"\n",
+            ),
             ("src/main.otter", main),
             ("src/util.otter", util),
         ],
@@ -2125,13 +2435,19 @@ fn multi_file_strict_module_scoping() {
     let (_, err, ok) = lang_run_project(
         "",
         &[
-            ("project.toml", "[package]\nname = \"app\"\nkind = \"binary\"\n"),
+            (
+                "project.toml",
+                "[package]\nname = \"app\"\nkind = \"binary\"\n",
+            ),
             ("src/main.otter", main),
             ("src/util.otter", util),
         ],
     );
     assert!(!ok);
-    assert!(err.contains("cannot find value `root_only`"), "stderr: {err}");
+    assert!(
+        err.contains("cannot find value `root_only`"),
+        "stderr: {err}"
+    );
 }
 
 #[test]
@@ -2146,7 +2462,10 @@ fn import_as_namespace_calls() {
     let (out, err, ok) = lang_run_project(
         "",
         &[
-            ("project.toml", "[package]\nname = \"app\"\nkind = \"binary\"\n"),
+            (
+                "project.toml",
+                "[package]\nname = \"app\"\nkind = \"binary\"\n",
+            ),
             ("src/main.otter", main),
             ("src/mathx.otter", mathx),
         ],
@@ -2165,7 +2484,10 @@ fn import_as_namespace_rejects_private() {
     let (_, err, ok) = lang_run_project(
         "",
         &[
-            ("project.toml", "[package]\nname = \"app\"\nkind = \"binary\"\n"),
+            (
+                "project.toml",
+                "[package]\nname = \"app\"\nkind = \"binary\"\n",
+            ),
             ("src/main.otter", main),
             ("src/mathx.otter", mathx),
         ],
@@ -2188,7 +2510,10 @@ fn multi_file_nested_submodule() {
     let (out, err, ok) = lang_run_project(
         "",
         &[
-            ("project.toml", "[package]\nname = \"app\"\nkind = \"binary\"\n"),
+            (
+                "project.toml",
+                "[package]\nname = \"app\"\nkind = \"binary\"\n",
+            ),
             ("src/main.otter", main),
             ("src/util.otter", util),
             ("src/util/math.otter", math),
@@ -2212,7 +2537,10 @@ fn self_relative_import_resolves_sibling() {
     let (out, err, ok) = lang_run_project(
         "",
         &[
-            ("project.toml", "[package]\nname = \"app\"\nkind = \"binary\"\n"),
+            (
+                "project.toml",
+                "[package]\nname = \"app\"\nkind = \"binary\"\n",
+            ),
             ("src/main.otter", main),
             ("src/a.otter", a),
             ("src/b.otter", b),
@@ -2231,7 +2559,10 @@ fn self_relative_parent_escape_is_rejected() {
     let (_, err, ok) = lang_run_project(
         "",
         &[
-            ("project.toml", "[package]\nname = \"app\"\nkind = \"binary\"\n"),
+            (
+                "project.toml",
+                "[package]\nname = \"app\"\nkind = \"binary\"\n",
+            ),
             ("src/main.otter", main),
         ],
     );
@@ -2249,7 +2580,10 @@ fn prefixless_import_is_rejected() {
     let (_, err, ok) = lang_run_project(
         "",
         &[
-            ("project.toml", "[package]\nname = \"app\"\nkind = \"binary\"\n"),
+            (
+                "project.toml",
+                "[package]\nname = \"app\"\nkind = \"binary\"\n",
+            ),
             ("src/main.otter", main),
             ("src/util.otter", util),
         ],
@@ -2299,12 +2633,18 @@ fn file_import_escaping_package_needs_allowlist() {
     let (_, err, ok) = lang_run_project(
         "",
         &[
-            ("project.toml", "[package]\nname = \"app\"\nkind = \"binary\"\n"),
+            (
+                "project.toml",
+                "[package]\nname = \"app\"\nkind = \"binary\"\n",
+            ),
             ("src/main.otter", main),
         ],
     );
     assert!(!ok);
-    assert!(err.contains("not authorized by `[file-imports] allow`"), "stderr: {err}");
+    assert!(
+        err.contains("not authorized by `[file-imports] allow`"),
+        "stderr: {err}"
+    );
 }
 
 #[test]
@@ -2318,7 +2658,10 @@ fn file_import_binds_an_in_package_data_module() {
     let (out, err, ok) = lang_run_project(
         "",
         &[
-            ("project.toml", "[package]\nname = \"app\"\nkind = \"binary\"\n"),
+            (
+                "project.toml",
+                "[package]\nname = \"app\"\nkind = \"binary\"\n",
+            ),
             ("src/main.otter", main),
             ("src/data.otter", data),
         ],
@@ -2332,7 +2675,10 @@ fn file_import_binds_in_loose_direct_mode() {
     // In direct/`exec` mode `file:` is unrestricted; a loose script binds names
     // from a sibling file (`docs/17` §17.13).
     let root = write_tree(&[
-        ("script.otter", "import { val } from \"file:./helper\";\nfunction main() { var x = val(); }"),
+        (
+            "script.otter",
+            "import { val } from \"file:./helper\";\nfunction main() { var x = val(); }",
+        ),
         ("helper.otter", "pub function val(): i64 { 5 }"),
     ]);
     let (_o, err, ok) = lang_in_dir(&root, &["exec", "script.otter"]);
@@ -2794,7 +3140,10 @@ fn stdlib_list_contains_requires_eq() {
                }";
     let (_out, err, ok) = lang("check", src);
     assert!(!ok);
-    assert!(err.contains("requires the element type to implement `Eq`"), "got: {err}");
+    assert!(
+        err.contains("requires the element type to implement `Eq`"),
+        "got: {err}"
+    );
 }
 
 #[test]
@@ -2923,7 +3272,10 @@ fn doc_generates_markdown_for_public_items() {
     let (out, err, ok) = lang("doc", src);
     assert!(ok, "stderr: {err}");
     assert!(out.contains("## function `add`"), "got:\n{out}");
-    assert!(out.contains("pub function add(a: i64, b: i64): i64"), "got:\n{out}");
+    assert!(
+        out.contains("pub function add(a: i64, b: i64): i64"),
+        "got:\n{out}"
+    );
     assert!(out.contains("Adds two integers."), "got:\n{out}");
     assert!(out.contains("## struct `Point`"), "got:\n{out}");
     assert!(out.contains("A 2-D point."), "got:\n{out}");
@@ -2939,8 +3291,14 @@ fn project_manifest_resolves_entry() {
     let (out, err, ok) = lang_run_project(
         "",
         &[
-            ("project.toml", "[package]\nname = \"demo\"\nkind = \"binary\"\nentry = \"src/main.otter\"\n"),
-            ("src/main.otter", "function main() { println(\"manifest ok\"); }"),
+            (
+                "project.toml",
+                "[package]\nname = \"demo\"\nkind = \"binary\"\nentry = \"src/main.otter\"\n",
+            ),
+            (
+                "src/main.otter",
+                "function main() { println(\"manifest ok\"); }",
+            ),
         ],
     );
     assert!(ok, "stderr: {err}");
@@ -2954,9 +3312,18 @@ fn project_manifest_default_entry_and_submodule() {
     let (out, err, ok) = lang_run_project(
         "",
         &[
-            ("project.toml", "[package]\nname = \"app\"\nkind = \"binary\"\n"),
-            ("src/main.otter", "mod util;\nimport { double } from \"self:util\";\nfunction main() { println(\"${double(21)}\"); }"),
-            ("src/util.otter", "pub function double(x: i64): i64 { x * 2 }"),
+            (
+                "project.toml",
+                "[package]\nname = \"app\"\nkind = \"binary\"\n",
+            ),
+            (
+                "src/main.otter",
+                "mod util;\nimport { double } from \"self:util\";\nfunction main() { println(\"${double(21)}\"); }",
+            ),
+            (
+                "src/util.otter",
+                "pub function double(x: i64): i64 { x * 2 }",
+            ),
         ],
     );
     assert!(ok, "stderr: {err}");
@@ -2968,10 +3335,16 @@ fn project_manifest_missing_entry_errors() {
     // A manifest whose entry file does not exist is a hard error.
     let (_out, err, ok) = lang_run_project(
         "",
-        &[("project.toml", "[package]\nname = \"app\"\nkind = \"binary\"\n")],
+        &[(
+            "project.toml",
+            "[package]\nname = \"app\"\nkind = \"binary\"\n",
+        )],
     );
     assert!(!ok);
-    assert!(err.contains("cannot read") || err.contains("main.otter"), "got: {err}");
+    assert!(
+        err.contains("cannot read") || err.contains("main.otter"),
+        "got: {err}"
+    );
 }
 
 #[test]
@@ -4067,7 +4440,10 @@ fn check_rejects_callconv_invalid_value() {
                function main() {}";
     let (_, err, ok) = lang("check", src);
     assert!(!ok);
-    assert!(err.contains("@CallConv` takes one string argument"), "stderr: {err}");
+    assert!(
+        err.contains("@CallConv` takes one string argument"),
+        "stderr: {err}"
+    );
 }
 
 #[test]
@@ -4078,7 +4454,10 @@ fn check_rejects_callconv_on_non_extern() {
                function main() {}";
     let (_, err, ok) = lang("check", src);
     assert!(!ok);
-    assert!(err.contains("only valid on an `extern function`"), "stderr: {err}");
+    assert!(
+        err.contains("only valid on an `extern function`"),
+        "stderr: {err}"
+    );
 }
 
 #[test]
@@ -4118,7 +4497,6 @@ fn check_rejects_deref_of_non_pointer() {
     assert!(err.contains("raw pointer"), "stderr: {err}");
 }
 
-
 #[test]
 fn check_rejects_union_on_managed_struct() {
     // The C-layout decorators only apply to `extern struct`.
@@ -4127,7 +4505,10 @@ fn check_rejects_union_on_managed_struct() {
                function main() {}";
     let (_, err, ok) = lang("check", src);
     assert!(!ok);
-    assert!(err.contains("only valid on an `extern struct`"), "stderr: {err}");
+    assert!(
+        err.contains("only valid on an `extern struct`"),
+        "stderr: {err}"
+    );
 }
 
 #[test]
@@ -4742,7 +5123,7 @@ fn check_clean_program_succeeds() {
 // -- async (docs/21) ---------------------------------------------------------
 
 #[test]
-fn async_fn_driven_by_block_on() {
+fn async_fn_driven_by_async_main() {
     // An async function lowers to a Future state machine; an async main awaits
     // it directly. (No `await` in `answer`'s body — the core pipeline slice.)
     let src = "function answer(): Future<i64> async { 40 + 2 }\n\
@@ -4756,7 +5137,7 @@ fn async_fn_driven_by_block_on() {
 }
 
 #[test]
-fn async_block_captures_and_block_on() {
+fn async_block_captures_and_async_main_awaits() {
     // A bare `async { … }` block is a zero-arg inline future literal that
     // captures enclosing locals; an async main awaits it.
     let src = "function main(): Future<null> async {\n\
@@ -4772,7 +5153,7 @@ fn async_block_captures_and_block_on() {
 }
 
 #[test]
-fn async_block_on_str_survives_gc_stress() {
+fn async_main_awaited_str_survives_gc_stress() {
     // The future's managed (str) result must survive collections triggered
     // during the poll/await machinery.
     let src = "function greet(name: str): Future<str> async { \"hi, \" + name }\n\
@@ -4875,7 +5256,7 @@ fn await_genuine_suspension_via_yield_under_gc_stress() {
 #[test]
 fn await_inside_async_block() {
     // An async main awaits an inline `async { await … }` block — the
-    // doc's primary launcher pattern.
+    // root future is driven by the internal executor entry.
     let src = "function tick(): Future<i64> async { var _ = await yield_now(); 7 }\n\
                function main(): Future<null> async {\n\
                  var r: i64 = await async {\n\
@@ -4985,11 +5366,17 @@ fn check_rejects_forgotten_future() {
 
 #[test]
 fn dep_add_and_remove_edit_the_manifest() {
-    let root = write_tree(&[("project.toml", "[package]\nname = \"app\"\nkind = \"binary\"\n")]);
+    let root = write_tree(&[(
+        "project.toml",
+        "[package]\nname = \"app\"\nkind = \"binary\"\n",
+    )]);
     let (_o, e, ok) = lang_in_dir(&root, &["add", "leftpad", "1.2"]);
     assert!(ok, "stderr: {e}");
     let manifest = std::fs::read_to_string(root.join("project.toml")).unwrap();
-    assert!(manifest.contains("leftpad = \"1.2\""), "manifest: {manifest}");
+    assert!(
+        manifest.contains("leftpad = \"1.2\""),
+        "manifest: {manifest}"
+    );
 
     let (_o, e, ok) = lang_in_dir(&root, &["remove", "leftpad"]);
     assert!(ok, "stderr: {e}");
@@ -5000,11 +5387,17 @@ fn dep_add_and_remove_edit_the_manifest() {
 
 #[test]
 fn dep_add_path_form() {
-    let root = write_tree(&[("project.toml", "[package]\nname = \"app\"\nkind = \"binary\"\n")]);
+    let root = write_tree(&[(
+        "project.toml",
+        "[package]\nname = \"app\"\nkind = \"binary\"\n",
+    )]);
     let (_o, e, ok) = lang_in_dir(&root, &["add", "mylib", "--path", "../mylib"]);
     assert!(ok, "stderr: {e}");
     let manifest = std::fs::read_to_string(root.join("project.toml")).unwrap();
-    assert!(manifest.contains("mylib = { path = \"../mylib\" }"), "manifest: {manifest}");
+    assert!(
+        manifest.contains("mylib = { path = \"../mylib\" }"),
+        "manifest: {manifest}"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -5030,7 +5423,10 @@ fn dep_lock_tree_and_why_with_a_path_dep() {
     assert!(ok, "stderr: {e}");
     let lock = std::fs::read_to_string(app.join("project.lock")).unwrap();
     assert!(lock.contains("name     = \"mylib\""), "lock: {lock}");
-    assert!(lock.contains("source   = \"path+../mylib\""), "lock: {lock}");
+    assert!(
+        lock.contains("source   = \"path+../mylib\""),
+        "lock: {lock}"
+    );
 
     let (out, e, ok) = lang_in_dir(&app, &["tree"]);
     assert!(ok, "stderr: {e}");
@@ -5056,7 +5452,10 @@ fn dep_lock_check_detects_drift() {
              [dependencies]\nmylib = { path = \"../mylib\" }\n",
         ),
         ("app/src/main.otter", "function main() {}"),
-        ("mylib/project.toml", "[package]\nname = \"mylib\"\nversion = \"0.4.2\"\nkind = \"library\"\n"),
+        (
+            "mylib/project.toml",
+            "[package]\nname = \"mylib\"\nversion = \"0.4.2\"\nkind = \"library\"\n",
+        ),
         ("mylib/src/lib.otter", "pub function f(): i64 { 1 }"),
     ]);
     let app = root.join("app");
@@ -5086,7 +5485,10 @@ fn pkg_import_from_a_path_dependency_runs_end_to_end() {
             "greeter/project.toml",
             "[package]\nname = \"greeter\"\nversion = \"0.1.0\"\nkind = \"library\"\n",
         ),
-        ("greeter/src/lib.otter", "pub function greet(): i64 { 42 }\nfunction hidden(): i64 { 0 }"),
+        (
+            "greeter/src/lib.otter",
+            "pub function greet(): i64 { 42 }\nfunction hidden(): i64 { 0 }",
+        ),
     ]);
     let (out, err, ok) = lang_in_dir(&root.join("app"), &["run"]);
     assert!(ok, "stderr: {err}");
@@ -5110,7 +5512,10 @@ fn pkg_import_of_a_private_item_is_rejected_e2e() {
             "greeter/project.toml",
             "[package]\nname = \"greeter\"\nversion = \"0.1.0\"\nkind = \"library\"\n",
         ),
-        ("greeter/src/lib.otter", "pub function greet(): i64 { 1 }\nfunction hidden(): i64 { 0 }"),
+        (
+            "greeter/src/lib.otter",
+            "pub function greet(): i64 { 1 }\nfunction hidden(): i64 { 0 }",
+        ),
     ]);
     let (_o, err, ok) = lang_in_dir(&root.join("app"), &["run"]);
     assert!(!ok);
@@ -5148,16 +5553,26 @@ fn pkg_import_subpath_through_pub_mod_runs() {
 #[test]
 fn login_and_logout_manage_credentials() {
     let home = write_tree(&[]);
-    let proj = write_tree(&[("project.toml", "[package]\nname = \"app\"\nkind = \"binary\"\n")]);
+    let proj = write_tree(&[(
+        "project.toml",
+        "[package]\nname = \"app\"\nkind = \"binary\"\n",
+    )]);
     let home_s = home.to_str().unwrap();
-    let (_o, e, ok) =
-        lang_in_dir_env(&proj, &["login", "--token", "secret-abc", "--registry", "public"], &[("OTTER_FUSION_HOME", home_s)]);
+    let (_o, e, ok) = lang_in_dir_env(
+        &proj,
+        &["login", "--token", "secret-abc", "--registry", "public"],
+        &[("OTTER_FUSION_HOME", home_s)],
+    );
     assert!(ok, "stderr: {e}");
     let creds = std::fs::read_to_string(home.join("credentials.toml")).unwrap();
     assert!(creds.contains("[registries.public]"), "creds: {creds}");
     assert!(creds.contains("token = \"secret-abc\""), "creds: {creds}");
 
-    let (_o, e, ok) = lang_in_dir_env(&proj, &["logout", "--registry", "public"], &[("OTTER_FUSION_HOME", home_s)]);
+    let (_o, e, ok) = lang_in_dir_env(
+        &proj,
+        &["logout", "--registry", "public"],
+        &[("OTTER_FUSION_HOME", home_s)],
+    );
     assert!(ok, "stderr: {e}");
     let creds = std::fs::read_to_string(home.join("credentials.toml")).unwrap();
     assert!(!creds.contains("secret-abc"), "creds: {creds}");
@@ -5174,7 +5589,10 @@ fn vendor_copies_a_path_dependency() {
              [dependencies]\nmylib = { path = \"../mylib\" }\n",
         ),
         ("app/src/main.otter", "function main() {}"),
-        ("mylib/project.toml", "[package]\nname = \"mylib\"\nversion = \"0.1.0\"\nkind = \"library\"\n"),
+        (
+            "mylib/project.toml",
+            "[package]\nname = \"mylib\"\nversion = \"0.1.0\"\nkind = \"library\"\n",
+        ),
         ("mylib/src/lib.otter", "pub function f(): i64 { 1 }"),
     ]);
     let (out, e, ok) = lang_in_dir(&root.join("app"), &["vendor"]);
@@ -5187,7 +5605,10 @@ fn vendor_copies_a_path_dependency() {
 #[test]
 fn publish_dry_run_packages_a_library() {
     let root = write_tree(&[
-        ("project.toml", "[package]\nname = \"mylib\"\nversion = \"2.1.0\"\nkind = \"library\"\n"),
+        (
+            "project.toml",
+            "[package]\nname = \"mylib\"\nversion = \"2.1.0\"\nkind = \"library\"\n",
+        ),
         ("src/lib.otter", "pub function f(): i64 { 1 }"),
     ]);
     let (out, e, ok) = lang_in_dir(&root, &["publish", "--dry-run"]);
@@ -5200,12 +5621,18 @@ fn publish_dry_run_packages_a_library() {
 #[test]
 fn publish_rejects_a_binary_package() {
     let root = write_tree(&[
-        ("project.toml", "[package]\nname = \"app\"\nversion = \"0.1.0\"\nkind = \"binary\"\n"),
+        (
+            "project.toml",
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nkind = \"binary\"\n",
+        ),
         ("src/main.otter", "function main() {}"),
     ]);
     let (_o, e, ok) = lang_in_dir(&root, &["publish", "--dry-run"]);
     assert!(!ok);
-    assert!(e.contains("only library packages can be published"), "stderr: {e}");
+    assert!(
+        e.contains("only library packages can be published"),
+        "stderr: {e}"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -5221,10 +5648,16 @@ fn test_runner_reports_pass_and_fail() {
         test \"commutative\" { if add(1, 2) != add(2, 1) { panic(\"bad\"); } }\n\
         test \"deliberately broken\" { if add(2, 2) != 5 { panic(\"2+2 is not 5\"); } }\n";
     let (out, _err, ok) = lang("test", src);
-    assert!(!ok, "suite with a failing test must exit non-zero; out: {out}");
+    assert!(
+        !ok,
+        "suite with a failing test must exit non-zero; out: {out}"
+    );
     assert!(out.contains("test addition ... ok"), "out: {out}");
     assert!(out.contains("test commutative ... ok"), "out: {out}");
-    assert!(out.contains("test deliberately broken ... FAILED"), "out: {out}");
+    assert!(
+        out.contains("test deliberately broken ... FAILED"),
+        "out: {out}"
+    );
     assert!(out.contains("2 passed; 1 failed"), "out: {out}");
     // The failing test's panic message is surfaced.
     assert!(out.contains("2+2 is not 5"), "out: {out}");
@@ -5245,7 +5678,10 @@ fn test_runner_all_pass_exits_zero() {
 fn test_keyword_does_not_reserve_identifier() {
     // `test` is a contextual keyword: it is only special as `test "..." { }` at
     // item position, so `test` remains usable as an ordinary identifier.
-    let (out, _err, ok) = lang("run", "function main() { var test = 42; println(\"${test}\"); }");
+    let (out, _err, ok) = lang(
+        "run",
+        "function main() { var test = 42; println(\"${test}\"); }",
+    );
     assert!(ok, "out: {out}");
     assert_eq!(out.trim(), "42");
 }
@@ -5261,15 +5697,24 @@ fn bench_runner_times_and_separates_from_tests() {
     let (out, _err, ok) = lang("bench", src);
     assert!(ok, "bench run should succeed; out: {out}");
     assert!(out.contains("running 1 bench(s)"), "out: {out}");
-    assert!(out.contains("bench fib(10) ... ") && out.contains("ns/iter"), "out: {out}");
+    assert!(
+        out.contains("bench fib(10) ... ") && out.contains("ns/iter"),
+        "out: {out}"
+    );
     // The `test` declaration is NOT run by `bench`.
-    assert!(!out.contains("correctness"), "bench must not run tests; out: {out}");
+    assert!(
+        !out.contains("correctness"),
+        "bench must not run tests; out: {out}"
+    );
 
     // And `test` runs only the test, not the bench.
     let (tout, _e, tok) = lang("test", src);
     assert!(tok, "out: {tout}");
     assert!(tout.contains("test correctness ... ok"), "out: {tout}");
-    assert!(!tout.contains("fib(10)"), "test must not run benches; out: {tout}");
+    assert!(
+        !tout.contains("fib(10)"),
+        "test must not run benches; out: {tout}"
+    );
 }
 
 #[test]
@@ -5287,12 +5732,21 @@ fn lint_flags_unused_local_and_function() {
           println(\"${kept}\");\n\
         }\n";
     let (out, err, ok) = lang("lint", src);
-    assert!(ok, "lint is informational and must exit zero; out: {out} err: {err}");
+    assert!(
+        ok,
+        "lint is informational and must exit zero; out: {out} err: {err}"
+    );
     // Diagnostics render to stderr; the count summary goes to stdout.
     assert!(err.contains("unused function `never_called`"), "err: {err}");
     assert!(err.contains("unused variable `dead`"), "err: {err}");
-    assert!(!err.contains("`_ignored`"), "underscore vars are exempt; err: {err}");
-    assert!(!err.contains("`kept`") && !err.contains("`used`"), "err: {err}");
+    assert!(
+        !err.contains("`_ignored`"),
+        "underscore vars are exempt; err: {err}"
+    );
+    assert!(
+        !err.contains("`kept`") && !err.contains("`used`"),
+        "err: {err}"
+    );
     assert!(out.contains("2 warnings"), "out: {out}");
 }
 
@@ -5309,26 +5763,41 @@ fn fix_prefixes_unused_variables() {
     // `_name`. After the fix the unused-variable lint is silenced.
     let dir = std::env::temp_dir();
     let path = dir.join(format!("lang_fix_{}.otter", nonce()));
-    std::fs::write(&path, pre("function main() { var gone = 5; var kept = 1; println(\"${kept}\"); }")).unwrap();
+    std::fs::write(
+        &path,
+        pre("function main() { var gone = 5; var kept = 1; println(\"${kept}\"); }"),
+    )
+    .unwrap();
 
     // --check reports without writing.
-    let check = Command::new(env!("CARGO_BIN_EXE_otter_fusion"))
-        .arg("fix").arg(&path).arg("--check").output().unwrap();
+    let mut check_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    check_cmd.arg("fix").arg(&path).arg("--check");
+    let check = output_with_timeout(&mut check_cmd, cli_test_timeout()).unwrap();
     assert!(check.status.success());
     assert!(String::from_utf8_lossy(&check.stdout).contains("would fix 1 unused"));
-    assert!(std::fs::read_to_string(&path).unwrap().contains("var gone ="), "--check must not modify the file");
+    assert!(
+        std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("var gone ="),
+        "--check must not modify the file"
+    );
 
     // Apply.
-    let fix = Command::new(env!("CARGO_BIN_EXE_otter_fusion"))
-        .arg("fix").arg(&path).output().unwrap();
+    let mut fix_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    fix_cmd.arg("fix").arg(&path);
+    let fix = output_with_timeout(&mut fix_cmd, cli_test_timeout()).unwrap();
     assert!(fix.status.success());
     let after = std::fs::read_to_string(&path).unwrap();
-    assert!(after.contains("var _gone ="), "expected the unused var renamed; got:\n{after}");
+    assert!(
+        after.contains("var _gone ="),
+        "expected the unused var renamed; got:\n{after}"
+    );
     assert!(after.contains("var kept ="), "used var untouched");
 
     // Lint is now clean (no unused-variable warning).
-    let lint = Command::new(env!("CARGO_BIN_EXE_otter_fusion"))
-        .arg("lint").arg(&path).output().unwrap();
+    let mut lint_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    lint_cmd.arg("lint").arg(&path);
+    let lint = output_with_timeout(&mut lint_cmd, cli_test_timeout()).unwrap();
     assert!(!String::from_utf8_lossy(&lint.stderr).contains("unused variable"));
 
     let _ = std::fs::remove_file(&path);
@@ -5339,24 +5808,43 @@ fn fmt_reindents_and_check_gates() {
     let dir = std::env::temp_dir();
     let path = dir.join(format!("lang_fmt_{}.otter", nonce()));
     // Deliberately mis-indented (no prelude needed — fmt is text-only).
-    std::fs::write(&path, "function main() {\nvar x = 1;\n  if x > 0 {\nx = 2;\n}\n}\n").unwrap();
+    std::fs::write(
+        &path,
+        "function main() {\nvar x = 1;\n  if x > 0 {\nx = 2;\n}\n}\n",
+    )
+    .unwrap();
 
     // --check: reports it needs formatting and exits non-zero, without writing.
-    let chk = Command::new(env!("CARGO_BIN_EXE_otter_fusion"))
-        .arg("fmt").arg(&path).arg("--check").output().unwrap();
-    assert!(!chk.status.success(), "check must fail on unformatted input");
+    let mut chk_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk = output_with_timeout(&mut chk_cmd, cli_test_timeout()).unwrap();
+    assert!(
+        !chk.status.success(),
+        "check must fail on unformatted input"
+    );
     assert!(String::from_utf8_lossy(&chk.stdout).contains("need formatting"));
-    assert!(std::fs::read_to_string(&path).unwrap().contains("\nvar x = 1;"), "check must not modify");
+    assert!(
+        std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("\nvar x = 1;"),
+        "check must not modify"
+    );
 
     // Apply: reindents to two spaces per level.
-    let fix = Command::new(env!("CARGO_BIN_EXE_otter_fusion")).arg("fmt").arg(&path).output().unwrap();
+    let mut fix_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    fix_cmd.arg("fmt").arg(&path);
+    let fix = output_with_timeout(&mut fix_cmd, cli_test_timeout()).unwrap();
     assert!(fix.status.success());
     let after = std::fs::read_to_string(&path).unwrap();
-    assert_eq!(after, "function main() {\n  var x = 1;\n  if x > 0 {\n    x = 2;\n  }\n}\n", "got:\n{after}");
+    assert_eq!(
+        after, "function main() {\n  var x = 1;\n  if x > 0 {\n    x = 2;\n  }\n}\n",
+        "got:\n{after}"
+    );
 
     // --check now passes (idempotent / already formatted).
-    let chk2 = Command::new(env!("CARGO_BIN_EXE_otter_fusion"))
-        .arg("fmt").arg(&path).arg("--check").output().unwrap();
+    let mut chk2_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk2_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk2 = output_with_timeout(&mut chk2_cmd, cli_test_timeout()).unwrap();
     assert!(chk2.status.success(), "formatted file must pass --check");
 
     let _ = std::fs::remove_file(&path);
@@ -5374,16 +5862,30 @@ fn repl_persists_state_and_recovers_from_errors() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn repl");
-    child.stdin.take().unwrap().write_all(session.as_bytes()).unwrap();
-    let out = child.wait_with_output().unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(session.as_bytes())
+        .unwrap();
+    let out = output_from_child_with_timeout(child, cli_test_timeout()).unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stdout.contains("7"), "expr eval; stdout: {stdout}");
-    assert!(stdout.contains("100"), "x*x with persisted x; stdout: {stdout}");
+    assert!(
+        stdout.contains("100"),
+        "x*x with persisted x; stdout: {stdout}"
+    );
     // sq(x) = sq(10) = 100 (function persisted, binding visible)
-    assert!(stderr.contains("cannot find value `bad_name`"), "error reported; stderr: {stderr}");
+    assert!(
+        stderr.contains("cannot find value `bad_name`"),
+        "error reported; stderr: {stderr}"
+    );
     // After the error, `x` still evaluates — session state survived.
-    assert!(stdout.matches("10").count() >= 1, "state intact after error; stdout: {stdout}");
+    assert!(
+        stdout.matches("10").count() >= 1,
+        "state intact after error; stdout: {stdout}"
+    );
 }
 
 #[test]
@@ -5403,17 +5905,25 @@ fn explain_prints_code_explanation_and_diagnostics_carry_codes() {
     // A type mismatch is reported with its code, and `explain` elaborates it.
     let (_o, err, ok) = lang("check", "function f(): i64 { \"x\" }\nfunction main() {}");
     assert!(!ok);
-    assert!(err.contains("error[E0006]"), "diagnostic should carry its code; err: {err}");
+    assert!(
+        err.contains("error[E0006]"),
+        "diagnostic should carry its code; err: {err}"
+    );
 
-    let out = Command::new(env!("CARGO_BIN_EXE_otter_fusion"))
-        .arg("explain").arg("e0006").output().unwrap(); // case-insensitive
+    let mut explain_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    explain_cmd.arg("explain").arg("e0006");
+    let out = output_with_timeout(&mut explain_cmd, cli_test_timeout()).unwrap(); // case-insensitive
     assert!(out.status.success());
     let s = String::from_utf8_lossy(&out.stdout);
-    assert!(s.contains("E0006") && s.contains("type mismatch"), "stdout: {s}");
+    assert!(
+        s.contains("E0006") && s.contains("type mismatch"),
+        "stdout: {s}"
+    );
 
     // Unknown code fails and lists the available codes.
-    let bad = Command::new(env!("CARGO_BIN_EXE_otter_fusion"))
-        .arg("explain").arg("E9999").output().unwrap();
+    let mut bad_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    bad_cmd.arg("explain").arg("E9999");
+    let bad = output_with_timeout(&mut bad_cmd, cli_test_timeout()).unwrap();
     assert!(!bad.status.success());
     assert!(String::from_utf8_lossy(&bad.stderr).contains("available codes"));
 }
@@ -5424,12 +5934,30 @@ fn promoted_member_diagnostics_carry_codes() {
     // stable codes, and each has an `explain` entry.
     let cases = [
         // (source, expected diagnostic code)
-        ("struct P { x: i64 }\nfunction main() { var p = P { x: 1 }; p.nope(); }", "E0013"),
-        ("struct P { x: i64 }\nfunction main() { var p = P { x: 1 }; var y = p.y; }", "E0014"),
-        ("struct P { x: i64 }\nfunction main() { var p = P { x: 1, z: 2 }; }", "E0015"),
-        ("struct P { x: i64, y: i64 }\nfunction main() { var p = P { x: 1 }; }", "E0016"),
-        ("struct P { x: i64 }\nfunction main() { var p = P { x: 1, x: 2 }; }", "E0017"),
-        ("function f(v: i64 | str): i64 { match v { i64 n => n } }\nfunction main() {}", "E0018"),
+        (
+            "struct P { x: i64 }\nfunction main() { var p = P { x: 1 }; p.nope(); }",
+            "E0013",
+        ),
+        (
+            "struct P { x: i64 }\nfunction main() { var p = P { x: 1 }; var y = p.y; }",
+            "E0014",
+        ),
+        (
+            "struct P { x: i64 }\nfunction main() { var p = P { x: 1, z: 2 }; }",
+            "E0015",
+        ),
+        (
+            "struct P { x: i64, y: i64 }\nfunction main() { var p = P { x: 1 }; }",
+            "E0016",
+        ),
+        (
+            "struct P { x: i64 }\nfunction main() { var p = P { x: 1, x: 2 }; }",
+            "E0017",
+        ),
+        (
+            "function f(v: i64 | str): i64 { match v { i64 n => n } }\nfunction main() {}",
+            "E0018",
+        ),
         ("function main() { break; }", "E0019"),
     ];
     for (src, code) in cases {
@@ -5440,8 +5968,9 @@ fn promoted_member_diagnostics_carry_codes() {
             "diagnostic should carry {code}; got:\n{err}"
         );
         // `explain <code>` succeeds and echoes the code.
-        let out = Command::new(env!("CARGO_BIN_EXE_otter_fusion"))
-            .arg("explain").arg(code).output().unwrap();
+        let mut command = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+        command.arg("explain").arg(code);
+        let out = output_with_timeout(&mut command, cli_test_timeout()).unwrap();
         assert!(out.status.success(), "explain {code} failed");
         assert!(
             String::from_utf8_lossy(&out.stdout).contains(code),
@@ -5531,7 +6060,10 @@ fn macro_error_is_reported() {
         function main() {}";
     let (_out, err, ok) = lang("check", src);
     assert!(!ok, "expected a macro error");
-    assert!(err.contains("MustBeStruct only applies to structs"), "stderr: {err}");
+    assert!(
+        err.contains("MustBeStruct only applies to structs"),
+        "stderr: {err}"
+    );
 }
 
 /// The macro-surface methods are compile-time only: a program that defines a
@@ -5772,7 +6304,10 @@ fn macro_recursion_limit_is_configurable() {
     ];
     let (_out, err, ok) = lang_run_project("project.toml", files);
     assert!(!ok, "runaway macro must be rejected");
-    assert!(err.contains("recursion limit of 3"), "configured limit should appear: {err}");
+    assert!(
+        err.contains("recursion limit of 3"),
+        "configured limit should appear: {err}"
+    );
 }
 
 // ===========================================================================
@@ -5813,7 +6348,10 @@ fn macro_warn_is_non_fatal() {
         function main() {}";
     let (_out, err, ok) = lang("check", src);
     assert!(ok, "warn must not fail the build; stderr: {err}");
-    assert!(err.contains("heads up"), "warning text should appear: {err}");
+    assert!(
+        err.contains("heads up"),
+        "warning text should appear: {err}"
+    );
 }
 
 /// A macro that reports its own error and returns `ASTNode.error_marker()`
@@ -5831,7 +6369,10 @@ fn macro_error_marker_suppresses_followon() {
     let (_out, err, ok) = lang("check", src);
     assert!(!ok);
     assert!(err.contains("boom"), "stderr: {err}");
-    assert!(!err.contains("cannot find macro"), "no follow-on error: {err}");
+    assert!(
+        !err.contains("cannot find macro"),
+        "no follow-on error: {err}"
+    );
 }
 
 /// A parse error in macro-generated source is reported (not a crash): the
@@ -6043,6 +6584,964 @@ fn native_build_async_closure_matches_jit() {
     assert!(nok, "native stderr: {nerr}");
     assert_eq!(jit_out, nat_out, "native build diverged from JIT");
     assert_eq!(nat_out, "v=42\n");
+}
+
+#[test]
+fn native_build_task_spawn_matches_jit() {
+    // `std:task::Task.spawn` is separate from `std:thread::Thread.spawn`; run
+    // this without the test prelude so the task JoinHandle/Joined/Cancelled
+    // names are imported exactly as a real program writes them.
+    let src = "import { println } from \"std:io\";\n\
+               import { Future } from \"core:prelude\";\n\
+               import { Shared, LockBusy } from \"std:sync\";\n\
+               import { sleep } from \"std:async\";\n\
+               import { Task, JoinHandle, Joined, Panicked, Cancelled } from \"std:task\";\n\
+               struct C { value: i64 }\n\
+               function val(r: Joined<i64> | Panicked | Cancelled): i64 {\n\
+                 match r { Joined<i64> j => j.value, Panicked p => -1, Cancelled c => -2 }\n\
+               }\n\
+               function main(): Future<null> async {\n\
+                 var state: Shared<C> = Shared.new(C { value: 0 });\n\
+                 var sync_h: JoinHandle<i64> = Task.spawn(() => 42);\n\
+                 println(\"sync=${val(await sync_h.join())}\");\n\
+                 var s: Shared<C> = state.clone();\n\
+                 var async_h: JoinHandle<i64> = Task.spawn(() async => {\n\
+                   var i: i64 = 0;\n\
+                   while i < 5 {\n\
+                     await s.lock((c) => { c.value = c.value + 1; 0 });\n\
+                     i = i + 1;\n\
+                   }\n\
+                   await s.lock((c) => c.value)\n\
+                 });\n\
+                 var worker: i64 = val(await async_h.join());\n\
+                 var total: i64 = await state.lock((c) => c.value);\n\
+                 println(\"async=${worker} total=${total}\");\n\
+                 var s2: Shared<C> = state.clone();\n\
+                 var cancel_h: JoinHandle<i64> = Task.spawn(() async => {\n\
+                   await s2.lock((c) async => {\n\
+                     c.value = 99;\n\
+                     var _ = await sleep(1000);\n\
+                     c.value = 100;\n\
+                     c.value\n\
+                   })\n\
+                 });\n\
+                 var _started = await sleep(20);\n\
+                 cancel_h.cancel();\n\
+                 println(\"cancel=${val(await cancel_h.join())}\");\n\
+                 match await state.try_lock((c) => c.value) {\n\
+                   i64 n => println(\"after=${n}\"),\n\
+                   LockBusy busy => println(\"after=busy\"),\n\
+                 };\n\
+               }";
+    let (jit_out, jerr, jok) = lang_raw("run", src);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, &[]);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native Task.spawn output diverged from JIT"
+    );
+    assert_eq!(nat_out, "sync=42\nasync=5 total=5\ncancel=-2\nafter=99\n");
+}
+
+#[test]
+fn native_build_task_spawn_panic_join_matches_jit() {
+    let src = include_str!("../../../tests/cases/concurrency/task_spawn_panic_join.otter");
+    let env = &[("OTTER_FUSION_TASK_WORKERS", "4")];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native Task.spawn panic join output diverged from JIT"
+    );
+    assert_eq!(
+        nat_out,
+        "sync panic: sync boom\nasync panic: async boom\nok joined: 99\n"
+    );
+}
+
+#[test]
+fn native_build_task_spawn_panic_releases_lock_matches_jit() {
+    let src = include_str!("../../../tests/cases/concurrency/task_spawn_panic_releases_lock.otter");
+    let env = &[("OTTER_FUSION_TASK_WORKERS", "1")];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native Task.spawn panic lock-release output diverged from JIT"
+    );
+    assert_eq!(nat_out, "bad = panicked: task lock boom\nsibling = 42\n");
+}
+
+#[test]
+fn native_build_task_spawn_detach_panic_isolated_matches_jit() {
+    let src =
+        include_str!("../../../tests/cases/concurrency/task_spawn_detach_panic_isolated.otter");
+    let env = &[("OTTER_FUSION_TASK_WORKERS", "4")];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native detached Task.spawn panic isolation output diverged from JIT"
+    );
+    assert_eq!(nat_out, "sibling=42\n");
+}
+
+#[test]
+fn native_build_task_spawn_thousand_tasks_matches_jit() {
+    let src = include_str!("../../../tests/cases/concurrency/task_spawn_thousand_tasks.otter");
+    let (jit_out, jerr, jok) = lang_raw("run", src);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, &[]);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native thousand Task.spawn output diverged from JIT"
+    );
+    assert_eq!(nat_out, "total=499500\n");
+}
+
+#[test]
+fn native_build_spawn_executor_4096_tasks_matches_jit() {
+    let src = include_str!("../../../tests/cases/concurrency/spawn_executor_4096_tasks.otter");
+    let env = &[("OTTER_FUSION_TASK_WORKERS", "4")];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native 4096-task spawn keyword output diverged from JIT"
+    );
+    assert_eq!(nat_out, "total=8386560\n");
+}
+
+#[test]
+fn native_build_spawn_executor_8192_tasks_matches_jit() {
+    let src = include_str!("../../../tests/cases/concurrency/spawn_executor_8192_tasks.otter");
+    let env = &[("OTTER_FUSION_TASK_WORKERS", "4")];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native 8192-task spawn keyword output diverged from JIT"
+    );
+    assert_eq!(nat_out, "total=33550336\n");
+}
+
+#[test]
+fn native_build_spawn_executor_16384_tasks_matches_jit() {
+    let src = include_str!("../../../tests/cases/concurrency/spawn_executor_16384_tasks.otter");
+    let env = &[("OTTER_FUSION_TASK_WORKERS", "4")];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native 16384-task spawn keyword output diverged from JIT"
+    );
+    assert_eq!(nat_out, "total=134209536\n");
+}
+
+#[test]
+fn native_build_spawn_executor_32768_tasks_matches_jit() {
+    let src = include_str!("../../../tests/cases/concurrency/spawn_executor_32768_tasks.otter");
+    let env = &[("OTTER_FUSION_TASK_WORKERS", "4")];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native 32768-task spawn keyword output diverged from JIT"
+    );
+    assert_eq!(nat_out, "total=536854528\n");
+}
+
+#[test]
+fn native_build_spawn_executor_1024_sleeping_tasks_matches_jit() {
+    let src =
+        include_str!("../../../tests/cases/concurrency/spawn_executor_1024_sleeping_tasks.otter");
+    let env = &[("OTTER_FUSION_TASK_WORKERS", "4")];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native 1024-sleeping-task spawn keyword output diverged from JIT"
+    );
+    assert_eq!(nat_out, "total=523776\n");
+}
+
+#[test]
+fn native_build_spawn_executor_channel_fairness_2048_matches_jit() {
+    let src =
+        include_str!("../../../tests/cases/concurrency/spawn_executor_channel_fairness_2048.otter");
+    let env = &[("OTTER_FUSION_TASK_WORKERS", "2")];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native 2048-task spawn keyword channel fairness output diverged from JIT"
+    );
+    assert_eq!(nat_out, "received=2096128 awaited=2096128\n");
+}
+
+#[test]
+fn native_build_spawn_executor_channel_fairness_4096_matches_jit() {
+    let src =
+        include_str!("../../../tests/cases/concurrency/spawn_executor_channel_fairness_4096.otter");
+    let env = &[("OTTER_FUSION_TASK_WORKERS", "2")];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native 4096-task spawn keyword channel fairness output diverged from JIT"
+    );
+    assert_eq!(nat_out, "received=8386560 awaited=8386560\n");
+}
+
+#[test]
+fn native_build_spawn_executor_channel_fairness_8192_matches_jit() {
+    let src =
+        include_str!("../../../tests/cases/concurrency/spawn_executor_channel_fairness_8192.otter");
+    let env = &[("OTTER_FUSION_TASK_WORKERS", "2")];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native 8192-task spawn keyword channel fairness output diverged from JIT"
+    );
+    assert_eq!(nat_out, "received=33550336 awaited=33550336\n");
+}
+
+#[test]
+fn native_build_spawn_executor_repeated_wave_fanout_matches_jit() {
+    let src =
+        include_str!("../../../tests/cases/concurrency/spawn_executor_repeated_wave_fanout.otter");
+    let env = &[("OTTER_FUSION_TASK_WORKERS", "2")];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native repeated-wave spawn keyword output diverged from JIT"
+    );
+    assert_eq!(nat_out, "received=128020480 awaited=128020480\n");
+}
+
+#[test]
+fn native_build_spawn_executor_gc_many_live_lists_matches_jit() {
+    let src =
+        include_str!("../../../tests/cases/concurrency/spawn_executor_gc_many_live_lists.otter");
+    let env = &[
+        ("OTTER_FUSION_TASK_WORKERS", "4"),
+        ("OTTER_FUSION_GC", "stress"),
+    ];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native spawn keyword GC-stress live-list output diverged from JIT"
+    );
+    assert_eq!(nat_out, "total=98688\n");
+}
+
+#[test]
+fn native_build_spawn_executor_map_gc_stress_matches_jit() {
+    let src = include_str!("../../../tests/cases/concurrency/spawn_executor_map_gc_stress.otter");
+    let env = &[
+        ("OTTER_FUSION_TASK_WORKERS", "4"),
+        ("OTTER_FUSION_GC", "stress"),
+    ];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native spawn keyword GC-stress Map output diverged from JIT"
+    );
+    assert_eq!(nat_out, "weights=1240 awaited=7440\n");
+}
+
+#[test]
+fn native_build_spawn_executor_mixed_high_contention_matches_jit() {
+    let src =
+        include_str!("../../../tests/cases/concurrency/spawn_executor_mixed_high_contention.otter");
+    let env = &[("OTTER_FUSION_TASK_WORKERS", "4")];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native mixed-contention spawn keyword output diverged from JIT"
+    );
+    assert_eq!(nat_out, "shared=3072 received=784896 awaited=784896\n");
+}
+
+#[test]
+fn native_build_spawn_executor_managed_result_gc_stress_matches_jit() {
+    let src = include_str!(
+        "../../../tests/cases/concurrency/spawn_executor_managed_result_gc_stress.otter"
+    );
+    let env = &[
+        ("OTTER_FUSION_TASK_WORKERS", "4"),
+        ("OTTER_FUSION_GC", "stress"),
+    ];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native spawn keyword managed-result GC-stress output diverged from JIT"
+    );
+    assert_eq!(nat_out, "total=33280\n");
+}
+
+#[test]
+fn executor_high_concurrency_soak_cases_are_stable() {
+    // This intentionally churns several high-concurrency executor programs.
+    // Share the native-build lock so it does not run alongside native GC-stress
+    // tests in this same Rust test binary and turn timing into noise.
+    let _guard = native_build_guard();
+    let cases: &[(&str, &str, &[(&str, &str)], &str)] = &[
+        (
+            "spawn keyword channel fairness 2048",
+            include_str!(
+                "../../../tests/cases/concurrency/spawn_executor_channel_fairness_2048.otter"
+            ),
+            &[("OTTER_FUSION_TASK_WORKERS", "2")],
+            "received=2096128 awaited=2096128\n",
+        ),
+        (
+            "spawn keyword channel fairness 4096",
+            include_str!(
+                "../../../tests/cases/concurrency/spawn_executor_channel_fairness_4096.otter"
+            ),
+            &[("OTTER_FUSION_TASK_WORKERS", "2")],
+            "received=8386560 awaited=8386560\n",
+        ),
+        (
+            "spawn keyword channel fairness 8192",
+            include_str!(
+                "../../../tests/cases/concurrency/spawn_executor_channel_fairness_8192.otter"
+            ),
+            &[("OTTER_FUSION_TASK_WORKERS", "2")],
+            "received=33550336 awaited=33550336\n",
+        ),
+        (
+            "Task.spawn channel fairness 2048",
+            include_str!("../../../tests/cases/concurrency/task_spawn_channel_fairness_2048.otter"),
+            &[("OTTER_FUSION_TASK_WORKERS", "2")],
+            "received=2096128 joined=2096128\n",
+        ),
+        (
+            "Task.spawn channel fairness 4096",
+            include_str!("../../../tests/cases/concurrency/task_spawn_channel_fairness_4096.otter"),
+            &[("OTTER_FUSION_TASK_WORKERS", "2")],
+            "received=8386560 joined=8386560\n",
+        ),
+        (
+            "Task.spawn channel fairness 8192",
+            include_str!("../../../tests/cases/concurrency/task_spawn_channel_fairness_8192.otter"),
+            &[("OTTER_FUSION_TASK_WORKERS", "2")],
+            "received=33550336 joined=33550336\n",
+        ),
+        (
+            "Task.spawn panic lock release",
+            include_str!("../../../tests/cases/concurrency/task_spawn_panic_releases_lock.otter"),
+            &[("OTTER_FUSION_TASK_WORKERS", "1")],
+            "bad = panicked: task lock boom\nsibling = 42\n",
+        ),
+        (
+            "spawn keyword repeated wave fanout",
+            include_str!(
+                "../../../tests/cases/concurrency/spawn_executor_repeated_wave_fanout.otter"
+            ),
+            &[("OTTER_FUSION_TASK_WORKERS", "2")],
+            "received=128020480 awaited=128020480\n",
+        ),
+        (
+            "Task.spawn repeated wave fanout",
+            include_str!("../../../tests/cases/concurrency/task_spawn_repeated_wave_fanout.otter"),
+            &[("OTTER_FUSION_TASK_WORKERS", "2")],
+            "received=128020480 joined=128020480\n",
+        ),
+    ];
+    for iter in 0..3 {
+        for (name, src, env, expected) in cases {
+            let (out, err, ok) = lang_raw_env("run", src, env);
+            assert!(ok, "{name} failed on soak iteration {iter}: {err}");
+            assert_eq!(
+                &out, expected,
+                "{name} changed output on soak iteration {iter}"
+            );
+        }
+    }
+}
+
+#[test]
+fn native_build_task_spawn_1024_sleeping_tasks_matches_jit() {
+    let src = include_str!("../../../tests/cases/concurrency/task_spawn_1024_sleeping_tasks.otter");
+    let env = &[("OTTER_FUSION_TASK_WORKERS", "4")];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native 1024-sleeping-task Task.spawn output diverged from JIT"
+    );
+    assert_eq!(nat_out, "total=523776\n");
+}
+
+#[test]
+fn native_build_task_spawn_clone_capture_snapshot_matches_jit() {
+    let src =
+        include_str!("../../../tests/cases/concurrency/task_spawn_clone_capture_snapshot.otter");
+    let env = &[("OTTER_FUSION_TASK_WORKERS", "4")];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native Task.spawn Clone-capture snapshot output diverged from JIT"
+    );
+    assert_eq!(nat_out, "captured=1 parent=9\n");
+}
+
+#[test]
+fn native_build_task_spawn_generic_clone_capture_snapshot_matches_jit() {
+    let src = include_str!(
+        "../../../tests/cases/concurrency/task_spawn_generic_clone_capture_snapshot.otter"
+    );
+    let env = &[("OTTER_FUSION_TASK_WORKERS", "4")];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native Task.spawn generic Clone-capture snapshot output diverged from JIT"
+    );
+    assert_eq!(nat_out, "captured=1 parent=9\nlist_size=1 parent_size=2\n");
+}
+
+#[test]
+fn native_build_thread_spawn_generic_clone_capture_snapshot_matches_jit() {
+    let src = include_str!(
+        "../../../tests/cases/concurrency/thread_spawn_generic_clone_capture_snapshot.otter"
+    );
+    let (jit_out, jerr, jok) = lang_raw("run", src);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, &[]);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native Thread.spawn generic Clone-capture snapshot output diverged from JIT"
+    );
+    assert_eq!(nat_out, "captured=1 parent=9\nlist_size=1 parent_size=2\n");
+}
+
+#[test]
+fn native_build_task_joinhandle_abort_releases_lock_matches_jit() {
+    let src =
+        include_str!("../../../tests/cases/concurrency/task_joinhandle_abort_releases_lock.otter");
+    let env = &[("OTTER_FUSION_TASK_WORKERS", "4")];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native Task.spawn abort lock-release output diverged from JIT"
+    );
+    assert_eq!(nat_out, "join = cancelled\nafter abort = 1\n");
+}
+
+#[test]
+fn native_build_task_join_timeout_does_not_cancel_task_matches_jit() {
+    let src = include_str!(
+        "../../../tests/cases/concurrency/task_join_timeout_does_not_cancel_task.otter"
+    );
+    let env = &[("OTTER_FUSION_TASK_WORKERS", "4")];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native Task.spawn join-timeout output diverged from JIT"
+    );
+    assert_eq!(nat_out, "first = timed out\nsecond = joined 42\n");
+}
+
+#[test]
+fn native_build_task_join_multiple_waiters_matches_jit() {
+    let src = include_str!("../../../tests/cases/concurrency/task_join_multiple_waiters.otter");
+    let env = &[("OTTER_FUSION_TASK_WORKERS", "4")];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native Task.spawn multi-join-waiter output diverged from JIT"
+    );
+    assert_eq!(nat_out, "first=42 second=42 total=84\n");
+}
+
+#[test]
+fn native_build_task_join_cancel_wakes_multiple_waiters_matches_jit() {
+    let src = include_str!(
+        "../../../tests/cases/concurrency/task_join_cancel_wakes_multiple_waiters.otter"
+    );
+    let env = &[("OTTER_FUSION_TASK_WORKERS", "4")];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native Task.spawn multi-join cancellation output diverged from JIT"
+    );
+    assert_eq!(nat_out, "first=-2 second=-2 total=-4\n");
+}
+
+#[test]
+fn native_build_task_join_cancel_many_spawned_waiters_matches_jit() {
+    let src = include_str!(
+        "../../../tests/cases/concurrency/task_join_cancel_many_spawned_waiters.otter"
+    );
+    let env = &[("OTTER_FUSION_TASK_WORKERS", "4")];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native Task.spawn many spawned join-waiter cancellation output diverged from JIT"
+    );
+    assert_eq!(nat_out, "cancelled=128 total=-256\n");
+}
+
+#[test]
+fn native_build_spawn_future_cancel_many_releases_channel_endpoints_matches_jit() {
+    let src = include_str!(
+        "../../../tests/cases/concurrency/spawn_future_cancel_many_releases_channel_endpoints.otter"
+    );
+    let env = &[("OTTER_FUSION_TASK_WORKERS", "4")];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native mass-cancel spawn future output diverged from JIT"
+    );
+    assert_eq!(nat_out, "closed=4096\n");
+}
+
+#[test]
+fn native_build_spawn_future_cancel_many_gc_stress_matches_jit() {
+    let src =
+        include_str!("../../../tests/cases/concurrency/spawn_future_cancel_many_gc_stress.otter");
+    let env = &[
+        ("OTTER_FUSION_TASK_WORKERS", "4"),
+        ("OTTER_FUSION_GC", "stress"),
+    ];
+    let (jit_out, jerr, jok) = {
+        let _native_guard = native_build_guard();
+        let stress_timeout = std::cmp::max(cli_test_timeout(), Duration::from_secs(90));
+        lang_raw_env_with_timeout("run", src, env, stress_timeout)
+    };
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native GC-stress mass-cancel spawn future output diverged from JIT"
+    );
+    assert_eq!(nat_out, "closed=512\n");
+}
+
+#[test]
+fn native_build_spawn_future_cancel_repeated_wave_gc_stress_matches_jit() {
+    let src = include_str!(
+        "../../../tests/cases/concurrency/spawn_future_cancel_repeated_wave_gc_stress.otter"
+    );
+    let env = &[
+        ("OTTER_FUSION_TASK_WORKERS", "4"),
+        ("OTTER_FUSION_GC", "stress"),
+    ];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native repeated-wave GC-stress spawn future cancellation output diverged from JIT"
+    );
+    assert_eq!(nat_out, "closed=128\n");
+}
+
+#[test]
+fn native_build_timeout_cancels_many_spawn_losers_releases_channels_matches_jit() {
+    let src = include_str!(
+        "../../../tests/cases/concurrency/timeout_cancels_many_spawn_losers_releases_channels.otter"
+    );
+    let env = &[("OTTER_FUSION_TASK_WORKERS", "4")];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native timeout mass-cancel spawn loser output diverged from JIT"
+    );
+    assert_eq!(nat_out, "timed_out=512 closed=512\n");
+}
+
+#[test]
+fn native_build_timeout_cancels_many_recv_losers_releases_waiters_matches_jit() {
+    let src = include_str!(
+        "../../../tests/cases/concurrency/timeout_cancels_many_recv_losers_releases_waiters.otter"
+    );
+    let env = &[("OTTER_FUSION_GC", "stress")];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native timeout mass-cancel recv loser output diverged from JIT"
+    );
+    assert_eq!(nat_out, "timed_out=512 received=77\n");
+}
+
+#[test]
+fn native_build_task_spawn_4096_tasks_matches_jit() {
+    let src = include_str!("../../../tests/cases/concurrency/task_spawn_4096_tasks.otter");
+    let env = &[("OTTER_FUSION_TASK_WORKERS", "4")];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native 4096-task Task.spawn output diverged from JIT"
+    );
+    assert_eq!(nat_out, "total=8386560\n");
+}
+
+#[test]
+fn native_build_task_spawn_8192_tasks_matches_jit() {
+    let src = include_str!("../../../tests/cases/concurrency/task_spawn_8192_tasks.otter");
+    let env = &[("OTTER_FUSION_TASK_WORKERS", "4")];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native 8192-task Task.spawn output diverged from JIT"
+    );
+    assert_eq!(nat_out, "total=33550336\n");
+}
+
+#[test]
+fn native_build_task_spawn_16384_tasks_matches_jit() {
+    let src = include_str!("../../../tests/cases/concurrency/task_spawn_16384_tasks.otter");
+    let env = &[("OTTER_FUSION_TASK_WORKERS", "4")];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native 16384-task Task.spawn output diverged from JIT"
+    );
+    assert_eq!(nat_out, "total=134209536\n");
+}
+
+#[test]
+fn native_build_task_spawn_32768_tasks_matches_jit() {
+    let src = include_str!("../../../tests/cases/concurrency/task_spawn_32768_tasks.otter");
+    let env = &[("OTTER_FUSION_TASK_WORKERS", "4")];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native 32768-task Task.spawn output diverged from JIT"
+    );
+    assert_eq!(nat_out, "total=536854528\n");
+}
+
+#[test]
+fn native_build_task_spawn_detach_many_channel_close_matches_jit() {
+    let src =
+        include_str!("../../../tests/cases/concurrency/task_spawn_detach_many_channel_close.otter");
+    let env = &[("OTTER_FUSION_TASK_WORKERS", "4")];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native detached Task.spawn fanout output diverged from JIT"
+    );
+    assert_eq!(nat_out, "count=1024 total=523776 closed=1\n");
+}
+
+#[test]
+fn native_build_task_spawn_detach_gc_many_live_lists_matches_jit() {
+    let src =
+        include_str!("../../../tests/cases/concurrency/task_spawn_detach_gc_many_live_lists.otter");
+    let env = &[
+        ("OTTER_FUSION_TASK_WORKERS", "4"),
+        ("OTTER_FUSION_GC", "stress"),
+    ];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native detached GC-stress Task.spawn output diverged from JIT"
+    );
+    assert_eq!(nat_out, "count=256 total=98688 closed=1\n");
+}
+
+#[test]
+fn native_build_task_spawn_yield_fairness_channel_matches_jit() {
+    let src =
+        include_str!("../../../tests/cases/concurrency/task_spawn_yield_fairness_channel.otter");
+    let (jit_out, jerr, jok) = lang_raw("run", src);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, &[]);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native uneven-yield Task.spawn channel fan-in output diverged from JIT"
+    );
+    assert_eq!(nat_out, "received=4560 joined=9120\n");
+}
+
+#[test]
+fn native_build_task_spawn_channel_fairness_2048_matches_jit() {
+    let src =
+        include_str!("../../../tests/cases/concurrency/task_spawn_channel_fairness_2048.otter");
+    let env = &[("OTTER_FUSION_TASK_WORKERS", "2")];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native 2048-task Task.spawn channel fairness output diverged from JIT"
+    );
+    assert_eq!(nat_out, "received=2096128 joined=2096128\n");
+}
+
+#[test]
+fn native_build_task_spawn_channel_fairness_4096_matches_jit() {
+    let src =
+        include_str!("../../../tests/cases/concurrency/task_spawn_channel_fairness_4096.otter");
+    let env = &[("OTTER_FUSION_TASK_WORKERS", "2")];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native 4096-task Task.spawn channel fairness output diverged from JIT"
+    );
+    assert_eq!(nat_out, "received=8386560 joined=8386560\n");
+}
+
+#[test]
+fn native_build_task_spawn_channel_fairness_8192_matches_jit() {
+    let src =
+        include_str!("../../../tests/cases/concurrency/task_spawn_channel_fairness_8192.otter");
+    let env = &[("OTTER_FUSION_TASK_WORKERS", "2")];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native 8192-task Task.spawn channel fairness output diverged from JIT"
+    );
+    assert_eq!(nat_out, "received=33550336 joined=33550336\n");
+}
+
+#[test]
+fn native_build_task_spawn_repeated_wave_fanout_matches_jit() {
+    let src =
+        include_str!("../../../tests/cases/concurrency/task_spawn_repeated_wave_fanout.otter");
+    let env = &[("OTTER_FUSION_TASK_WORKERS", "2")];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native repeated-wave Task.spawn output diverged from JIT"
+    );
+    assert_eq!(nat_out, "received=128020480 joined=128020480\n");
+}
+
+#[test]
+fn native_build_task_spawn_mixed_high_contention_matches_jit() {
+    let src =
+        include_str!("../../../tests/cases/concurrency/task_spawn_mixed_high_contention.otter");
+    let env = &[("OTTER_FUSION_TASK_WORKERS", "4")];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native mixed-contention Task.spawn output diverged from JIT"
+    );
+    assert_eq!(nat_out, "shared=3072 received=784896 joined=784896\n");
+}
+
+#[test]
+fn native_build_task_spawn_gc_stress_matches_jit() {
+    let src = include_str!("../../../tests/cases/concurrency/task_spawn_gc_stress.otter");
+    let env = &[("OTTER_FUSION_GC", "stress")];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native GC-stress Task.spawn output diverged from JIT"
+    );
+    assert_eq!(nat_out, "total = 10\n");
+}
+
+#[test]
+fn native_build_task_spawn_map_gc_stress_matches_jit() {
+    let src = include_str!("../../../tests/cases/concurrency/task_spawn_map_gc_stress.otter");
+    let env = &[
+        ("OTTER_FUSION_TASK_WORKERS", "4"),
+        ("OTTER_FUSION_GC", "stress"),
+    ];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native Task.spawn GC-stress Map output diverged from JIT"
+    );
+    assert_eq!(nat_out, "weights=1240 joined=7440\n");
+}
+
+#[test]
+fn native_build_task_spawn_managed_result_gc_stress_matches_jit() {
+    let src =
+        include_str!("../../../tests/cases/concurrency/task_spawn_managed_result_gc_stress.otter");
+    let env = &[
+        ("OTTER_FUSION_TASK_WORKERS", "4"),
+        ("OTTER_FUSION_GC", "stress"),
+    ];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native Task.spawn managed-result GC-stress output diverged from JIT"
+    );
+    assert_eq!(nat_out, "total=33280\n");
+}
+
+#[test]
+fn native_build_task_cancel_many_releases_channel_endpoints_matches_jit() {
+    // This case creates and cancels thousands of executor tasks plus thousands
+    // of channels. Keep the whole parity run out of the rest of the native/
+    // soak churn so the 30s native executable watchdog measures the program,
+    // not unrelated scheduler load in the Rust test process.
+    let _guard = native_build_guard();
+    let src = include_str!(
+        "../../../tests/cases/concurrency/task_cancel_many_releases_channel_endpoints.otter"
+    );
+    let env = &[("OTTER_FUSION_TASK_WORKERS", "4")];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw_unlocked(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native mass-cancel Task.spawn output diverged from JIT"
+    );
+    assert_eq!(nat_out, "cancelled=4096 recv=closed\n");
+}
+
+#[test]
+fn native_build_task_cancel_many_gc_stress_matches_jit() {
+    let src = include_str!("../../../tests/cases/concurrency/task_cancel_many_gc_stress.otter");
+    let env = &[
+        ("OTTER_FUSION_TASK_WORKERS", "4"),
+        ("OTTER_FUSION_GC", "stress"),
+    ];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native GC-stress mass-cancel Task.spawn output diverged from JIT"
+    );
+    assert_eq!(nat_out, "cancelled=512 recv=closed\n");
+}
+
+#[test]
+fn native_build_task_cancel_repeated_wave_gc_stress_matches_jit() {
+    let _guard = native_build_guard();
+    let src =
+        include_str!("../../../tests/cases/concurrency/task_cancel_repeated_wave_gc_stress.otter");
+    let env = &[
+        ("OTTER_FUSION_TASK_WORKERS", "4"),
+        ("OTTER_FUSION_GC", "stress"),
+    ];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw_unlocked(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native repeated-wave GC-stress Task.spawn cancellation output diverged from JIT"
+    );
+    assert_eq!(nat_out, "cancelled=128 recv=closed\n");
 }
 
 #[test]

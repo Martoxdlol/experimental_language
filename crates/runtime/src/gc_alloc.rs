@@ -55,7 +55,7 @@
 //! memory is already zero (it comes from `alloc_zeroed`); recycled blocks are
 //! re-zeroed when popped from a local free list.
 
-use std::alloc::{alloc_zeroed, Layout};
+use std::alloc::{Layout, alloc_zeroed};
 use std::cell::RefCell;
 use std::sync::{Mutex, OnceLock};
 
@@ -188,7 +188,11 @@ struct LocalCache {
 
 impl LocalCache {
     fn new() -> Self {
-        LocalCache { cursor: 0, end: 0, free: (0..NUM_CLASSES).map(|_| Vec::new()).collect() }
+        LocalCache {
+            cursor: 0,
+            end: 0,
+            free: (0..NUM_CLASSES).map(|_| Vec::new()).collect(),
+        }
     }
 }
 
@@ -322,7 +326,11 @@ pub fn free_list_bytes() -> usize {
         .enumerate()
         .map(|(idx, list)| class_size_of_index(idx) * list.len())
         .sum();
-    let large: usize = g.large_free.iter().map(|(class, list)| class * list.len()).sum();
+    let large: usize = g
+        .large_free
+        .iter()
+        .map(|(class, list)| class * list.len())
+        .sum();
     small + large
 }
 
@@ -440,11 +448,18 @@ mod tests {
             if freed.contains(&q) {
                 recycled += 1;
                 for i in 0..class {
-                    assert_eq!(unsafe { *(q as *const u8).add(i) }, 0, "recycled must be re-zeroed");
+                    assert_eq!(
+                        unsafe { *(q as *const u8).add(i) },
+                        0,
+                        "recycled must be re-zeroed"
+                    );
                 }
             }
         }
-        assert!(recycled >= REFILL_BATCH, "freed blocks must be recycled via the global pool (got {recycled})");
+        assert!(
+            recycled >= REFILL_BATCH,
+            "freed blocks must be recycled via the global pool (got {recycled})"
+        );
         for q in wave2 {
             free(q, sz);
         }
@@ -459,7 +474,10 @@ mod tests {
         unsafe { std::ptr::write_bytes(p, 0x7, big) };
         free(p as usize, big);
         let q = alloc(big);
-        assert_eq!(p, q, "large blocks recycle by exact size (no per-thread cache)");
+        assert_eq!(
+            p, q,
+            "large blocks recycle by exact size (no per-thread cache)"
+        );
         for i in (0..big).step_by(4096) {
             assert_eq!(unsafe { *q.add(i) }, 0);
         }
@@ -515,7 +533,11 @@ mod tests {
         addrs.sort_unstable();
         let before = addrs.len();
         addrs.dedup();
-        assert_eq!(addrs.len(), before, "no two concurrently-live blocks may alias");
+        assert_eq!(
+            addrs.len(),
+            before,
+            "no two concurrently-live blocks may alias"
+        );
         // Free everything back (exercises global free-list return from many threads).
         for (p, sz) in all {
             free(p, sz);

@@ -1,0 +1,37 @@
+//@ kind: run
+//@ serial
+//@ env: OTTER_FUSION_GC=stress
+//@ description: timeout() cancellation scales across many losing recv() futures, releasing their handoff roots and channel waiters
+//@ stdout:
+//~ timed_out=512 received=77
+
+import { println } from "std:io";
+import { Future } from "core:prelude";
+import { Sender, Receiver, ChannelClosed, channel } from "std:sync";
+import { timeout, TimedOut } from "std:async";
+
+function main(): Future<null> async {
+  var ends = channel<i64>();
+  var tx: Sender<i64> = ends.0;
+  var rx: Receiver<i64> = ends.1;
+
+  var timed_out: i64 = 0;
+  var i: i64 = 0;
+  while i < 512 {
+    match await timeout(rx.recv(), 0) {
+      i64 n => {},
+      ChannelClosed c => {},
+      TimedOut t => { timed_out = timed_out + 1; },
+    };
+    i = i + 1;
+  }
+
+  tx.send(77);
+  var received: i64 = -1;
+  match await rx.recv() {
+    i64 n => { received = n; },
+    ChannelClosed c => {},
+  };
+
+  println("timed_out=${timed_out} received=${received}");
+}

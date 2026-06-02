@@ -79,13 +79,19 @@ impl std::fmt::Display for ResolveError {
                 reqs.join(", ")
             ),
             ResolveError::UnknownRegistry { name, registry } => {
-                write!(f, "dependency `{name}` uses registry `{registry}`, which is not declared")
+                write!(
+                    f,
+                    "dependency `{name}` uses registry `{registry}`, which is not declared"
+                )
             }
             ResolveError::Path { name, message } => {
                 write!(f, "path dependency `{name}`: {message}")
             }
             ResolveError::GitUnsupported { name } => {
-                write!(f, "git dependency `{name}` is not yet supported by the resolver")
+                write!(
+                    f,
+                    "git dependency `{name}` is not yet supported by the resolver"
+                )
             }
             ResolveError::Backend(m) => write!(f, "{m}"),
         }
@@ -103,10 +109,13 @@ pub struct Registries<'a> {
 impl<'a> Registries<'a> {
     fn get(&self, name: Option<&str>, dep: &str) -> Result<&'a dyn Registry, ResolveError> {
         let key = name.unwrap_or(&self.default);
-        self.by_name.get(key).copied().ok_or_else(|| ResolveError::UnknownRegistry {
-            name: dep.to_string(),
-            registry: key.to_string(),
-        })
+        self.by_name
+            .get(key)
+            .copied()
+            .ok_or_else(|| ResolveError::UnknownRegistry {
+                name: dep.to_string(),
+                registry: key.to_string(),
+            })
     }
 }
 
@@ -214,13 +223,20 @@ impl<'a> Run<'a> {
                 // Feature-gated optional deps are a follow-up; skip for now.
                 continue;
             }
-            self.edges.entry(parent.to_string()).or_default().push(name.clone());
+            self.edges
+                .entry(parent.to_string())
+                .or_default()
+                .push(name.clone());
             match &dep.source {
-                DepSource::Registry { version: req_str, registry } => {
-                    let req = version::parse_req(req_str)
-                        .map_err(|m| ResolveError::Backend(m))?;
+                DepSource::Registry {
+                    version: req_str,
+                    registry,
+                } => {
+                    let req = version::parse_req(req_str).map_err(|m| ResolveError::Backend(m))?;
                     self.reqs.entry(name.clone()).or_default().push(req);
-                    self.registry_of.entry(name.clone()).or_insert_with(|| registry.clone());
+                    self.registry_of
+                        .entry(name.clone())
+                        .or_insert_with(|| registry.clone());
                     if direct {
                         self.direct.insert(name.clone());
                     }
@@ -263,7 +279,9 @@ impl<'a> Run<'a> {
             ResolvedInternal {
                 name: name.to_string(),
                 version,
-                source: LockSource::Path { path: path.to_string() },
+                source: LockSource::Path {
+                    path: path.to_string(),
+                },
                 root: dep_dir.clone(),
                 direct,
                 checksum_hint: None,
@@ -319,12 +337,16 @@ impl<'a> Run<'a> {
             }
         }
 
-        let available: Vec<Version> =
-            entries.iter().filter(|e| !e.yanked).map(|e| e.vers.clone()).collect();
-        let picked = version::pick_version(&reqs, &available).ok_or_else(|| ResolveError::NoMatch {
-            name: name.to_string(),
-            reqs: reqs.iter().map(|r| r.to_string()).collect(),
-        })?;
+        let available: Vec<Version> = entries
+            .iter()
+            .filter(|e| !e.yanked)
+            .map(|e| e.vers.clone())
+            .collect();
+        let picked =
+            version::pick_version(&reqs, &available).ok_or_else(|| ResolveError::NoMatch {
+                name: name.to_string(),
+                reqs: reqs.iter().map(|r| r.to_string()).collect(),
+            })?;
         let entry = entries
             .iter()
             .find(|e| e.vers == picked)
@@ -370,10 +392,18 @@ impl<'a> Run<'a> {
             if d.optional {
                 continue;
             }
-            self.edges.entry(name.to_string()).or_default().push(d.name.clone());
-            self.reqs.entry(d.name.clone()).or_default().push(d.req.clone());
+            self.edges
+                .entry(name.to_string())
+                .or_default()
+                .push(d.name.clone());
+            self.reqs
+                .entry(d.name.clone())
+                .or_default()
+                .push(d.req.clone());
             let dep_registry = d.registry.clone().or_else(|| registry_name.clone());
-            self.registry_of.entry(d.name.clone()).or_insert(dep_registry);
+            self.registry_of
+                .entry(d.name.clone())
+                .or_insert(dep_registry);
         }
         let _ = registry_name;
         Ok(())
@@ -412,7 +442,9 @@ mod tests {
                 header.set_size(contents.len() as u64);
                 header.set_mode(0o644);
                 header.set_cksum();
-                builder.append_data(&mut header, path, contents.as_bytes()).unwrap();
+                builder
+                    .append_data(&mut header, path, contents.as_bytes())
+                    .unwrap();
             }
             builder.finish().unwrap();
         }
@@ -467,12 +499,21 @@ mod tests {
     #[test]
     fn resolves_a_single_registry_dep_and_locks_it() {
         let reg_dir = temp_dir("single_reg");
-        publish(&reg_dir, "leftpad", "1.2.0", &[], &[("lib.otter", "pub function f(): i64 {1}")]);
+        publish(
+            &reg_dir,
+            "leftpad",
+            "1.2.0",
+            &[],
+            &[("lib.otter", "pub function f(): i64 {1}")],
+        );
         let store = Store::at(temp_dir("single_store"));
         let local = LocalRegistry::new("public", reg_dir.clone());
         let mut by_name: HashMap<String, &dyn Registry> = HashMap::new();
         by_name.insert("public".into(), &local);
-        let registries = Registries { by_name, default: "public".into() };
+        let registries = Registries {
+            by_name,
+            default: "public".into(),
+        };
 
         let m = manifest("leftpad = \"1.2\"\n");
         let resolved = resolve(&m, &temp_dir("single_proj"), &registries, &store, None).unwrap();
@@ -493,12 +534,21 @@ mod tests {
         publish(&reg_dir, "dep", "1.5.3", &[], &[("lib.otter", "z")]);
         publish(&reg_dir, "dep", "2.0.0", &[], &[("lib.otter", "w")]);
         // `mid` depends on dep ^1.4; the root depends on dep ^1.2. Unify → 1.5.3.
-        publish(&reg_dir, "mid", "1.0.0", &[("dep", "^1.4")], &[("lib.otter", "m")]);
+        publish(
+            &reg_dir,
+            "mid",
+            "1.0.0",
+            &[("dep", "^1.4")],
+            &[("lib.otter", "m")],
+        );
         let store = Store::at(temp_dir("unify_store"));
         let local = LocalRegistry::new("public", reg_dir.clone());
         let mut by_name: HashMap<String, &dyn Registry> = HashMap::new();
         by_name.insert("public".into(), &local);
-        let registries = Registries { by_name, default: "public".into() };
+        let registries = Registries {
+            by_name,
+            default: "public".into(),
+        };
 
         let m = manifest("dep = \"1.2\"\nmid = \"1.0\"\n");
         let resolved = resolve(&m, &temp_dir("unify_proj"), &registries, &store, None).unwrap();
@@ -511,17 +561,29 @@ mod tests {
     fn transitive_dependencies_are_pulled_in() {
         let reg_dir = temp_dir("trans_reg");
         publish(&reg_dir, "bottom", "0.1.0", &[], &[("lib.otter", "b")]);
-        publish(&reg_dir, "top", "1.0.0", &[("bottom", "^0.1")], &[("lib.otter", "t")]);
+        publish(
+            &reg_dir,
+            "top",
+            "1.0.0",
+            &[("bottom", "^0.1")],
+            &[("lib.otter", "t")],
+        );
         let store = Store::at(temp_dir("trans_store"));
         let local = LocalRegistry::new("public", reg_dir.clone());
         let mut by_name: HashMap<String, &dyn Registry> = HashMap::new();
         by_name.insert("public".into(), &local);
-        let registries = Registries { by_name, default: "public".into() };
+        let registries = Registries {
+            by_name,
+            default: "public".into(),
+        };
 
         let m = manifest("top = \"1.0\"\n");
         let resolved = resolve(&m, &temp_dir("trans_proj"), &registries, &store, None).unwrap();
         assert!(resolved.lockfile.get("top").is_some());
-        assert!(resolved.lockfile.get("bottom").is_some(), "transitive dep missing");
+        assert!(
+            resolved.lockfile.get("bottom").is_some(),
+            "transitive dep missing"
+        );
     }
 
     #[test]
@@ -531,7 +593,10 @@ mod tests {
         let local = LocalRegistry::new("public", reg_dir.clone());
         let mut by_name: HashMap<String, &dyn Registry> = HashMap::new();
         by_name.insert("public".into(), &local);
-        let registries = Registries { by_name, default: "public".into() };
+        let registries = Registries {
+            by_name,
+            default: "public".into(),
+        };
         let m = manifest("ghost = \"1.0\"\n");
         assert!(matches!(
             resolve(&m, &temp_dir("missing_proj"), &registries, &store, None),
@@ -543,7 +608,10 @@ mod tests {
     fn path_dependency_is_resolved_from_its_manifest() {
         let proj = temp_dir("pathdep_proj");
         // A sibling `../mylib` path dependency.
-        let lib_dir = proj.parent().unwrap().join(format!("mylib_{}", std::process::id()));
+        let lib_dir = proj
+            .parent()
+            .unwrap()
+            .join(format!("mylib_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&lib_dir);
         std::fs::create_dir_all(&lib_dir).unwrap();
         std::fs::write(
@@ -553,7 +621,10 @@ mod tests {
         .unwrap();
 
         let store = Store::at(temp_dir("pathdep_store"));
-        let registries = Registries { by_name: HashMap::new(), default: "public".into() };
+        let registries = Registries {
+            by_name: HashMap::new(),
+            default: "public".into(),
+        };
         let rel = format!("../mylib_{}", std::process::id());
         let m = manifest(&format!("mylib = {{ path = \"{rel}\" }}\n"));
         let resolved = resolve(&m, &proj, &registries, &store, None).unwrap();
@@ -576,7 +647,10 @@ mod tests {
         let local = LocalRegistry::new("public", reg_dir.clone());
         let mut by_name: HashMap<String, &dyn Registry> = HashMap::new();
         by_name.insert("public".into(), &local);
-        let registries = Registries { by_name, default: "public".into() };
+        let registries = Registries {
+            by_name,
+            default: "public".into(),
+        };
         let m = manifest("dep = \"1.0\"\n");
         let err = resolve(&m, &temp_dir("tamper_proj"), &registries, &store, None).unwrap_err();
         assert!(matches!(err, ResolveError::Backend(_)));

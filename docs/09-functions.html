@@ -411,7 +411,7 @@ opener — before <code>{</code> on a <code>function(...)</code>, before <code>=
 closure. The type of an async closure is <code>(...) =&gt; Future&lt;R&gt;</code>.</p>
 
 <p>The one exception is the bare <code>async { ... }</code> block — a zero-arg inline future
-literal kept for launcher ergonomics (<code>block_on(async { ... })</code>). See
+literal that is awaited or spawned by surrounding async code. See
 <a href="21-async.html#exec">21-async §6</a>.</p>
 
 <!-- =========================================================== -->

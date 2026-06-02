@@ -1,0 +1,50 @@
+//@ kind: run
+//@ serial
+//@ env: OTTER_FUSION_TASK_WORKERS=4
+//@ env: OTTER_FUSION_GC=stress
+//@ description: mass spawn EXPR cancellation under stress GC releases future state, sender endpoints, and executor wake registrations
+//@ stdout:
+//~ closed=512
+
+import { println } from "std:io";
+import { Future } from "core:prelude";
+import { List } from "core:collections";
+import { Sender, Receiver, ChannelClosed, channel } from "std:sync";
+import { sleep } from "std:async";
+
+function send_later(tx: Sender<i64>, n: i64): Future<i64> async {
+  var _ = await sleep(1000);
+  tx.send(n);
+  n
+}
+
+function make_cancelled_receiver(n: i64): Receiver<i64> {
+  var ends = channel<i64>();
+  var tx = ends.0;
+  var rx = ends.1;
+  var fut: Future<i64> = spawn send_later(tx, n);
+  fut.cancel();
+  rx
+}
+
+function main(): Future<null> async {
+  var receivers: List<Receiver<i64>> = [];
+
+  var i: i64 = 0;
+  while i < 512 {
+    receivers.push(make_cancelled_receiver(i));
+    i = i + 1;
+  }
+
+  var closed: i64 = 0;
+  var j: i64 = 0;
+  while j < receivers.size() {
+    match await receivers[j].recv() {
+      i64 n => {},
+      ChannelClosed c => { closed = closed + 1; },
+    }
+    j = j + 1;
+  }
+
+  println("closed=${closed}");
+}

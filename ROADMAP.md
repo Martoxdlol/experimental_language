@@ -79,8 +79,8 @@ The full module/import/package system, end to end.
   requires an import from `core:prelude`/`core:collections`/`std:io`/`std:*`.
   `print`/`println`/`panic`/`panic_with`/`exit`/`abort` are importable marker
   functions dispatched by `DefId`. The concurrency/FFI intrinsics
-  (`channel`/`sleep`/`yield_now`/`timeout`/`Thread.spawn`/`Shared.new`/
-  `Foreign.*`) also require their import — recognized only when
+  (`channel`/`sleep`/`yield_now`/`timeout`/`Thread.spawn`/`Task.spawn`/
+  `Shared.new`/`Foreign.*`) also require their import — recognized only when
   the name resolves to a built-in (`intr_fn`/`intr_ns`). (`CString`/`CStr`/
   `Buffer` are now ordinary imported prelude types with real `extend` methods,
   not callee-shape intrinsics.) Only `str` methods +
@@ -1411,9 +1411,9 @@ The tracing GC is functionally complete for single-threaded programs.
       **`JoinHandle<R>.join()` is async + non-blocking**: it
       yields a `Future<Joined<R> | Panicked>` so the joining task *suspends*
       (`lang_thread_join_future` registers a waker; the worker wakes it on
-      publish) instead of parking the OS thread. From sync code the implicit-async
-      driver runs it to completion; user surface is just `var r = h.join()` (see
-      the Async note below — async is implicit, with the `spawn` keyword).
+      publish) instead of parking the OS thread. Callers join from an async
+      context and `await` the join future; async `main` is driven by the runtime
+      launcher, with no user-visible `block_on`.
       The checker recognises `Thread.spawn`, records the result type, and rejects
       mutable-managed captures (deep-clone of mutable managed captures via
       `Clone` is the follow-up); codegen builds the handle/union.
@@ -1452,8 +1452,8 @@ The tracing GC is functionally complete for single-threaded programs.
       so a `JoinHandle.join()` surfaces it recoverably, while a `spawn EXPR`
       awaiter has the panic *re-propagated* at its own `await` (`spawn_poll`) —
       the promise-rejection model (`docs/21` §11). Sibling workers are unaffected.
-      Covers `Thread.spawn` (sync + async closures) and the `spawn` keyword
-      (one-OS-thread-per-task today). JIT + native parity; the C shim is bundled
+      Covers `Thread.spawn` (sync + async closures) and the pre-M:N `spawn`
+      keyword path. JIT + native parity; the C shim is bundled
       into both the `rlib` (JIT) and `libruntime.a` (native). Tests: 5 runtime
       unit/integration (panic_boundary + a real worker-panic), 4 CLI integration
       (isolated join, lock-release, `spawn` propagation, GC-stress parity), and
@@ -1461,7 +1461,7 @@ The tracing GC is functionally complete for single-threaded programs.
       spawn_panic_propagates,lock_released_on_panic}` (the last graduated from
       XFAIL). The **executor-multiplexed** case (many `Task.spawn` tasks sharing
       one work-stealing worker thread, where the boundary must sit at the poll
-      call site) is a separate follow-on after the M:N executor lands.
+      call site and prove sibling survival) remains the separate follow-on.
 - [x] **Channels (`docs/20` §2): `channel<T>()`, `send`, `recv`, `try_recv`, and
       deterministic close-on-last-sender-drop + `Receiver: Iterator`.**
       `channel<T>()` (a recognised builtin, like `Thread.spawn`) allocates a
@@ -1520,25 +1520,19 @@ The tracing GC is functionally complete for single-threaded programs.
       concurrent increments (2×5000 → 10000, deterministic under stress). JIT +
       native parity; `examples/shared.otter`; 2 CLI tests. TODO: lock release on a
       panicking body (needs unwinding); reentrancy is undefined (per spec).
-- [x] **Async (`docs/21`) — COMPLETE, with an implicit-async surface.**
-      > **SURFACE NOTE (current design, `docs/21` rewritten):** async is now
-      > **implicit**. There is **no** user-visible `async` modifier, `await`
-      > expression, `block_on` builtin, `async { … }` block, or `for await` —
-      > those were removed from the language surface. A single keyword **`spawn
-      > call_expr`** evaluates to a `JoinHandle<T>` (like Go's `go`). User code
-      > never spells `Future<T>`: `sleep` returns `null`, `Receiver.recv()`
-      > returns `T`, `JoinHandle.join()` returns `Joined<T> | Panicked`,
-      > `Shared.lock(fn)` returns the closure's result. The compiler decides which
-      > functions need state-machine codegen by a fix-point pass
-      > (`propagate_async_calls`): a function is "async" iff its body reaches a
-      > suspending op (`sleep`/`yield_now`/`recv`/`join`) or calls another async
-      > function; non-suspending functions keep straight-line codegen with zero
-      > executor overhead. `main` is driven by `lang_block_on` automatically if it
-      > is async. **The `Future`/`Pending`/`Ready`/state-machine/`block_on`
-      > machinery described below all still exists internally** — it is exactly
-      > what the implicit surface lowers to; the user just never names it. The
-      > `[x]` sub-bullets that mention `await`/`async {}`/`for await` describe the
-      > internal lowering, reachable from the implicit surface.
+- [x] **Async (`docs/21`) — COMPLETE, with an explicit-async surface.**
+      > **SURFACE NOTE (current design, `docs/21`):** async is explicit:
+      > `async` functions/closures and `await` are user-visible, `Future<T>` is a
+      > real type programmers can name, and there is **no user-visible
+      > `block_on`**. An async `main` is driven by the runtime launcher. The
+      > **`spawn EXPR` keyword schedules a future on the shared executor and
+      > itself returns `Future<T>`**; `await`ing that future yields the spawned
+      > task's result and propagates task panics at the awaiter. Thread-like
+      > handles are reserved for `Thread.spawn` (dedicated OS thread) and
+      > `Task.spawn` (executor-backed `std:task::JoinHandle<R>` with
+      > `join`/`detach`/`cancel`/`abort`). The internal
+      > `runtime::async_rt::lang_block_on` machinery still drives root futures,
+      > but user code never calls it.
 
       Prelude:
       `interface Future<Output> { poll(self, ctx: *Context): Ready<Output> |
@@ -1553,11 +1547,11 @@ The tracing GC is functionally complete for single-threaded programs.
       the body (returning `Ready<Output>`), and the public symbol becomes a
       *constructor* that allocates the state struct (holding the captured
       arguments / locals) and wraps it in a `Future<Output>` interface-object
-      box whose single vtable slot is `poll`. `block_on(fut): Out` (a recognised
-      builtin) drives the future to completion via the runtime executor
-      (`runtime::async_rt::lang_block_on`: a poll loop that parks on a condvar
-      waker between `Pending` polls, in GC-native state, pinning the future as a
-      GC root across polls). **`await` is fully lowered**: an async function
+      box whose single vtable slot is `poll`. The internal runtime entry
+      `runtime::async_rt::lang_block_on` drives the program root future to
+      completion; it is not a user-visible builtin. It parks on a condvar waker
+      between `Pending` polls, in GC-native state, pinning the future as a GC
+      root across polls. **`await` is fully lowered**: an async function
       whose body contains `await` becomes a real suspendable state machine — the
       state struct holds every body local, `poll` dispatches on a saved state
       word to resume at the right `await`, each `await` saves the live locals +
@@ -1565,13 +1559,13 @@ The tracing GC is functionally complete for single-threaded programs.
       `yield_now()` (a `Future<null>` that suspends once, self-waking) exercises
       genuine park/resume cycles. `await`s in `if`/`while`/`match` bodies work.
       JIT + native parity; GC-stress clean. **`await` inside `async { … }`
-      blocks** works (`block_on(async { await … })`, the doc's main launcher).
-      **`spawn(fut): JoinHandle<T>`** drives a future on a worker thread (reusing
-      the `JoinHandle`/`join` machinery → `Joined<T> | Panicked`). **`for await x
-      in stream`** drives an `AsyncIterator<T>` (`next_async()` is awaited each
-      step). `yield_now()` provides genuine suspension; **`sleep(ms)`** is a
-      timer-thread-backed future; **`.cancel()`** is a (no-op) abort for the
-      compute-only futures we build. `examples/async.otter` exercises the whole
+      blocks** works when awaited or spawned by surrounding async code.
+      **`spawn fut_expr: Future<T>`** schedules a future on the shared worker
+      executor and returns a future handle whose `await` yields `T`.
+      `yield_now()` provides genuine suspension; **`sleep(ms)`** is driven
+      by the shared timer driver; **`.cancel()`** is a safe no-op for plain
+      compute-only futures and has real executor cancellation for spawned
+      futures. `examples/async.otter` exercises the whole
       surface; 14 CLI tests + 2 runtime tests; JIT + native + GC-stress parity.
 - [x] **`await` ANF hoisting** (`docs/21`): `await` may appear nested in a
       larger expression — function arguments, operands of `+`/`-`/comparisons,
@@ -2200,7 +2194,7 @@ feature, JIT≡native byte-identical and GC-stress clean.
 - **Phase 5 (system features):** structs, unions, generics, interfaces (static +
   dynamic + default methods), error handling (`?`/`Try`/`FromResidual`), pattern
   matching (complete), closures (by-ref cells), threads/channels/`Shared<T>`,
-  **async (implicit, `spawn` keyword)** incl. `sleep`/`timeout`/for-await/async
+  **explicit async/await (`spawn` keyword)** incl. `sleep`/`timeout`/for-await/async
   closures, FFI (extern fns/structs/vars/arrays/opaque types/NPO/`Foreign.*`/
   CString/CStr/`@Packed`/`@Align`/`@Union`/`@Transparent`/`@Link`), all `@Derive`s
   (Eq/Ord/ToStr/Clone/Hash), `Drop`, full stdlib collection/string/numeric APIs.
@@ -2271,16 +2265,172 @@ feature, JIT≡native byte-identical and GC-stress clean.
   executor:* the executor-multiplexed case (boundary at the poll call site so a
   panicking `Task` unwinds only its own state machine, leaving sibling tasks on
   the same worker thread alive).
-- **M:N work-stealing executor + `Task.spawn` (`std:task`)** — the async runtime is
-  one-OS-thread-per-task today. Add a real multi-threaded work-stealing scheduler
-  (a small worker pool, per-worker run queues + stealing, a global injector, and a
-  reactor/timer for `sleep`/`timeout`/I/O) that the `spawn` keyword and `await`
-  drive onto. On top of it, add `Task.spawn` (`std:task`): the *same* surface as
-  `Thread.spawn` (sync or async closure → `JoinHandle<R>` with `join`/`detach`) and
-  the *same* safety model (by-value capture snapshots for cross-task isolation +
-  `Shared<T>`/channels for shared state), but scheduled on the executor instead of a
-  dedicated OS thread per worker — so code stays thread-like while scaling to far
-  more concurrency without one OS thread each. **Complements, not replaces,**
+- **M:N work-stealing executor + `Task.spawn` (`std:task`)** — **in progress.**
+  Landed the first executor-backed slice: `spawn EXPR` now schedules onto a
+  lazily-started M:N worker pool with per-worker queues, stealing, a global
+  injector, task-local held-`Shared` lock tracking, poll-site panic boundaries,
+  and duplicate-poll suppression for wake-during-poll futures; `std:task` is
+  importable and `Task.spawn` now accepts both sync `() => R` and async
+  `() => Future<R>` closures, returning a task-specific `std:task::JoinHandle<R>`
+  with `join`/`detach`/`cancel`/`abort` and scheduling them on the executor.
+  The executor sizes from hardware parallelism with a higher bounded cap and an
+  `OTTER_FUSION_TASK_WORKERS=N` runtime override for stress/performance tuning.
+  `future.cancel()` now has
+  real executor teeth for `spawn EXPR` futures: it marks the underlying task
+  cancelled, stops future polls, wakes waiters, and releases any task-held
+  `Shared` locks while suspended; generated async-block futures also carry a
+  cleanup hook so cancellation can run prompt state cleanup for owned captures
+  instead of waiting for GC. Runtime-built `sleep` and `timeout` futures also
+  unregister their one-shot reactor/timer interests when cancelled, and
+  cancelling a pending `timeout` future cascades cancellation into its inner
+  loser future. `Task.spawn` handle cancellation uses the same path and `join()`
+  now resolves to `Joined<R> | Panicked | Cancelled`; the OS-thread
+  `std:thread::JoinHandle<R>` remains distinct and intentionally has no
+  `cancel()` or `abort()` method. `timeout(fut, ms)` now calls the same
+  cancellation hook when the timer wins, so cancellable loser futures such as
+  `spawn EXPR` release their suspended task state. `Thread.spawn` remains the
+  dedicated OS-thread primitive.
+  Tests added for sync and async `Task.spawn`, by-value capture snapshots for
+  both sync and async `Task.spawn` closures (JIT/native), compiler/e2e rejection
+  of non-shareable mutable captures through `Task.spawn`, async `Task.spawn` with
+  `Shared.lock`, spawn-future cancellation releasing a held lock, mass
+  `spawn EXPR` future cancellation releasing captured sender endpoints so
+  receivers close promptly, including a 512-task stress-GC storm (JIT + native),
+  task-handle
+  `cancel()`/`abort()` joining as `Cancelled`, `abort()` sharing the same
+  suspended-state cleanup path as `cancel()` and releasing task-held `Shared`
+  locks (JIT + native), sync and async `Task.spawn`
+  panics joining as `Panicked` while a sibling task completes (JIT + native),
+  one-worker `Task.spawn` panic-after-await while holding `Shared` releasing the
+  lock and allowing a sibling executor task to complete (JIT + native),
+  `timeout(h.join(), ms)` cancelling only the join waiter while the
+  `Task.spawn` worker continues and can be joined later (JIT + native),
+  multiple concurrent `JoinHandle.join()` waiters on the same executor task
+  all waking and observing the completed result (JIT + native), same-frame
+  multiple join futures and 128 spawned waiter tasks concurrently awaiting one
+  `Task.spawn` join handle all waking as `Cancelled` after handle cancellation
+  (JIT + native),
+  sync-closure `Task.spawn`
+  cancellation remaining cooperative (no forced `Cancelled` without an `await`
+  suspension point) with a runtime guard against treating closure envs as future
+  cleanup boxes, active-poll cancellation taking effect only once the poll
+  returns `Pending`, cancellation publishing waking every registered join/spawn
+  waiter exactly once, timeout loser cancellation releasing a held lock plus
+  512 losing `spawn EXPR` futures releasing captured channel endpoints and
+  512 losing channel `recv()` futures releasing pinned handoff state plus parked
+  channel waiters under stress GC (JIT + native), shared
+  reactor-backed timer wakeups for many sleeping executor tasks, direct runtime
+  cancellation cleanup for pending `sleep` and `timeout` registrations, explicit
+  JIT/native cancellation of a pending `timeout(sleep(...), ...)` future cleaning
+  both timer registrations, runtime mass-cancellation coverage proving suspended
+  executor tasks unregister their persistent waker entries and release handoff
+  roots, staggered
+  `Task.spawn` timer deadlines joining deterministically in JIT/native, direct
+  scheduler unit coverage for round-robin worker queues, global injector
+  priority, stealing, wake-during-poll coalescing,
+  wake-while-already-queued preservation, duplicate runnable-copy suppression,
+  duplicate pending join/spawn waiter coalescing, post-unlock reschedule
+  draining for the lost-wake race, parking `Pending` tasks that have not
+  actually been woken (no executor busy-requeue backstop),
+  `Shared` head-only wake handoff with FIFO acquisition, runtime-only GC
+  safepoints for executor loops that are registered mutators but have no
+  generated language frame, GC-rooted `Task.spawn` handle pinning across the
+  pin-call safepoint, generated-side closure-env pinning across
+  `Thread.spawn`/`Task.spawn` runtime handoff safepoints (with detached
+  stress-GC coverage on both surfaces), `List`/`Map` locals classified as
+  managed stack-map roots,
+  async poll loop safepoints flushing live locals into the pinned future state,
+  and rooted list receivers across allocating method arguments,
+  a shared one-shot readiness reactor core for future I/O backends (registration,
+  cancellation, stale-readiness suppression, reentrant wake safety, and direct
+  C ABI wake-hook coverage, including mass registration/cancel/readiness cleanup),
+  cross-task channel
+  send/recv through `Task.spawn`, uneven-yield channel fan-in fairness across
+  many `Task.spawn` workers,
+  `Task.spawn.detach()` completion plus 1024 detached async workers sending over
+  cloned channels and releasing endpoints until the receiver observes close,
+  detached `Task.spawn` panic isolation that still lets sibling executor work complete
+  (JIT + native), 256 detached async workers with managed `List` locals live
+  across awaits under stress GC while channel close proves captured endpoints
+  release (JIT + native), JIT executor/GC-stress coverage for
+  task-held `Shared` locks, native/JIT parity for the non-stress task cases,
+  explicit native/JIT parity for `Task.spawn` sync workers, async workers,
+  `Shared.lock`, `JoinHandle.join()`, and cancellation joining as `Cancelled`,
+  negative compiler/e2e coverage proving OS-thread `JoinHandle` has neither
+  `cancel()` nor `abort()`, LSP hover/type-table coverage for `Task.spawn`
+  returning `JoinHandle<R>` and task-only `join`/`cancel`/`abort` method types
+  including `Cancelled`, `examples/task_spawn.otter` covering sync workers,
+  async workers, `Shared.lock`, and cancelled joins, native/JIT parity for small executor fanout, 1000-task,
+  4096-task, 8192-task, 16384-task, and 32768-task JIT/native executor fanout through the `spawn`
+  keyword, 2048- and 4096-task unevenly-yielding `spawn` keyword tasks sending through cloned
+  channel endpoints on a two-worker executor (JIT + native),
+  1024 concurrent sleeping `spawn` tasks woken by the shared
+  timer/reactor driver (JIT + native), 1024 concurrent sleeping `Task.spawn`
+  workers joined through executor handles on the same timer/reactor path
+  (JIT + native), 1000-task JIT/native `Task.spawn`
+  JoinHandle fanout, 4096-task, 8192-task, 16384-task, and 32768-task `Task.spawn` fanout on a
+  four-worker executor (JIT + native), four-worker mixed high-contention
+  `spawn` keyword and `Task.spawn` workloads
+  combining yields, `Shared.lock`, channel sends, and joins/awaits (JIT + native),
+  high-fanout `Task.spawn` channel traffic with cloned sender endpoints
+  including 2048-, 4096-, and 8192-task unevenly-yielding workers on a two-worker executor
+  (JIT + native),
+  native/JIT executor GC-stress parity, 256-task `spawn` keyword and
+  `Task.spawn` GC-stress fanout with managed `List` locals live across awaits
+  (JIT + native), `spawn` keyword and `Task.spawn` workers with managed `Map`
+  locals live across repeated await suspensions under stress GC (JIT + native),
+  128-task `spawn` keyword and `Task.spawn` fanout returning managed `List`
+  result graphs under stress GC (JIT + native), ordinary HIR
+  channel-endpoint local release on function return, and
+  cancellation of suspended `Task.spawn` async workers releasing captured
+  sender endpoints so receivers observe `ChannelClosed` (single-worker and
+  512-worker fanout plus a 512-worker stress-GC cancellation storm, and repeated
+  4-wave/128-total `spawn` keyword and `Task.spawn` cancellation storms under
+  stress GC proving stale wakers, join waiters, roots, and channel endpoints are
+  cleaned up across executor reuse, JIT + native);
+  the GC STW unit tests now model production
+  workers by registering/gating spawned mutators with `thread_start()` before
+  safepoint polling, removing a parallel-test race that could poison the shared
+  runtime test heap; `timeout()` now
+  preserves already-flattened ready union payloads (for example
+  `timeout(rx.recv(), ms)` matches `ChannelClosed`, not a nested union tag) with
+  JIT/native coverage; stress coverage for `Map` locals held by async
+  main before its first await and by executor workers across repeated
+  await suspensions; poison-tolerant executor/reactor/channel/`Shared` locks so
+  task queues, task poll/cancellation locks, join/cancel/detach state, reactor registrations,
+  timer-driver waits, channel registries, channel queues, shared registries, and
+  shared lock-state queues recover from poisoned runtime mutexes instead of
+  stranding high-concurrency work; async channel receive waiters now prune dead
+  executor-task wakers and coalesce duplicate registrations before send/close
+  wakeups so repeated polls and cancelled receiver tasks do not amplify
+  high-fanout channel traffic; and
+  concrete `Clone` captures for `Thread.spawn`/`Task.spawn` snapshotted into the
+  worker environment at the spawn boundary (JIT + native), while `Shared` handles
+  remain shared and channel endpoints keep their ownership-transfer semantics;
+  generic `T: Clone` captures and `List<T>` captures now snapshot through the same
+  monomorphized clone path before `Thread.spawn` handoff / `Task.spawn` executor
+  scheduling (JIT + native), while unbounded `T` remains rejected; and a repeatable CLI integration soak gate now
+  reruns the 2048-, 4096-, and 8192-task `spawn` keyword channel fan-in cases, the
+  2048-, 4096-, and 8192-task `Task.spawn` channel fan-in cases, repeated 32-wave
+  256-task `spawn` keyword and `Task.spawn` fanout/channel/join reuse cases, and
+  the one-worker panic/lock-release case multiple times to catch scheduler
+  wake/fairness flakes and stale registry cleanup issues; the CLI native/JIT
+  parity harness now recovers a poisoned native-build lock, caps concurrent
+  helper subprocesses to avoid oversubscribing high-concurrency executor stress
+  runs, and watchdogs helper subprocesses plus native build/run steps so hung
+  concurrency programs fail with captured diagnostics instead of stranding the
+  suite; native linking now chooses the freshest `libruntime*.a` archive rather
+  than a stale un-hashed `libruntime.a`, preventing native builds from silently
+  running older runtime/GC scheduler code after runtime-only rebuilds.
+  Remaining before this
+  goal is complete: attaching real std I/O futures to the reactor and the
+  separate executor-multiplexed panic goal's full sibling-survival matrix.
+  Target shape:
+  `Task.spawn` has the same
+  surface as `Thread.spawn` (sync or async closure → `JoinHandle<R>` with
+  `join`/`detach`) and the same safety model (by-value capture snapshots for
+  cross-task isolation + `Shared<T>`/channels for shared state), but scheduled on
+  the executor instead of a dedicated OS thread. **Complements, not replaces,**
   `Thread.spawn` (kept for dedicated/blocking work). **Folds in cancellation
   teeth** (`docs/21` §8): on the executor, `future.cancel()` stops polling the task
   and drops its state machine (running drops, releasing held `Shared` locks /

@@ -136,7 +136,10 @@ pub enum TyKind {
     Never,
     /// A nominal type (struct / interface / opaque) applied to type arguments.
     /// Type aliases are expanded away before interning, so they never appear.
-    Named { def: DefId, args: Vec<Ty> },
+    Named {
+        def: DefId,
+        args: Vec<Ty>,
+    },
     /// A structural tuple. Never length 0 or 1.
     Tuple(Vec<Ty>),
     /// A function value type. `is_extern` marks the C-ABI `extern (..) => R`.
@@ -151,7 +154,10 @@ pub enum TyKind {
     /// A raw FFI pointer `*T`.
     Ptr(Ty),
     /// A fixed-size FFI array `[T; N]`. `len` is recorded post-evaluation.
-    Array { elem: Ty, len: u64 },
+    Array {
+        elem: Ty,
+        len: u64,
+    },
     /// `Self` inside an interface or `extend` body, before substitution.
     SelfTy,
     /// A generic parameter, identified by its definition.
@@ -282,7 +288,11 @@ impl TyCtxt {
     }
 
     pub fn mk_func(&mut self, params: Vec<Ty>, ret: Ty, is_extern: bool) -> Ty {
-        self.intern(TyKind::Func { params, ret, is_extern })
+        self.intern(TyKind::Func {
+            params,
+            ret,
+            is_extern,
+        })
     }
 
     /// Construct a normalized union from a set of member types.
@@ -371,25 +381,30 @@ impl TyCtxt {
                 if args.is_empty() {
                     base
                 } else {
-                    let inner: Vec<_> =
-                        args.iter().map(|a| self.display(*a, name_of)).collect();
+                    let inner: Vec<_> = args.iter().map(|a| self.display(*a, name_of)).collect();
                     format!("{}<{}>", base, inner.join(", "))
                 }
             }
             TyKind::Tuple(elems) => {
-                let inner: Vec<_> =
-                    elems.iter().map(|e| self.display(*e, name_of)).collect();
+                let inner: Vec<_> = elems.iter().map(|e| self.display(*e, name_of)).collect();
                 format!("({})", inner.join(", "))
             }
-            TyKind::Func { params, ret, is_extern } => {
-                let inner: Vec<_> =
-                    params.iter().map(|p| self.display(*p, name_of)).collect();
+            TyKind::Func {
+                params,
+                ret,
+                is_extern,
+            } => {
+                let inner: Vec<_> = params.iter().map(|p| self.display(*p, name_of)).collect();
                 let prefix = if *is_extern { "extern " } else { "" };
-                format!("{}({}) => {}", prefix, inner.join(", "), self.display(*ret, name_of))
+                format!(
+                    "{}({}) => {}",
+                    prefix,
+                    inner.join(", "),
+                    self.display(*ret, name_of)
+                )
             }
             TyKind::Union(members) => {
-                let inner: Vec<_> =
-                    members.iter().map(|m| self.display(*m, name_of)).collect();
+                let inner: Vec<_> = members.iter().map(|m| self.display(*m, name_of)).collect();
                 inner.join(" | ")
             }
         }

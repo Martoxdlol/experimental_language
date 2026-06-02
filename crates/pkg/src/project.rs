@@ -58,7 +58,11 @@ impl ProjectContext {
     /// parsing the first one found. Returns `Ok(None)` if none exists — that is
     /// not an error in itself (it means "no project context", `docs/17` §17.13).
     pub fn discover(start: &Path) -> Result<Option<ProjectContext>, DiscoverError> {
-        let mut dir: Option<&Path> = if start.is_dir() { Some(start) } else { start.parent() };
+        let mut dir: Option<&Path> = if start.is_dir() {
+            Some(start)
+        } else {
+            start.parent()
+        };
         while let Some(d) = dir {
             let candidate = d.join(MANIFEST_NAME);
             if candidate.is_file() {
@@ -76,8 +80,10 @@ impl ProjectContext {
             path: manifest_path.to_path_buf(),
             message: e.to_string(),
         })?;
-        let manifest = Manifest::parse(&text)
-            .map_err(|error| DiscoverError::Parse { path: manifest_path.to_path_buf(), error })?;
+        let manifest = Manifest::parse(&text).map_err(|error| DiscoverError::Parse {
+            path: manifest_path.to_path_buf(),
+            error,
+        })?;
         let root = manifest_path
             .parent()
             .map(Path::to_path_buf)
@@ -98,7 +104,11 @@ impl ProjectContext {
 
     /// Every entry file the compiler walks (primary + extra `bins`), absolute.
     pub fn entry_files(&self) -> Vec<PathBuf> {
-        self.manifest.entry_paths().into_iter().map(|e| self.root.join(e)).collect()
+        self.manifest
+            .entry_paths()
+            .into_iter()
+            .map(|e| self.root.join(e))
+            .collect()
     }
 
     /// Whether `file` lies within this project's source root (a prerequisite
@@ -121,7 +131,8 @@ mod tests {
 
     /// A unique temp dir under the system temp root (no external crates).
     fn temp_dir(tag: &str) -> PathBuf {
-        let base = std::env::temp_dir().join(format!("otter_pkg_test_{tag}_{}", std::process::id()));
+        let base =
+            std::env::temp_dir().join(format!("otter_pkg_test_{tag}_{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(&base).unwrap();
         base
@@ -135,7 +146,9 @@ mod tests {
         fs::create_dir_all(&deep).unwrap();
         fs::write(deep.join("x.otter"), "// x\n").unwrap();
 
-        let ctx = ProjectContext::discover(&deep.join("x.otter")).unwrap().unwrap();
+        let ctx = ProjectContext::discover(&deep.join("x.otter"))
+            .unwrap()
+            .unwrap();
         assert_eq!(ctx.manifest.package.name, "app");
         assert_eq!(
             ctx.root.canonicalize().unwrap(),

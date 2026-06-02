@@ -45,7 +45,9 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         let mut desc = DataDescription::new();
         desc.set_align(8); // the runtime reads `size`/`kind`/`type_id`/`n_ptrs` as `u64`
         desc.define(bytes.into_boxed_slice());
-        self.module.define_data(data_id, &desc).expect("define descriptor");
+        self.module
+            .define_data(data_id, &desc)
+            .expect("define descriptor");
         let gv = self.module.declare_data_in_func(data_id, self.b.func);
         self.b.ins().global_value(PTR, gv)
     }
@@ -56,7 +58,11 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     /// (relevant for tuples / internal aggregates holding refcounted elements).
     pub(crate) fn alloc_struct(&mut self, layout: &Layout) -> Value {
         let desc = self.emit_descriptor_full(
-            layout.size, GC_KIND_PLAIN, 0, &layout.ptr_offsets, &layout.rc_offsets,
+            layout.size,
+            GC_KIND_PLAIN,
+            0,
+            &layout.ptr_offsets,
+            &layout.rc_offsets,
         );
         self.call_intrinsic("lang_alloc", &[PTR], Some(PTR), &[desc])
             .expect("lang_alloc returns a pointer")
@@ -70,10 +76,21 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     /// binding owns the one reference).
     pub(crate) fn alloc_struct_typed(&mut self, layout: &Layout, ty: Ty) -> CgResult<Value> {
         let tid = self.drop_type_id(ty)?;
-        let refcounted = is_refcounted_ty(self.cx.analysis, resolve_shallow(self.cx.analysis, ty, &self.subst));
-        let kind = if refcounted { GC_KIND_REFCOUNTED } else { GC_KIND_PLAIN };
+        let refcounted = is_refcounted_ty(
+            self.cx.analysis,
+            resolve_shallow(self.cx.analysis, ty, &self.subst),
+        );
+        let kind = if refcounted {
+            GC_KIND_REFCOUNTED
+        } else {
+            GC_KIND_PLAIN
+        };
         let desc = self.emit_descriptor_full(
-            layout.size, kind, tid, &layout.ptr_offsets, &layout.rc_offsets,
+            layout.size,
+            kind,
+            tid,
+            &layout.ptr_offsets,
+            &layout.rc_offsets,
         );
         let ptr = self
             .call_intrinsic("lang_alloc", &[PTR], Some(PTR), &[desc])
@@ -196,7 +213,9 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         };
         let zero = self.b.ins().iconst(types::I64, 0);
         for w in 0..words {
-            self.b.ins().store(MemFlags::trusted(), zero, addr, (w * 8) as i32);
+            self.b
+                .ins()
+                .store(MemFlags::trusted(), zero, addr, (w * 8) as i32);
         }
         addr
     }
@@ -212,16 +231,20 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             return false;
         }
         match self.cx.analysis.hir.local_ty(local) {
-            Some(ty) => {
-                is_refcounted_ty(self.cx.analysis, resolve_shallow(self.cx.analysis, ty, &self.subst))
-            }
+            Some(ty) => is_refcounted_ty(
+                self.cx.analysis,
+                resolve_shallow(self.cx.analysis, ty, &self.subst),
+            ),
             None => false,
         }
     }
 
     /// Whether `ty` (after this instance's substitution) is a `@RefCounted` struct.
     pub(crate) fn is_rc_ty(&self, ty: Ty) -> bool {
-        is_refcounted_ty(self.cx.analysis, resolve_shallow(self.cx.analysis, ty, &self.subst))
+        is_refcounted_ty(
+            self.cx.analysis,
+            resolve_shallow(self.cx.analysis, ty, &self.subst),
+        )
     }
 
     /// Emit a strong-count retain (`+1`) of a `@RefCounted` field-block pointer.
@@ -244,7 +267,10 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     /// free); at worst it over-retains a genuinely owned value, and the GC
     /// backstop reclaims that.
     pub(crate) fn is_owned_rc_expr(e: &compiler::hir::Expr) -> bool {
-        matches!(e.kind, compiler::hir::ExprKind::Struct { .. } | compiler::hir::ExprKind::Call { .. })
+        matches!(
+            e.kind,
+            compiler::hir::ExprKind::Struct { .. } | compiler::hir::ExprKind::Call { .. }
+        )
     }
 
     /// Manage a `@RefCounted` local at a `let`/destructure bind. `init_owned` is
@@ -270,7 +296,11 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     /// than producing a fresh one), retain it so the caller receives an owned
     /// `+1` that survives `emit_return`'s release of this frame's owned locals.
     /// An owned return (a construction/call temporary) is already `+1`.
-    pub(crate) fn rc_return_value(&mut self, e: Option<&compiler::hir::Expr>, val: Option<Value>) -> Option<Value> {
+    pub(crate) fn rc_return_value(
+        &mut self,
+        e: Option<&compiler::hir::Expr>,
+        val: Option<Value>,
+    ) -> Option<Value> {
         if let (Some(e), Some(v)) = (e, val) {
             if self.is_rc_ty(e.ty) && !Self::is_owned_rc_expr(e) {
                 self.emit_rc_retain(v);
@@ -290,6 +320,127 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 self.emit_rc_release(v);
             }
         }
+    }
+
+    /// Manage a channel endpoint local at a `let`/destructure bind. Endpoint
+    /// handles own one runtime endpoint reference while the frame is alive.
+    /// Rebinding releases the previous endpoint before the new value replaces it.
+    pub(crate) fn endpoint_manage_bind(
+        &mut self,
+        local: LocalId,
+        ty: Ty,
+        init: Value,
+        span: Span,
+    ) -> CgResult<()> {
+        let Some(is_sender) = self.channel_endpoint_kind(ty) else {
+            return Ok(());
+        };
+        let rebind = self.endpoint_owned.iter().any(|(l, _, _)| *l == local);
+        if rebind {
+            if let Some(old) = self.read_local(local) {
+                let chan = self.emit_channel_id(old, ty, span)?;
+                let name = if is_sender {
+                    "lang_chan_sender_release"
+                } else {
+                    "lang_chan_receiver_release"
+                };
+                self.call_intrinsic(name, &[types::I64], None, &[chan]);
+                self.call_intrinsic("lang_gc_unpin", &[PTR], None, &[old]);
+            }
+        } else {
+            self.endpoint_owned.push((local, ty, is_sender));
+        }
+        self.call_intrinsic("lang_gc_pin", &[PTR], None, &[init]);
+        Ok(())
+    }
+
+    /// Release the old endpoint held by `local` before an assignment. A first
+    /// assignment to an endpoint local starts tracking it for function exit.
+    pub(crate) fn endpoint_release_assignment_old(
+        &mut self,
+        local: LocalId,
+        ty: Ty,
+        span: Span,
+    ) -> CgResult<()> {
+        let Some(is_sender) = self.channel_endpoint_kind(ty) else {
+            return Ok(());
+        };
+        let tracked = self.endpoint_owned.iter().any(|(l, _, _)| *l == local);
+        if let Some(old) = self.read_local(local) {
+            let chan = self.emit_channel_id(old, ty, span)?;
+            let name = if is_sender {
+                "lang_chan_sender_release"
+            } else {
+                "lang_chan_receiver_release"
+            };
+            self.call_intrinsic(name, &[types::I64], None, &[chan]);
+            self.call_intrinsic("lang_gc_unpin", &[PTR], None, &[old]);
+        }
+        if !tracked {
+            self.endpoint_owned.push((local, ty, is_sender));
+        }
+        Ok(())
+    }
+
+    /// Pin the new endpoint object assigned into an owned endpoint local. The
+    /// channel reference count was established by the expression that produced
+    /// the endpoint; this pin keeps the tiny handle object itself alive until
+    /// the local is reassigned, returned, captured by value, or released.
+    pub(crate) fn endpoint_pin_assignment_new(&mut self, ty: Ty, v: Value) {
+        if self.channel_endpoint_kind(ty).is_some() {
+            self.call_intrinsic("lang_gc_pin", &[PTR], None, &[v]);
+        }
+    }
+
+    /// Retain a returned endpoint local so ownership transfers to the caller
+    /// before this frame releases its own endpoint locals.
+    pub(crate) fn endpoint_return_value(
+        &mut self,
+        e: Option<&compiler::hir::Expr>,
+        val: Option<Value>,
+    ) -> CgResult<()> {
+        let (Some(e), Some(v)) = (e, val) else {
+            return Ok(());
+        };
+        let compiler::hir::ExprKind::Name(compiler::hir::Res::Local(local)) = e.kind else {
+            return Ok(());
+        };
+        let Some((_, ty, is_sender)) = self
+            .endpoint_owned
+            .iter()
+            .find(|(l, _, _)| *l == local)
+            .copied()
+        else {
+            return Ok(());
+        };
+        let chan = self.emit_channel_id(v, ty, e.span)?;
+        let name = if is_sender {
+            "lang_chan_sender_acquire"
+        } else {
+            "lang_chan_receiver_acquire"
+        };
+        self.call_intrinsic(name, &[types::I64], None, &[chan]);
+        Ok(())
+    }
+
+    /// Release every endpoint local owned by this frame in reverse binding
+    /// order. Locals not bound on the running path read back as null-like zeroes;
+    /// the runtime release helpers tolerate inactive channel ids.
+    pub(crate) fn endpoint_release_owned_locals(&mut self) -> CgResult<()> {
+        let owned = self.endpoint_owned.clone();
+        for (local, ty, is_sender) in owned.into_iter().rev() {
+            if let Some(v) = self.read_local(local) {
+                let chan = self.emit_channel_id(v, ty, Span::dummy())?;
+                let name = if is_sender {
+                    "lang_chan_sender_release"
+                } else {
+                    "lang_chan_receiver_release"
+                };
+                self.call_intrinsic(name, &[types::I64], None, &[chan]);
+                self.call_intrinsic("lang_gc_unpin", &[PTR], None, &[v]);
+            }
+        }
+        Ok(())
     }
 
     /// Whether `def` is an `extern struct` (laid out on the stack, no header).
@@ -321,7 +472,13 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
 
     /// The field-block layout of a struct or tuple-typed value.
     pub(crate) fn layout_for_ty(&self, ty: Ty) -> Option<Layout> {
-        match self.cx.analysis.tcx.kind(resolve_shallow(self.cx.analysis, ty, &self.subst)).clone() {
+        match self
+            .cx
+            .analysis
+            .tcx
+            .kind(resolve_shallow(self.cx.analysis, ty, &self.subst))
+            .clone()
+        {
             TyKind::Named { def, args } => Some(self.struct_layout(def, &args)),
             TyKind::Tuple(elems) => {
                 let re: Vec<Ty> = elems
@@ -339,10 +496,17 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     /// inline (`docs/19` §3).
     pub(crate) fn copy_bytes(&mut self, dst: Value, dst_off: i32, src: Value, n: u32) {
         let mut i = 0u32;
-        for (w, ct) in [(8u32, types::I64), (4, types::I32), (2, types::I16), (1, types::I8)] {
+        for (w, ct) in [
+            (8u32, types::I64),
+            (4, types::I32),
+            (2, types::I16),
+            (1, types::I8),
+        ] {
             while i + w <= n {
                 let v = self.b.ins().load(ct, MemFlags::trusted(), src, i as i32);
-                self.b.ins().store(MemFlags::trusted(), v, dst, dst_off + i as i32);
+                self.b
+                    .ins()
+                    .store(MemFlags::trusted(), v, dst, dst_off + i as i32);
                 i += w;
             }
         }
@@ -366,5 +530,4 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         self.copy_bytes(copy, 0, v, size);
         copy
     }
-
 }

@@ -1,0 +1,24 @@
+//@ kind: run
+//@ serial
+//@ description: returning a Receiver releases a local Sender endpoint and async recv observes ChannelClosed
+//@ stdout:
+//~ recv = closed
+
+import { println } from "std:io";
+import { Future } from "core:prelude";
+import { Receiver, ChannelClosed, channel } from "std:sync";
+
+function make_receiver(): Receiver<i64> {
+  var ends = channel<i64>();
+  var tx = ends.0;
+  var rx = ends.1;
+  rx
+}
+
+function main(): Future<null> async {
+  var rx = make_receiver();
+  match await rx.recv() {
+    i64 n => println("recv = value ${n}"),
+    ChannelClosed c => println("recv = closed"),
+  };
+}

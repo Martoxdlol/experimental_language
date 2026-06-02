@@ -4,9 +4,7 @@
 //! ranges, every error variant, every keyword, every escape form, Unicode
 //! identifiers, and line/column reporting via `SourceFile::line_col`.
 
-use compiler::{
-    lex, BytePos, IntBase, Keyword, LexErrorKind, SourceMap, Span, Token, TokenKind,
-};
+use compiler::{BytePos, IntBase, Keyword, LexErrorKind, SourceMap, Span, Token, TokenKind, lex};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -43,7 +41,10 @@ fn spans_cover_every_byte_of_a_run() {
     //               0123456789012345
     let src = "var foo = 42 ;";
     let (toks, _e, _sm) = lex_str(src);
-    let got: Vec<_> = toks.iter().map(|t| (t.kind.clone(), (t.span.lo, t.span.hi))).collect();
+    let got: Vec<_> = toks
+        .iter()
+        .map(|t| (t.kind.clone(), (t.span.lo, t.span.hi)))
+        .collect();
     assert_eq!(
         got,
         vec![
@@ -51,7 +52,10 @@ fn spans_cover_every_byte_of_a_run() {
             (TokenKind::Ident, span(4, 7)),
             (TokenKind::Eq, span(8, 9)),
             (
-                TokenKind::Int { base: IntBase::Dec, has_suffix: false },
+                TokenKind::Int {
+                    base: IntBase::Dec,
+                    has_suffix: false
+                },
                 span(10, 12),
             ),
             (TokenKind::Semi, span(13, 14)),
@@ -173,9 +177,18 @@ fn digit_underscores_are_consumed() {
     assert_eq!(
         kinds,
         vec![
-            TokenKind::Int { base: IntBase::Dec, has_suffix: false },
-            TokenKind::Int { base: IntBase::Hex, has_suffix: false },
-            TokenKind::Int { base: IntBase::Bin, has_suffix: false },
+            TokenKind::Int {
+                base: IntBase::Dec,
+                has_suffix: false
+            },
+            TokenKind::Int {
+                base: IntBase::Hex,
+                has_suffix: false
+            },
+            TokenKind::Int {
+                base: IntBase::Bin,
+                has_suffix: false
+            },
             TokenKind::Eof,
         ]
     );
@@ -183,14 +196,19 @@ fn digit_underscores_are_consumed() {
 
 #[test]
 fn every_int_suffix_is_accepted() {
-    let suffixes = ["i8", "i16", "i32", "i64", "isize", "u8", "u16", "u32", "u64", "usize"];
+    let suffixes = [
+        "i8", "i16", "i32", "i64", "isize", "u8", "u16", "u32", "u64", "usize",
+    ];
     for sfx in &suffixes {
         let src = format!("42{sfx}");
         let (toks, e, _sm) = lex_str(&src);
         assert!(e.is_empty(), "{sfx}: {e:?}");
         assert_eq!(
             toks[0].kind,
-            TokenKind::Int { base: IntBase::Dec, has_suffix: true },
+            TokenKind::Int {
+                base: IntBase::Dec,
+                has_suffix: true
+            },
             "suffix {sfx}"
         );
         // The span should cover the whole literal including the suffix.
@@ -239,15 +257,35 @@ fn float_positive_exponent() {
 fn every_keyword_is_recognized() {
     use Keyword::*;
     let all = [
-        ("var", Var), ("function", Function), ("struct", Struct),
-        ("interface", Interface), ("type", Type), ("mod", Mod),
-        ("extend", Extend), ("extern", Extern), ("import", Import),
-        ("pub", Pub), ("async", Async), ("self", SelfLower), ("Self", SelfUpper),
-        ("if", If), ("else", Else), ("match", Match), ("return", Return),
-        ("for", For), ("in", In), ("while", While), ("loop", Loop),
-        ("break", Break), ("continue", Continue), ("await", Await),
-        ("as", As), ("is", Is),
-        ("true", True), ("false", False), ("null", Null),
+        ("var", Var),
+        ("function", Function),
+        ("struct", Struct),
+        ("interface", Interface),
+        ("type", Type),
+        ("mod", Mod),
+        ("extend", Extend),
+        ("extern", Extern),
+        ("import", Import),
+        ("pub", Pub),
+        ("async", Async),
+        ("self", SelfLower),
+        ("Self", SelfUpper),
+        ("if", If),
+        ("else", Else),
+        ("match", Match),
+        ("return", Return),
+        ("for", For),
+        ("in", In),
+        ("while", While),
+        ("loop", Loop),
+        ("break", Break),
+        ("continue", Continue),
+        ("await", Await),
+        ("as", As),
+        ("is", Is),
+        ("true", True),
+        ("false", False),
+        ("null", Null),
         ("yield", Yield),
     ];
     for (text, kw) in all {
@@ -313,7 +351,10 @@ fn deeply_nested_block_comment() {
 
 #[test]
 fn unterminated_block_comment_is_error() {
-    assert_eq!(errs("/* unfinished"), vec![LexErrorKind::UnterminatedBlockComment]);
+    assert_eq!(
+        errs("/* unfinished"),
+        vec![LexErrorKind::UnterminatedBlockComment]
+    );
     // Also: missing one closer in a nested group.
     assert_eq!(
         errs("/* /* one short */"),
@@ -359,7 +400,16 @@ fn unterminated_char_is_error() {
 
 #[test]
 fn char_escape_forms() {
-    for src in [r"'\n'", r"'\r'", r"'\t'", r"'\\'", r"'\''", r"'\0'", r"'\x41'", r"'\u{1F600}'"] {
+    for src in [
+        r"'\n'",
+        r"'\r'",
+        r"'\t'",
+        r"'\\'",
+        r"'\''",
+        r"'\0'",
+        r"'\x41'",
+        r"'\u{1F600}'",
+    ] {
         let (toks, e, _sm) = lex_str(src);
         assert!(e.is_empty(), "src={src}: {e:?}");
         assert_eq!(toks[0].kind, TokenKind::Char, "src={src}");
@@ -415,7 +465,12 @@ fn escaped_dollar_does_not_start_interpolation() {
     let body: Vec<_> = toks.iter().map(|t| t.kind.clone()).collect();
     assert_eq!(
         body,
-        vec![TokenKind::StrStart, TokenKind::StrText, TokenKind::StrEnd, TokenKind::Eof]
+        vec![
+            TokenKind::StrStart,
+            TokenKind::StrText,
+            TokenKind::StrEnd,
+            TokenKind::Eof
+        ]
     );
     assert_eq!(sm.slice(toks[1].span), r"price: \$5");
 }
@@ -594,7 +649,10 @@ fn ascii_whitespace_variants_are_skipped() {
     assert_eq!(
         toks.into_iter().map(|t| t.kind).collect::<Vec<_>>(),
         vec![
-            TokenKind::Ident, TokenKind::Ident, TokenKind::Ident, TokenKind::Ident,
+            TokenKind::Ident,
+            TokenKind::Ident,
+            TokenKind::Ident,
+            TokenKind::Ident,
             TokenKind::Eof,
         ]
     );
@@ -619,10 +677,7 @@ fn lexer_recovers_after_an_error() {
     let (toks, e, _sm) = lex_str("foo `bar` baz");
     // Two UnknownChar errors for the two backticks.
     assert!(e.len() >= 2);
-    let idents = toks
-        .iter()
-        .filter(|t| t.kind == TokenKind::Ident)
-        .count();
+    let idents = toks.iter().filter(|t| t.kind == TokenKind::Ident).count();
     assert_eq!(idents, 3);
 }
 

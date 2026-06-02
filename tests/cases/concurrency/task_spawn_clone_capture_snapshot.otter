@@ -1,0 +1,33 @@
+//@ description: Task.spawn deep-clones concrete Clone captures at the spawn boundary, so async workers observe a snapshot even after the parent mutates its original value
+//@ stdout:
+//~ captured=1 parent=9
+
+import { println } from "std:io";
+import { Clone, Future } from "core:prelude";
+import { sleep } from "std:async";
+import { Task, JoinHandle, Joined, Panicked, Cancelled } from "std:task";
+
+struct Boxed { value: i64 }
+
+extend Boxed: Clone {
+  function clone(self): Boxed { Boxed { value: self.value } }
+}
+
+function joined_value(r: Joined<i64> | Panicked | Cancelled): i64 {
+  match r {
+    Joined<i64> j => j.value,
+    Panicked p => -1,
+    Cancelled c => -2,
+  }
+}
+
+function main(): Future<null> async {
+  var b: Boxed = Boxed { value: 1 };
+  var h: JoinHandle<i64> = Task.spawn(() async => {
+    var _ = await sleep(10);
+    b.value
+  });
+  b.value = 9;
+  var captured = joined_value(await h.join());
+  println("captured=${captured} parent=${b.value}");
+}

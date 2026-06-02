@@ -125,8 +125,8 @@ fn ensure_semi(line: &str) -> String {
 fn classify(line: &str) -> Input {
     let first = line.split_whitespace().next().unwrap_or("");
     match first {
-        "function" | "struct" | "interface" | "type" | "extend" | "import" | "extern"
-        | "test" | "bench" | "mod" | "pub" => Input::Item,
+        "function" | "struct" | "interface" | "type" | "extend" | "import" | "extern" | "test"
+        | "bench" | "mod" | "pub" => Input::Item,
         "var" => Input::Binding,
         _ if line.ends_with(';') => Input::Statement,
         _ => Input::Expr,

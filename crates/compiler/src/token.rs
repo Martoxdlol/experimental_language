@@ -157,9 +157,14 @@ pub enum TokenKind {
 
     // -------- Literals --------
     /// Integer literal. The span covers prefix + digits + optional suffix.
-    Int { base: IntBase, has_suffix: bool },
+    Int {
+        base: IntBase,
+        has_suffix: bool,
+    },
     /// Floating-point literal. Span covers digits, decimal part, exponent, suffix.
-    Float { has_suffix: bool },
+    Float {
+        has_suffix: bool,
+    },
     /// `'…'` — span covers the quotes too.
     Char,
 

@@ -1,0 +1,56 @@
+//@ kind: run
+//@ serial
+//@ description: many Task.spawn async workers fan out on the M:N executor, yield, send through cloned channel endpoints, and join deterministically
+//@ stdout:
+//~ received=19900 joined=19900
+import { println } from "std:io";
+import { Future } from "core:prelude";
+import { List } from "core:collections";
+import { Task, JoinHandle, Joined, Panicked, Cancelled } from "std:task";
+import { Sender, Receiver, ChannelClosed, channel } from "std:sync";
+import { yield_now } from "std:async";
+
+function joined_value(r: Joined<i64> | Panicked | Cancelled): i64 {
+  match r {
+    Joined<i64> j => j.value,
+    Panicked p => -1,
+    Cancelled c => -2,
+  }
+}
+
+function main(): Future<null> async {
+  var ends = channel<i64>();
+  var tx: Sender<i64> = ends.0;
+  var rx: Receiver<i64> = ends.1;
+  var handles: List<JoinHandle<i64>> = [];
+
+  var i: i64 = 0;
+  while i < 200 {
+    var tx_i = tx.clone();
+    var n = i;
+    handles.push(Task.spawn(() async => {
+      var _ = await yield_now();
+      tx_i.send(n);
+      n
+    }));
+    i = i + 1;
+  }
+
+  var received: i64 = 0;
+  var rcount: i64 = 0;
+  while rcount < 200 {
+    var msg: i64 | ChannelClosed = await rx.recv();
+    match msg {
+      i64 value => { received = received + value; },
+      ChannelClosed c => { received = -9999; },
+    }
+    rcount = rcount + 1;
+  }
+
+  var joined: i64 = 0;
+  for h in handles {
+    joined = joined + joined_value(await h.join());
+  }
+
+  println("received=${received} joined=${joined}");
+}

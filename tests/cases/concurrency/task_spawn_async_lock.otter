@@ -1,0 +1,28 @@
+//@ kind: run
+//@ serial
+//@ description: Task.spawn runs an async closure on the shared executor, returns JoinHandle<R>, and can await Shared.lock without dedicating one OS thread per task
+//@ stdout:
+//~ worker=50 total=50
+import { println } from "std:io";
+import { Future } from "core:prelude";
+import { Shared } from "std:sync";
+import { Task, JoinHandle, Joined, Panicked, Cancelled } from "std:task";
+struct C { value: i64 }
+function value_of(r: Joined<i64> | Panicked | Cancelled): i64 {
+  match r { Joined<i64> j => j.value, Panicked p => -1, Cancelled c => -2 }
+}
+function main(): Future<null> async {
+  var state: Shared<C> = Shared.new(C { value: 0 });
+  var s: Shared<C> = state.clone();
+  var h: JoinHandle<i64> = Task.spawn(() async => {
+    var i: i64 = 0;
+    while i < 50 {
+      await s.lock((c) => { c.value = c.value + 1; 0 });
+      i = i + 1;
+    }
+    await s.lock((c) => c.value)
+  });
+  var r: Joined<i64> | Panicked | Cancelled = await h.join();
+  var total: i64 = await state.lock((c) => c.value);
+  println("worker=${value_of(r)} total=${total}");
+}

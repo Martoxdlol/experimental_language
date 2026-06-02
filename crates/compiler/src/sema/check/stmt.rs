@@ -60,11 +60,14 @@ impl<'a> Checker<'a> {
                 // explicitly discard. `await EXPR` is allowed at the statement
                 // level even when its own type is a future.
                 if self.is_future_ty(t) && !matches!(e.kind, ExprKind::Await { .. }) {
-                    self.emit(e.span, SemaErrorKind::Message(
-                        "this `Future` is created but never used — `await` it, \
+                    self.emit(
+                        e.span,
+                        SemaErrorKind::Message(
+                            "this `Future` is created but never used — `await` it, \
                          `spawn` it, or bind it (e.g. `var _ = …`)"
-                            .into(),
-                    ));
+                                .into(),
+                        ),
+                    );
                 }
             }
             StmtKind::Item(_) => {
@@ -109,9 +112,12 @@ impl<'a> Checker<'a> {
                             return t;
                         }
                     }
-                    self.emit(target.span, SemaErrorKind::UnknownValue {
-                        name: name.name.clone(),
-                    });
+                    self.emit(
+                        target.span,
+                        SemaErrorKind::UnknownValue {
+                            name: name.name.clone(),
+                        },
+                    );
                     self.tcx.error
                 }
             },
@@ -119,15 +125,19 @@ impl<'a> Checker<'a> {
             // Field and tuple-index targets are checked as expressions; the
             // result type is what the assigned value must satisfy.
             ExprKind::Field { receiver, name } => self.check_field(receiver, name, target.span),
-            ExprKind::TupleIndex { receiver, index, index_span } => {
-                self.check_tuple_index(receiver, *index, *index_span)
-            }
+            ExprKind::TupleIndex {
+                receiver,
+                index,
+                index_span,
+            } => self.check_tuple_index(receiver, *index, *index_span),
             ExprKind::Index { receiver, index } => self.check_index(receiver, index),
             // `*p = v` — assign through a raw pointer (`docs/19` §2). The pointee
             // type is what the assigned value must satisfy.
-            ExprKind::Deref { expr: inner, star_span } => self.check_deref(inner, *star_span),
+            ExprKind::Deref {
+                expr: inner,
+                star_span,
+            } => self.check_deref(inner, *star_span),
             _ => self.check_expr(target, None),
         }
     }
-
 }

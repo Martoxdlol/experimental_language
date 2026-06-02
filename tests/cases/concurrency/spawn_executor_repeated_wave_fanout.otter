@@ -1,0 +1,65 @@
+//@ kind: run
+//@ serial
+//@ env: OTTER_FUSION_TASK_WORKERS=2
+//@ description: repeated waves of spawn-keyword tasks reuse the executor queues, waker registry, and channel endpoints without stale wakeups or lost work
+//@ stdout:
+//~ received=128020480 awaited=128020480
+
+import { println } from "std:io";
+import { Future } from "core:prelude";
+import { List } from "core:collections";
+import { Sender, Receiver, ChannelClosed, channel } from "std:sync";
+import { yield_now } from "std:async";
+
+function wave_worker(tx: Sender<i64>, wave: i64, n: i64): Future<i64> async {
+  var rounds: i64 = (n % 5) + 1;
+  var r: i64 = 0;
+  while r < rounds {
+    var _ = await yield_now();
+    r = r + 1;
+  }
+  var value: i64 = (wave * 1000) + n;
+  tx.send(value);
+  value
+}
+
+function main(): Future<null> async {
+  var total_received: i64 = 0;
+  var total_awaited: i64 = 0;
+  var wave: i64 = 0;
+  while wave < 32 {
+    var ends = channel<i64>();
+    var tx: Sender<i64> = ends.0;
+    var rx: Receiver<i64> = ends.1;
+    var handles: List<Future<i64>> = [];
+
+    var i: i64 = 0;
+    while i < 256 {
+      handles.push(spawn wave_worker(tx.clone(), wave, i));
+      i = i + 1;
+    }
+
+    var received: i64 = 0;
+    var count: i64 = 0;
+    while count < 256 {
+      match await rx.recv() {
+        i64 value => { received = received + value; },
+        ChannelClosed c => { received = -999999; },
+      }
+      count = count + 1;
+    }
+
+    var awaited: i64 = 0;
+    var j: i64 = 0;
+    while j < handles.size() {
+      awaited = awaited + await handles[j];
+      j = j + 1;
+    }
+
+    total_received = total_received + received;
+    total_awaited = total_awaited + awaited;
+    wave = wave + 1;
+  }
+
+  println("received=${total_received} awaited=${total_awaited}");
+}

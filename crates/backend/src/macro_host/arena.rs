@@ -139,7 +139,11 @@ impl MacroState {
     }
 
     pub fn span(&self, h: i64) -> Span {
-        usize::try_from(h).ok().and_then(|i| self.spans.get(i)).copied().unwrap_or_else(Span::dummy)
+        usize::try_from(h)
+            .ok()
+            .and_then(|i| self.spans.get(i))
+            .copied()
+            .unwrap_or_else(Span::dummy)
     }
 
     /// Allocate a fresh virtual `FileId`, recording `src` so diagnostics that
@@ -154,7 +158,10 @@ impl MacroState {
     /// The recorded source text for a generated virtual file, if any.
     #[allow(dead_code)] // consumed by the diagnostic renderer in a later slice
     pub fn gen_source(&self, file: FileId) -> Option<&str> {
-        self.gen_sources.iter().find(|(f, _)| *f == file).map(|(_, s)| s.as_str())
+        self.gen_sources
+            .iter()
+            .find(|(f, _)| *f == file)
+            .map(|(_, s)| s.as_str())
     }
 }
 
@@ -214,7 +221,10 @@ fn expr_kind(k: &ExprKind) -> &'static str {
 pub fn node_name(n: &Node) -> String {
     match n {
         Node::Item(it) => item_name(&it.kind),
-        Node::Expr(Expr { kind: ExprKind::Ident(id), .. }) => id.name.clone(),
+        Node::Expr(Expr {
+            kind: ExprKind::Ident(id),
+            ..
+        }) => id.name.clone(),
         Node::Ident(id) => id.name.clone(),
         _ => String::new(),
     }
@@ -244,7 +254,10 @@ fn type_name(t: &Type) -> String {
 /// Field count for a struct item node (0 for non-structs / unit structs).
 pub fn node_field_count(n: &Node) -> i64 {
     match n {
-        Node::Item(Item { kind: ItemKind::Struct(s), .. }) => match &s.kind {
+        Node::Item(Item {
+            kind: ItemKind::Struct(s),
+            ..
+        }) => match &s.kind {
             StructKind::Unit => 0,
             StructKind::Record(f) => f.len() as i64,
             StructKind::Tuple(f) => f.len() as i64,
@@ -256,13 +269,22 @@ pub fn node_field_count(n: &Node) -> i64 {
 /// The name of field `i` of a record struct node (tuple fields render as their
 /// index; out-of-range / non-struct yields empty).
 pub fn node_field_name(n: &Node, i: i64) -> String {
-    let Node::Item(Item { kind: ItemKind::Struct(s), .. }) = n else { return String::new() };
+    let Node::Item(Item {
+        kind: ItemKind::Struct(s),
+        ..
+    }) = n
+    else {
+        return String::new();
+    };
     let i = match usize::try_from(i) {
         Ok(i) => i,
         Err(_) => return String::new(),
     };
     match &s.kind {
-        StructKind::Record(fields) => fields.get(i).map(|f| f.name.name.clone()).unwrap_or_default(),
+        StructKind::Record(fields) => fields
+            .get(i)
+            .map(|f| f.name.name.clone())
+            .unwrap_or_default(),
         StructKind::Tuple(fields) => {
             if i < fields.len() {
                 i.to_string()
@@ -301,13 +323,18 @@ pub fn node_span(n: &Node) -> Span {
 pub fn node_text(n: &Node) -> String {
     match n {
         Node::Item(it) => compiler::ast_print::print_item(it),
-        Node::Items(items) => {
-            items.iter().map(compiler::ast_print::print_item).collect::<Vec<_>>().join("\n")
-        }
+        Node::Items(items) => items
+            .iter()
+            .map(compiler::ast_print::print_item)
+            .collect::<Vec<_>>()
+            .join("\n"),
         Node::Expr(e) => compiler::ast_print::print_expr(e),
         Node::Args(es) => {
-            let inner =
-                es.iter().map(compiler::ast_print::print_expr).collect::<Vec<_>>().join(", ");
+            let inner = es
+                .iter()
+                .map(compiler::ast_print::print_expr)
+                .collect::<Vec<_>>()
+                .join(", ");
             format!("({inner})")
         }
         Node::Block(b) => compiler::ast_print::print_block(b),
@@ -378,7 +405,10 @@ pub fn parse_expr(src: &str) -> ParseOutcome {
             match trailing {
                 // Strip the disambiguating wrapper paren so the macro sees the
                 // real expression node (`binary`, `call`, …) rather than `expr`.
-                Some(Expr { kind: ExprKind::Paren(inner), .. }) => ParseOutcome::Ok(Node::Expr(*inner)),
+                Some(Expr {
+                    kind: ExprKind::Paren(inner),
+                    ..
+                }) => ParseOutcome::Ok(Node::Expr(*inner)),
                 Some(e) => ParseOutcome::Ok(Node::Expr(e)),
                 None => ParseOutcome::Err(
                     "parse_expr: source was not a single expression".into(),

@@ -102,8 +102,15 @@ pub fn collect_pub_interfaces(module: &Module, out: &mut ForeignIfaces) {
     for item in &module.items {
         match &item.kind {
             ItemKind::Interface(i) if item.visibility.is_public() => out.insert(i.clone()),
-            ItemKind::Module(ModuleItem { kind: ModuleKind::Inline { items, .. }, .. }) => {
-                let sub = Module { inner_docs: Vec::new(), items: items.clone(), span: item.span };
+            ItemKind::Module(ModuleItem {
+                kind: ModuleKind::Inline { items, .. },
+                ..
+            }) => {
+                let sub = Module {
+                    inner_docs: Vec::new(),
+                    items: items.clone(),
+                    span: item.span,
+                };
                 collect_pub_interfaces(&sub, out);
             }
             _ => {}
@@ -126,14 +133,18 @@ pub fn expand_default_methods(module: &mut Module, foreign: &ForeignIfaces) {
 
     for item in &mut module.items {
         if let ItemKind::Extend(e) = &mut item.kind {
-            let mut have: HashSet<String> =
-                e.members.iter().map(|m| m.function.name.name.clone()).collect();
+            let mut have: HashSet<String> = e
+                .members
+                .iter()
+                .map(|m| m.function.name.name.clone())
+                .collect();
             let mut additions: Vec<ExtendMember> = Vec::new();
             for iface_ty in &e.interfaces {
-                let TypeKind::Named { name, generics } = &iface_ty.kind else { continue };
+                let TypeKind::Named { name, generics } = &iface_ty.kind else {
+                    continue;
+                };
                 // Local declarations shadow imported ones (`docs/17`).
-                let Some(iface) = ifaces.get(&name.name).or_else(|| foreign.get(&name.name))
-                else {
+                let Some(iface) = ifaces.get(&name.name).or_else(|| foreign.get(&name.name)) else {
                     continue;
                 };
                 // Map the interface's type parameters to this `extend`'s
@@ -141,7 +152,9 @@ pub fn expand_default_methods(module: &mut Module, foreign: &ForeignIfaces) {
                 // ⇒ `T` → `i32`). A non-generic interface yields an empty map.
                 let iface_subst = iface_param_subst(iface, generics);
                 for m in &iface.members {
-                    let Some(body) = &m.default_body else { continue };
+                    let Some(body) = &m.default_body else {
+                        continue;
+                    };
                     if have.contains(&m.function.name.name) {
                         continue; // overridden by the impl
                     }
@@ -154,10 +167,16 @@ pub fn expand_default_methods(module: &mut Module, foreign: &ForeignIfaces) {
     }
 
     for item in &mut module.items {
-        if let ItemKind::Module(ModuleItem { kind: ModuleKind::Inline { items, .. }, .. }) =
-            &mut item.kind
+        if let ItemKind::Module(ModuleItem {
+            kind: ModuleKind::Inline { items, .. },
+            ..
+        }) = &mut item.kind
         {
-            let mut sub = Module { inner_docs: Vec::new(), items: std::mem::take(items), span: item.span };
+            let mut sub = Module {
+                inner_docs: Vec::new(),
+                items: std::mem::take(items),
+                span: item.span,
+            };
             expand_default_methods(&mut sub, foreign);
             *items = sub.items;
         }
@@ -180,7 +199,11 @@ fn iface_param_subst(iface: &InterfaceItem, args: &[Type]) -> HashMap<String, Ty
 
 /// Build an `extend` member from an interface default method + body, applying
 /// the interface's type-parameter substitution, then re-spanning.
-fn synth_member(m: &InterfaceMember, body: &Block, iface_subst: &HashMap<String, Type>) -> ExtendMember {
+fn synth_member(
+    m: &InterfaceMember,
+    body: &Block,
+    iface_subst: &HashMap<String, Type>,
+) -> ExtendMember {
     let mut f = FunctionItem {
         name: m.function.name.clone(),
         generics: m.function.generics.clone(),
@@ -217,7 +240,11 @@ fn synth_member(m: &InterfaceMember, body: &Block, iface_subst: &HashMap<String,
 // nodes pick up fresh spans in the `rs_*` pass.
 // ---------------------------------------------------------------------------
 
-fn subst_function_types(f: &mut FunctionItem, subst: &HashMap<String, Type>, shadow: &HashSet<String>) {
+fn subst_function_types(
+    f: &mut FunctionItem,
+    subst: &HashMap<String, Type>,
+    shadow: &HashSet<String>,
+) {
     for p in &mut f.params {
         if let ParamKind::Normal { ty, .. } = &mut p.kind {
             subst_type(ty, subst, shadow);
@@ -344,9 +371,15 @@ fn subst_type_path(tp: &mut TypePath, subst: &HashMap<String, Type>, shadow: &Ha
 
 fn subst_expr(e: &mut Expr, subst: &HashMap<String, Type>, shadow: &HashSet<String>) {
     match &mut e.kind {
-        ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Null
-        | ExprKind::Char(_) | ExprKind::SelfExpr | ExprKind::Underscore
-        | ExprKind::Continue | ExprKind::Ident(_) => {}
+        ExprKind::Int(_)
+        | ExprKind::Float(_)
+        | ExprKind::Bool(_)
+        | ExprKind::Null
+        | ExprKind::Char(_)
+        | ExprKind::SelfExpr
+        | ExprKind::Underscore
+        | ExprKind::Continue
+        | ExprKind::Ident(_) => {}
         ExprKind::Str(s) => {
             for part in &mut s.parts {
                 if let StringPart::Expr(x) = part {
@@ -371,7 +404,11 @@ fn subst_expr(e: &mut Expr, subst: &HashMap<String, Type>, shadow: &HashSet<Stri
                 }
             }
         }
-        ExprKind::StructLit { path, fields, spread } => {
+        ExprKind::StructLit {
+            path,
+            fields,
+            spread,
+        } => {
             subst_type_path(path, subst, shadow);
             for f in fields {
                 if let Some(v) = &mut f.value {
@@ -393,7 +430,12 @@ fn subst_expr(e: &mut Expr, subst: &HashMap<String, Type>, shadow: &HashSet<Stri
         }
         ExprKind::Field { receiver, .. } => subst_expr(receiver, subst, shadow),
         ExprKind::TupleIndex { receiver, .. } => subst_expr(receiver, subst, shadow),
-        ExprKind::Call { callee, generics, args, trailing_closure } => {
+        ExprKind::Call {
+            callee,
+            generics,
+            args,
+            trailing_closure,
+        } => {
             subst_expr(callee, subst, shadow);
             for g in generics {
                 subst_type(g, subst, shadow);
@@ -409,11 +451,16 @@ fn subst_expr(e: &mut Expr, subst: &HashMap<String, Type>, shadow: &HashSet<Stri
             subst_expr(receiver, subst, shadow);
             subst_expr(index, subst, shadow);
         }
-        ExprKind::Try { expr, .. } | ExprKind::Ref { expr, .. } | ExprKind::Deref { expr, .. }
-        | ExprKind::Await { expr, .. } | ExprKind::Spawn { expr, .. } => {
-            subst_expr(expr, subst, shadow)
-        }
-        ExprKind::If { cond, then_block, else_branch } => {
+        ExprKind::Try { expr, .. }
+        | ExprKind::Ref { expr, .. }
+        | ExprKind::Deref { expr, .. }
+        | ExprKind::Await { expr, .. }
+        | ExprKind::Spawn { expr, .. } => subst_expr(expr, subst, shadow),
+        ExprKind::If {
+            cond,
+            then_block,
+            else_branch,
+        } => {
             subst_expr(cond, subst, shadow);
             subst_block(then_block, subst, shadow);
             if let Some(eb) = else_branch {
@@ -438,7 +485,12 @@ fn subst_expr(e: &mut Expr, subst: &HashMap<String, Type>, shadow: &HashSet<Stri
             subst_expr(cond, subst, shadow);
             subst_block(body, subst, shadow);
         }
-        ExprKind::For { pattern, iter, body, .. } => {
+        ExprKind::For {
+            pattern,
+            iter,
+            body,
+            ..
+        } => {
             subst_pattern(pattern, subst, shadow);
             subst_expr(iter, subst, shadow);
             subst_block(body, subst, shadow);
@@ -448,7 +500,12 @@ fn subst_expr(e: &mut Expr, subst: &HashMap<String, Type>, shadow: &HashSet<Stri
                 subst_expr(x, subst, shadow);
             }
         }
-        ExprKind::Closure { params, return_type, body, .. } => {
+        ExprKind::Closure {
+            params,
+            return_type,
+            body,
+            ..
+        } => {
             for p in params {
                 if let Some(t) = &mut p.ty {
                     subst_type(t, subst, shadow);
@@ -652,8 +709,13 @@ fn rs_type_path(tp: &mut TypePath) {
 fn rs_expr(e: &mut Expr) {
     e.span = nsp();
     match &mut e.kind {
-        ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Null
-        | ExprKind::Char(_) | ExprKind::SelfExpr | ExprKind::Underscore
+        ExprKind::Int(_)
+        | ExprKind::Float(_)
+        | ExprKind::Bool(_)
+        | ExprKind::Null
+        | ExprKind::Char(_)
+        | ExprKind::SelfExpr
+        | ExprKind::Underscore
         | ExprKind::Continue => {}
         ExprKind::Ident(i) => rs_ident(i),
         ExprKind::Str(s) => {
@@ -684,7 +746,11 @@ fn rs_expr(e: &mut Expr) {
                 }
             }
         }
-        ExprKind::StructLit { path, fields, spread } => {
+        ExprKind::StructLit {
+            path,
+            fields,
+            spread,
+        } => {
             rs_type_path(path);
             for f in fields {
                 rs_ident(&mut f.name);
@@ -697,16 +763,25 @@ fn rs_expr(e: &mut Expr) {
                 rs_expr(s);
             }
         }
-        ExprKind::Unary { operand, op_span, .. } => {
+        ExprKind::Unary {
+            operand, op_span, ..
+        } => {
             *op_span = nsp();
             rs_expr(operand);
         }
-        ExprKind::Binary { left, right, op_span, .. } => {
+        ExprKind::Binary {
+            left,
+            right,
+            op_span,
+            ..
+        } => {
             *op_span = nsp();
             rs_expr(left);
             rs_expr(right);
         }
-        ExprKind::Cast { expr, ty, op_span, .. } => {
+        ExprKind::Cast {
+            expr, ty, op_span, ..
+        } => {
             *op_span = nsp();
             rs_expr(expr);
             rs_type(ty);
@@ -715,11 +790,20 @@ fn rs_expr(e: &mut Expr) {
             rs_expr(receiver);
             rs_ident(name);
         }
-        ExprKind::TupleIndex { receiver, index_span, .. } => {
+        ExprKind::TupleIndex {
+            receiver,
+            index_span,
+            ..
+        } => {
             rs_expr(receiver);
             *index_span = nsp();
         }
-        ExprKind::Call { callee, generics, args, trailing_closure } => {
+        ExprKind::Call {
+            callee,
+            generics,
+            args,
+            trailing_closure,
+        } => {
             rs_expr(callee);
             for g in generics {
                 rs_type(g);
@@ -755,7 +839,11 @@ fn rs_expr(e: &mut Expr) {
             rs_expr(expr);
             *kw_span = nsp();
         }
-        ExprKind::If { cond, then_block, else_branch } => {
+        ExprKind::If {
+            cond,
+            then_block,
+            else_branch,
+        } => {
             rs_expr(cond);
             rs_block(then_block);
             if let Some(eb) = else_branch {
@@ -781,7 +869,12 @@ fn rs_expr(e: &mut Expr) {
             rs_expr(cond);
             rs_block(body);
         }
-        ExprKind::For { pattern, iter, body, .. } => {
+        ExprKind::For {
+            pattern,
+            iter,
+            body,
+            ..
+        } => {
             rs_pattern(pattern);
             rs_expr(iter);
             rs_block(body);
@@ -791,7 +884,12 @@ fn rs_expr(e: &mut Expr) {
                 rs_expr(x);
             }
         }
-        ExprKind::Closure { params, return_type, body, .. } => {
+        ExprKind::Closure {
+            params,
+            return_type,
+            body,
+            ..
+        } => {
             for p in params {
                 p.span = nsp();
                 rs_ident(&mut p.name);
@@ -866,7 +964,11 @@ mod tests {
         );
         expand_default_methods(&mut m, &ForeignIfaces::default());
         let members = extend_members(&m);
-        assert!(members.contains_key("greet"), "default `greet` not copied: {:?}", members.keys());
+        assert!(
+            members.contains_key("greet"),
+            "default `greet` not copied: {:?}",
+            members.keys()
+        );
         assert!(members.contains_key("name"));
     }
 
@@ -884,7 +986,11 @@ mod tests {
             let mut n = 0;
             for item in &m.items {
                 if let ItemKind::Extend(e) = &item.kind {
-                    n += e.members.iter().filter(|x| x.function.name.name == "greet").count();
+                    n += e
+                        .members
+                        .iter()
+                        .filter(|x| x.function.name.name == "greet")
+                        .count();
                 }
             }
             n
@@ -940,7 +1046,10 @@ mod tests {
         collect_pub_interfaces(&iface, &mut foreign);
         expand_default_methods(&mut m, &foreign);
         let members = extend_members(&m);
-        assert!(members.contains_key("greet"), "cross-module default not copied");
+        assert!(
+            members.contains_key("greet"),
+            "cross-module default not copied"
+        );
     }
 
     #[test]
@@ -984,7 +1093,10 @@ mod tests {
         );
         collect_pub_interfaces(&a, &mut foreign);
         collect_pub_interfaces(&b, &mut foreign);
-        assert!(foreign.get("Named").is_none(), "conflicting name must be ambiguous");
+        assert!(
+            foreign.get("Named").is_none(),
+            "conflicting name must be ambiguous"
+        );
 
         let mut m = parse_module(
             "struct P { x: i64 }\n\
@@ -992,7 +1104,10 @@ mod tests {
         );
         expand_default_methods(&mut m, &foreign);
         let members = extend_members(&m);
-        assert!(!members.contains_key("greet"), "ambiguous default must not be copied");
+        assert!(
+            !members.contains_key("greet"),
+            "ambiguous default must not be copied"
+        );
     }
 
     #[test]
@@ -1005,6 +1120,9 @@ mod tests {
         let b = a.clone();
         collect_pub_interfaces(&a, &mut foreign);
         collect_pub_interfaces(&b, &mut foreign);
-        assert!(foreign.get("Named").is_some(), "identical re-export must resolve");
+        assert!(
+            foreign.get("Named").is_some(),
+            "identical re-export must resolve"
+        );
     }
 }

@@ -13,9 +13,9 @@
 use std::collections::HashMap;
 
 use cranelift_module::FuncId;
+use cranelift_object::ObjectProduct;
 use cranelift_object::object::write::{Relocation, RelocationFlags};
 use cranelift_object::object::{BinaryFormat, RelocationEncoding, RelocationKind, SectionKind};
-use cranelift_object::ObjectProduct;
 use gimli::write::{
     Address, AttributeValue, DwarfUnit, EndianVec, LineProgram, LineString, Sections, Writer,
 };
@@ -25,7 +25,10 @@ use gimli::{Encoding, Format, LineEncoding, RunTimeEndian};
 /// Out-of-range offsets clamp to the last line. Used to fill line-program rows.
 pub(crate) fn byte_to_line(src: &str, byte_offset: u32) -> u32 {
     let off = (byte_offset as usize).min(src.len());
-    1 + src.as_bytes()[..off].iter().filter(|&&b| b == b'\n').count() as u32
+    1 + src.as_bytes()[..off]
+        .iter()
+        .filter(|&&b| b == b'\n')
+        .count() as u32
 }
 
 /// A relocation gimli asked us to record while serializing a debug section:
@@ -56,7 +59,10 @@ struct DwarfWriter {
 
 impl DwarfWriter {
     fn new(endian: RunTimeEndian) -> Self {
-        DwarfWriter { vec: EndianVec::new(endian), relocs: Vec::new() }
+        DwarfWriter {
+            vec: EndianVec::new(endian),
+            relocs: Vec::new(),
+        }
     }
 }
 
@@ -106,13 +112,22 @@ pub(crate) fn emit_dwarf(
     src: &str,
     file_name: &str,
 ) -> Result<(), gimli::write::Error> {
-    let encoding = Encoding { format: Format::Dwarf32, version: 4, address_size: 8 };
+    let encoding = Encoding {
+        format: Format::Dwarf32,
+        version: 4,
+        address_size: 8,
+    };
     let mut dwarf = DwarfUnit::new(encoding);
 
     let comp_dir = LineString::String(b".".to_vec());
     let comp_file = LineString::String(file_name.as_bytes().to_vec());
-    let mut program =
-        LineProgram::new(encoding, LineEncoding::default(), comp_dir.clone(), comp_file.clone(), None);
+    let mut program = LineProgram::new(
+        encoding,
+        LineEncoding::default(),
+        comp_dir.clone(),
+        comp_file.clone(),
+        None,
+    );
 
     // Group the captured rows by function, preserving order.
     let mut by_func: Vec<(FuncId, Vec<(u32, u32)>)> = Vec::new();
@@ -132,7 +147,10 @@ pub(crate) fn emit_dwarf(
         let sym = func_syms.len();
         func_syms.push(*func);
         let len = func_len.get(func).copied().unwrap_or(0) as u64;
-        program.begin_sequence(Some(Address::Symbol { symbol: sym, addend: 0 }));
+        program.begin_sequence(Some(Address::Symbol {
+            symbol: sym,
+            addend: 0,
+        }));
         for &(code_off, src_off) in rows {
             let row = program.row();
             row.address_offset = code_off as u64;
@@ -171,15 +189,23 @@ pub(crate) fn emit_dwarf(
             return Ok(());
         }
         let (seg, name) = if macho {
-            (b"__DWARF".to_vec(), format!("__{}", id.name().trim_start_matches('.')).into_bytes())
+            (
+                b"__DWARF".to_vec(),
+                format!("__{}", id.name().trim_start_matches('.')).into_bytes(),
+            )
         } else {
             (Vec::new(), id.name().as_bytes().to_vec())
         };
         let obj_sec = product.object.add_section(seg, name, SectionKind::Debug);
-        product.object.section_mut(obj_sec).set_data(w.vec.clone().into_vec(), 1);
+        product
+            .object
+            .section_mut(obj_sec)
+            .set_data(w.vec.clone().into_vec(), 1);
         for r in &w.relocs {
             let RelocTarget::Symbol(i) = r.target;
-            let Some((symbol, _)) = product.functions[func_syms[i]] else { continue };
+            let Some((symbol, _)) = product.functions[func_syms[i]] else {
+                continue;
+            };
             let _ = product.object.add_relocation(
                 obj_sec,
                 Relocation {

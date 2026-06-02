@@ -43,7 +43,10 @@ pub fn verify(bytes: &[u8], expected: &str) -> Result<(), StoreError> {
     if got.eq_ignore_ascii_case(want) {
         Ok(())
     } else {
-        Err(StoreError::Checksum { expected: want.to_string(), got })
+        Err(StoreError::Checksum {
+            expected: want.to_string(),
+            got,
+        })
     }
 }
 
@@ -92,9 +95,13 @@ impl Store {
         let base = std::env::var_os("OTTER_FUSION_HOME")
             .map(PathBuf::from)
             .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".otter_fusion")))
-            .or_else(|| std::env::var_os("USERPROFILE").map(|h| PathBuf::from(h).join(".otter_fusion")))
+            .or_else(|| {
+                std::env::var_os("USERPROFILE").map(|h| PathBuf::from(h).join(".otter_fusion"))
+            })
             .unwrap_or_else(|| PathBuf::from(".otter_fusion"));
-        Store { root: base.join("registry") }
+        Store {
+            root: base.join("registry"),
+        }
     }
 
     pub fn index_dir(&self) -> PathBuf {
@@ -208,7 +215,9 @@ mod tests {
                 header.set_size(contents.len() as u64);
                 header.set_mode(0o644);
                 header.set_cksum();
-                builder.append_data(&mut header, path, contents.as_bytes()).unwrap();
+                builder
+                    .append_data(&mut header, path, contents.as_bytes())
+                    .unwrap();
             }
             builder.finish().unwrap();
         }
@@ -233,7 +242,10 @@ mod tests {
         let bytes = b"hello world";
         let ck = checksum(bytes);
         assert!(verify(bytes, &ck).is_ok());
-        assert!(matches!(verify(b"tampered", &ck), Err(StoreError::Checksum { .. })));
+        assert!(matches!(
+            verify(b"tampered", &ck),
+            Err(StoreError::Checksum { .. })
+        ));
     }
 
     #[test]
@@ -255,7 +267,10 @@ mod tests {
         let store = Store::at(temp_dir("corrupt"));
         let gz = make_tar_gz(&[("lib.otter", "x")]);
         let wrong = checksum(b"different bytes");
-        assert!(matches!(store.extract(&gz, &wrong), Err(StoreError::Checksum { .. })));
+        assert!(matches!(
+            store.extract(&gz, &wrong),
+            Err(StoreError::Checksum { .. })
+        ));
     }
 
     #[test]

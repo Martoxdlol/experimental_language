@@ -19,11 +19,14 @@ impl<'a> Checker<'a> {
         // `?` on a `*T | null` (NPO) raw pointer is not supported (it has no
         // tagged box to partition) — use an explicit null check (`docs/19` §2).
         if self.is_npo_union(raw_et) {
-            self.emit(q_span, SemaErrorKind::Message(
-                "`?` on a nullable pointer `*T | null` is not supported; \
+            self.emit(
+                q_span,
+                SemaErrorKind::Message(
+                    "`?` on a nullable pointer `*T | null` is not supported; \
                  check it explicitly with `if p is null { … }` (`docs/19` §2)"
-                    .into(),
-            ));
+                        .into(),
+                ),
+            );
             return self.tcx.error;
         }
         // `?` classifies each variant of the operand into success / direct
@@ -40,26 +43,27 @@ impl<'a> Checker<'a> {
         // The `Try` impl's `branch` shape, if the operand is a `Try` wrapper —
         // handed to the HIR `Try` node at the end (was the `try_branches` table).
         let mut try_branch: Option<TryBranch> = None;
-        let (always_success, failure_candidates): (Vec<Ty>, Vec<Ty>) = if matches!(
-            self.tcx.kind(raw_et),
-            TyKind::Union(_) | TyKind::Dynamic
-        ) {
-            (Vec::new(), self.tcx.variants(raw_et))
-        } else if let Some(tb) = self.find_try_impl(raw_et, q_span) {
-            let s = self.tcx.variants(tb.output);
-            let f = self.tcx.variants(tb.residual);
-            try_branch = Some(tb);
-            (s, f)
-        } else {
-            // No way to propagate from this type — emit a clear message
-            // covering both the "wrong shape" and "no Try impl" cases.
-            let nm = self.display(raw_et);
-            self.emit(q_span, SemaErrorKind::Message(format!(
-                "nothing to propagate here: `{nm}` is not a union and has no \
+        let (always_success, failure_candidates): (Vec<Ty>, Vec<Ty>) =
+            if matches!(self.tcx.kind(raw_et), TyKind::Union(_) | TyKind::Dynamic) {
+                (Vec::new(), self.tcx.variants(raw_et))
+            } else if let Some(tb) = self.find_try_impl(raw_et, q_span) {
+                let s = self.tcx.variants(tb.output);
+                let f = self.tcx.variants(tb.residual);
+                try_branch = Some(tb);
+                (s, f)
+            } else {
+                // No way to propagate from this type — emit a clear message
+                // covering both the "wrong shape" and "no Try impl" cases.
+                let nm = self.display(raw_et);
+                self.emit(
+                    q_span,
+                    SemaErrorKind::Message(format!(
+                        "nothing to propagate here: `{nm}` is not a union and has no \
                  `Try` impl; remove the `?`"
-            )));
-            return self.tcx.error;
-        };
+                    )),
+                );
+                return self.tcx.error;
+            };
         // Classify each candidate failure variant. For the union case a
         // variant outside R with no `FromResidual` impl stays a success (the
         // historical lenient behaviour, `docs/13` §2); for the Try case the
@@ -77,25 +81,32 @@ impl<'a> Checker<'a> {
             } else if is_try {
                 let vn = self.display(v);
                 let rn = self.display(r);
-                self.emit(q_span, SemaErrorKind::Message(format!(
-                    "residual variant `{vn}` from `branch` cannot propagate \
+                self.emit(
+                    q_span,
+                    SemaErrorKind::Message(format!(
+                        "residual variant `{vn}` from `branch` cannot propagate \
                      into `{rn}`; add a `FromResidual<{vn}>` impl on a \
                      variant of the return type"
-                )));
+                    )),
+                );
             } else {
                 successes.push(v);
             }
         }
         if failures.is_empty() && conversions.is_empty() {
-            self.emit(q_span, SemaErrorKind::Message(
-                "nothing to propagate here; remove the `?`".into(),
-            ));
+            self.emit(
+                q_span,
+                SemaErrorKind::Message("nothing to propagate here; remove the `?`".into()),
+            );
             return raw_et;
         }
         if successes.is_empty() {
-            self.emit(q_span, SemaErrorKind::Message(
-                "this expression always returns; use a `match` instead".into(),
-            ));
+            self.emit(
+                q_span,
+                SemaErrorKind::Message(
+                    "this expression always returns; use a `match` instead".into(),
+                ),
+            );
             return self.tcx.error;
         }
         // Hand `branch` shape + residual conversions to the HIR `Try` node
@@ -103,7 +114,8 @@ impl<'a> Checker<'a> {
         // checked so nested `?` doesn't clobber the slots.
         let _ = q_span;
         self.pending_try_branch.set(try_branch);
-        self.pending_residuals.set((!conversions.is_empty()).then_some(conversions));
+        self.pending_residuals
+            .set((!conversions.is_empty()).then_some(conversions));
         self.tcx.mk_union(successes)
     }
 
@@ -118,7 +130,9 @@ impl<'a> Checker<'a> {
             if self.prog.def(ext).kind != DefKind::Extend {
                 continue;
             }
-            let Some(ItemKind::Extend(e_item)) = self.prog.def(ext).item.clone() else { continue };
+            let Some(ItemKind::Extend(e_item)) = self.prog.def(ext).item.clone() else {
+                continue;
+            };
             // Only non-generic FromResidual impls are matched for now.
             if !self.prog.def(ext).generics.is_empty() {
                 continue;
@@ -129,7 +143,9 @@ impl<'a> Checker<'a> {
                 continue;
             }
             for itf in &e_item.interfaces {
-                let TypeKind::Named { name, generics } = &itf.kind else { continue };
+                let TypeKind::Named { name, generics } = &itf.kind else {
+                    continue;
+                };
                 if generics.len() != 1 {
                     continue;
                 }
@@ -165,7 +181,9 @@ impl<'a> Checker<'a> {
             if self.prog.def(ext).kind != DefKind::Extend {
                 continue;
             }
-            let Some(ItemKind::Extend(e_item)) = self.prog.def(ext).item.clone() else { continue };
+            let Some(ItemKind::Extend(e_item)) = self.prog.def(ext).item.clone() else {
+                continue;
+            };
             // Build a lowering env: each extend generic becomes a fresh `Param`.
             let mut env = TypeEnv::new(self.prog.def(ext).module);
             let ext_gens = self.prog.def(ext).generics.clone();
@@ -190,7 +208,9 @@ impl<'a> Checker<'a> {
             // its `Output`/`Residual` type arguments.
             let mut try_iface_args: Option<(Ty, Ty)> = None;
             for itf in &e_item.interfaces {
-                let TypeKind::Named { name, generics } = &itf.kind else { continue };
+                let TypeKind::Named { name, generics } = &itf.kind else {
+                    continue;
+                };
                 if generics.len() != 2 {
                     continue;
                 }
@@ -205,8 +225,12 @@ impl<'a> Checker<'a> {
                 try_iface_args = Some((o, r));
                 break;
             }
-            let Some((output, residual)) = try_iface_args else { continue };
-            let Some(method) = self.extend_method(ext, "branch") else { continue };
+            let Some((output, residual)) = try_iface_args else {
+                continue;
+            };
+            let Some(method) = self.extend_method(ext, "branch") else {
+                continue;
+            };
             // Monomorphization arguments for `branch` (the extend's generics in
             // declaration order — the method takes no own generics in `Try`).
             let targs: Vec<Ty> = ext_gens
@@ -216,7 +240,13 @@ impl<'a> Checker<'a> {
             // The monomorphization args travel on `TryBranch.targs` (consumed by
             // codegen from the HIR `Try` node) — no separate span side table.
             let union_ty = self.tcx.mk_union([output, residual]);
-            return Some(TryBranch { method, targs, union_ty, output, residual });
+            return Some(TryBranch {
+                method,
+                targs,
+                union_ty,
+                output,
+                residual,
+            });
         }
         None
     }
@@ -226,10 +256,7 @@ impl<'a> Checker<'a> {
         for id in 0..self.prog.defs.len() {
             let d = DefId(id as u32);
             let def = self.prog.def(d);
-            if def.kind == DefKind::ExtendMethod
-                && def.parent == Some(ext)
-                && def.name == name
-            {
+            if def.kind == DefKind::ExtendMethod && def.parent == Some(ext) && def.name == name {
                 return Some(d);
             }
         }
@@ -250,11 +277,14 @@ impl<'a> Checker<'a> {
         // so `match` cannot dispatch on it yet — use `if p is *T { … }` /
         // `if p is null { … }` flow narrowing instead (`docs/19` §2).
         if self.is_npo_union(sty) {
-            self.emit(span, SemaErrorKind::Message(
-                "`match` on a nullable pointer `*T | null` is not yet supported; \
+            self.emit(
+                span,
+                SemaErrorKind::Message(
+                    "`match` on a nullable pointer `*T | null` is not yet supported; \
                  use `if p is null { … } else { … }` (`docs/19` §2)"
-                    .into(),
-            ));
+                        .into(),
+                ),
+            );
         }
         let mut body_tys = Vec::new();
         for arm in arms {
@@ -301,7 +331,13 @@ impl<'a> Checker<'a> {
                     if !self.tcx.variants(sty).contains(&lt) {
                         let e2 = self.display(sty);
                         let f = self.display(lt);
-                        self.emit(e.span, SemaErrorKind::TypeMismatch { expected: e2, found: f });
+                        self.emit(
+                            e.span,
+                            SemaErrorKind::TypeMismatch {
+                                expected: e2,
+                                found: f,
+                            },
+                        );
                     }
                 }
             }
@@ -318,9 +354,12 @@ impl<'a> Checker<'a> {
             PatternKind::UnitPath(path) => {
                 let module = self.current_module();
                 if self.prog.resolve_type_in(module, &path.name.name).is_none() {
-                    self.emit(path.span, SemaErrorKind::UnknownType {
-                        name: path.name.name.clone(),
-                    });
+                    self.emit(
+                        path.span,
+                        SemaErrorKind::UnknownType {
+                            name: path.name.name.clone(),
+                        },
+                    );
                 }
             }
             PatternKind::Tuple { elems, rest: None } => {
@@ -332,9 +371,12 @@ impl<'a> Checker<'a> {
                         return;
                     }
                 }
-                self.emit(pattern.span, SemaErrorKind::Message(
-                    "tuple pattern does not match the scrutinee shape".into(),
-                ));
+                self.emit(
+                    pattern.span,
+                    SemaErrorKind::Message(
+                        "tuple pattern does not match the scrutinee shape".into(),
+                    ),
+                );
             }
             // `Rect(w, h)` — a tuple-struct variant pattern. Resolve the matched
             // variant type (a union member with this struct's `def`, else the
@@ -363,7 +405,12 @@ impl<'a> Checker<'a> {
                         // (e.g. a tuple struct `P(i64)`) is a shape error — give
                         // a clear diagnostic rather than letting field binds fall
                         // through to `error` and surface a misleading codegen error.
-                        if r.is_none() && matches!(self.prog.def(def).kind, DefKind::Struct | DefKind::ExternStruct) {
+                        if r.is_none()
+                            && matches!(
+                                self.prog.def(def).kind,
+                                DefKind::Struct | DefKind::ExternStruct
+                            )
+                        {
                             self.emit(pattern.span, SemaErrorKind::Message(format!(
                                 "`{}` is not a record struct; use a tuple-struct pattern like `{}(..)`",
                                 self.prog.def(def).name, self.prog.def(def).name
@@ -393,9 +440,12 @@ impl<'a> Checker<'a> {
             PatternKind::Or(alts) => {
                 for alt in alts {
                     if self.pattern_binds(alt) {
-                        self.emit(alt.span, SemaErrorKind::Message(
-                            "an alternative in an `|` or-pattern may not bind variables".into(),
-                        ));
+                        self.emit(
+                            alt.span,
+                            SemaErrorKind::Message(
+                                "an alternative in an `|` or-pattern may not bind variables".into(),
+                            ),
+                        );
                     }
                     self.check_pattern(alt, sty);
                 }
@@ -405,9 +455,13 @@ impl<'a> Checker<'a> {
             PatternKind::List { elems, rest } => {
                 let elem = self.list_elem(sty).unwrap_or_else(|| {
                     if !self.tcx.is_error(sty) {
-                        self.emit(pattern.span, SemaErrorKind::Message(format!(
-                            "list pattern on non-list type `{}`", self.display(sty)
-                        )));
+                        self.emit(
+                            pattern.span,
+                            SemaErrorKind::Message(format!(
+                                "list pattern on non-list type `{}`",
+                                self.display(sty)
+                            )),
+                        );
                     }
                     self.tcx.error
                 });
@@ -421,9 +475,10 @@ impl<'a> Checker<'a> {
                     }
                 }
             }
-            _ => self.emit(pattern.span, SemaErrorKind::Message(
-                "this pattern is not yet supported".into(),
-            )),
+            _ => self.emit(
+                pattern.span,
+                SemaErrorKind::Message("this pattern is not yet supported".into()),
+            ),
         }
     }
 
@@ -471,7 +526,12 @@ impl<'a> Checker<'a> {
     pub(crate) fn struct_pattern_ty(&mut self, path: &TypePath, sty: Ty) -> Ty {
         let module = self.current_module();
         let Some(def) = self.prog.resolve_type_in(module, &path.name.name) else {
-            self.emit(path.span, SemaErrorKind::UnknownType { name: path.name.name.clone() });
+            self.emit(
+                path.span,
+                SemaErrorKind::UnknownType {
+                    name: path.name.name.clone(),
+                },
+            );
             return self.tcx.error;
         };
         for v in self.tcx.variants(sty) {
@@ -504,18 +564,27 @@ impl<'a> Checker<'a> {
             for a in arms.iter().filter(|a| a.guard.is_none()) {
                 self.collect_covered(&a.pattern, &mut covered);
             }
-            let missing: Vec<Ty> =
-                variants.iter().copied().filter(|v| !covered.contains(v)).collect();
+            let missing: Vec<Ty> = variants
+                .iter()
+                .copied()
+                .filter(|v| !covered.contains(v))
+                .collect();
             if !missing.is_empty() {
                 let names: Vec<String> = missing.iter().map(|v| self.display(*v)).collect();
-                self.emit(span, SemaErrorKind::NonExhaustiveMatch {
-                    detail: format!("missing {}", names.join(", ")),
-                });
+                self.emit(
+                    span,
+                    SemaErrorKind::NonExhaustiveMatch {
+                        detail: format!("missing {}", names.join(", ")),
+                    },
+                );
             }
         } else {
-            self.emit(span, SemaErrorKind::NonExhaustiveMatch {
-                detail: "add a `_` arm".into(),
-            });
+            self.emit(
+                span,
+                SemaErrorKind::NonExhaustiveMatch {
+                    detail: "add a `_` arm".into(),
+                },
+            );
         }
     }
 
@@ -543,14 +612,13 @@ impl<'a> Checker<'a> {
     pub(crate) fn is_irrefutable(&mut self, pattern: &Pattern, sty: Ty) -> bool {
         match &pattern.kind {
             PatternKind::Wildcard | PatternKind::Binding(_) => true,
-            PatternKind::Tuple { elems, rest: None } => {
-                match self.tcx.kind(sty).clone() {
-                    TyKind::Tuple(ets) if ets.len() == elems.len() => {
-                        elems.iter().zip(ets).all(|(p, et)| self.is_irrefutable(p, et))
-                    }
-                    _ => false,
-                }
-            }
+            PatternKind::Tuple { elems, rest: None } => match self.tcx.kind(sty).clone() {
+                TyKind::Tuple(ets) if ets.len() == elems.len() => elems
+                    .iter()
+                    .zip(ets)
+                    .all(|(p, et)| self.is_irrefutable(p, et)),
+                _ => false,
+            },
             PatternKind::TypeBinding { .. } => {
                 // `T x` covers the scrutinee only when `T` is exactly its type
                 // (i.e. a non-union match on its own type).
@@ -565,7 +633,11 @@ impl<'a> Checker<'a> {
             PatternKind::Or(alts) => alts.iter().any(|p| self.is_irrefutable(p, sty)),
             // A struct pattern covers the scrutinee only when it is exactly that
             // single (non-union) struct type and its fields are all irrefutable.
-            PatternKind::TupleStruct { path, fields, rest: None } => {
+            PatternKind::TupleStruct {
+                path,
+                fields,
+                rest: None,
+            } => {
                 if matches!(self.tcx.kind(sty), TyKind::Union(_) | TyKind::Dynamic) {
                     return false;
                 }
@@ -575,16 +647,19 @@ impl<'a> Checker<'a> {
                 }
                 match self.tcx.kind(sty).clone() {
                     TyKind::Named { def, args } => match self.tuple_fields(def, &args) {
-                        Some(fts) => fields
-                            .iter()
-                            .enumerate()
-                            .all(|(i, p)| self.is_irrefutable(p, fts.get(i).copied().unwrap_or(self.tcx.error))),
+                        Some(fts) => fields.iter().enumerate().all(|(i, p)| {
+                            self.is_irrefutable(p, fts.get(i).copied().unwrap_or(self.tcx.error))
+                        }),
                         None => false,
                     },
                     _ => false,
                 }
             }
-            PatternKind::RecordStruct { path, fields, has_rest: _ } => {
+            PatternKind::RecordStruct {
+                path,
+                fields,
+                has_rest: _,
+            } => {
                 if matches!(self.tcx.kind(sty), TyKind::Union(_) | TyKind::Dynamic) {
                     return false;
                 }
@@ -611,5 +686,4 @@ impl<'a> Checker<'a> {
             _ => false,
         }
     }
-
 }

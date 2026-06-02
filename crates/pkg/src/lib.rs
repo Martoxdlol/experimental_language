@@ -23,9 +23,9 @@ pub mod server;
 pub mod store;
 pub mod version;
 
-pub use lockfile::{LockSource, LockedPackage, Lockfile, LOCKFILE_VERSION};
+pub use lockfile::{LOCKFILE_VERSION, LockSource, LockedPackage, Lockfile};
 pub use manifest::{
-    Dependency, DepSource, GitRef, Manifest, ManifestError, Package, PackageKind, Registry,
+    DepSource, Dependency, GitRef, Manifest, ManifestError, Package, PackageKind, Registry,
 };
-pub use project::{DiscoverError, ProjectContext, MANIFEST_NAME};
-pub use store::{checksum, sha256_hex, verify, Store, StoreError};
+pub use project::{DiscoverError, MANIFEST_NAME, ProjectContext};
+pub use store::{Store, StoreError, checksum, sha256_hex, verify};

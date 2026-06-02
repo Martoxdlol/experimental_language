@@ -5,6 +5,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[lib]
+doctest = false
+
 [dependencies]
 compiler.workspace = true
 backend = { path = "../backend" }

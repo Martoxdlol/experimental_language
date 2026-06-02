@@ -13,10 +13,10 @@ use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
 
 use crate::analysis::{
-    builtin_signature, dot_completion_context, float_instance_methods, float_static_methods,
-    int_instance_methods, keyword_texts, list_intrinsic_methods, map_intrinsic_methods,
-    offset_at, position_at, primitive_static_methods, span_to_range, str_intrinsic_methods,
-    Compiled, LineIndex, TokenClass, DOC_FILE,
+    Compiled, DOC_FILE, LineIndex, TokenClass, builtin_signature, dot_completion_context,
+    float_instance_methods, float_static_methods, int_instance_methods, keyword_texts,
+    list_intrinsic_methods, map_intrinsic_methods, offset_at, position_at,
+    primitive_static_methods, span_to_range, str_intrinsic_methods,
 };
 use compiler::sema::symbols::DefKind;
 use compiler::ty::TyKind;
@@ -27,12 +27,18 @@ use compiler::ty::TyKind;
 /// by go-to-definition and cross-file references/rename.
 fn span_to_location(c: &Compiled, span: Span, doc_uri: &Url) -> Option<Location> {
     if span.file == DOC_FILE {
-        return Some(Location { uri: doc_uri.clone(), range: span_to_range(&c.text, span) });
+        return Some(Location {
+            uri: doc_uri.clone(),
+            range: span_to_range(&c.text, span),
+        });
     }
     if (span.file.0 as usize) < c.map.file_count() {
         let sf = c.map.file(span.file);
         if let Ok(u) = Url::from_file_path(&sf.name) {
-            return Some(Location { uri: u, range: span_to_range(&sf.src, span) });
+            return Some(Location {
+                uri: u,
+                range: span_to_range(&sf.src, span),
+            });
         }
     }
     None
@@ -64,7 +70,10 @@ pub struct Backend {
 
 impl Backend {
     pub fn new(client: Client) -> Backend {
-        Backend { client, documents: DashMap::new() }
+        Backend {
+            client,
+            documents: DashMap::new(),
+        }
     }
 
     /// Compile a document's current text, if it is open. When the document has
@@ -403,7 +412,8 @@ impl LanguageServer for Backend {
 
         // Group edits by the file (URI) each span belongs to, so a cross-module
         // rename updates every affected document in one `WorkspaceEdit`.
-        let mut changes: std::collections::HashMap<Url, Vec<TextEdit>> = std::collections::HashMap::new();
+        let mut changes: std::collections::HashMap<Url, Vec<TextEdit>> =
+            std::collections::HashMap::new();
         for s in spans {
             if let Some(loc) = span_to_location(&c, s, &uri) {
                 changes.entry(loc.uri).or_default().push(TextEdit {
@@ -415,7 +425,10 @@ impl LanguageServer for Backend {
         if changes.is_empty() {
             return Ok(None);
         }
-        Ok(Some(WorkspaceEdit { changes: Some(changes), ..Default::default() }))
+        Ok(Some(WorkspaceEdit {
+            changes: Some(changes),
+            ..Default::default()
+        }))
     }
 
     async fn document_symbol(
@@ -449,23 +462,32 @@ impl LanguageServer for Backend {
                 continue;
             }
             // A zero-width insert of `_` at the binding's start.
-            let at = Range { start: range.start, end: range.start };
+            let at = Range {
+                start: range.start,
+                end: range.start,
+            };
             let mut changes = std::collections::HashMap::new();
-            changes.insert(uri.clone(), vec![TextEdit { range: at, new_text: "_".into() }]);
+            changes.insert(
+                uri.clone(),
+                vec![TextEdit {
+                    range: at,
+                    new_text: "_".into(),
+                }],
+            );
             actions.push(CodeActionOrCommand::CodeAction(CodeAction {
                 title: format!("Prefix `_` to silence unused `{name}`"),
                 kind: Some(CodeActionKind::QUICKFIX),
-                edit: Some(WorkspaceEdit { changes: Some(changes), ..Default::default() }),
+                edit: Some(WorkspaceEdit {
+                    changes: Some(changes),
+                    ..Default::default()
+                }),
                 ..Default::default()
             }));
         }
         Ok(Some(actions))
     }
 
-    async fn formatting(
-        &self,
-        params: DocumentFormattingParams,
-    ) -> Result<Option<Vec<TextEdit>>> {
+    async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
         let Some(c) = self.compile(&params.text_document.uri) else {
             return Ok(None);
         };
@@ -481,7 +503,10 @@ impl LanguageServer for Backend {
         // Replace the whole document in one edit.
         let end = position_at(&c.text, c.text.len());
         Ok(Some(vec![TextEdit {
-            range: Range { start: Position::new(0, 0), end },
+            range: Range {
+                start: Position::new(0, 0),
+                end,
+            },
             new_text: formatted,
         }]))
     }
@@ -498,7 +523,9 @@ impl LanguageServer for Backend {
         // the receiver's type. The same path handles trigger-by-`.` and
         // re-trigger after typing letters.
         if let Some(ctx) = dot_completion_context(&c.text, off) {
-            return Ok(Some(CompletionResponse::Array(member_completions(&c, &ctx))));
+            return Ok(Some(CompletionResponse::Array(member_completions(
+                &c, &ctx,
+            ))));
         }
 
         // Macro completion: just after `@` (with an optional partial name),
@@ -557,10 +584,7 @@ impl LanguageServer for Backend {
         Ok(Some(collect_code_lenses(&c, uri.as_ref())))
     }
 
-    async fn signature_help(
-        &self,
-        params: SignatureHelpParams,
-    ) -> Result<Option<SignatureHelp>> {
+    async fn signature_help(&self, params: SignatureHelpParams) -> Result<Option<SignatureHelp>> {
         let pos = params.text_document_position_params;
         let Some(c) = self.compile(&pos.text_document.uri) else {
             return Ok(None);
@@ -582,7 +606,11 @@ impl LanguageServer for Backend {
             _ => None,
         };
         let Some(sig) = sig else { return Ok(None) };
-        let active = active.min(sig.parameters.as_ref().map_or(0, |p| p.len().saturating_sub(1)) as u32);
+        let active = active.min(
+            sig.parameters
+                .as_ref()
+                .map_or(0, |p| p.len().saturating_sub(1)) as u32,
+        );
         Ok(Some(SignatureHelp {
             signatures: vec![SignatureInformation {
                 active_parameter: Some(active),
@@ -638,7 +666,12 @@ impl LanguageServer for Backend {
 #[allow(deprecated)] // DocumentSymbol::deprecated is a required (deprecated) field
 fn document_symbols(c: &Compiled) -> Vec<DocumentSymbol> {
     let text = &c.text;
-    let mk = |name: String, detail: Option<String>, kind: SymbolKind, span: Span, sel: Span, children: Vec<DocumentSymbol>| {
+    let mk = |name: String,
+              detail: Option<String>,
+              kind: SymbolKind,
+              span: Span,
+              sel: Span,
+              children: Vec<DocumentSymbol>| {
         DocumentSymbol {
             name,
             detail,
@@ -647,7 +680,11 @@ fn document_symbols(c: &Compiled) -> Vec<DocumentSymbol> {
             deprecated: None,
             range: span_to_range(text, span),
             selection_range: span_to_range(text, sel),
-            children: if children.is_empty() { None } else { Some(children) },
+            children: if children.is_empty() {
+                None
+            } else {
+                Some(children)
+            },
         }
     };
 
@@ -765,14 +802,27 @@ fn document_symbols(c: &Compiled) -> Vec<DocumentSymbol> {
                     ModuleKind::External => SymbolKind::MODULE,
                     ModuleKind::Inline { .. } => SymbolKind::MODULE,
                 };
-                out.push(mk(m.name.name.clone(), None, kind, item.span, m.name.span, vec![]));
+                out.push(mk(
+                    m.name.name.clone(),
+                    None,
+                    kind,
+                    item.span,
+                    m.name.span,
+                    vec![],
+                ));
             }
             ItemKind::Extern(ext) => {
                 let (name, sel, kind) = match ext {
-                    ExternItem::Function(f) => (f.name.name.clone(), f.name.span, SymbolKind::FUNCTION),
+                    ExternItem::Function(f) => {
+                        (f.name.name.clone(), f.name.span, SymbolKind::FUNCTION)
+                    }
                     ExternItem::Struct(s) => (s.name.name.clone(), s.name.span, SymbolKind::STRUCT),
-                    ExternItem::OpaqueType(n) => (n.name.clone(), n.span, SymbolKind::TYPE_PARAMETER),
-                    ExternItem::Var { name, .. } => (name.name.clone(), name.span, SymbolKind::VARIABLE),
+                    ExternItem::OpaqueType(n) => {
+                        (n.name.clone(), n.span, SymbolKind::TYPE_PARAMETER)
+                    }
+                    ExternItem::Var { name, .. } => {
+                        (name.name.clone(), name.span, SymbolKind::VARIABLE)
+                    }
                 };
                 out.push(mk(name, None, kind, item.span, sel, vec![]));
             }
@@ -847,13 +897,12 @@ fn macro_completions(c: &Compiled) -> Vec<CompletionItem> {
 fn default_completions(c: &Compiled) -> Vec<CompletionItem> {
     let mut items: Vec<CompletionItem> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
-    let push = |items: &mut Vec<CompletionItem>,
-                seen: &mut HashSet<String>,
-                item: CompletionItem| {
-        if seen.insert(item.label.clone()) {
-            items.push(item);
-        }
-    };
+    let push =
+        |items: &mut Vec<CompletionItem>, seen: &mut HashSet<String>, item: CompletionItem| {
+            if seen.insert(item.label.clone()) {
+                items.push(item);
+            }
+        };
 
     // 1. Locals (highest priority — most contextually relevant).
     let mut locals: HashSet<String> = HashSet::new();
@@ -959,19 +1008,15 @@ fn default_completions(c: &Compiled) -> Vec<CompletionItem> {
 /// type. Falls back to `default_completions` for an empty list when the
 /// receiver type cannot be determined (e.g. the receiver expression has not
 /// type-checked yet because of an upstream error).
-fn member_completions(
-    c: &Compiled,
-    ctx: &crate::analysis::DotContext,
-) -> Vec<CompletionItem> {
+fn member_completions(c: &Compiled, ctx: &crate::analysis::DotContext) -> Vec<CompletionItem> {
     let mut items: Vec<CompletionItem> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
-    let mut push = |items: &mut Vec<CompletionItem>,
-                    seen: &mut HashSet<String>,
-                    item: CompletionItem| {
-        if seen.insert(item.label.clone()) {
-            items.push(item);
-        }
-    };
+    let mut push =
+        |items: &mut Vec<CompletionItem>, seen: &mut HashSet<String>, item: CompletionItem| {
+            if seen.insert(item.label.clone()) {
+                items.push(item);
+            }
+        };
 
     // Value-receiver case: `expr.|` — use the inferred type of the receiver.
     if let Some(ty) = c.receiver_type_at_dot(ctx.dot_offset) {
@@ -1059,7 +1104,11 @@ fn push_instance_members(
             }
             DefKind::Interface => {
                 for m in c.interface_methods(def, false) {
-                    push(items, seen, def_to_completion(c, m, CompletionItemKind::METHOD));
+                    push(
+                        items,
+                        seen,
+                        def_to_completion(c, m, CompletionItemKind::METHOD),
+                    );
                 }
             }
             _ => {}
@@ -1090,7 +1139,11 @@ fn push_instance_members(
         // name contributes instance methods.
         let type_name = d.name.clone();
         for m in c.extend_methods_for(&type_name, false) {
-            push(items, seen, def_to_completion(c, m, CompletionItemKind::METHOD));
+            push(
+                items,
+                seen,
+                def_to_completion(c, m, CompletionItemKind::METHOD),
+            );
         }
     }
 }
@@ -1110,13 +1163,21 @@ fn push_type_namespace_members(
 
     if INT_NAMES.contains(&name) {
         for (n, sig) in primitive_static_methods() {
-            push(items, seen, intrinsic_completion(n, sig, CompletionItemKind::FUNCTION));
+            push(
+                items,
+                seen,
+                intrinsic_completion(n, sig, CompletionItemKind::FUNCTION),
+            );
         }
         return;
     }
     if FLOAT_NAMES.contains(&name) {
         for (n, sig) in float_static_methods() {
-            push(items, seen, intrinsic_completion(n, sig, CompletionItemKind::CONSTANT));
+            push(
+                items,
+                seen,
+                intrinsic_completion(n, sig, CompletionItemKind::CONSTANT),
+            );
         }
         return;
     }
@@ -1124,16 +1185,16 @@ fn push_type_namespace_members(
     // User type namespace: static methods on `extend Type`.
     if let Some(_def) = c.lookup_type_def(name) {
         for m in c.extend_methods_for(name, true) {
-            push(items, seen, def_to_completion(c, m, CompletionItemKind::FUNCTION));
+            push(
+                items,
+                seen,
+                def_to_completion(c, m, CompletionItemKind::FUNCTION),
+            );
         }
     }
 }
 
-fn intrinsic_completion(
-    name: &str,
-    signature: &str,
-    kind: CompletionItemKind,
-) -> CompletionItem {
+fn intrinsic_completion(name: &str, signature: &str, kind: CompletionItemKind) -> CompletionItem {
     CompletionItem {
         label: name.into(),
         kind: Some(kind),
@@ -1163,7 +1224,9 @@ fn def_to_completion(
 fn collect_code_lenses(c: &Compiled, uri: &str) -> Vec<CodeLens> {
     let mut lenses = Vec::new();
     for item in &c.module.items {
-        let ItemKind::Function(f) = &item.kind else { continue };
+        let ItemKind::Function(f) = &item.kind else {
+            continue;
+        };
         if f.name.name != "main" {
             continue;
         }
@@ -1316,10 +1379,7 @@ fn builtin_signature_info(b: compiler::sema::Builtin) -> SignatureInformation {
         Builtin::Print => ("print(value: str)", &[("value", "str")]),
         Builtin::Println => ("println(value: str)", &[("value", "str")]),
         Builtin::Panic => ("panic(message: str): never", &[("message", "str")]),
-        Builtin::PanicWith => (
-            "panic_with(value: dynamic): never",
-            &[("value", "dynamic")],
-        ),
+        Builtin::PanicWith => ("panic_with(value: dynamic): never", &[("value", "dynamic")]),
         Builtin::Exit => ("exit(code: i32): never", &[("code", "i32")]),
         Builtin::Abort => ("abort(): never", &[]),
     };
@@ -1516,8 +1576,15 @@ function main() { println(\"hi\"); }
 ";
         let c = Compiled::new(src.into());
         let lenses = collect_code_lenses(&c, "file:///tmp/x.otter");
-        let titles: Vec<&str> = lenses.iter().map(|l| l.command.as_ref().unwrap().title.as_str()).collect();
-        assert!(titles.iter().any(|t| t.contains("Run") && !t.contains("release")));
+        let titles: Vec<&str> = lenses
+            .iter()
+            .map(|l| l.command.as_ref().unwrap().title.as_str())
+            .collect();
+        assert!(
+            titles
+                .iter()
+                .any(|t| t.contains("Run") && !t.contains("release"))
+        );
         assert!(titles.iter().any(|t| t.contains("Run (release)")));
         assert!(titles.iter().any(|t| t.contains("Build")));
         // Every lens anchors at the `main` name occurrence.

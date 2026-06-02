@@ -51,7 +51,9 @@ pub fn analyze(analysis: &Analysis, map: &SourceMap) -> Lints {
             if params.contains(&local) || uses.locals.contains(&local) {
                 continue;
             }
-            let Some(&decl) = hir.local_decls.get(&local) else { continue };
+            let Some(&decl) = hir.local_decls.get(&local) else {
+                continue;
+            };
             if (decl.file.0 as usize) >= map.file_count() {
                 continue;
             }
@@ -88,7 +90,11 @@ pub fn analyze(analysis: &Analysis, map: &SourceMap) -> Lints {
     }
     unreachable.sort_by_key(|(s, _)| (s.file.0, s.lo.0));
 
-    Lints { unused_locals, unused_fns, unreachable }
+    Lints {
+        unused_locals,
+        unused_fns,
+        unreachable,
+    }
 }
 
 /// A statement *diverges* if it cannot fall through to the next one: an explicit
@@ -97,8 +103,10 @@ pub fn analyze(analysis: &Analysis, map: &SourceMap) -> Lints {
 fn diverges(s: &Stmt, never: crate::ty::Ty) -> bool {
     match &s.kind {
         StmtKind::Expr(e) => {
-            matches!(e.kind, ExprKind::Return(_) | ExprKind::Break(_) | ExprKind::Continue)
-                || e.ty == never
+            matches!(
+                e.kind,
+                ExprKind::Return(_) | ExprKind::Break(_) | ExprKind::Continue
+            ) || e.ty == never
         }
         _ => false,
     }
@@ -106,7 +114,12 @@ fn diverges(s: &Stmt, never: crate::ty::Ty) -> bool {
 
 /// Flag the first statement after a diverging one in each block (recursing into
 /// nested blocks). Only real source spans are reported.
-fn scan_unreachable(b: &Block, never: crate::ty::Ty, map: &SourceMap, out: &mut Vec<(Span, String)>) {
+fn scan_unreachable(
+    b: &Block,
+    never: crate::ty::Ty,
+    map: &SourceMap,
+    out: &mut Vec<(Span, String)>,
+) {
     let mut dead_from: Option<usize> = None;
     for (i, s) in b.stmts.iter().enumerate() {
         if dead_from.is_none() && diverges(s, never) && i + 1 < b.stmts.len() {
@@ -136,13 +149,24 @@ fn scan_unreachable(b: &Block, never: crate::ty::Ty, map: &SourceMap, out: &mut 
 
 /// Recurse into the blocks nested inside an expression (if/match/while/for/loop/
 /// closure/async), scanning each for unreachable code.
-fn scan_expr_blocks(e: &Expr, never: crate::ty::Ty, map: &SourceMap, out: &mut Vec<(Span, String)>) {
+fn scan_expr_blocks(
+    e: &Expr,
+    never: crate::ty::Ty,
+    map: &SourceMap,
+    out: &mut Vec<(Span, String)>,
+) {
     use ExprKind as K;
     match &e.kind {
-        K::Block(b) | K::Loop(b) | K::AsyncBlock { body: b, .. } => scan_unreachable(b, never, map, out),
+        K::Block(b) | K::Loop(b) | K::AsyncBlock { body: b, .. } => {
+            scan_unreachable(b, never, map, out)
+        }
         K::While { body, .. } => scan_unreachable(body, never, map, out),
         K::For { body, .. } => scan_unreachable(body, never, map, out),
-        K::If { then_block, else_branch, .. } => {
+        K::If {
+            then_block,
+            else_branch,
+            ..
+        } => {
             scan_unreachable(then_block, never, map, out);
             if let Some(e) = else_branch {
                 scan_expr_blocks(e, never, map, out);
@@ -163,8 +187,16 @@ fn scan_expr_blocks(e: &Expr, never: crate::ty::Ty, map: &SourceMap, out: &mut V
 pub fn collect_lints(analysis: &Analysis, map: &SourceMap) -> Vec<(Span, String)> {
     let l = analyze(analysis, map);
     let mut out: Vec<(Span, String)> = Vec::new();
-    out.extend(l.unused_locals.into_iter().map(|(s, n)| (s, format!("unused variable `{n}`"))));
-    out.extend(l.unused_fns.into_iter().map(|(s, n)| (s, format!("unused function `{n}`"))));
+    out.extend(
+        l.unused_locals
+            .into_iter()
+            .map(|(s, n)| (s, format!("unused variable `{n}`"))),
+    );
+    out.extend(
+        l.unused_fns
+            .into_iter()
+            .map(|(s, n)| (s, format!("unused function `{n}`"))),
+    );
     out.extend(l.unreachable);
     out.sort_by_key(|(s, _)| (s.file.0, s.lo.0));
     out
@@ -268,7 +300,11 @@ fn walk_expr(e: &Expr, u: &mut Uses) {
         | K::Await { expr, .. }
         | K::Spawn { expr, .. } => walk_expr(expr, u),
         K::Try { expr, .. } => walk_expr(expr, u),
-        K::If { cond, then_block, else_branch } => {
+        K::If {
+            cond,
+            then_block,
+            else_branch,
+        } => {
             walk_expr(cond, u);
             walk_block(then_block, u);
             if let Some(e) = else_branch {
@@ -300,7 +336,13 @@ fn walk_expr(e: &Expr, u: &mut Uses) {
         }
         K::Closure { body, .. } => walk_expr(body, u),
         K::AsyncBlock { body, .. } => walk_block(body, u),
-        K::Int(_) | K::Float(_) | K::Bool(_) | K::Null | K::Char(_) | K::Continue
-        | K::Discard | K::Error => {}
+        K::Int(_)
+        | K::Float(_)
+        | K::Bool(_)
+        | K::Null
+        | K::Char(_)
+        | K::Continue
+        | K::Discard
+        | K::Error => {}
     }
 }

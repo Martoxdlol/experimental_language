@@ -22,7 +22,11 @@ impl<'a> Checker<'a> {
         self.push_scope();
         self.hir.fn_sigs.insert(
             def,
-            crate::hir::FnSig { params: Vec::new(), ret: self.tcx.null, async_output: None },
+            crate::hir::FnSig {
+                params: Vec::new(),
+                ret: self.tcx.null,
+                async_output: None,
+            },
         );
         // The body's trailing value (if any) is discarded — a test reports
         // pass/fail by completing vs. panicking, not by a return value.
@@ -63,7 +67,9 @@ impl<'a> Checker<'a> {
                 }
                 None => {
                     self.emit(
-                        f.return_type.as_ref().map_or(self.prog.def(def).span, |t| t.span),
+                        f.return_type
+                            .as_ref()
+                            .map_or(self.prog.def(def).span, |t| t.span),
                         SemaErrorKind::Message(
                             "an `async` function must declare its return type as \
                              `Future<Output>`"
@@ -104,7 +110,11 @@ impl<'a> Checker<'a> {
         // `fn_params`/`fn_return`/`async_fns` side tables.
         self.hir.fn_sigs.insert(
             def,
-            crate::hir::FnSig { params: param_sig, ret: ret_ty, async_output },
+            crate::hir::FnSig {
+                params: param_sig,
+                ret: ret_ty,
+                async_output,
+            },
         );
         if let Some(body) = &f.body {
             let bty = self.check_block(body, Some(body_ret));
@@ -181,7 +191,11 @@ impl<'a> Checker<'a> {
                 let ne: Vec<Ty> = es.iter().map(|e| self.subst_ty(*e, map)).collect();
                 self.tcx.mk_tuple(ne)
             }
-            TyKind::Func { params, ret, is_extern } => {
+            TyKind::Func {
+                params,
+                ret,
+                is_extern,
+            } => {
                 let np: Vec<Ty> = params.iter().map(|p| self.subst_ty(*p, map)).collect();
                 let nr = self.subst_ty(ret, map);
                 self.tcx.mk_func(np, nr, is_extern)
@@ -221,9 +235,18 @@ impl<'a> Checker<'a> {
                     self.unify(*a, b, map);
                 }
             }
-            (TyKind::Func { params: pp, ret: pr, .. }, TyKind::Func { params: vp, ret: vr, .. })
-                if pp.len() == vp.len() =>
-            {
+            (
+                TyKind::Func {
+                    params: pp,
+                    ret: pr,
+                    ..
+                },
+                TyKind::Func {
+                    params: vp,
+                    ret: vr,
+                    ..
+                },
+            ) if pp.len() == vp.len() => {
                 for (a, b) in pp.iter().zip(vp) {
                     self.unify(*a, b, map);
                 }
@@ -233,5 +256,4 @@ impl<'a> Checker<'a> {
             _ => {}
         }
     }
-
 }

@@ -57,14 +57,21 @@ impl LockSource {
     /// Parse a lockfile `source =` string.
     pub fn decode(s: &str) -> Result<LockSource, LockError> {
         if let Some(rest) = s.strip_prefix("registry+") {
-            Ok(LockSource::Registry { index: rest.to_string() })
+            Ok(LockSource::Registry {
+                index: rest.to_string(),
+            })
         } else if let Some(rest) = s.strip_prefix("path+") {
-            Ok(LockSource::Path { path: rest.to_string() })
+            Ok(LockSource::Path {
+                path: rest.to_string(),
+            })
         } else if let Some(rest) = s.strip_prefix("git+") {
             let (url, rev) = rest.split_once('#').ok_or_else(|| {
                 LockError::Parse(format!("git source `{rest}` is missing a `#<rev>` pin"))
             })?;
-            Ok(LockSource::Git { url: url.to_string(), rev: rev.to_string() })
+            Ok(LockSource::Git {
+                url: url.to_string(),
+                rev: rev.to_string(),
+            })
         } else {
             Err(LockError::Parse(format!("unknown source form `{s}`")))
         }
@@ -92,12 +99,16 @@ impl std::error::Error for LockError {}
 impl Lockfile {
     /// An empty lockfile at the current version.
     pub fn empty() -> Lockfile {
-        Lockfile { version: LOCKFILE_VERSION, packages: Vec::new() }
+        Lockfile {
+            version: LOCKFILE_VERSION,
+            packages: Vec::new(),
+        }
     }
 
     /// Parse a `project.lock` from its text.
     pub fn parse(text: &str) -> Result<Lockfile, LockError> {
-        let raw: RawLock = toml::from_str(text).map_err(|e| LockError::Toml(e.message().to_string()))?;
+        let raw: RawLock =
+            toml::from_str(text).map_err(|e| LockError::Toml(e.message().to_string()))?;
         let mut packages = Vec::new();
         for p in raw.package {
             packages.push(LockedPackage {
@@ -107,7 +118,10 @@ impl Lockfile {
                 checksum: p.checksum,
             });
         }
-        let mut lock = Lockfile { version: raw.version, packages };
+        let mut lock = Lockfile {
+            version: raw.version,
+            packages,
+        };
         lock.sort();
         Ok(lock)
     }
@@ -132,7 +146,8 @@ impl Lockfile {
     }
 
     fn sort(&mut self) {
-        self.packages.sort_by(|a, b| (&a.name, &a.version).cmp(&(&b.name, &b.version)));
+        self.packages
+            .sort_by(|a, b| (&a.name, &a.version).cmp(&(&b.name, &b.version)));
     }
 
     /// Look up a locked package by name.
@@ -203,14 +218,27 @@ source   = "git+https://example.com/bar#abc123"
         assert_eq!(lock.packages[0].name, "bar-git");
         assert_eq!(
             lock.packages[0].source,
-            LockSource::Git { url: "https://example.com/bar".into(), rev: "abc123".into() }
+            LockSource::Git {
+                url: "https://example.com/bar".into(),
+                rev: "abc123".into()
+            }
         );
-        assert_eq!(lock.get("foo-local").unwrap().source, LockSource::Path { path: "../foo".into() });
+        assert_eq!(
+            lock.get("foo-local").unwrap().source,
+            LockSource::Path {
+                path: "../foo".into()
+            }
+        );
         assert_eq!(
             lock.get("serde").unwrap().source,
-            LockSource::Registry { index: "https://pkgs.example.dev/index".into() }
+            LockSource::Registry {
+                index: "https://pkgs.example.dev/index".into()
+            }
         );
-        assert_eq!(lock.get("serde").unwrap().checksum.as_deref(), Some("sha256:9f8bc41a"));
+        assert_eq!(
+            lock.get("serde").unwrap().checksum.as_deref(),
+            Some("sha256:9f8bc41a")
+        );
         assert!(lock.get("foo-local").unwrap().checksum.is_none());
     }
 
@@ -228,13 +256,17 @@ source   = "git+https://example.com/bar#abc123"
         lock.packages.push(LockedPackage {
             name: "zed".into(),
             version: "1.0.0".into(),
-            source: LockSource::Path { path: "../zed".into() },
+            source: LockSource::Path {
+                path: "../zed".into(),
+            },
             checksum: None,
         });
         lock.packages.push(LockedPackage {
             name: "alpha".into(),
             version: "2.0.0".into(),
-            source: LockSource::Registry { index: "https://r".into() },
+            source: LockSource::Registry {
+                index: "https://r".into(),
+            },
             checksum: Some("sha256:ff".into()),
         });
         let a = lock.to_toml();
@@ -254,6 +286,9 @@ source   = "git+https://example.com/bar#abc123"
 
     #[test]
     fn unknown_source_form_is_an_error() {
-        assert!(matches!(LockSource::decode("svn+https://x"), Err(LockError::Parse(_))));
+        assert!(matches!(
+            LockSource::decode("svn+https://x"),
+            Err(LockError::Parse(_))
+        ));
     }
 }

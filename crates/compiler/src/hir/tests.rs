@@ -17,7 +17,11 @@ fn sp(lo: u32, hi: u32) -> Span {
 }
 
 fn expr(kind: ExprKind, ty: Ty, lo: u32, hi: u32) -> Expr {
-    Expr { kind, ty, span: sp(lo, hi) }
+    Expr {
+        kind,
+        ty,
+        span: sp(lo, hi),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -37,7 +41,11 @@ fn hir_container_accessors() {
 
     hir.fn_sigs.insert(
         f,
-        FnSig { params: vec![(p0, i64t)], ret: i64t, async_output: None },
+        FnSig {
+            params: vec![(p0, i64t)],
+            ret: i64t,
+            async_output: None,
+        },
     );
     hir.bodies.insert(
         f,
@@ -47,7 +55,12 @@ fn hir_container_accessors() {
             locals,
             ret: i64t,
             async_output: None,
-            block: Block { stmts: vec![], trailing: None, ty: tcx.null, span: sp(0, 2) },
+            block: Block {
+                stmts: vec![],
+                trailing: None,
+                ty: tcx.null,
+                span: sp(0, 2),
+            },
             span: sp(0, 2),
         },
     );
@@ -65,8 +78,15 @@ fn program_level_tables_are_def_keyed() {
     let i32t = tcx.int(crate::ty::IntTy::I32);
     let mut hir = Hir::new();
 
-    hir.extern_sigs.insert(DefId(1), ExternSig { params: vec![i32t], ret: tcx.null });
-    hir.structs.insert(DefId(2), StructFields::Tuple(vec![i32t]));
+    hir.extern_sigs.insert(
+        DefId(1),
+        ExternSig {
+            params: vec![i32t],
+            ret: tcx.null,
+        },
+    );
+    hir.structs
+        .insert(DefId(2), StructFields::Tuple(vec![i32t]));
     hir.iface_impls.insert((DefId(2), DefId(3)), DefId(4));
     hir.link_libs.push("z".into());
     hir.local_decls.insert(LocalId(0), sp(10, 14));
@@ -149,7 +169,10 @@ fn call_kinds_capture_dispatch() {
 
     let cs = Span::dummy();
     let direct = ExprKind::Call {
-        kind: CallKind::Direct { def: DefId(1), type_args: vec![t] },
+        kind: CallKind::Direct {
+            def: DefId(1),
+            type_args: vec![t],
+        },
         args: vec![arg()],
         callee_span: cs,
         callee_ty: t,
@@ -172,7 +195,9 @@ fn call_kinds_capture_dispatch() {
         callee_ty: t,
     };
     let closure = ExprKind::Call {
-        kind: CallKind::Closure { callee: Box::new(arg()) },
+        kind: CallKind::Closure {
+            callee: Box::new(arg()),
+        },
         args: vec![],
         callee_span: cs,
         callee_ty: t,
@@ -199,19 +224,33 @@ fn intrinsics_cover_every_retired_marker_table() {
         Intrinsic::Clone(CloneKind::Identity),
         Intrinsic::SharedNew,
         Intrinsic::ChannelNew,
-        Intrinsic::ThreadSpawn { output: t, is_async: false },
+        Intrinsic::ThreadSpawn {
+            output: t,
+            is_async: false,
+        },
         Intrinsic::ThreadJoin { output: t },
         Intrinsic::YieldNow,
         Intrinsic::AsyncSleep,
         Intrinsic::FutureCancel,
-        Intrinsic::ForeignAlloc { ty: t, zeroed: false },
+        Intrinsic::ForeignAlloc {
+            ty: t,
+            zeroed: false,
+        },
         Intrinsic::ForeignFree,
         Intrinsic::ForeignRealloc,
         Intrinsic::ForeignFlex { ty: t, elem: t },
     ];
     assert_eq!(kinds.len(), 14);
     for intrinsic in kinds {
-        let _ = expr(ExprKind::Intrinsic { intrinsic, args: vec![] }, t, 0, 3);
+        let _ = expr(
+            ExprKind::Intrinsic {
+                intrinsic,
+                args: vec![],
+            },
+            t,
+            0,
+            3,
+        );
     }
 }
 
@@ -221,15 +260,30 @@ fn operators_carry_optional_overload() {
     let t = tcx.int(crate::ty::IntTy::I64);
     let one = || Box::new(expr(ExprKind::Int(1), t, 0, 1));
 
-    let prim = ExprKind::Binary { op: BinaryOp::Add, left: one(), right: one(), overload: None };
+    let prim = ExprKind::Binary {
+        op: BinaryOp::Add,
+        left: one(),
+        right: one(),
+        overload: None,
+    };
     let over = ExprKind::Binary {
         op: BinaryOp::Add,
         left: one(),
         right: one(),
-        overload: Some(OpOverload { method: DefId(8), type_args: Vec::new() }),
+        overload: Some(OpOverload {
+            method: DefId(8),
+            type_args: Vec::new(),
+        }),
     };
-    let neg = ExprKind::Unary { op: UnaryOp::Neg, operand: one(), overload: None };
-    if let ExprKind::Binary { overload: Some(ov), .. } = over {
+    let neg = ExprKind::Unary {
+        op: UnaryOp::Neg,
+        operand: one(),
+        overload: None,
+    };
+    if let ExprKind::Binary {
+        overload: Some(ov), ..
+    } = over
+    {
         assert_eq!(ov.method, DefId(8));
     } else {
         panic!("expected an overloaded binary");
@@ -245,7 +299,12 @@ fn cast_records_target_separately_from_result() {
     let c = expr(
         ExprKind::Cast {
             op: CastOp::Is,
-            expr: Box::new(expr(ExprKind::Name(Res::Local(LocalId(0))), tcx.dynamic, 0, 1)),
+            expr: Box::new(expr(
+                ExprKind::Name(Res::Local(LocalId(0))),
+                tcx.dynamic,
+                0,
+                1,
+            )),
             target: i64t,
         },
         tcx.bool,
@@ -253,7 +312,9 @@ fn cast_records_target_separately_from_result() {
         6,
     );
     assert_eq!(c.ty, tcx.bool);
-    let ExprKind::Cast { target, op, .. } = &c.kind else { panic!() };
+    let ExprKind::Cast { target, op, .. } = &c.kind else {
+        panic!()
+    };
     assert_eq!(*target, i64t);
     assert_eq!(*op, CastOp::Is);
 }
@@ -265,14 +326,19 @@ fn adjust_is_an_explicit_wrapper_node() {
     let dyn_t = tcx.dynamic;
     let inner = expr(ExprKind::Int(1), i64t, 0, 1);
     let widened = expr(
-        ExprKind::Adjust { adjust: Adjust::Widen(dyn_t), expr: Box::new(inner) },
+        ExprKind::Adjust {
+            adjust: Adjust::Widen(dyn_t),
+            expr: Box::new(inner),
+        },
         dyn_t,
         0,
         1,
     );
     // The wrapper node's type is the post-coercion type; the inner keeps its own.
     assert_eq!(widened.ty, dyn_t);
-    let ExprKind::Adjust { adjust, expr } = &widened.kind else { panic!() };
+    let ExprKind::Adjust { adjust, expr } = &widened.kind else {
+        panic!()
+    };
     assert!(matches!(adjust, Adjust::Widen(_)));
     assert_eq!(expr.ty, i64t);
 }
@@ -287,7 +353,11 @@ fn try_records_branch_and_residual_conversions() {
         branch: None,
         residual_conversions: vec![(t, DefId(3), t)],
     };
-    if let ExprKind::Try { residual_conversions, .. } = &tnode {
+    if let ExprKind::Try {
+        residual_conversions,
+        ..
+    } = &tnode
+    {
         assert_eq!(residual_conversions.len(), 1);
     }
     let _ = expr(tnode, t, 0, 2);
@@ -297,9 +367,32 @@ fn try_records_branch_and_residual_conversions() {
 fn await_and_spawn_carry_output_types() {
     let tcx = TyCtxt::new();
     let i64t = tcx.int(crate::ty::IntTy::I64);
-    let inner = || Box::new(expr(ExprKind::Name(Res::Local(LocalId(0))), tcx.dynamic, 0, 1));
-    let aw = expr(ExprKind::Await { expr: inner(), output: i64t }, i64t, 0, 7);
-    let sp_ = expr(ExprKind::Spawn { expr: inner(), output: i64t }, tcx.dynamic, 0, 8);
+    let inner = || {
+        Box::new(expr(
+            ExprKind::Name(Res::Local(LocalId(0))),
+            tcx.dynamic,
+            0,
+            1,
+        ))
+    };
+    let aw = expr(
+        ExprKind::Await {
+            expr: inner(),
+            output: i64t,
+        },
+        i64t,
+        0,
+        7,
+    );
+    let sp_ = expr(
+        ExprKind::Spawn {
+            expr: inner(),
+            output: i64t,
+        },
+        tcx.dynamic,
+        0,
+        8,
+    );
     if let ExprKind::Await { output, .. } = aw.kind {
         assert_eq!(output, i64t);
     }
@@ -310,9 +403,23 @@ fn await_and_spawn_carry_output_types() {
 fn for_driver_covers_all_four_protocols() {
     let tcx = TyCtxt::new();
     let t = tcx.int(crate::ty::IntTy::I64);
-    let body = Block { stmts: vec![], trailing: None, ty: tcx.null, span: sp(8, 10) };
-    let pat = Pattern { kind: PatternKind::Bind(LocalId(1)), ty: t, span: sp(4, 5) };
-    let iter = Box::new(expr(ExprKind::Name(Res::Local(LocalId(0))), tcx.dynamic, 6, 7));
+    let body = Block {
+        stmts: vec![],
+        trailing: None,
+        ty: tcx.null,
+        span: sp(8, 10),
+    };
+    let pat = Pattern {
+        kind: PatternKind::Bind(LocalId(1)),
+        ty: t,
+        span: sp(4, 5),
+    };
+    let iter = Box::new(expr(
+        ExprKind::Name(Res::Local(LocalId(0))),
+        tcx.dynamic,
+        6,
+        7,
+    ));
 
     let drivers = vec![
         ForDriver::ListFast { elem: t },
@@ -324,7 +431,11 @@ fn for_driver_covers_all_four_protocols() {
             done_ty: t,
             item_ty: t,
         }),
-        ForDriver::Map { key: t, value: t, entry: t },
+        ForDriver::Map {
+            key: t,
+            value: t,
+            entry: t,
+        },
         ForDriver::AsyncIter(ForAsyncIter {
             elem: t,
             next_async: DefId(2),
@@ -364,7 +475,10 @@ fn closure_and_async_block_carry_capture_analysis() {
         is_async: false,
         body,
     };
-    if let ExprKind::Closure { captures, params, .. } = &clo {
+    if let ExprKind::Closure {
+        captures, params, ..
+    } = &clo
+    {
         assert_eq!(captures.len(), 1);
         assert_eq!(params.len(), 1);
     }
@@ -372,7 +486,12 @@ fn closure_and_async_block_carry_capture_analysis() {
         output: t,
         params: vec![],
         captures: vec![(LocalId(9), t)],
-        body: Block { stmts: vec![], trailing: None, ty: t, span: sp(0, 2) },
+        body: Block {
+            stmts: vec![],
+            trailing: None,
+            ty: t,
+            span: sp(0, 2),
+        },
     };
     let _ = (expr(clo, t, 0, 7), expr(ab, tcx.dynamic, 0, 9));
 }
@@ -388,7 +507,11 @@ fn statements_cover_let_assign_expr_item() {
     let stmts = vec![
         Stmt {
             kind: StmtKind::Let {
-                pattern: Pattern { kind: PatternKind::Bind(LocalId(0)), ty: t, span: sp(4, 5) },
+                pattern: Pattern {
+                    kind: PatternKind::Bind(LocalId(0)),
+                    ty: t,
+                    span: sp(4, 5),
+                },
                 init: expr(ExprKind::Int(1), t, 8, 9),
             },
             span: sp(0, 10),
@@ -400,10 +523,21 @@ fn statements_cover_let_assign_expr_item() {
             },
             span: sp(11, 17),
         },
-        Stmt { kind: StmtKind::Expr(expr(ExprKind::Continue, tcx.never, 18, 26)), span: sp(18, 27) },
-        Stmt { kind: StmtKind::Item(DefId(42)), span: sp(28, 40) },
+        Stmt {
+            kind: StmtKind::Expr(expr(ExprKind::Continue, tcx.never, 18, 26)),
+            span: sp(18, 27),
+        },
+        Stmt {
+            kind: StmtKind::Item(DefId(42)),
+            span: sp(28, 40),
+        },
     ];
-    let block = Block { stmts, trailing: Some(Box::new(expr(ExprKind::Null, tcx.null, 41, 42))), ty: tcx.null, span: sp(0, 43) };
+    let block = Block {
+        stmts,
+        trailing: Some(Box::new(expr(ExprKind::Null, tcx.null, 41, 42))),
+        ty: tcx.null,
+        span: sp(0, 43),
+    };
     assert_eq!(block.stmts.len(), 4);
     assert!(block.trailing.is_some());
     assert!(matches!(block.stmts[3].kind, StmtKind::Item(DefId(42))));
@@ -424,22 +558,53 @@ fn assignment_discard_target() {
 fn patterns_cover_every_kind_and_carry_type_tests() {
     let tcx = TyCtxt::new();
     let t = tcx.int(crate::ty::IntTy::I64);
-    let bind = |id| Pattern { kind: PatternKind::Bind(LocalId(id)), ty: t, span: sp(0, 1) };
+    let bind = |id| Pattern {
+        kind: PatternKind::Bind(LocalId(id)),
+        ty: t,
+        span: sp(0, 1),
+    };
 
     let kinds = vec![
         PatternKind::Wildcard,
         PatternKind::Bind(LocalId(0)),
         PatternKind::Literal(Box::new(expr(ExprKind::Int(1), t, 0, 1))),
-        PatternKind::TypeBind { test_ty: t, bind: Some(LocalId(1)) },
-        PatternKind::UnitPath { def: DefId(3), test_ty: t },
-        PatternKind::TupleStruct { def: DefId(4), fields: vec![bind(2)], rest: None },
+        PatternKind::TypeBind {
+            test_ty: t,
+            bind: Some(LocalId(1)),
+        },
+        PatternKind::UnitPath {
+            def: DefId(3),
+            test_ty: t,
+        },
+        PatternKind::TupleStruct {
+            def: DefId(4),
+            fields: vec![bind(2)],
+            rest: None,
+        },
         PatternKind::RecordStruct {
             def: DefId(5),
-            fields: vec![FieldPattern { index: 0, name: "x".into(), pattern: bind(3), span: sp(0, 1) }],
+            fields: vec![FieldPattern {
+                index: 0,
+                name: "x".into(),
+                pattern: bind(3),
+                span: sp(0, 1),
+            }],
             has_rest: true,
         },
-        PatternKind::Tuple { elems: vec![bind(4)], rest: Some((1, RestPattern { bind: Some(LocalId(5)), span: sp(0, 1) })) },
-        PatternKind::List { elems: vec![bind(6)], rest: None },
+        PatternKind::Tuple {
+            elems: vec![bind(4)],
+            rest: Some((
+                1,
+                RestPattern {
+                    bind: Some(LocalId(5)),
+                    span: sp(0, 1),
+                },
+            )),
+        },
+        PatternKind::List {
+            elems: vec![bind(6)],
+            rest: None,
+        },
         PatternKind::Or(vec![bind(7), bind(8)]),
     ];
     assert_eq!(kinds.len(), 10);
@@ -450,7 +615,11 @@ fn patterns_cover_every_kind_and_carry_type_tests() {
         assert_eq!(*bind, Some(LocalId(1)));
     }
     for kind in kinds {
-        let _ = Pattern { kind, ty: t, span: sp(0, 4) };
+        let _ = Pattern {
+            kind,
+            ty: t,
+            span: sp(0, 4),
+        };
     }
 }
 
@@ -468,7 +637,10 @@ fn composites_struct_tuple_list_map() {
     let list = expr(ExprKind::List(vec![one()]), t, 0, 3);
     let map = expr(
         ExprKind::Map(vec![
-            MapEntry::Kv { key: one(), value: one() },
+            MapEntry::Kv {
+                key: one(),
+                value: one(),
+            },
             MapEntry::Spread(one()),
         ]),
         t,
@@ -479,7 +651,12 @@ fn composites_struct_tuple_list_map() {
         ExprKind::Struct {
             def: DefId(1),
             type_args: vec![t],
-            fields: vec![FieldInit { index: 0, name: "x".into(), value: one(), span: sp(2, 3) }],
+            fields: vec![FieldInit {
+                index: 0,
+                name: "x".into(),
+                value: one(),
+                span: sp(2, 3),
+            }],
             spread: Some(Box::new(one())),
         },
         t,
@@ -505,19 +682,42 @@ fn field_and_index_accesses() {
     let field = expr(
         ExprKind::Field {
             receiver: recv(),
-            field: FieldRef { struct_def: DefId(1), index: 2, name: "z".into() },
+            field: FieldRef {
+                struct_def: DefId(1),
+                index: 2,
+                name: "z".into(),
+            },
         },
         t,
         0,
         3,
     );
-    let tup_idx = expr(ExprKind::TupleIndex { receiver: recv(), index: 1 }, t, 0, 3);
-    let index = expr(ExprKind::Index { receiver: recv(), index: recv() }, t, 0, 4);
+    let tup_idx = expr(
+        ExprKind::TupleIndex {
+            receiver: recv(),
+            index: 1,
+        },
+        t,
+        0,
+        3,
+    );
+    let index = expr(
+        ExprKind::Index {
+            receiver: recv(),
+            index: recv(),
+        },
+        t,
+        0,
+        4,
+    );
     if let ExprKind::Field { field, .. } = &field.kind {
         assert_eq!(field.index, 2);
         assert_eq!(field.name, "z");
     }
-    assert!(matches!(tup_idx.kind, ExprKind::TupleIndex { index: 1, .. }));
+    assert!(matches!(
+        tup_idx.kind,
+        ExprKind::TupleIndex { index: 1, .. }
+    ));
     assert!(matches!(index.kind, ExprKind::Index { .. }));
 }
 
@@ -525,7 +725,12 @@ fn field_and_index_accesses() {
 fn control_flow_if_match_loops() {
     let tcx = TyCtxt::new();
     let t = tcx.int(crate::ty::IntTy::I64);
-    let blk = || Block { stmts: vec![], trailing: None, ty: tcx.null, span: sp(0, 2) };
+    let blk = || Block {
+        stmts: vec![],
+        trailing: None,
+        ty: tcx.null,
+        span: sp(0, 2),
+    };
     let cond = || Box::new(expr(ExprKind::Bool(true), tcx.bool, 0, 4));
 
     let if_ = expr(
@@ -542,7 +747,11 @@ fn control_flow_if_match_loops() {
         ExprKind::Match {
             scrutinee: Box::new(expr(ExprKind::Int(1), t, 0, 1)),
             arms: vec![MatchArm {
-                pattern: Pattern { kind: PatternKind::Wildcard, ty: t, span: sp(0, 1) },
+                pattern: Pattern {
+                    kind: PatternKind::Wildcard,
+                    ty: t,
+                    span: sp(0, 1),
+                },
                 guard: None,
                 body: expr(ExprKind::Int(2), t, 0, 1),
                 span: sp(0, 4),
@@ -552,9 +761,22 @@ fn control_flow_if_match_loops() {
         0,
         12,
     );
-    let while_ = expr(ExprKind::While { cond: cond(), body: blk() }, tcx.null, 0, 8);
+    let while_ = expr(
+        ExprKind::While {
+            cond: cond(),
+            body: blk(),
+        },
+        tcx.null,
+        0,
+        8,
+    );
     let loop_ = expr(ExprKind::Loop(blk()), tcx.never, 0, 6);
-    let ret = expr(ExprKind::Return(Some(Box::new(expr(ExprKind::Int(0), t, 0, 1)))), tcx.never, 0, 8);
+    let ret = expr(
+        ExprKind::Return(Some(Box::new(expr(ExprKind::Int(0), t, 0, 1)))),
+        tcx.never,
+        0,
+        8,
+    );
     let brk = expr(ExprKind::Break(None), tcx.never, 0, 5);
 
     assert!(matches!(if_.kind, ExprKind::If { .. }));

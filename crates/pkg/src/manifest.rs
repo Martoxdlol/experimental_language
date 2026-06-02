@@ -97,7 +97,10 @@ pub struct Dependency {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DepSource {
     /// `serde = "1.2"` or `{ version = "...", registry = "..." }`.
-    Registry { version: String, registry: Option<String> },
+    Registry {
+        version: String,
+        registry: Option<String>,
+    },
     /// `{ path = "../foo" }` — a local path dependency.
     Path { path: String },
     /// `{ git = "https://...", rev/branch/tag = "..." }`.
@@ -264,7 +267,11 @@ struct RawMacros {
 
 impl RawManifest {
     fn into_manifest(self) -> Result<Manifest, ManifestError> {
-        let src = self.package.src.clone().unwrap_or_else(|| "src".to_string());
+        let src = self
+            .package
+            .src
+            .clone()
+            .unwrap_or_else(|| "src".to_string());
         let kind = match self.package.kind.as_deref() {
             None | Some("binary") => PackageKind::Binary,
             Some("library") => PackageKind::Library,
@@ -298,7 +305,15 @@ impl RawManifest {
         let registries = self
             .registries
             .into_iter()
-            .map(|(name, r)| (name, Registry { index: r.index, auth: r.auth }))
+            .map(|(name, r)| {
+                (
+                    name,
+                    Registry {
+                        index: r.index,
+                        auth: r.auth,
+                    },
+                )
+            })
             .collect();
 
         Ok(Manifest {
@@ -317,7 +332,10 @@ impl RawDep {
     fn normalize(self, name: &str) -> Result<Dependency, ManifestError> {
         match self {
             RawDep::Version(version) => Ok(Dependency {
-                source: DepSource::Registry { version, registry: None },
+                source: DepSource::Registry {
+                    version,
+                    registry: None,
+                },
                 features: Vec::new(),
                 default_features: true,
                 optional: false,
@@ -339,7 +357,9 @@ impl RawDep {
                                 "path dependency `{name}` may not also set `version`/`registry`"
                             )));
                         }
-                        DepSource::Path { path: d.path.unwrap() }
+                        DepSource::Path {
+                            path: d.path.unwrap(),
+                        }
                     }
                     (false, true) => {
                         let reference = match (d.rev, d.branch, d.tag) {
@@ -353,7 +373,10 @@ impl RawDep {
                                 )));
                             }
                         };
-                        DepSource::Git { url: d.git.unwrap(), reference }
+                        DepSource::Git {
+                            url: d.git.unwrap(),
+                            reference,
+                        }
                     }
                     (false, false) => {
                         let version = d.version.ok_or_else(|| {
@@ -361,7 +384,10 @@ impl RawDep {
                                 "dependency `{name}` needs a `version`, `path`, or `git` source"
                             ))
                         })?;
-                        DepSource::Registry { version, registry: d.registry }
+                        DepSource::Registry {
+                            version,
+                            registry: d.registry,
+                        }
                     }
                 };
                 Ok(Dependency {
@@ -435,7 +461,10 @@ ci = "otter_fusion test"
         let serde = &m.dependencies["serde"];
         assert_eq!(
             serde.source,
-            DepSource::Registry { version: "1.2".into(), registry: None }
+            DepSource::Registry {
+                version: "1.2".into(),
+                registry: None
+            }
         );
         assert!(serde.default_features);
     }
@@ -446,14 +475,22 @@ ci = "otter_fusion test"
         assert_eq!(m.dependencies["http"].features, ["tls"]);
         assert_eq!(
             m.dependencies["internal"].source,
-            DepSource::Registry { version: "2.0".into(), registry: Some("myco".into()) }
+            DepSource::Registry {
+                version: "2.0".into(),
+                registry: Some("myco".into())
+            }
         );
     }
 
     #[test]
     fn path_and_git_dep_forms() {
         let m = Manifest::parse(FULL).unwrap();
-        assert_eq!(m.dependencies["foo-local"].source, DepSource::Path { path: "../foo".into() });
+        assert_eq!(
+            m.dependencies["foo-local"].source,
+            DepSource::Path {
+                path: "../foo".into()
+            }
+        );
         assert_eq!(
             m.dependencies["bar-git"].source,
             DepSource::Git {
@@ -473,10 +510,8 @@ ci = "otter_fusion test"
 
     #[test]
     fn macros_recursion_limit_parses() {
-        let m = Manifest::parse(
-            "[package]\nname = \"x\"\n[macros]\nrecursion_limit = 256\n",
-        )
-        .unwrap();
+        let m =
+            Manifest::parse("[package]\nname = \"x\"\n[macros]\nrecursion_limit = 256\n").unwrap();
         assert_eq!(m.macro_recursion_limit, Some(256));
         // Absent table → None (default applies).
         let m2 = Manifest::parse("[package]\nname = \"x\"\n").unwrap();
@@ -487,7 +522,10 @@ ci = "otter_fusion test"
     fn registries_and_default() {
         let m = Manifest::parse(FULL).unwrap();
         assert_eq!(m.default_registry.as_deref(), Some("public"));
-        assert_eq!(m.registries["public"].index, "sparse+https://pkgs.example.dev/index");
+        assert_eq!(
+            m.registries["public"].index,
+            "sparse+https://pkgs.example.dev/index"
+        );
         assert!(m.registries["myco"].auth);
         assert!(!m.registries["public"].auth);
     }
@@ -529,31 +567,45 @@ ci = "otter_fusion test"
     fn conflicting_dep_sources_are_rejected() {
         let src =
             "[package]\nname=\"a\"\n[dependencies]\nx = { path = \"../x\", git = \"http://y\" }\n";
-        assert!(matches!(Manifest::parse(src), Err(ManifestError::Invalid(_))));
+        assert!(matches!(
+            Manifest::parse(src),
+            Err(ManifestError::Invalid(_))
+        ));
     }
 
     #[test]
     fn git_with_two_pins_is_rejected() {
-        let src =
-            "[package]\nname=\"a\"\n[dependencies]\nx = { git = \"http://y\", rev=\"a\", tag=\"b\" }\n";
-        assert!(matches!(Manifest::parse(src), Err(ManifestError::Invalid(_))));
+        let src = "[package]\nname=\"a\"\n[dependencies]\nx = { git = \"http://y\", rev=\"a\", tag=\"b\" }\n";
+        assert!(matches!(
+            Manifest::parse(src),
+            Err(ManifestError::Invalid(_))
+        ));
     }
 
     #[test]
     fn dep_without_source_is_rejected() {
         let src = "[package]\nname=\"a\"\n[dependencies]\nx = { features = [\"a\"] }\n";
-        assert!(matches!(Manifest::parse(src), Err(ManifestError::Invalid(_))));
+        assert!(matches!(
+            Manifest::parse(src),
+            Err(ManifestError::Invalid(_))
+        ));
     }
 
     #[test]
     fn unknown_kind_is_rejected() {
         let src = "[package]\nname=\"a\"\nkind=\"frobnicator\"\n";
-        assert!(matches!(Manifest::parse(src), Err(ManifestError::Invalid(_))));
+        assert!(matches!(
+            Manifest::parse(src),
+            Err(ManifestError::Invalid(_))
+        ));
     }
 
     #[test]
     fn syntactically_broken_toml_is_an_error() {
-        assert!(matches!(Manifest::parse("[package"), Err(ManifestError::Toml(_))));
+        assert!(matches!(
+            Manifest::parse("[package"),
+            Err(ManifestError::Toml(_))
+        ));
     }
 
     #[test]
@@ -562,7 +614,10 @@ ci = "otter_fusion test"
         let m = Manifest::parse(src).unwrap();
         assert_eq!(
             m.dependencies["x"].source,
-            DepSource::Git { url: "http://y".into(), reference: GitRef::Default }
+            DepSource::Git {
+                url: "http://y".into(),
+                reference: GitRef::Default
+            }
         );
     }
 }

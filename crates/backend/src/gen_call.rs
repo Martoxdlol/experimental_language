@@ -3,9 +3,26 @@
 use super::*;
 
 impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
+    fn pin_spawn_env_for_runtime_handoff(&mut self, env: Value) -> Value {
+        let root = self.b.declare_var(PTR);
+        self.b.declare_var_needs_stack_map(root);
+        self.b.def_var(root, env);
+        let rooted = self.b.use_var(root);
+        self.call_intrinsic("lang_gc_pin", &[PTR], None, &[rooted]);
+        self.b.use_var(root)
+    }
+
+    fn unpin_spawn_env_for_runtime_handoff(&mut self, env: Value) {
+        self.call_intrinsic("lang_gc_unpin", &[PTR], None, &[env]);
+    }
+
     /// Numeric-namespace intrinsic over already-evaluated argument values.
     /// Shared by the AST and HIR walks.
-    pub(crate) fn emit_num_intrinsic(&mut self, intr: NumIntrinsic, args: &[Value]) -> CgResult<Option<Value>> {
+    pub(crate) fn emit_num_intrinsic(
+        &mut self,
+        intr: NumIntrinsic,
+        args: &[Value],
+    ) -> CgResult<Option<Value>> {
         match intr {
             NumIntrinsic::IntBound { ty, max } => {
                 let it = self.int_ty_of(ty);
@@ -46,9 +63,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 };
                 Ok(Some(r))
             }
-            NumIntrinsic::IntArith { ty, family, op } => {
-                self.emit_int_arith(ty, family, op, args)
-            }
+            NumIntrinsic::IntArith { ty, family, op } => self.emit_int_arith(ty, family, op, args),
         }
     }
 
@@ -62,7 +77,12 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
 
     /// The `IntTy` behind a primitive integer `Ty` (after substitution).
     pub(crate) fn int_ty_of(&self, ty: Ty) -> IntTy {
-        match self.cx.analysis.tcx.kind(resolve_shallow(self.cx.analysis, ty, &self.subst)) {
+        match self
+            .cx
+            .analysis
+            .tcx
+            .kind(resolve_shallow(self.cx.analysis, ty, &self.subst))
+        {
             TyKind::Int(it) => *it,
             _ => IntTy::I64,
         }
@@ -70,7 +90,13 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
 
     /// Lower a `{wrapping,saturating,checked,overflowing}_{add,sub,mul,div,
     /// rem,neg,shl,shr}` call. Op codes follow `NumIntrinsic::IntArith`.
-    pub(crate) fn emit_int_arith(&mut self, ty: Ty, family: u8, op: u8, args: &[Value]) -> CgResult<Option<Value>> {
+    pub(crate) fn emit_int_arith(
+        &mut self,
+        ty: Ty,
+        family: u8,
+        op: u8,
+        args: &[Value],
+    ) -> CgResult<Option<Value>> {
         let it = self.int_ty_of(ty);
         let signed = it.is_signed();
         // Arg layout: neg is unary; shl/shr take a `u32` shift; the rest `(T, T)`.
@@ -138,8 +164,12 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         let elems = vec![ty, self.cx.analysis.tcx.bool];
         let layout = tuple_layout(self.cx.analysis, &elems);
         let ptr = self.alloc_struct(&layout);
-        self.b.ins().store(MemFlags::trusted(), res, ptr, layout.offsets[0] as i32);
-        self.b.ins().store(MemFlags::trusted(), ovf, ptr, layout.offsets[1] as i32);
+        self.b
+            .ins()
+            .store(MemFlags::trusted(), res, ptr, layout.offsets[0] as i32);
+        self.b
+            .ins()
+            .store(MemFlags::trusted(), ovf, ptr, layout.offsets[1] as i32);
         ptr
     }
 
@@ -232,7 +262,11 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             ovf_signed
         };
         let raw = if op == 3 {
-            if signed { self.b.ins().sdiv(a, safe_b) } else { self.b.ins().udiv(a, safe_b) }
+            if signed {
+                self.b.ins().sdiv(a, safe_b)
+            } else {
+                self.b.ins().udiv(a, safe_b)
+            }
         } else if signed {
             self.b.ins().srem(a, safe_b)
         } else {
@@ -240,8 +274,11 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         };
         // Real `INT_MIN / -1` wraps to `INT_MIN`; `INT_MIN % -1` to `0`.
         let res = if signed {
-            if op == 3 { self.b.ins().select(ovf_signed, a, raw) }
-            else { self.b.ins().select(ovf_signed, zero, raw) }
+            if op == 3 {
+                self.b.ins().select(ovf_signed, a, raw)
+            } else {
+                self.b.ins().select(ovf_signed, zero, raw)
+            }
         } else {
             raw
         };
@@ -316,7 +353,10 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             _ => self.b.ins().uextend(types::I32, count_u32),
         };
         let bits_i32 = self.b.ins().iconst(types::I32, bits);
-        let ovf = self.b.ins().icmp(IntCC::UnsignedGreaterThanOrEqual, count_u32_w, bits_i32);
+        let ovf = self
+            .b
+            .ins()
+            .icmp(IntCC::UnsignedGreaterThanOrEqual, count_u32_w, bits_i32);
         // Bring the count into the value's type for the hardware shift. The
         // hardware ignores the upper bits past `BITS`, so wrapping behaviour
         // emerges naturally; the explicit `ovf` flag drives the family logic.
@@ -351,9 +391,13 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
 
     /// Builtin `.clone()` over an already-evaluated receiver value `v` of type
     /// `rty`. Shared by the AST and HIR walks.
-    pub(crate) fn emit_builtin_clone(&mut self, v: Value, rty: Ty, kind: CloneKind, span: Span)
-        -> CgResult<Option<Value>>
-    {
+    pub(crate) fn emit_builtin_clone(
+        &mut self,
+        v: Value,
+        rty: Ty,
+        kind: CloneKind,
+        span: Span,
+    ) -> CgResult<Option<Value>> {
         Ok(match kind {
             CloneKind::Identity => {
                 // Cloning a channel endpoint registers another live handle so
@@ -374,15 +418,15 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             CloneKind::List => self.call_intrinsic("lang_list_clone", &[PTR], Some(PTR), &[v]),
             CloneKind::Map => self.call_intrinsic("lang_map_clone", &[PTR], Some(PTR), &[v]),
             CloneKind::ListDeep => {
-                let elem = self.list_elem_of(rty).ok_or_else(|| {
-                    CodegenError::new(span, "deep-clone target is not a List")
-                })?;
+                let elem = self
+                    .list_elem_of(rty)
+                    .ok_or_else(|| CodegenError::new(span, "deep-clone target is not a List"))?;
                 Some(self.gen_list_clone_deep(v, elem, span)?)
             }
             CloneKind::MapDeep => {
-                let (kt, vt) = self.map_kv_of(rty).ok_or_else(|| {
-                    CodegenError::new(span, "deep-clone target is not a Map")
-                })?;
+                let (kt, vt) = self
+                    .map_kv_of(rty)
+                    .ok_or_else(|| CodegenError::new(span, "deep-clone target is not a Map"))?;
                 Some(self.gen_map_clone_deep(v, kt, vt, span)?)
             }
         })
@@ -396,7 +440,12 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         // thread-shareable `Shared`/`Sender`/`Receiver` handles.
         if matches!(
             self.cx.analysis.tcx.kind(ty),
-            TyKind::Int(_) | TyKind::Float(_) | TyKind::Bool | TyKind::Char | TyKind::Str | TyKind::Null
+            TyKind::Int(_)
+                | TyKind::Float(_)
+                | TyKind::Bool
+                | TyKind::Char
+                | TyKind::Str
+                | TyKind::Null
         ) {
             return Ok(v);
         }
@@ -446,7 +495,9 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                     .map(DefId)
                     .find(|&d| {
                         let de = self.cx.analysis.program.def(d);
-                        de.kind == DefKind::ExtendMethod && de.parent == Some(ext) && de.name == "clone"
+                        de.kind == DefKind::ExtendMethod
+                            && de.parent == Some(ext)
+                            && de.name == "clone"
                     })
                     .ok_or_else(|| CodegenError::new(span, "Clone impl has no `clone` method"))?;
                 let targs = if self.cx.analysis.program.def(ext).generics.is_empty() {
@@ -465,7 +516,11 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     /// Deep-clone a `List<T>`: allocate a fresh list and push each cloned
     /// element. Used when `T` is mutable but implements `Clone`.
     fn gen_list_clone_deep(&mut self, src: Value, elem: Ty, span: Span) -> CgResult<Value> {
-        let elem_is_ptr = if is_managed_ptr(self.cx.analysis, elem) { 1 } else { 0 };
+        let elem_is_ptr = if is_managed_ptr(self.cx.analysis, elem) {
+            1
+        } else {
+            0
+        };
         let flag = self.b.ins().iconst(types::I64, elem_is_ptr);
         let new_list = self
             .call_intrinsic("lang_list_new", &[types::I64], Some(PTR), &[flag])
@@ -477,12 +532,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         self.list_for_each(src, elem, span, |this, ev| {
             let cloned = this.gen_clone_value(ev, elem, span)?;
             let raw = this.elem_to_i64(Some(cloned), elem, span)?;
-            this.call_intrinsic(
-                "lang_list_push",
-                &[PTR, types::I64],
-                None,
-                &[new_list, raw],
-            );
+            this.call_intrinsic("lang_list_push", &[PTR, types::I64], None, &[new_list, raw]);
             Ok(())
         })?;
         Ok(new_list)
@@ -498,7 +548,12 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         // Snapshot the key list.
         let one = self.b.ins().iconst(types::I64, 1);
         let keys = self
-            .call_intrinsic("lang_map_entries", &[PTR, types::I64], Some(PTR), &[src, one])
+            .call_intrinsic(
+                "lang_map_entries",
+                &[PTR, types::I64],
+                Some(PTR),
+                &[src, one],
+            )
             .expect("map_entries returns");
         self.mark_root(keys);
         self.list_for_each(keys, kt, span, |this, kv| {
@@ -535,7 +590,12 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     pub(crate) fn builtin_clone_kind(&self, ty: Ty) -> Option<CloneKind> {
         if matches!(
             self.cx.analysis.tcx.kind(ty),
-            TyKind::Int(_) | TyKind::Float(_) | TyKind::Bool | TyKind::Char | TyKind::Str | TyKind::Null
+            TyKind::Int(_)
+                | TyKind::Float(_)
+                | TyKind::Bool
+                | TyKind::Char
+                | TyKind::Str
+                | TyKind::Null
         ) {
             return Some(CloneKind::Identity);
         }
@@ -590,9 +650,13 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
 
     /// Emit a primitive/`str` comparison over already-evaluated operand values.
     /// Shared by the AST and HIR walks.
-    pub(crate) fn emit_primitive_compare(&mut self, op: BinaryOp, recv_ty: Ty, l: Value, r: Value)
-        -> CgResult<Option<Value>>
-    {
+    pub(crate) fn emit_primitive_compare(
+        &mut self,
+        op: BinaryOp,
+        recv_ty: Ty,
+        l: Value,
+        r: Value,
+    ) -> CgResult<Option<Value>> {
         if matches!(self.cx.analysis.tcx.kind(recv_ty), TyKind::Str) {
             return Ok(Some(self.gen_str_compare(op, l, r)));
         }
@@ -617,6 +681,12 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         is_async: bool,
         _span: Span,
     ) -> CgResult<Option<Value>> {
+        // The closure env is a managed allocation passed across a runtime
+        // handoff. The runtime pins it immediately on entry, but stress GC may
+        // collect at the call boundary before control reaches that first Rust
+        // instruction, so the generated caller pins it until the runtime has
+        // taken its own root.
+        let env = self.pin_spawn_env_for_runtime_handoff(env);
         let id = if is_async {
             // `block_on` carries the awaited `R` as its raw bits (a float is its
             // own bit pattern), so no `float_kind` is needed here (`docs/20` §1).
@@ -640,12 +710,19 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 _ => 0,
             };
             let fk = self.b.ins().iconst(types::I64, float_kind);
-            self.call_intrinsic("lang_thread_spawn", &[PTR, types::I64], Some(types::I64), &[env, fk])
-                .expect("lang_thread_spawn returns an id")
+            self.call_intrinsic(
+                "lang_thread_spawn",
+                &[PTR, types::I64],
+                Some(types::I64),
+                &[env, fk],
+            )
+            .expect("lang_thread_spawn returns an id")
         };
+        self.unpin_spawn_env_for_runtime_handoff(env);
         let jh_def = self.cx.analysis.program.join_handle_def;
         let layout = self.struct_layout(jh_def, &[r]);
         let ptr = self.alloc_struct(&layout);
+        self.mark_root(ptr);
         let off = layout.offsets[layout.index_of("id").unwrap_or(0)] as i32;
         self.b.ins().store(MemFlags::trusted(), id, ptr, off);
         // Pin the handle as a global root for its lifetime: it may be held on a
@@ -655,13 +732,74 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         Ok(Some(ptr))
     }
 
+    /// `Task.spawn` over an already-evaluated closure env value. The handle
+    /// shape is intentionally identical to `Thread.spawn`, but async closures
+    /// are scheduled on the shared M:N executor.
+    pub(crate) fn emit_task_spawn(
+        &mut self,
+        env: Value,
+        r: Ty,
+        is_async: bool,
+        _span: Span,
+    ) -> CgResult<Option<Value>> {
+        // Same handoff rule as `Thread.spawn`: generated code owns the managed
+        // closure env until the runtime has pinned it, including the safepoint
+        // at the call boundary itself.
+        let env = self.pin_spawn_env_for_runtime_handoff(env);
+        let r_res = resolve_shallow(self.cx.analysis, r, &self.subst);
+        let is_ptr = is_managed_ptr(self.cx.analysis, r_res) as i64;
+        let ip = self.b.ins().iconst(types::I64, is_ptr);
+        let id = if is_async {
+            let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+            let pt = self.b.ins().iconst(types::I64, pending_tid);
+            self.call_intrinsic(
+                "lang_task_spawn_async",
+                &[PTR, types::I64, types::I64],
+                Some(types::I64),
+                &[env, pt, ip],
+            )
+            .expect("lang_task_spawn_async returns an id")
+        } else {
+            let float_kind = match self.cx.analysis.tcx.kind(r_res) {
+                TyKind::Float(FloatTy::F64) => 8,
+                TyKind::Float(FloatTy::F32) => 4,
+                _ => 0,
+            };
+            let fk = self.b.ins().iconst(types::I64, float_kind);
+            self.call_intrinsic(
+                "lang_task_spawn",
+                &[PTR, types::I64, types::I64],
+                Some(types::I64),
+                &[env, fk, ip],
+            )
+            .expect("lang_task_spawn returns an id")
+        };
+        self.unpin_spawn_env_for_runtime_handoff(env);
+        let jh_def = self.cx.analysis.program.task_join_handle_def;
+        let layout = self.struct_layout(jh_def, &[r]);
+        let ptr = self.alloc_struct(&layout);
+        self.mark_root(ptr);
+        let off = layout.offsets[layout.index_of("id").unwrap_or(0)] as i32;
+        self.b.ins().store(MemFlags::trusted(), id, ptr, off);
+        self.call_intrinsic("lang_gc_pin", &[PTR], None, &[ptr]);
+        Ok(Some(ptr))
+    }
+
     /// `JoinHandle<R>.join()` over an already-evaluated handle value. Shared by
     /// the AST and HIR walks.
-    pub(crate) fn emit_thread_join(&mut self, jh: Value, r: Ty, _span: Span) -> CgResult<Option<Value>> {
+    pub(crate) fn emit_thread_join(
+        &mut self,
+        jh: Value,
+        r: Ty,
+        _span: Span,
+    ) -> CgResult<Option<Value>> {
         let jh_def = self.cx.analysis.program.join_handle_def;
         let jh_layout = self.struct_layout(jh_def, &[r]);
         let id_off = jh_layout.offsets[jh_layout.index_of("id").unwrap_or(0)] as i32;
-        let id = self.b.ins().load(types::I64, MemFlags::trusted(), jh, id_off);
+        let id = self
+            .b
+            .ins()
+            .load(types::I64, MemFlags::trusted(), jh, id_off);
         // The handle is consumed by `join`; unpin it from the global roots.
         self.call_intrinsic("lang_gc_unpin", &[PTR], None, &[jh]);
 
@@ -685,7 +823,14 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         let fut = self
             .call_intrinsic(
                 "lang_thread_join_future",
-                &[types::I64, types::I64, types::I64, types::I64, types::I64, types::I64],
+                &[
+                    types::I64,
+                    types::I64,
+                    types::I64,
+                    types::I64,
+                    types::I64,
+                    types::I64,
+                ],
                 Some(PTR),
                 &[id, rt, pt, jt, pkt, ip],
             )
@@ -696,21 +841,118 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     /// `JoinHandle<R>.detach()` over an already-evaluated handle value
     /// (`docs/20` §1): unpin the handle from the global roots and relinquish the
     /// worker (fire-and-forget). Yields no value (`null`).
-    pub(crate) fn emit_thread_detach(&mut self, jh: Value, r: Ty, _span: Span) -> CgResult<Option<Value>> {
+    pub(crate) fn emit_thread_detach(
+        &mut self,
+        jh: Value,
+        r: Ty,
+        _span: Span,
+    ) -> CgResult<Option<Value>> {
         let jh_def = self.cx.analysis.program.join_handle_def;
         let jh_layout = self.struct_layout(jh_def, &[r]);
         let id_off = jh_layout.offsets[jh_layout.index_of("id").unwrap_or(0)] as i32;
-        let id = self.b.ins().load(types::I64, MemFlags::trusted(), jh, id_off);
+        let id = self
+            .b
+            .ins()
+            .load(types::I64, MemFlags::trusted(), jh, id_off);
         // The handle is consumed by `detach`; unpin it from the global roots.
         self.call_intrinsic("lang_gc_unpin", &[PTR], None, &[jh]);
         self.call_intrinsic("lang_thread_detach", &[types::I64], None, &[id]);
         Ok(None)
     }
 
+    /// `std:task::JoinHandle<R>.join()` over an already-evaluated handle value.
+    pub(crate) fn emit_task_join(
+        &mut self,
+        jh: Value,
+        r: Ty,
+        _span: Span,
+    ) -> CgResult<Option<Value>> {
+        let jh_def = self.cx.analysis.program.task_join_handle_def;
+        let jh_layout = self.struct_layout(jh_def, &[r]);
+        let id_off = jh_layout.offsets[jh_layout.index_of("id").unwrap_or(0)] as i32;
+        let id = self
+            .b
+            .ins()
+            .load(types::I64, MemFlags::trusted(), jh, id_off);
+        self.call_intrinsic("lang_gc_unpin", &[PTR], None, &[jh]);
+
+        let prog = &self.cx.analysis.program;
+        let ready_tid = 1000 + prog.ready_def.index() as i64;
+        let pending_tid = 1000 + prog.pending_def.index() as i64;
+        let joined_tid = 1000 + prog.joined_def.index() as i64;
+        let panicked_tid = 1000 + prog.panicked_def.index() as i64;
+        let cancelled_tid = 1000 + prog.cancelled_def.index() as i64;
+        let rt = self.b.ins().iconst(types::I64, ready_tid);
+        let pt = self.b.ins().iconst(types::I64, pending_tid);
+        let jt = self.b.ins().iconst(types::I64, joined_tid);
+        let pkt = self.b.ins().iconst(types::I64, panicked_tid);
+        let ct = self.b.ins().iconst(types::I64, cancelled_tid);
+        let r_res = resolve_shallow(self.cx.analysis, r, &self.subst);
+        let is_ptr = is_managed_ptr(self.cx.analysis, r_res) as i64;
+        let ip = self.b.ins().iconst(types::I64, is_ptr);
+        let fut = self
+            .call_intrinsic(
+                "lang_task_join_future",
+                &[
+                    types::I64,
+                    types::I64,
+                    types::I64,
+                    types::I64,
+                    types::I64,
+                    types::I64,
+                    types::I64,
+                ],
+                Some(PTR),
+                &[id, rt, pt, jt, pkt, ct, ip],
+            )
+            .expect("task join future");
+        Ok(Some(fut))
+    }
+
+    /// `std:task::JoinHandle<R>.detach()`.
+    pub(crate) fn emit_task_detach(
+        &mut self,
+        jh: Value,
+        r: Ty,
+        span: Span,
+    ) -> CgResult<Option<Value>> {
+        let jh_def = self.cx.analysis.program.task_join_handle_def;
+        let jh_layout = self.struct_layout(jh_def, &[r]);
+        let id_off = jh_layout.offsets[jh_layout.index_of("id").unwrap_or(0)] as i32;
+        let id = self
+            .b
+            .ins()
+            .load(types::I64, MemFlags::trusted(), jh, id_off);
+        self.call_intrinsic("lang_gc_unpin", &[PTR], None, &[jh]);
+        self.call_intrinsic("lang_thread_detach", &[types::I64], None, &[id]);
+        let _ = span;
+        Ok(None)
+    }
+
+    /// `std:task::JoinHandle<R>.cancel()` / `.abort()`.
+    pub(crate) fn emit_task_cancel(
+        &mut self,
+        jh: Value,
+        r: Ty,
+        span: Span,
+    ) -> CgResult<Option<Value>> {
+        let jh_def = self.cx.analysis.program.task_join_handle_def;
+        let jh_layout = self.struct_layout(jh_def, &[r]);
+        let id_off = jh_layout.offsets[jh_layout.index_of("id").unwrap_or(0)] as i32;
+        let id = self
+            .b
+            .ins()
+            .load(types::I64, MemFlags::trusted(), jh, id_off);
+        self.call_intrinsic("lang_task_cancel", &[types::I64], None, &[id]);
+        let _ = span;
+        Ok(None)
+    }
+
     /// Lower `channel<T>()` (`docs/20` §2): allocate a runtime channel and build
     /// the `(Sender<T>, Receiver<T>)` tuple, both carrying the channel id.
     pub(crate) fn gen_channel_new(&mut self, result_ty: Ty, span: Span) -> CgResult<Option<Value>> {
-        let id = self.call_intrinsic("lang_channel_new", &[], Some(types::I64), &[])
+        let id = self
+            .call_intrinsic("lang_channel_new", &[], Some(types::I64), &[])
             .expect("channel id");
         // The `(Sender<T>, Receiver<T>)` tuple type rides on the intrinsic node.
         let elem_tys = match self.cx.analysis.tcx.kind(result_ty).clone() {
@@ -723,13 +965,22 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         self.mark_root(receiver);
         let layout = tuple_layout(self.cx.analysis, &elem_tys);
         let tup = self.alloc_struct(&layout);
-        self.b.ins().store(MemFlags::trusted(), sender, tup, layout.offsets[0] as i32);
-        self.b.ins().store(MemFlags::trusted(), receiver, tup, layout.offsets[1] as i32);
+        self.b
+            .ins()
+            .store(MemFlags::trusted(), sender, tup, layout.offsets[0] as i32);
+        self.b
+            .ins()
+            .store(MemFlags::trusted(), receiver, tup, layout.offsets[1] as i32);
         Ok(Some(tup))
     }
 
     /// Allocate a `Sender<T>`/`Receiver<T>` struct holding the channel `id`.
-    pub(crate) fn build_channel_end(&mut self, end_ty: Ty, id: Value, span: Span) -> CgResult<Value> {
+    pub(crate) fn build_channel_end(
+        &mut self,
+        end_ty: Ty,
+        id: Value,
+        span: Span,
+    ) -> CgResult<Value> {
         let resolved = resolve_shallow(self.cx.analysis, end_ty, &self.subst);
         let (def, args) = match self.cx.analysis.tcx.kind(resolved).clone() {
             TyKind::Named { def, args } => (def, args),
@@ -756,7 +1007,12 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     ) -> CgResult<Option<Value>> {
         let raw = self.elem_to_i64(v, elem, span)?;
         let status = self
-            .call_intrinsic("lang_chan_send", &[types::I64, types::I64], Some(types::I64), &[chan, raw])
+            .call_intrinsic(
+                "lang_chan_send",
+                &[types::I64, types::I64],
+                Some(types::I64),
+                &[chan, raw],
+            )
             .expect("send status");
         // Identify the `ChannelClosed` variant of the result union to box on a
         // closed send; the success case is `null`.
@@ -791,11 +1047,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     /// Find the union variant of `ty` matching `pred`, or `ty` itself if it is
     /// not a union (single-variant). Used to recover a specific variant type for
     /// boxing a runtime-produced value into a union.
-    fn union_variant_ty(
-        &self,
-        ty: Ty,
-        pred: impl Fn(&Analysis, Ty) -> bool,
-    ) -> Ty {
+    fn union_variant_ty(&self, ty: Ty, pred: impl Fn(&Analysis, Ty) -> bool) -> Ty {
         let resolved = resolve_shallow(self.cx.analysis, ty, &self.subst);
         if let TyKind::Union(vs) = self.cx.analysis.tcx.kind(resolved).clone() {
             for v in vs {
@@ -808,9 +1060,13 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     }
 
     /// `Receiver<T>.recv()`/`.try_recv()` over an already-read channel id. Shared.
-    pub(crate) fn emit_channel_recv(&mut self, chan: Value, elem: Ty, method: &str, span: Span)
-        -> CgResult<Option<Value>>
-    {
+    pub(crate) fn emit_channel_recv(
+        &mut self,
+        chan: Value,
+        elem: Ty,
+        method: &str,
+        span: Span,
+    ) -> CgResult<Option<Value>> {
         if method == "recv" {
             // Async recv: build a `Future<T | ChannelClosed>` interface-object
             // box. The runtime future's `poll` pops a message (→ `Ready<T>`
@@ -830,23 +1086,40 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             let value_tid = self.type_id_of(elem);
             let vt = self.b.ins().iconst(types::I64, value_tid);
             let ct = self.b.ins().iconst(types::I64, closed_tid);
-            let fut = self.call_intrinsic(
-                "lang_chan_recv_future",
-                &[types::I64, types::I64, types::I64, types::I64, types::I64, types::I64],
-                Some(PTR),
-                &[chan, rt, pt, ip, vt, ct],
-            ).expect("recv future");
+            let fut = self
+                .call_intrinsic(
+                    "lang_chan_recv_future",
+                    &[
+                        types::I64,
+                        types::I64,
+                        types::I64,
+                        types::I64,
+                        types::I64,
+                        types::I64,
+                    ],
+                    Some(PTR),
+                    &[chan, rt, pt, ip, vt, ct],
+                )
+                .expect("recv future");
             return Ok(Some(fut));
         }
         // try_recv: returns `T | null` — null when the queue is empty.
-        let slot = self.b.create_sized_stack_slot(StackSlotData::new(
-            StackSlotKind::ExplicitSlot, 8, 3,
-        ));
+        let slot =
+            self.b
+                .create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, 8, 3));
         let has_ptr = self.b.ins().stack_addr(PTR, slot, 0);
-        let raw = self.call_intrinsic(
-            "lang_chan_try_recv", &[types::I64, PTR], Some(types::I64), &[chan, has_ptr],
-        ).expect("try_recv value");
-        let has = self.b.ins().load(types::I64, MemFlags::trusted(), has_ptr, 0);
+        let raw = self
+            .call_intrinsic(
+                "lang_chan_try_recv",
+                &[types::I64, PTR],
+                Some(types::I64),
+                &[chan, has_ptr],
+            )
+            .expect("try_recv value");
+        let has = self
+            .b
+            .ins()
+            .load(types::I64, MemFlags::trusted(), has_ptr, 0);
         let zero = self.b.ins().iconst(types::I64, 0);
         let got = self.b.ins().icmp(IntCC::NotEqual, has, zero);
         // Build the `T | null` union: a value box when present, else a null ptr.
@@ -858,8 +1131,13 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         self.term = true;
         self.switch(some_bb);
         let val = self.i64_to_elem(raw, elem, span)?;
-        if is_managed_ptr(self.cx.analysis, resolve_shallow(self.cx.analysis, elem, &self.subst)) {
-            if let Some(v) = val { self.mark_root(v); }
+        if is_managed_ptr(
+            self.cx.analysis,
+            resolve_shallow(self.cx.analysis, elem, &self.subst),
+        ) {
+            if let Some(v) = val {
+                self.mark_root(v);
+            }
         }
         let boxed = self.box_value(val, elem);
         self.b.ins().jump(merge, &[boxed.into()]);
@@ -898,18 +1176,24 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     /// Read the `chan` id field from an already-evaluated `Sender`/`Receiver`
     /// struct value. Shared by the AST and HIR walks.
     pub(crate) fn emit_channel_id(&mut self, ptr: Value, rty: Ty, span: Span) -> CgResult<Value> {
-        let layout = self.layout_for_ty(rty)
+        let layout = self
+            .layout_for_ty(rty)
             .ok_or_else(|| CodegenError::new(span, "channel end is not a struct"))?;
         let off = layout.offsets[layout.index_of("chan").unwrap_or(0)] as i32;
         Ok(self.b.ins().load(types::I64, MemFlags::trusted(), ptr, off))
     }
 
     /// `Shared.new(v)` over an already-evaluated value. Shared by both walks.
-    pub(crate) fn emit_shared_new(&mut self, v: Option<Value>, elem: Ty, result_ty: Ty, span: Span)
-        -> CgResult<Option<Value>>
-    {
+    pub(crate) fn emit_shared_new(
+        &mut self,
+        v: Option<Value>,
+        elem: Ty,
+        result_ty: Ty,
+        span: Span,
+    ) -> CgResult<Option<Value>> {
         let raw = self.elem_to_i64(v, elem, span)?;
-        let id = self.call_intrinsic("lang_shared_new", &[types::I64], Some(types::I64), &[raw])
+        let id = self
+            .call_intrinsic("lang_shared_new", &[types::I64], Some(types::I64), &[raw])
             .expect("shared id");
         let shared = self.build_channel_end(result_ty, id, span)?; // {id} struct, same shape
         Ok(Some(shared))
@@ -946,7 +1230,9 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         let elem_res = resolve_shallow(self.cx.analysis, elem, &self.subst);
         let r_res = resolve_shallow(self.cx.analysis, r_ty, &self.subst);
         let is_float = |k: &TyKind| matches!(k, TyKind::Float(_));
-        if is_float(self.cx.analysis.tcx.kind(elem_res)) || is_float(self.cx.analysis.tcx.kind(r_res)) {
+        if is_float(self.cx.analysis.tcx.kind(elem_res))
+            || is_float(self.cx.analysis.tcx.kind(r_res))
+        {
             return Err(CodegenError::new(
                 span,
                 "locking a `Shared` whose value or body result is a float is not yet \
@@ -963,7 +1249,11 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             self.b.ins().iconst(PTR, 0)
         };
         let r_tid = if is_try { self.type_id_of(r_ty) } else { 0 };
-        let busy_tid = if is_try { 1000 + busy_def.index() as i64 } else { 0 };
+        let busy_tid = if is_try {
+            1000 + busy_def.index() as i64
+        } else {
+            0
+        };
 
         let body_async_v = self.b.ins().iconst(types::I64, body_is_async as i64);
         let r_is_ptr_v = self.b.ins().iconst(types::I64, r_is_ptr as i64);
@@ -976,13 +1266,29 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         Ok(self.call_intrinsic(
             "lang_shared_lock_future",
             &[
-                types::I64, PTR, PTR, types::I64, types::I64, types::I64, types::I64,
-                types::I64, types::I64, types::I64,
+                types::I64,
+                PTR,
+                PTR,
+                types::I64,
+                types::I64,
+                types::I64,
+                types::I64,
+                types::I64,
+                types::I64,
+                types::I64,
             ],
             Some(PTR),
             &[
-                id, env, clone_fn, body_async_v, r_is_ptr_v, is_try_v, r_tid_v, busy_tid_v,
-                ready_v, pending_v,
+                id,
+                env,
+                clone_fn,
+                body_async_v,
+                r_is_ptr_v,
+                is_try_v,
+                r_tid_v,
+                busy_tid_v,
+                ready_v,
+                pending_v,
             ],
         ))
     }
@@ -1011,7 +1317,8 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
 
     /// Read the `id` field from an already-evaluated `Shared` struct value.
     pub(crate) fn emit_shared_id(&mut self, ptr: Value, rty: Ty, span: Span) -> CgResult<Value> {
-        let layout = self.layout_for_ty(rty)
+        let layout = self
+            .layout_for_ty(rty)
             .ok_or_else(|| CodegenError::new(span, "`Shared` is not a struct"))?;
         let off = layout.offsets[layout.index_of("id").unwrap_or(0)] as i32;
         Ok(self.b.ins().load(types::I64, MemFlags::trusted(), ptr, off))
@@ -1035,9 +1342,10 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     /// so mutations are shared with the outer scope. `true` (`Thread.spawn`
     /// closures, `docs/20` §6 cross-thread isolation): every capture is an
     /// independent *value snapshot* taken at the spawn site — the env slot
-    /// stores the captured value itself (a primitive copy, or an immutable
-    /// managed pointer), so the worker never shares a mutable cell with the
-    /// spawner. Only managed value slots are GC-traced in the by-value layout.
+    /// stores either the captured value itself (primitive, immutable managed
+    /// value, channel endpoint transfer, or `Shared` handle) or a freshly cloned
+    /// value for concrete `Clone` captures. Only managed value slots are
+    /// GC-traced in the by-value layout.
     pub(crate) fn emit_closure_value_kind(
         &mut self,
         info: &compiler::sema::results::ClosureInfo,
@@ -1047,7 +1355,8 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(PTR));
         for (_, ty) in &info.params {
-            let ct = self.cx_clty(*ty)
+            let ct = self
+                .cx_clty(*ty)
                 .ok_or_else(|| CodegenError::new(span, "closure parameter is zero-sized"))?;
             sig.params.push(AbiParam::new(ct));
         }
@@ -1055,7 +1364,9 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             sig.returns.push(AbiParam::new(rc));
         }
         let name = format!("closure.{}", DATA_CTR.fetch_add(1, Ordering::Relaxed));
-        let func_id = self.module.declare_function(&name, Linkage::Local, &sig)
+        let func_id = self
+            .module
+            .declare_function(&name, Linkage::Local, &sig)
             .expect("declare closure");
 
         // Environment layout: [fn_ptr][cap0][cap1]… By reference, each cap slot
@@ -1077,24 +1388,43 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             (0..n).map(|k| (8 + k * 8) as u32).collect()
         };
         let desc = self.emit_descriptor(size, GC_KIND_PLAIN, &ptr_offsets);
-        let env = self.call_intrinsic("lang_alloc", &[PTR], Some(PTR), &[desc])
+        let env = self
+            .call_intrinsic("lang_alloc", &[PTR], Some(PTR), &[desc])
             .expect("lang_alloc returns a pointer");
+        let env = if by_value { self.mark_root(env) } else { env };
         let fref = self.module.declare_func_in_func(func_id, self.b.func);
         let faddr = self.b.ins().func_addr(PTR, fref);
         self.b.ins().store(MemFlags::trusted(), faddr, env, 0);
-        for (k, (local, _)) in info.captures.iter().enumerate() {
-            let v = if by_value {
+        for (k, (local, ty)) in info.captures.iter().enumerate() {
+            let mut v = if by_value {
                 // Snapshot the captured local's current value (loading through
                 // its cell if it is cell-backed in the outer scope).
                 self.read_local(*local)
                     .ok_or_else(|| CodegenError::new(span, "captured local has no slot"))?
             } else {
                 // Capture-by-reference: the cell pointer held in the var.
-                let var = *self.vars.get(local)
+                let var = *self
+                    .vars
+                    .get(local)
                     .ok_or_else(|| CodegenError::new(span, "captured local has no slot"))?;
                 self.b.use_var(var)
             };
-            self.b.ins().store(MemFlags::trusted(), v, env, (8 + k * 8) as i32);
+            if by_value {
+                let rty = resolve_shallow(self.cx.analysis, *ty, &self.subst);
+                if self.channel_endpoint_kind(rty).is_some() {
+                    // Spawn by-value capture transfers endpoint ownership to the
+                    // worker/future environment. The lifted worker releases it on
+                    // return (or cancellation), so the spawner frame must not also
+                    // release the same endpoint local at its own return path.
+                    self.call_intrinsic("lang_gc_unpin", &[PTR], None, &[v]);
+                    self.endpoint_owned.retain(|(owned, _, _)| *owned != *local);
+                } else if !is_spawn_shareable_capture_codegen(self.cx.analysis, rty) {
+                    v = self.gen_clone_value(v, rty, span)?;
+                }
+            }
+            self.b
+                .ins()
+                .store(MemFlags::trusted(), v, env, (8 + k * 8) as i32);
         }
         Ok((func_id, env))
     }
@@ -1114,9 +1444,10 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                  call it directly or wrap it in a closure",
             ));
         }
-        let fsig = self.cx.analysis.hir.fn_sigs.get(&def).ok_or_else(|| {
-            CodegenError::new(span, "function used as a value has no signature")
-        })?;
+        let fsig =
+            self.cx.analysis.hir.fn_sigs.get(&def).ok_or_else(|| {
+                CodegenError::new(span, "function used as a value has no signature")
+            })?;
         let params: Vec<(LocalId, Ty)> = fsig.params.clone();
         let ret = fsig.ret;
         // Synthetic body: `def(p0, p1, …)` forwarding each parameter local.
@@ -1130,7 +1461,10 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             .collect();
         let body = hir::Expr {
             kind: hir::ExprKind::Call {
-                kind: hir::CallKind::Direct { def, type_args: vec![] },
+                kind: hir::CallKind::Direct {
+                    def,
+                    type_args: vec![],
+                },
                 args,
                 callee_span: span,
                 callee_ty: ty,
@@ -1138,7 +1472,11 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             ty: ret,
             span,
         };
-        let info = compiler::sema::results::ClosureInfo { params, captures: vec![], ret };
+        let info = compiler::sema::results::ClosureInfo {
+            params,
+            captures: vec![],
+            ret,
+        };
         let (func_id, env) = self.emit_closure_value(&info, span)?;
         self.closures.push(crate::ClosureJob {
             func_id,
@@ -1153,14 +1491,20 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
 
     /// Call a closure `env` value with already-evaluated arguments: load its
     /// function pointer (offset 0) and call indirectly, passing the env first.
-    pub(crate) fn emit_closure_call(&mut self, env: Value, args: &[Value], ret_clty: Option<ClType>) -> Option<Value> {
+    pub(crate) fn emit_closure_call(
+        &mut self,
+        env: Value,
+        args: &[Value],
+        ret_clty: Option<ClType>,
+    ) -> Option<Value> {
         self.mark_root(env);
         let fnptr = self.b.ins().load(PTR, MemFlags::trusted(), env, 0);
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(PTR)); // env
         let mut arg_vals = vec![env];
         for &v in args {
-            sig.params.push(AbiParam::new(self.b.func.dfg.value_type(v)));
+            sig.params
+                .push(AbiParam::new(self.b.func.dfg.value_type(v)));
             arg_vals.push(v);
         }
         if let Some(rc) = ret_clty {
@@ -1196,14 +1540,18 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     ) -> CgResult<Option<Value>> {
         self.mark_root(obj);
         let vtable = self.b.ins().load(PTR, MemFlags::trusted(), obj, 0);
-        let fnptr = self.b.ins().load(PTR, MemFlags::trusted(), vtable, (slot * 8) as i32);
+        let fnptr = self
+            .b
+            .ins()
+            .load(PTR, MemFlags::trusted(), vtable, (slot * 8) as i32);
         let data = self.b.ins().load(PTR, MemFlags::trusted(), obj, 8);
 
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(PTR)); // self (data pointer)
         let mut arg_vals = vec![data];
         for &v in args {
-            sig.params.push(AbiParam::new(self.b.func.dfg.value_type(v)));
+            sig.params
+                .push(AbiParam::new(self.b.func.dfg.value_type(v)));
             arg_vals.push(v);
         }
         if let Some(r) = ret_clty {
@@ -1216,7 +1564,11 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
 
     /// Resolve an interface method to the concrete `extend` method for the
     /// receiver's (monomorphized) type, plus the extend's type arguments.
-    pub(crate) fn resolve_iface_method(&self, iface_method: DefId, recv: Ty) -> Option<(DefId, Vec<Ty>)> {
+    pub(crate) fn resolve_iface_method(
+        &self,
+        iface_method: DefId,
+        recv: Ty,
+    ) -> Option<(DefId, Vec<Ty>)> {
         let prog = &self.cx.analysis.program;
         let iface = prog.def(iface_method).parent?;
         let mname = prog.def(iface_method).name.clone();
@@ -1231,7 +1583,11 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         })?;
         // A generic `extend Name<P0, …>` takes the receiver's type arguments in
         // order (the common form); a concrete `extend` takes none.
-        let targs = if prog.def(ext).generics.is_empty() { Vec::new() } else { args };
+        let targs = if prog.def(ext).generics.is_empty() {
+            Vec::new()
+        } else {
+            args
+        };
         Some((method, targs))
     }
 
@@ -1265,7 +1621,26 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     /// thread requests a stop-the-world collection. Cheap on the common path
     /// (a flag load + branch inside the runtime).
     pub(crate) fn emit_safepoint(&mut self) {
+        self.flush_async_state_for_safepoint();
         self.call_intrinsic("lang_gc_safepoint", &[], None, &[]);
+    }
+
+    /// In a stateful async poll, keep the pinned future state graph current at
+    /// GC safepoints, not only at `await` suspension points. This mirrors the
+    /// `await` save path: raw Cranelift variables are stored so cell-backed
+    /// captures persist their cell pointer, not the cell contents.
+    fn flush_async_state_for_safepoint(&mut self) {
+        let Some(actx) = self.async_ctx.as_ref() else {
+            return;
+        };
+        let self_val = actx.self_val;
+        let saves = actx.save_locals.clone();
+        for (local, off) in saves {
+            if let Some(&var) = self.vars.get(&local) {
+                let v = self.b.use_var(var);
+                self.b.ins().store(MemFlags::trusted(), v, self_val, off);
+            }
+        }
     }
 
     /// Terminate the current block after a `never`-returning call: emit a trap
@@ -1275,7 +1650,6 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         self.b.ins().trap(tc);
         self.term = true;
     }
-
 }
 
 /// Map an `Eq`/`Ord` method name to the binary comparison operator it stands

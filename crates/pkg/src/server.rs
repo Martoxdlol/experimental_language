@@ -24,12 +24,12 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use crate::registry::{parse_index, IndexEntry};
+use crate::registry::{IndexEntry, parse_index};
 use crate::store::{index_path, sha256_hex};
 use crate::version::Version;
 
@@ -91,16 +91,16 @@ pub fn serve(dir: PathBuf, token: Option<String>) -> std::io::Result<ServerHandl
 
 /// Like [`serve`] but binds an explicit address (e.g. `0.0.0.0:8080` to host a
 /// real private registry on the network).
-pub fn serve_on(
-    bind: &str,
-    dir: PathBuf,
-    token: Option<String>,
-) -> std::io::Result<ServerHandle> {
+pub fn serve_on(bind: &str, dir: PathBuf, token: Option<String>) -> std::io::Result<ServerHandle> {
     let listener = TcpListener::bind(bind)?;
     let addr = listener.local_addr()?;
     listener.set_nonblocking(true)?;
     let stop = Arc::new(AtomicBool::new(false));
-    let ctx = Arc::new(Ctx { dir, token, base: format!("http://{addr}") });
+    let ctx = Arc::new(Ctx {
+        dir,
+        token,
+        base: format!("http://{addr}"),
+    });
 
     let stop_thread = stop.clone();
     let join = std::thread::spawn(move || {
@@ -125,7 +125,11 @@ pub fn serve_on(
         }
     });
 
-    Ok(ServerHandle { addr, stop, join: Some(join) })
+    Ok(ServerHandle {
+        addr,
+        stop,
+        join: Some(join),
+    })
 }
 
 /// Shared per-server state.
@@ -194,7 +198,13 @@ fn read_request(stream: &TcpStream) -> Option<Request> {
     if content_length > 0 {
         reader.read_exact(&mut body).ok()?;
     }
-    Some(Request { method, path, query, auth, body })
+    Some(Request {
+        method,
+        path,
+        query,
+        auth,
+        body,
+    })
 }
 
 /// An HTTP response to send back.
@@ -207,13 +217,28 @@ struct Response {
 
 impl Response {
     fn text(status: u16, reason: &'static str, body: impl Into<Vec<u8>>) -> Response {
-        Response { status, reason, content_type: "text/plain", body: body.into() }
+        Response {
+            status,
+            reason,
+            content_type: "text/plain",
+            body: body.into(),
+        }
     }
     fn json(body: String) -> Response {
-        Response { status: 200, reason: "OK", content_type: "application/json", body: body.into_bytes() }
+        Response {
+            status: 200,
+            reason: "OK",
+            content_type: "application/json",
+            body: body.into_bytes(),
+        }
     }
     fn bytes(body: Vec<u8>) -> Response {
-        Response { status: 200, reason: "OK", content_type: "application/octet-stream", body }
+        Response {
+            status: 200,
+            reason: "OK",
+            content_type: "application/octet-stream",
+            body,
+        }
     }
     fn not_found() -> Response {
         Response::text(404, "Not Found", "not found")
@@ -286,7 +311,10 @@ fn authed(req: &Request, ctx: &Ctx) -> bool {
 }
 
 fn config_json(ctx: &Ctx) -> Response {
-    let dl = format!("{}/crates/{{crate}}/{{version}}/{{sha256-checksum}}.tar.gz", ctx.base);
+    let dl = format!(
+        "{}/crates/{{crate}}/{{version}}/{{sha256-checksum}}.tar.gz",
+        ctx.base
+    );
     let v = serde_json::json!({
         "dl": dl,
         "api": ctx.base,
@@ -310,7 +338,11 @@ fn download(ctx: &Ctx, rest: &str) -> Response {
         return Response::not_found();
     }
     let (name, version) = (segs[0], segs[1]);
-    let path = ctx.dir.join("crates").join(name).join(format!("{version}.tar.gz"));
+    let path = ctx
+        .dir
+        .join("crates")
+        .join(name)
+        .join(format!("{version}.tar.gz"));
     match std::fs::read(&path) {
         Ok(bytes) => Response::bytes(bytes),
         Err(_) => Response::not_found(),
@@ -396,7 +428,12 @@ fn search(req: &Request, ctx: &Ctx) -> Response {
         if !needle.is_empty() && !name.to_lowercase().contains(&needle) {
             continue;
         }
-        if let Some(max) = entries.iter().filter(|e| !e.yanked).map(|e| e.vers.clone()).max() {
+        if let Some(max) = entries
+            .iter()
+            .filter(|e| !e.yanked)
+            .map(|e| e.vers.clone())
+            .max()
+        {
             hits.push((name, max));
         }
     }
@@ -468,7 +505,9 @@ fn walk_index(root: &std::path::Path) -> Vec<Vec<IndexEntry>> {
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
         for entry in rd.flatten() {
             let path = entry.path();
             if path.is_dir() {

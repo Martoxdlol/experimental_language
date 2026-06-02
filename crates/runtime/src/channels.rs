@@ -34,13 +34,50 @@
 //! traced result slot, keeping it alive across the hand-off.
 
 use crate::gc;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Condvar, Mutex, OnceLock};
+use std::sync::{Condvar, Mutex, MutexGuard, OnceLock};
 
 /// A waker captured from a poll [`Context`]: the `(waker_data, wake_fn)` pair a
 /// `send` invokes to re-poll a suspended receiver.
 type Waker = (usize, extern "C" fn(*mut u8));
+
+fn same_waker(a: Waker, b: Waker) -> bool {
+    a.0 == b.0 && a.1 as *const () as usize == b.1 as *const () as usize
+}
+
+fn prune_dead_waiters(waiters: &mut Vec<Waker>) {
+    waiters.retain(|(data, wake)| {
+        crate::threads::executor_waker_is_live(*data as *mut u8, *wake) != Some(false)
+    });
+}
+
+fn register_waiter(waiters: &mut Vec<Waker>, waiter: Waker) {
+    prune_dead_waiters(waiters);
+    let task_id = crate::threads::executor_waker_task_id(waiter.0 as *mut u8, waiter.1);
+    waiters.retain(|existing| {
+        if same_waker(*existing, waiter) {
+            return false;
+        }
+        match task_id {
+            Some(task_id) => {
+                crate::threads::executor_waker_task_id(existing.0 as *mut u8, existing.1)
+                    != Some(task_id)
+            }
+            None => true,
+        }
+    });
+    waiters.push(waiter);
+}
+
+fn drain_waiters(waiters: &mut Vec<Waker>) -> Vec<Waker> {
+    prune_dead_waiters(waiters);
+    std::mem::take(waiters)
+}
+
+fn remove_waiter(waiters: &mut Vec<Waker>, waiter: Waker) {
+    waiters.retain(|existing| !same_waker(*existing, waiter));
+}
 
 /// The waker context handed to a future's `poll` (`docs/21` §2). Layout matches
 /// the language `extern struct Context`; see `async_rt` for the canonical copy.
@@ -78,6 +115,14 @@ fn registry() -> &'static Mutex<HashMap<u64, std::sync::Arc<Channel>>> {
     R.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+fn lock_unpoison<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|err| err.into_inner())
+}
+
+fn wait_unpoison<'a, T>(cv: &Condvar, guard: MutexGuard<'a, T>) -> MutexGuard<'a, T> {
+    cv.wait(guard).unwrap_or_else(|err| err.into_inner())
+}
+
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Create a channel; returns its id (stored in the `Sender`/`Receiver` structs).
@@ -95,12 +140,15 @@ pub extern "C" fn lang_channel_new() -> u64 {
         }),
         not_empty: Condvar::new(),
     });
-    registry().lock().unwrap().insert(id, ch);
+    lock_unpoison(registry()).insert(id, ch);
     id
 }
 
 fn channel(id: u64) -> std::sync::Arc<Channel> {
-    registry().lock().unwrap().get(&id).cloned().expect("invalid channel id")
+    lock_unpoison(registry())
+        .get(&id)
+        .cloned()
+        .unwrap_or_else(|| panic!("invalid channel id {id}"))
 }
 
 // -- endpoint reference counting (deterministic close, `docs/16` §8) ----------
@@ -113,7 +161,7 @@ fn channel(id: u64) -> std::sync::Arc<Channel> {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lang_chan_sender_acquire(id: u64) {
     let ch = channel(id);
-    ch.inner.lock().unwrap().senders += 1;
+    lock_unpoison(&ch.inner).senders += 1;
 }
 
 /// Release a live `Sender`. When the count reaches zero the channel is *closed
@@ -126,12 +174,12 @@ pub unsafe extern "C" fn lang_chan_sender_acquire(id: u64) {
 pub unsafe extern "C" fn lang_chan_sender_release(id: u64) {
     let ch = channel(id);
     let wakers = {
-        let mut g = ch.inner.lock().unwrap();
+        let mut g = lock_unpoison(&ch.inner);
         debug_assert!(g.senders > 0, "sender release underflow");
         g.senders = g.senders.saturating_sub(1);
         if g.senders == 0 {
             ch.not_empty.notify_all();
-            std::mem::take(&mut g.waiters)
+            drain_waiters(&mut g.waiters)
         } else {
             Vec::new()
         }
@@ -149,7 +197,7 @@ pub unsafe extern "C" fn lang_chan_sender_release(id: u64) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lang_chan_receiver_acquire(id: u64) {
     let ch = channel(id);
-    ch.inner.lock().unwrap().receivers += 1;
+    lock_unpoison(&ch.inner).receivers += 1;
 }
 
 /// Release a live `Receiver`. When the count reaches zero the channel is
@@ -160,7 +208,7 @@ pub unsafe extern "C" fn lang_chan_receiver_acquire(id: u64) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lang_chan_receiver_release(id: u64) {
     let ch = channel(id);
-    let mut g = ch.inner.lock().unwrap();
+    let mut g = lock_unpoison(&ch.inner);
     debug_assert!(g.receivers > 0, "receiver release underflow");
     g.receivers = g.receivers.saturating_sub(1);
 }
@@ -178,7 +226,7 @@ pub unsafe extern "C" fn lang_chan_receiver_release(id: u64) {
 pub unsafe extern "C" fn lang_chan_send(id: u64, value: i64) -> i64 {
     let ch = channel(id);
     let wakers = {
-        let mut g = ch.inner.lock().unwrap();
+        let mut g = lock_unpoison(&ch.inner);
         if g.receivers == 0 {
             // Closed for sending — nobody can ever observe this message.
             return 1;
@@ -190,7 +238,7 @@ pub unsafe extern "C" fn lang_chan_send(id: u64, value: i64) -> i64 {
         // Take the parked async wakers under the same lock the receiver
         // registered them under; each will re-poll and re-register if still
         // empty.
-        std::mem::take(&mut g.waiters)
+        drain_waiters(&mut g.waiters)
     };
     // Wake a synchronous blocking receiver (`Receiver: Iterator`).
     ch.not_empty.notify_one();
@@ -231,10 +279,11 @@ fn recv_box_desc() -> *const u8 {
     *D.get_or_init(|| make_desc(24, &[8]) as usize) as *const u8
 }
 fn recv_data_desc() -> *const u8 {
-    // State: [chan_id][ready_tid][pending_tid][elem_is_ptr][value_tid][closed_tid]
-    // — no managed ptrs.
+    // State:
+    // [chan_id][ready_tid][pending_tid][elem_is_ptr][value_tid][closed_tid]
+    // [waker_data][wake_fn][registered_waiter] — no managed ptrs.
     static D: OnceLock<usize> = OnceLock::new();
-    *D.get_or_init(|| make_desc(48, &[]) as usize) as *const u8
+    *D.get_or_init(|| make_desc(72, &[]) as usize) as *const u8
 }
 fn union_managed_desc() -> *const u8 {
     // A `{type_id, payload @8 (managed)}` box (Ready wrapper, or a managed
@@ -261,10 +310,33 @@ fn recv_vtable() -> *const u8 {
     }) as *const u8
 }
 
+/// Private marker for runtime-built channel receive futures. This lets the
+/// shared future cancellation hook distinguish them from generated futures and
+/// remove their pinned handoff state promptly.
+pub(crate) const CHAN_RECV_FUTURE_KIND: i64 = -0x4348_414e_5f52_4543i64;
+
+fn active_recv_data() -> &'static Mutex<HashSet<usize>> {
+    static R: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new();
+    R.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn finish_recv_data(data: usize) -> bool {
+    if lock_unpoison(active_recv_data()).remove(&data) {
+        gc::remove_extra_root(data);
+        true
+    } else {
+        false
+    }
+}
+
 /// Build a `T | ChannelClosed` union box `{type_id, payload}` tagged with
 /// `variant_tid`. `is_ptr` selects a traced payload slot for a managed value.
 unsafe fn variant_box(variant_tid: i64, value: i64, is_ptr: bool) -> *mut u8 {
-    let desc = if is_ptr { union_managed_desc() } else { union_plain_desc() };
+    let desc = if is_ptr {
+        union_managed_desc()
+    } else {
+        union_plain_desc()
+    };
     let bx = unsafe { gc::alloc(desc) };
     unsafe {
         (bx as *mut i64).write(variant_tid);
@@ -304,14 +376,15 @@ extern "C" fn chan_recv_poll(data: *mut u8, ctx: *mut Context) -> *mut u8 {
     let closed_tid = unsafe { ((data as usize + 40) as *const i64).read() };
     let ch = channel(id);
 
-    let mut g = ch.inner.lock().unwrap();
+    let mut g = lock_unpoison(&ch.inner);
     if let Some(value) = g.queue.pop_front() {
         drop(g);
         // The result boxes must not be collected mid-build.
         gc::pause();
         let inner = unsafe { variant_box(value_tid, value, elem_is_ptr) };
         let r = unsafe { ready_box(ready_tid, inner) };
-        gc::resume();
+        gc::resume_with_return_root(r as usize);
+        finish_recv_data(data as usize);
         // The value now lives in the (traced) variant slot; unpin the queue root.
         if elem_is_ptr {
             gc::remove_extra_root(value as usize);
@@ -324,17 +397,24 @@ extern "C" fn chan_recv_poll(data: *mut u8, ctx: *mut Context) -> *mut u8 {
         gc::pause();
         let inner = unsafe { variant_box(closed_tid, 0, false) };
         let r = unsafe { ready_box(ready_tid, inner) };
-        gc::resume();
+        gc::resume_with_return_root(r as usize);
+        finish_recv_data(data as usize);
         return r;
     }
     // Queue empty but senders remain: register the executor's waker (under the
     // same lock `send` takes), then report Pending so the task suspends.
     let c = unsafe { &*ctx };
-    g.waiters.push((c.waker_data as usize, c.wake_fn));
+    let waiter = (c.waker_data as usize, c.wake_fn);
+    register_waiter(&mut g.waiters, waiter);
+    unsafe {
+        ((data as usize + 48) as *mut usize).write(waiter.0);
+        ((data as usize + 56) as *mut usize).write(waiter.1 as usize);
+        ((data as usize + 64) as *mut i64).write(1);
+    }
     drop(g);
     gc::pause();
     let r = unsafe { pending_box(pending_tid) };
-    gc::resume();
+    gc::resume_with_return_root(r as usize);
     r
 }
 
@@ -365,15 +445,52 @@ pub unsafe extern "C" fn lang_chan_recv_future(
         ((data as usize + 24) as *mut i64).write(elem_is_ptr);
         ((data as usize + 32) as *mut i64).write(value_tid);
         ((data as usize + 40) as *mut i64).write(closed_tid);
+        ((data as usize + 48) as *mut usize).write(0);
+        ((data as usize + 56) as *mut usize).write(0);
+        ((data as usize + 64) as *mut i64).write(0);
     }
     let bx = unsafe { gc::alloc(recv_box_desc()) };
     unsafe {
         (bx as *mut usize).write(recv_vtable() as usize); // vtable @0
         ((bx as usize + 8) as *mut usize).write(data as usize); // data @8
-        ((bx as usize + 16) as *mut i64).write(0); // type_id @16
+        ((bx as usize + 16) as *mut i64).write(CHAN_RECV_FUTURE_KIND); // type_id @16
     }
-    gc::resume();
+    // The future data carries only scalar ids, so it can be invisible to stack
+    // scans in the tiny window between construction and the generated async
+    // frame storing the returned future. Pin it until the future resolves.
+    gc::add_extra_root(data as usize);
+    lock_unpoison(active_recv_data()).insert(data as usize);
+    gc::resume_with_return_root(bx as usize);
     bx
+}
+
+/// Cancel a pending `recv()` future. This removes its parked waiter, if any,
+/// and releases the construction handoff root exactly once. Returns true when
+/// `fut` has the runtime channel-recv shape, even if an earlier cancel/resolve
+/// already consumed the active state.
+pub(crate) unsafe fn cancel_recv_future(fut: *mut u8) -> bool {
+    if fut.is_null() {
+        return false;
+    }
+    let kind = unsafe { ((fut as usize + 16) as *const i64).read() };
+    if kind != CHAN_RECV_FUTURE_KIND {
+        return false;
+    }
+    let data = unsafe { ((fut as usize + 8) as *const usize).read() };
+    let registered = unsafe { ((data + 64) as *const i64).read() } != 0;
+    if registered {
+        let id = unsafe { (data as *const i64).read() } as u64;
+        let waker_data = unsafe { ((data + 48) as *const usize).read() };
+        let wake_fn_addr = unsafe { ((data + 56) as *const usize).read() };
+        if wake_fn_addr != 0 {
+            let wake_fn: extern "C" fn(*mut u8) = unsafe { std::mem::transmute(wake_fn_addr) };
+            let ch = channel(id);
+            remove_waiter(&mut lock_unpoison(&ch.inner).waiters, (waker_data, wake_fn));
+        }
+        unsafe { ((data + 64) as *mut i64).write(0) };
+    }
+    finish_recv_data(data);
+    true
 }
 
 /// Blocking receive for `Receiver: Iterator` (`for n in rx`, `docs/20` §2).
@@ -387,7 +504,7 @@ pub unsafe extern "C" fn lang_chan_recv_future(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lang_chan_recv_blocking(id: u64, got: *mut i64) -> i64 {
     let ch = channel(id);
-    let mut g = ch.inner.lock().unwrap();
+    let mut g = lock_unpoison(&ch.inner);
     loop {
         if let Some(value) = g.queue.pop_front() {
             drop(g);
@@ -403,7 +520,7 @@ pub unsafe extern "C" fn lang_chan_recv_blocking(id: u64, got: *mut i64) -> i64 
         // Block until a send or the last-sender release notifies us. Tell the
         // GC we are parked in native code so a collection can proceed.
         gc::enter_native();
-        g = ch.not_empty.wait(g).unwrap();
+        g = wait_unpoison(&ch.not_empty, g);
         gc::leave_native();
     }
 }
@@ -417,7 +534,7 @@ pub unsafe extern "C" fn lang_chan_recv_blocking(id: u64, got: *mut i64) -> i64 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lang_chan_try_recv(id: u64, has: *mut i64) -> i64 {
     let ch = channel(id);
-    let mut g = ch.inner.lock().unwrap();
+    let mut g = lock_unpoison(&ch.inner);
     match g.queue.pop_front() {
         Some(value) => {
             drop(g);
@@ -435,6 +552,24 @@ pub unsafe extern "C" fn lang_chan_try_recv(id: u64, has: *mut i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    static WOKEN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    extern "C" fn count_wake(_: *mut u8) {
+        WOKEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn poll_recv_once(fut: *mut u8) -> *mut u8 {
+        let vtable = unsafe { (fut as *const usize).read() } as *const usize;
+        let poll: extern "C" fn(*mut u8, *mut Context) -> *mut u8 =
+            unsafe { std::mem::transmute(vtable.read()) };
+        let data = unsafe { ((fut as usize + 8) as *const usize).read() } as *mut u8;
+        let mut ctx = Context {
+            waker_data: std::ptr::null_mut(),
+            wake_fn: count_wake,
+        };
+        poll(data, &mut ctx)
+    }
 
     /// Acquiring and releasing senders drives the close-for-receiving flag; a
     /// drained blocking recv then terminates instead of parking forever.
@@ -497,5 +632,173 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(20));
         unsafe { lang_chan_sender_release(id) };
         assert_eq!(h.join().unwrap().0, 0, "woken → Done on close");
+    }
+
+    #[test]
+    fn registry_lock_recovers_after_poison() {
+        let h = std::thread::spawn(|| {
+            let _guard = registry().lock().unwrap();
+            panic!("poison channel registry");
+        });
+        assert!(h.join().is_err());
+
+        let id = lang_channel_new();
+        assert_eq!(unsafe { lang_chan_send(id, 11) }, 0);
+        let mut got = 0i64;
+        assert_eq!(unsafe { lang_chan_try_recv(id, &mut got) }, 11);
+        assert_eq!(got, 1);
+    }
+
+    #[test]
+    fn channel_queue_lock_recovers_after_poison() {
+        let id = lang_channel_new();
+        let ch = channel(id);
+        let h = std::thread::spawn(move || {
+            let _guard = ch.inner.lock().unwrap();
+            panic!("poison channel queue");
+        });
+        assert!(h.join().is_err());
+
+        assert_eq!(unsafe { lang_chan_send(id, 23) }, 0);
+        let mut got = 0i64;
+        assert_eq!(unsafe { lang_chan_recv_blocking(id, &mut got) }, 23);
+        assert_eq!(got, 1);
+        unsafe { lang_chan_sender_release(id) };
+        let _ = unsafe { lang_chan_recv_blocking(id, &mut got) };
+        assert_eq!(got, 0);
+    }
+
+    #[test]
+    fn duplicate_channel_waiters_are_coalesced() {
+        extern "C" fn wake_noop(_: *mut u8) {}
+
+        let mut waiters = Vec::new();
+        let a = 1usize;
+        let b = 2usize;
+
+        register_waiter(&mut waiters, (a, wake_noop));
+        register_waiter(&mut waiters, (a, wake_noop));
+        register_waiter(&mut waiters, (b, wake_noop));
+
+        assert_eq!(waiters.len(), 2, "exact duplicate wakers are coalesced");
+        assert!(waiters.iter().any(|w| same_waker(*w, (a, wake_noop))));
+        assert!(waiters.iter().any(|w| same_waker(*w, (b, wake_noop))));
+    }
+
+    #[test]
+    fn duplicate_executor_task_waiters_replace_previous_registration() {
+        let (data, wake) = crate::threads::test_executor_waker();
+        let mut waiters = Vec::new();
+
+        register_waiter(&mut waiters, (data as usize, wake));
+        register_waiter(&mut waiters, (data as usize, wake));
+
+        assert_eq!(
+            waiters.len(),
+            1,
+            "a task repeatedly polling the same recv future keeps one waiter"
+        );
+    }
+
+    #[test]
+    fn stale_executor_task_waiters_are_pruned() {
+        extern "C" fn wake_noop(_: *mut u8) {}
+
+        let stale: Waker = (usize::MAX - 17, crate::threads::task_wake);
+        let live: Waker = (3usize, wake_noop);
+        let mut waiters = vec![stale, live];
+
+        prune_dead_waiters(&mut waiters);
+
+        assert_eq!(waiters.len(), 1, "dead executor task waiter is dropped");
+        assert!(same_waker(waiters[0], live));
+    }
+
+    #[test]
+    fn send_wakes_each_coalesced_waiter_once() {
+        WOKEN.store(0, std::sync::atomic::Ordering::SeqCst);
+        let id = lang_channel_new();
+        {
+            let ch = channel(id);
+            let mut g = lock_unpoison(&ch.inner);
+            register_waiter(&mut g.waiters, (42, count_wake));
+            register_waiter(&mut g.waiters, (42, count_wake));
+        }
+
+        assert_eq!(unsafe { lang_chan_send(id, 99) }, 0);
+        assert_eq!(
+            WOKEN.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "duplicate waiters must not amplify wakeups"
+        );
+        assert!(channel(id).inner.lock().unwrap().waiters.is_empty());
+
+        let mut got = 0;
+        assert_eq!(unsafe { lang_chan_recv_blocking(id, &mut got) }, 99);
+        assert_eq!(got, 1);
+    }
+
+    #[test]
+    fn cancelling_recv_future_before_poll_releases_handoff_root_once() {
+        let _g = crate::gc::TEST_LOCK.lock().unwrap();
+        let id = lang_channel_new();
+        let fut = unsafe { lang_chan_recv_future(id, 7, 9, 0, 11, 12) };
+        let data = unsafe { ((fut as usize + 8) as *const usize).read() };
+        assert_eq!(
+            gc::extra_root_count_for(data),
+            1,
+            "recv future data is pinned across the generated-code handoff"
+        );
+
+        unsafe { crate::threads::lang_future_cancel(fut) };
+        assert_eq!(
+            gc::extra_root_count_for(data),
+            0,
+            "cancelling an unpolled recv future must release its handoff root"
+        );
+
+        unsafe { crate::threads::lang_future_cancel(fut) };
+        assert_eq!(
+            gc::extra_root_count_for(data),
+            0,
+            "recv cancellation must be repeatable"
+        );
+        unsafe { lang_chan_sender_release(id) };
+    }
+
+    #[test]
+    fn cancelling_pending_recv_future_removes_waiter_and_root() {
+        let _g = crate::gc::TEST_LOCK.lock().unwrap();
+        WOKEN.store(0, std::sync::atomic::Ordering::SeqCst);
+        let id = lang_channel_new();
+        let fut = unsafe { lang_chan_recv_future(id, 7, 9, 0, 11, 12) };
+        let data = unsafe { ((fut as usize + 8) as *const usize).read() };
+
+        let pending = poll_recv_once(fut);
+        assert_eq!(unsafe { (pending as *const i64).read() }, 9);
+        assert_eq!(channel(id).inner.lock().unwrap().waiters.len(), 1);
+
+        unsafe { crate::threads::lang_future_cancel(fut) };
+
+        assert_eq!(
+            gc::extra_root_count_for(data),
+            0,
+            "cancelling a pending recv future must release its handoff root"
+        );
+        assert!(
+            channel(id).inner.lock().unwrap().waiters.is_empty(),
+            "cancelling a pending recv future must remove its parked waiter"
+        );
+
+        assert_eq!(unsafe { lang_chan_send(id, 99) }, 0);
+        assert_eq!(
+            WOKEN.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "a cancelled recv future must not leave a stale live waiter behind"
+        );
+        let mut got = 0;
+        assert_eq!(unsafe { lang_chan_recv_blocking(id, &mut got) }, 99);
+        assert_eq!(got, 1);
+        unsafe { lang_chan_sender_release(id) };
     }
 }

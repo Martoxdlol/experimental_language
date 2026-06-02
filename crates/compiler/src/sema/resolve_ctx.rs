@@ -56,7 +56,10 @@ impl ResolveContext {
 
     /// The inverse of [`Self::file_of`]: normalized file → module path.
     pub fn file_to_module(&self) -> HashMap<PathBuf, Vec<String>> {
-        self.file_of.iter().map(|(mp, f)| (normalize(f), mp.clone())).collect()
+        self.file_of
+            .iter()
+            .map(|(mp, f)| (normalize(f), mp.clone()))
+            .collect()
     }
 }
 

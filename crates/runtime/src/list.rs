@@ -117,7 +117,7 @@ pub unsafe extern "C" fn lang_list_slice(h: *mut u8, start: i64, end: i64) -> *m
         unsafe { lang_list_push(out, v) };
         i += 1;
     }
-    gc::resume();
+    gc::resume_with_return_root(out as usize);
     out
 }
 
@@ -243,7 +243,6 @@ pub unsafe extern "C" fn lang_list_clone(h: *mut u8) -> *mut u8 {
             lset(new, L_LEN, len as u64);
         }
     }
-    gc::resume();
+    gc::resume_with_return_root(new as usize);
     new
 }
-

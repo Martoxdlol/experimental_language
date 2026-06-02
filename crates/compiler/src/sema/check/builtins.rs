@@ -35,15 +35,23 @@ impl<'a> Checker<'a> {
         }
     }
 
-    pub(crate) fn check_list_lit(&mut self, elems: &[Expr], expected: Option<Ty>, span: Span) -> Ty {
+    pub(crate) fn check_list_lit(
+        &mut self,
+        elems: &[Expr],
+        expected: Option<Ty>,
+        span: Span,
+    ) -> Ty {
         let exp_elem = expected.and_then(|e| self.list_elem(e));
         if elems.is_empty() {
             return match exp_elem {
                 Some(e) => self.mk_list(e),
                 None => {
-                    self.emit(span, SemaErrorKind::Message(
-                        "cannot infer the element type of an empty list; annotate it".into(),
-                    ));
+                    self.emit(
+                        span,
+                        SemaErrorKind::Message(
+                            "cannot infer the element type of an empty list; annotate it".into(),
+                        ),
+                    );
                     self.tcx.error
                 }
             };
@@ -91,7 +99,12 @@ impl<'a> Checker<'a> {
         self.type_implements(ty, hash_def) && self.type_implements(ty, eq_def)
     }
 
-    pub(crate) fn check_map_lit(&mut self, items: &[MapItem], expected: Option<Ty>, span: Span) -> Ty {
+    pub(crate) fn check_map_lit(
+        &mut self,
+        items: &[MapItem],
+        expected: Option<Ty>,
+        span: Span,
+    ) -> Ty {
         let exp_kv = expected.and_then(|e| self.map_kv(e));
         // Determine K/V from the annotation, else from the first entry.
         let mut kv = exp_kv;
@@ -112,10 +125,13 @@ impl<'a> Checker<'a> {
             return self.tcx.error;
         };
         if !self.is_valid_map_key(kt) && !self.tcx.is_error(kt) {
-            self.emit(span, SemaErrorKind::Message(format!(
-                "`{}` cannot be used as a map key (expected `str` or an integer type)",
-                self.display(kt)
-            )));
+            self.emit(
+                span,
+                SemaErrorKind::Message(format!(
+                    "`{}` cannot be used as a map key (expected `str` or an integer type)",
+                    self.display(kt)
+                )),
+            );
         }
         let map_ty = self.mk_map(kt, vt);
         for it in items {
@@ -136,11 +152,24 @@ impl<'a> Checker<'a> {
     }
 
     /// Type-check a builtin `Map<K, V>` method call (`docs/18` §6).
-    pub(crate) fn check_map_method(&mut self, kt: Ty, vt: Ty, name: &Ident, args: &[Expr], span: Span) -> Ty {
+    pub(crate) fn check_map_method(
+        &mut self,
+        kt: Ty,
+        vt: Ty,
+        name: &Ident,
+        args: &[Expr],
+        span: Span,
+    ) -> Ty {
         let i64t = self.tcx.int(IntTy::I64);
         let check_args = |this: &mut Self, expect: &[Ty]| {
             if args.len() != expect.len() {
-                this.emit(span, SemaErrorKind::ArgCount { expected: expect.len(), found: args.len() });
+                this.emit(
+                    span,
+                    SemaErrorKind::ArgCount {
+                        expected: expect.len(),
+                        found: args.len(),
+                    },
+                );
             }
             for (a, e) in args.iter().zip(expect) {
                 let at = this.check_expr(a, Some(*e));
@@ -148,13 +177,34 @@ impl<'a> Checker<'a> {
             }
         };
         match name.name.as_str() {
-            "size" => { check_args(self, &[]); i64t }
-            "is_empty" => { check_args(self, &[]); self.tcx.bool }
-            "clear" => { check_args(self, &[]); self.tcx.null }
-            "contains" => { check_args(self, &[kt]); self.tcx.bool }
-            "get" => { check_args(self, &[kt]); self.tcx.mk_union([vt, self.tcx.null]) }
-            "remove" => { check_args(self, &[kt]); self.tcx.mk_union([vt, self.tcx.null]) }
-            "set" => { check_args(self, &[kt, vt]); self.tcx.null }
+            "size" => {
+                check_args(self, &[]);
+                i64t
+            }
+            "is_empty" => {
+                check_args(self, &[]);
+                self.tcx.bool
+            }
+            "clear" => {
+                check_args(self, &[]);
+                self.tcx.null
+            }
+            "contains" => {
+                check_args(self, &[kt]);
+                self.tcx.bool
+            }
+            "get" => {
+                check_args(self, &[kt]);
+                self.tcx.mk_union([vt, self.tcx.null])
+            }
+            "remove" => {
+                check_args(self, &[kt]);
+                self.tcx.mk_union([vt, self.tcx.null])
+            }
+            "set" => {
+                check_args(self, &[kt, vt]);
+                self.tcx.null
+            }
             "keys" => {
                 check_args(self, &[]);
                 let def = self.prog.map_keys_def;
@@ -171,9 +221,10 @@ impl<'a> Checker<'a> {
                 self.tcx.mk_named(def, vec![kt, vt])
             }
             other => {
-                self.emit(name.span, SemaErrorKind::Message(format!(
-                    "`Map` has no method `{other}`"
-                )));
+                self.emit(
+                    name.span,
+                    SemaErrorKind::Message(format!("`Map` has no method `{other}`")),
+                );
                 for a in args {
                     self.check_expr(a, None);
                 }
@@ -208,18 +259,34 @@ impl<'a> Checker<'a> {
             self.expect(it, i64t, index.span);
             return elem;
         }
-        self.emit(receiver.span, SemaErrorKind::Message(format!(
-            "type `{}` cannot be indexed with `[]`", self.display(rty)
-        )));
+        self.emit(
+            receiver.span,
+            SemaErrorKind::Message(format!(
+                "type `{}` cannot be indexed with `[]`",
+                self.display(rty)
+            )),
+        );
         self.tcx.error
     }
 
     /// Type-check a builtin `List<E>` method call.
-    pub(crate) fn check_list_method(&mut self, elem: Ty, name: &Ident, args: &[Expr], span: Span) -> Ty {
+    pub(crate) fn check_list_method(
+        &mut self,
+        elem: Ty,
+        name: &Ident,
+        args: &[Expr],
+        span: Span,
+    ) -> Ty {
         let i64t = self.tcx.int(IntTy::I64);
         let check_args = |this: &mut Self, expect: &[Ty]| {
             if args.len() != expect.len() {
-                this.emit(span, SemaErrorKind::ArgCount { expected: expect.len(), found: args.len() });
+                this.emit(
+                    span,
+                    SemaErrorKind::ArgCount {
+                        expected: expect.len(),
+                        found: args.len(),
+                    },
+                );
             }
             for (a, e) in args.iter().zip(expect) {
                 let at = this.check_expr(a, Some(*e));
@@ -279,10 +346,13 @@ impl<'a> Checker<'a> {
             "contains" | "index_of" => {
                 check_args(self, &[elem]);
                 if !self.is_equatable(elem) {
-                    self.emit(span, SemaErrorKind::Message(format!(
-                        "`List.{}` requires the element type to implement `Eq`",
-                        name.name
-                    )));
+                    self.emit(
+                        span,
+                        SemaErrorKind::Message(format!(
+                            "`List.{}` requires the element type to implement `Eq`",
+                            name.name
+                        )),
+                    );
                 }
                 if name.name == "contains" {
                     self.tcx.bool
@@ -294,7 +364,13 @@ impl<'a> Checker<'a> {
             // closure with an implicit `it`).
             "map" => {
                 if args.len() != 1 {
-                    self.emit(span, SemaErrorKind::ArgCount { expected: 1, found: args.len() });
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 1,
+                            found: args.len(),
+                        },
+                    );
                     return self.tcx.error;
                 }
                 // Expected `(E) => U`; `U` is inferred from the closure body.
@@ -307,7 +383,13 @@ impl<'a> Checker<'a> {
             }
             "filter" => {
                 if args.len() != 1 {
-                    self.emit(span, SemaErrorKind::ArgCount { expected: 1, found: args.len() });
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 1,
+                            found: args.len(),
+                        },
+                    );
                     return self.tcx.error;
                 }
                 let want = self.tcx.mk_func(vec![elem], self.tcx.bool, false);
@@ -317,7 +399,13 @@ impl<'a> Checker<'a> {
             }
             "each" => {
                 if args.len() != 1 {
-                    self.emit(span, SemaErrorKind::ArgCount { expected: 1, found: args.len() });
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 1,
+                            found: args.len(),
+                        },
+                    );
                     return self.tcx.null;
                 }
                 let want = self.tcx.mk_func(vec![elem], self.tcx.null, false);
@@ -326,7 +414,13 @@ impl<'a> Checker<'a> {
             }
             "fold" => {
                 if args.len() != 2 {
-                    self.emit(span, SemaErrorKind::ArgCount { expected: 2, found: args.len() });
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 2,
+                            found: args.len(),
+                        },
+                    );
                     return self.tcx.error;
                 }
                 let acc = self.check_expr(&args[0], None);
@@ -336,9 +430,10 @@ impl<'a> Checker<'a> {
                 acc
             }
             other => {
-                self.emit(name.span, SemaErrorKind::Message(format!(
-                    "`List` has no method `{other}`"
-                )));
+                self.emit(
+                    name.span,
+                    SemaErrorKind::Message(format!("`List` has no method `{other}`")),
+                );
                 for a in args {
                     self.check_expr(a, None);
                 }
@@ -353,7 +448,13 @@ impl<'a> Checker<'a> {
         let i64t = self.tcx.int(IntTy::I64);
         let check = |this: &mut Self, expect: &[Ty]| {
             if args.len() != expect.len() {
-                this.emit(span, SemaErrorKind::ArgCount { expected: expect.len(), found: args.len() });
+                this.emit(
+                    span,
+                    SemaErrorKind::ArgCount {
+                        expected: expect.len(),
+                        found: args.len(),
+                    },
+                );
             }
             for (a, e) in args.iter().zip(expect) {
                 let at = this.check_expr(a, Some(*e));
@@ -413,9 +514,10 @@ impl<'a> Checker<'a> {
                 self.tcx.mk_named(self.prog.str_bytes_def, vec![])
             }
             other => {
-                self.emit(name.span, SemaErrorKind::Message(format!(
-                    "`str` has no method `{other}`"
-                )));
+                self.emit(
+                    name.span,
+                    SemaErrorKind::Message(format!("`str` has no method `{other}`")),
+                );
                 for a in args {
                     self.check_expr(a, None);
                 }
@@ -438,13 +540,19 @@ impl<'a> Checker<'a> {
     pub(crate) fn is_immutable_value(&self, ty: Ty) -> bool {
         matches!(
             self.tcx.kind(ty),
-            TyKind::Int(_) | TyKind::Float(_) | TyKind::Bool | TyKind::Char | TyKind::Str | TyKind::Null
+            TyKind::Int(_)
+                | TyKind::Float(_)
+                | TyKind::Bool
+                | TyKind::Char
+                | TyKind::Str
+                | TyKind::Null
         )
     }
 
-    /// Whether `ty` is safe to capture into a spawned thread by value: an
-    /// immutable value, or a thread-safe channel endpoint (`Sender`/`Receiver`,
-    /// whose struct just carries a synchronized channel's id) (`docs/20`).
+    /// Whether `ty` is safe to capture into a spawned thread/task by value
+    /// without synthesizing an extra clone: an immutable value, or a
+    /// thread-safe handle (`Sender`/`Receiver`/`Shared`, whose structs carry ids
+    /// into synchronized runtime state) (`docs/20`).
     pub(crate) fn is_thread_shareable(&self, ty: Ty) -> bool {
         if self.is_immutable_value(ty) {
             return true;
@@ -454,6 +562,46 @@ impl<'a> Checker<'a> {
                 if *def == self.prog.sender_def
                     || *def == self.prog.receiver_def
                     || *def == self.prog.shared_def)
+    }
+
+    fn param_has_clone_bound(&mut self, param: DefId) -> bool {
+        self.prog.clone_def != DefId(0)
+            && self
+                .bound_ifaces(param)
+                .iter()
+                .any(|(iface, _)| *iface == self.prog.clone_def)
+    }
+
+    fn is_spawn_cloneable_collection_value(&mut self, ty: Ty) -> bool {
+        self.is_immutable_value(ty)
+            || match self.tcx.kind(ty).clone() {
+                TyKind::Param(p) => self.param_has_clone_bound(p),
+                _ => {
+                    self.prog.clone_def != DefId(0) && self.type_implements(ty, self.prog.clone_def)
+                }
+            }
+    }
+
+    /// Whether `ty` can be snapshotted at a spawn boundary by calling/using the
+    /// existing `Clone` machinery (`docs/20` §1 capture isolation). The accepted
+    /// shapes intentionally mirror what codegen can clone at the spawn-site:
+    /// immutable/shareable handles, concrete `Clone` values, direct `T: Clone`
+    /// parameters after monomorphization, and collections whose cloned elements
+    /// or values are covered by those same rules.
+    pub(crate) fn is_spawn_cloneable_capture(&mut self, ty: Ty) -> bool {
+        if self.is_thread_shareable(ty) {
+            return true;
+        }
+        if let TyKind::Param(p) = self.tcx.kind(ty) {
+            return self.param_has_clone_bound(*p);
+        }
+        if let Some(elem) = self.list_elem(ty) {
+            return self.is_spawn_cloneable_collection_value(elem);
+        }
+        if let Some((kt, vt)) = self.map_kv(ty) {
+            return self.is_immutable_value(kt) && self.is_spawn_cloneable_collection_value(vt);
+        }
+        self.prog.clone_def != DefId(0) && self.type_implements(ty, self.prog.clone_def)
     }
 
     /// Resolve a builtin `.hash()` on a primitive or `str` receiver — types
@@ -483,7 +631,12 @@ impl<'a> Checker<'a> {
     /// [`CloneKind`] for codegen); `None` for user types, which clone through
     /// their own `Clone` impl. Emits an error for collections whose elements are
     /// not (yet) cloneable.
-    pub(crate) fn check_builtin_clone(&mut self, rty: Ty, _callee_span: Span, name_span: Span) -> Option<Ty> {
+    pub(crate) fn check_builtin_clone(
+        &mut self,
+        rty: Ty,
+        _callee_span: Span,
+        name_span: Span,
+    ) -> Option<Ty> {
         use crate::sema::results::CloneKind;
         if self.is_immutable_value(rty) {
             self.pending_clone_kind.set(Some(CloneKind::Identity));
@@ -514,11 +667,14 @@ impl<'a> Checker<'a> {
                 self.pending_clone_kind.set(Some(CloneKind::ListDeep));
                 return Some(rty);
             }
-            self.emit(name_span, SemaErrorKind::Message(format!(
-                "cannot `clone` a `List` of `{}` — its element type does not \
+            self.emit(
+                name_span,
+                SemaErrorKind::Message(format!(
+                    "cannot `clone` a `List` of `{}` — its element type does not \
                  implement `Clone`",
-                self.display(elem)
-            )));
+                    self.display(elem)
+                )),
+            );
             return Some(self.tcx.error);
         }
         if let Some((kt, vt)) = self.map_kv(rty) {
@@ -537,11 +693,15 @@ impl<'a> Checker<'a> {
                 self.pending_clone_kind.set(Some(CloneKind::MapDeep));
                 return Some(rty);
             }
-            self.emit(name_span, SemaErrorKind::Message(format!(
-                "cannot `clone` a `Map<{}, {}>` — key must be immutable and \
+            self.emit(
+                name_span,
+                SemaErrorKind::Message(format!(
+                    "cannot `clone` a `Map<{}, {}>` — key must be immutable and \
                  value must implement `Clone`",
-                self.display(kt), self.display(vt)
-            )));
+                    self.display(kt),
+                    self.display(vt)
+                )),
+            );
             return Some(self.tcx.error);
         }
         None
@@ -549,16 +709,58 @@ impl<'a> Checker<'a> {
 
     /// Type-check `Thread.spawn(() => R)` / `Thread.spawn { … }` (`docs/20` §1).
     /// The single argument is a parameterless closure; the result is
-    /// `JoinHandle<R>`. Captures must be immutable values (deep-cloning mutable
-    /// captures across the spawn boundary is a follow-up — `docs/20` §1).
-    pub(crate) fn check_thread_spawn(&mut self, args: &[Expr], trailing: Option<&Expr>, span: Span) -> Ty {
+    /// `JoinHandle<R>`. Captures must be immutable/thread-safe handles or
+    /// `Clone` values that codegen can snapshot at the spawn boundary
+    /// (`docs/20` §1).
+    pub(crate) fn check_thread_spawn(
+        &mut self,
+        args: &[Expr],
+        trailing: Option<&Expr>,
+        span: Span,
+    ) -> Ty {
+        self.check_spawn_handle(
+            args,
+            trailing,
+            span,
+            self.prog.join_handle_def,
+            "Thread.spawn",
+        )
+    }
+
+    /// Type-check `Task.spawn` against the same closure/capture rules as
+    /// `Thread.spawn`, but return the executor-task handle exposed by
+    /// `std:task`.
+    pub(crate) fn check_task_spawn(
+        &mut self,
+        args: &[Expr],
+        trailing: Option<&Expr>,
+        span: Span,
+    ) -> Ty {
+        self.check_spawn_handle(
+            args,
+            trailing,
+            span,
+            self.prog.task_join_handle_def,
+            "Task.spawn",
+        )
+    }
+
+    fn check_spawn_handle(
+        &mut self,
+        args: &[Expr],
+        trailing: Option<&Expr>,
+        span: Span,
+        handle_def: DefId,
+        surface: &str,
+    ) -> Ty {
         let clo = match (args, trailing) {
             ([], Some(tc)) => tc,
             ([a], None) => a,
             _ => {
-                self.emit(span, SemaErrorKind::Message(
-                    "`Thread.spawn` takes a single closure argument".into(),
-                ));
+                self.emit(
+                    span,
+                    SemaErrorKind::Message(format!("`{surface}` takes a single closure argument")),
+                );
                 for a in args {
                     self.check_expr(a, None);
                 }
@@ -572,19 +774,21 @@ impl<'a> Checker<'a> {
             TyKind::Func { params, ret, .. } if params.is_empty() => ret,
             TyKind::Error => return self.tcx.error,
             _ => {
-                self.emit(clo.span, SemaErrorKind::Message(
-                    "`Thread.spawn` expects a parameterless closure `() => R`".into(),
-                ));
+                self.emit(
+                    clo.span,
+                    SemaErrorKind::Message(format!(
+                        "`{surface}` expects a parameterless closure `() => R`"
+                    )),
+                );
                 return self.tcx.error;
             }
         };
         // A float result is carried across the worker boundary as its raw bit
         // pattern (the code generator selects the result ABI; `docs/20`), so
         // float-returning spawns are supported.
-        // Captures must be safe to share across threads: an immutable value, or
-        // a thread-safe handle (`Sender`/`Receiver` — the channel itself is
-        // synchronized; the struct only carries an id). Other managed values
-        // would need a deep clone at the boundary (a follow-up — `docs/20` §1).
+        // Captures must be safe to cross a task/thread boundary: either a
+        // shareable handle/immutable value, or a concrete type the backend can
+        // clone at the spawn site to make an independent snapshot.
         // The closure was just checked, so its HIR node (with the resolved
         // captures) is already in `node_hir` (was the `closures` side table).
         let cap_tys: Vec<Ty> = match self.node_hir.get(&clo.span).map(|n| &n.kind) {
@@ -594,20 +798,23 @@ impl<'a> Checker<'a> {
             _ => Vec::new(),
         };
         for cap_ty in cap_tys {
-            if !self.is_thread_shareable(cap_ty) {
-                self.emit(clo.span, SemaErrorKind::Message(format!(
-                    "`Thread.spawn` can only capture immutable values or channel \
-                     endpoints so far; captured value of type `{}` would need a \
-                     deep clone across the thread boundary (`docs/20` §1)",
-                    self.display(cap_ty)
-                )));
+            if !self.is_spawn_cloneable_capture(cap_ty) {
+                self.emit(
+                    clo.span,
+                    SemaErrorKind::Message(format!(
+                        "`{surface}` can only capture immutable values, thread-safe \
+                     handles, or `Clone` values that can be snapshotted; captured value of type \
+                     `{}` cannot be snapshotted across the task boundary (`docs/20` §1)",
+                        self.display(cap_ty)
+                    )),
+                );
             }
         }
         // An async worker — the closure returns a `Future<R>` (`docs/20` §1).
         // The worker drives that future to completion, so the handle joins on
         // the awaited `R`, not a `Future<R>`. A synchronous worker keeps `R`.
         let output = self.future_def_output(r).unwrap_or(r);
-        self.tcx.mk_named(self.prog.join_handle_def, vec![output])
+        self.tcx.mk_named(handle_def, vec![output])
     }
 
     /// If `ty` is the canonical `Future<Out>` interface object (`docs/21` §1),
@@ -627,12 +834,24 @@ impl<'a> Checker<'a> {
     /// `JoinHandle<R>.join(): Future<Joined<R> | Panicked>` and
     /// `.detach(): null` (`docs/20` §1).
     ///
-    /// `join` is **async and non-blocking** (`docs/21`): you `await` the
-    /// returned future (or drive it with `block_on`) instead of parking the
-    /// calling OS thread. The future resolves when the worker finishes.
-    pub(crate) fn check_join_handle_method(&mut self, r: Ty, name: &Ident, args: &[Expr], span: Span) -> Ty {
+    /// `join` is **async and non-blocking** (`docs/21`): user code `await`s the
+    /// returned future instead of parking the calling OS thread. The runtime's
+    /// root executor driver is internal.
+    pub(crate) fn check_join_handle_method(
+        &mut self,
+        r: Ty,
+        name: &Ident,
+        args: &[Expr],
+        span: Span,
+    ) -> Ty {
         if !args.is_empty() {
-            self.emit(span, SemaErrorKind::ArgCount { expected: 0, found: args.len() });
+            self.emit(
+                span,
+                SemaErrorKind::ArgCount {
+                    expected: 0,
+                    found: args.len(),
+                },
+            );
             for a in args {
                 self.check_expr(a, None);
             }
@@ -646,9 +865,50 @@ impl<'a> Checker<'a> {
             }
             "detach" => self.tcx.null,
             other => {
-                self.emit(name.span, SemaErrorKind::Message(format!(
-                    "`JoinHandle` has no method `{other}`"
-                )));
+                self.emit(
+                    name.span,
+                    SemaErrorKind::Message(format!("`JoinHandle` has no method `{other}`")),
+                );
+                self.tcx.error
+            }
+        }
+    }
+
+    /// `std:task::JoinHandle<R>.join(): Future<Joined<R> | Panicked |
+    /// Cancelled>`, `.detach(): null`, `.cancel(): null`, and `.abort(): null`.
+    pub(crate) fn check_task_join_handle_method(
+        &mut self,
+        r: Ty,
+        name: &Ident,
+        args: &[Expr],
+        span: Span,
+    ) -> Ty {
+        if !args.is_empty() {
+            self.emit(
+                span,
+                SemaErrorKind::ArgCount {
+                    expected: 0,
+                    found: args.len(),
+                },
+            );
+            for a in args {
+                self.check_expr(a, None);
+            }
+        }
+        match name.name.as_str() {
+            "join" => {
+                let joined = self.tcx.mk_named(self.prog.joined_def, vec![r]);
+                let panicked = self.tcx.mk_named(self.prog.panicked_def, Vec::new());
+                let cancelled = self.tcx.mk_named(self.prog.cancelled_def, Vec::new());
+                let union = self.tcx.mk_union([joined, panicked, cancelled]);
+                self.tcx.mk_named(self.prog.future_def, vec![union])
+            }
+            "detach" | "cancel" | "abort" => self.tcx.null,
+            other => {
+                self.emit(
+                    name.span,
+                    SemaErrorKind::Message(format!("`JoinHandle` has no method `{other}`")),
+                );
                 self.tcx.error
             }
         }
@@ -682,13 +942,20 @@ impl<'a> Checker<'a> {
         // (a) `T.static_method()` — a generic parameter, resolved via its bounds.
         if let Some(pty) = self.cur_generics.get(recv_name).copied() {
             if let TyKind::Param(pdef) = self.tcx.kind(pty).clone() {
-                return Some(self.check_bound_static_call(pdef, pty, callee, method, arg_slice, span));
+                return Some(
+                    self.check_bound_static_call(pdef, pty, callee, method, arg_slice, span),
+                );
             }
         }
         // (b) `Type.static_method()` — a concrete (extendable) type.
         if let Some(def) = self.prog.resolve_type_in(self.current_module(), recv_name) {
-            if matches!(self.prog.def(def).kind, DefKind::Struct | DefKind::ExternStruct) {
-                return Some(self.check_type_static_call(def, callee, method, arg_slice, generics, span));
+            if matches!(
+                self.prog.def(def).kind,
+                DefKind::Struct | DefKind::ExternStruct
+            ) {
+                return Some(
+                    self.check_type_static_call(def, callee, method, arg_slice, generics, span),
+                );
             }
         }
         None
@@ -710,23 +977,35 @@ impl<'a> Checker<'a> {
             for a in args {
                 self.check_expr(a, None);
             }
-            self.emit(method.span, SemaErrorKind::Message(format!(
-                "no static method `{}` on type parameter `{}` through its bounds",
-                method.name,
-                self.display(pty)
-            )));
+            self.emit(
+                method.span,
+                SemaErrorKind::Message(format!(
+                    "no static method `{}` on type parameter `{}` through its bounds",
+                    method.name,
+                    self.display(pty)
+                )),
+            );
             return self.tcx.error;
         };
         if !self.prog.def(mdef).is_static {
-            self.emit(method.span, SemaErrorKind::Message(format!(
-                "`{}` is an instance method; call it on a value, not on the type",
-                method.name
-            )));
+            self.emit(
+                method.span,
+                SemaErrorKind::Message(format!(
+                    "`{}` is an instance method; call it on a value, not on the type",
+                    method.name
+                )),
+            );
         }
         self.record_res(callee.span, ValueRes::Method(mdef), self.tcx.error);
         let (params, ret) = self.iface_method_sig(mdef, iface, &iargs, pty);
         if args.len() != params.len() {
-            self.emit(span, SemaErrorKind::ArgCount { expected: params.len(), found: args.len() });
+            self.emit(
+                span,
+                SemaErrorKind::ArgCount {
+                    expected: params.len(),
+                    found: args.len(),
+                },
+            );
         }
         for (a, pt) in args.iter().zip(&params) {
             let at = self.check_expr(a, Some(*pt));
@@ -762,17 +1041,25 @@ impl<'a> Checker<'a> {
             for a in args {
                 self.check_expr(a, None);
             }
-            self.emit(method.span, SemaErrorKind::Message(format!(
-                "type `{}` has no static method `{}`",
-                self.prog.def(struct_def).name, method.name
-            )));
+            self.emit(
+                method.span,
+                SemaErrorKind::Message(format!(
+                    "type `{}` has no static method `{}`",
+                    self.prog.def(struct_def).name,
+                    method.name
+                )),
+            );
             return self.tcx.error;
         };
         if !self.prog.def(mdef).is_static {
-            self.emit(method.span, SemaErrorKind::Message(format!(
-                "`{}` is an instance method on `{}`; call it on a value",
-                method.name, self.prog.def(struct_def).name
-            )));
+            self.emit(
+                method.span,
+                SemaErrorKind::Message(format!(
+                    "`{}` is an instance method on `{}`; call it on a value",
+                    method.name,
+                    self.prog.def(struct_def).name
+                )),
+            );
         }
         self.record_res(callee.span, ValueRes::Method(mdef), self.tcx.error);
 
@@ -828,11 +1115,14 @@ impl<'a> Checker<'a> {
         for g in &struct_gens {
             if subst.get(g).is_none() {
                 let gname = self.prog.def(*g).name.clone();
-                self.emit(span, SemaErrorKind::Message(format!(
-                    "cannot infer generic argument `{}` for `{}`; annotate it",
-                    gname,
-                    self.prog.def(struct_def).name
-                )));
+                self.emit(
+                    span,
+                    SemaErrorKind::Message(format!(
+                        "cannot infer generic argument `{}` for `{}`; annotate it",
+                        gname,
+                        self.prog.def(struct_def).name
+                    )),
+                );
                 subst.insert(*g, self.tcx.error);
             }
         }
@@ -862,7 +1152,13 @@ impl<'a> Checker<'a> {
             .map(|t| self.subst_ty(*t, &subst))
             .collect();
         if args.len() != param_tys.len() {
-            self.emit(span, SemaErrorKind::ArgCount { expected: param_tys.len(), found: args.len() });
+            self.emit(
+                span,
+                SemaErrorKind::ArgCount {
+                    expected: param_tys.len(),
+                    found: args.len(),
+                },
+            );
         }
         for (i, a) in args.iter().enumerate() {
             if let Some(pt) = param_tys.get(i) {
@@ -873,7 +1169,9 @@ impl<'a> Checker<'a> {
         // Record monomorphization args: the extend's generics (resolved through
         // the chain to concrete types), then the method's own generics.
         let parent = self.prog.def(mdef).parent;
-        let ext_gens = parent.map(|p| self.prog.def(p).generics.clone()).unwrap_or_default();
+        let ext_gens = parent
+            .map(|p| self.prog.def(p).generics.clone())
+            .unwrap_or_default();
         let mut targs: Vec<Ty> = ext_gens
             .iter()
             .map(|g| {
@@ -905,9 +1203,12 @@ impl<'a> Checker<'a> {
     /// Type-check `channel<T>(): (Sender<T>, Receiver<T>)` (`docs/20` §2).
     pub(crate) fn check_channel_new(&mut self, generics: &[Type], args: &[Expr], span: Span) -> Ty {
         if generics.len() != 1 {
-            self.emit(span, SemaErrorKind::Message(
-                "`channel` needs exactly one explicit type argument: `channel<T>()`".into(),
-            ));
+            self.emit(
+                span,
+                SemaErrorKind::Message(
+                    "`channel` needs exactly one explicit type argument: `channel<T>()`".into(),
+                ),
+            );
             return self.tcx.error;
         }
         let env = self.local_env();
@@ -915,14 +1216,23 @@ impl<'a> Checker<'a> {
         // Only immutable element types are shared across threads for now (no
         // clone-on-send yet — `docs/20` §3); matches `Thread.spawn` captures.
         if !self.is_immutable_value(elem) && !self.tcx.is_error(elem) {
-            self.emit(span, SemaErrorKind::Message(format!(
-                "`channel` element type `{}` must be immutable so far (only \
+            self.emit(
+                span,
+                SemaErrorKind::Message(format!(
+                    "`channel` element type `{}` must be immutable so far (only \
                  primitives and `str` can cross threads without a deep clone)",
-                self.display(elem)
-            )));
+                    self.display(elem)
+                )),
+            );
         }
         if !args.is_empty() {
-            self.emit(span, SemaErrorKind::ArgCount { expected: 0, found: args.len() });
+            self.emit(
+                span,
+                SemaErrorKind::ArgCount {
+                    expected: 0,
+                    found: args.len(),
+                },
+            );
             for a in args {
                 self.check_expr(a, None);
             }
@@ -933,7 +1243,14 @@ impl<'a> Checker<'a> {
     }
 
     /// `Sender<T>` / `Receiver<T>` builtin methods (`docs/20` §2).
-    pub(crate) fn check_channel_method(&mut self, def: DefId, elem: Ty, name: &Ident, args: &[Expr], span: Span) -> Ty {
+    pub(crate) fn check_channel_method(
+        &mut self,
+        def: DefId,
+        elem: Ty,
+        name: &Ident,
+        args: &[Expr],
+        span: Span,
+    ) -> Ty {
         let is_sender = def == self.prog.sender_def;
         match (is_sender, name.name.as_str()) {
             (true, "send") => {
@@ -941,7 +1258,13 @@ impl<'a> Checker<'a> {
                 // (`docs/20` §2): `ChannelClosed` once every receiver is dropped,
                 // since the message could never be observed.
                 if args.len() != 1 {
-                    self.emit(span, SemaErrorKind::ArgCount { expected: 1, found: args.len() });
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 1,
+                            found: args.len(),
+                        },
+                    );
                 } else {
                     let at = self.check_expr(&args[0], Some(elem));
                     self.expect(at, elem, args[0].span);
@@ -956,7 +1279,13 @@ impl<'a> Checker<'a> {
                 // message, or to `ChannelClosed` once the channel is drained and
                 // every sender has been dropped.
                 if !args.is_empty() {
-                    self.emit(span, SemaErrorKind::ArgCount { expected: 0, found: args.len() });
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 0,
+                            found: args.len(),
+                        },
+                    );
                 }
                 let closed = self.tcx.mk_named(self.prog.channel_closed_def, vec![]);
                 let out = self.tcx.mk_union([elem, closed]);
@@ -964,15 +1293,22 @@ impl<'a> Checker<'a> {
             }
             (false, "try_recv") => {
                 if !args.is_empty() {
-                    self.emit(span, SemaErrorKind::ArgCount { expected: 0, found: args.len() });
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 0,
+                            found: args.len(),
+                        },
+                    );
                 }
                 self.tcx.mk_union([elem, self.tcx.null])
             }
             _ => {
                 let tn = if is_sender { "Sender" } else { "Receiver" };
-                self.emit(name.span, SemaErrorKind::Message(format!(
-                    "`{tn}` has no method `{}`", name.name
-                )));
+                self.emit(
+                    name.span,
+                    SemaErrorKind::Message(format!("`{tn}` has no method `{}`", name.name)),
+                );
                 for a in args {
                     self.check_expr(a, None);
                 }
@@ -985,7 +1321,13 @@ impl<'a> Checker<'a> {
     /// from the value.
     pub(crate) fn check_shared_new(&mut self, args: &[Expr], span: Span) -> Ty {
         if args.len() != 1 {
-            self.emit(span, SemaErrorKind::ArgCount { expected: 1, found: args.len() });
+            self.emit(
+                span,
+                SemaErrorKind::ArgCount {
+                    expected: 1,
+                    found: args.len(),
+                },
+            );
             for a in args {
                 self.check_expr(a, None);
             }
@@ -1008,25 +1350,37 @@ impl<'a> Checker<'a> {
         match method {
             "alloc" | "alloc_zeroed" => {
                 if generics.len() != 1 {
-                    self.emit(span, SemaErrorKind::Message(format!(
-                        "`Foreign.{method}` needs exactly one type argument, e.g. \
+                    self.emit(
+                        span,
+                        SemaErrorKind::Message(format!(
+                            "`Foreign.{method}` needs exactly one type argument, e.g. \
                          `Foreign.{method}<Pair>()` (`docs/19` §5)"
-                    )));
+                        )),
+                    );
                     return self.tcx.error;
                 }
                 if !args.is_empty() {
-                    self.emit(span, SemaErrorKind::ArgCount { expected: 0, found: args.len() });
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 0,
+                            found: args.len(),
+                        },
+                    );
                 }
                 let env = self.local_env();
                 let t = self.lower_ty(&generics[0], &env);
                 // The element must be C-ABI-compatible (it lives on the foreign
                 // heap), or an extern struct.
                 if !self.is_repr_c(t) && !self.is_extern_struct(t) {
-                    self.emit(span, SemaErrorKind::Message(format!(
-                        "`Foreign.{method}` requires a C-ABI (`ReprC`) type argument, \
+                    self.emit(
+                        span,
+                        SemaErrorKind::Message(format!(
+                            "`Foreign.{method}` requires a C-ABI (`ReprC`) type argument, \
                          got `{}` (`docs/19` §5)",
-                        self.display(t)
-                    )));
+                            self.display(t)
+                        )),
+                    );
                     return self.tcx.error;
                 }
                 // `*T | null` — a raw nullable pointer (NPO).
@@ -1035,28 +1389,47 @@ impl<'a> Checker<'a> {
             }
             "free" => {
                 if args.len() != 1 {
-                    self.emit(span, SemaErrorKind::ArgCount { expected: 1, found: args.len() });
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 1,
+                            found: args.len(),
+                        },
+                    );
                     return self.tcx.null;
                 }
                 let at = self.check_expr(&args[0], None);
                 if !matches!(self.tcx.kind(at), TyKind::Ptr(_)) && !self.is_npo_union(at) {
-                    self.emit(args[0].span, SemaErrorKind::Message(format!(
-                        "`Foreign.free` expects a raw pointer `*T`, got `{}`",
-                        self.display(at)
-                    )));
+                    self.emit(
+                        args[0].span,
+                        SemaErrorKind::Message(format!(
+                            "`Foreign.free` expects a raw pointer `*T`, got `{}`",
+                            self.display(at)
+                        )),
+                    );
                 }
                 self.tcx.null
             }
             "realloc" => {
                 if generics.len() != 1 {
-                    self.emit(span, SemaErrorKind::Message(
-                        "`Foreign.realloc` needs one type argument, e.g. \
-                         `Foreign.realloc<Pair>(p, n)` (`docs/19` §5)".into(),
-                    ));
+                    self.emit(
+                        span,
+                        SemaErrorKind::Message(
+                            "`Foreign.realloc` needs one type argument, e.g. \
+                         `Foreign.realloc<Pair>(p, n)` (`docs/19` §5)"
+                                .into(),
+                        ),
+                    );
                     return self.tcx.error;
                 }
                 if args.len() != 2 {
-                    self.emit(span, SemaErrorKind::ArgCount { expected: 2, found: args.len() });
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 2,
+                            found: args.len(),
+                        },
+                    );
                     return self.tcx.error;
                 }
                 let env = self.local_env();
@@ -1064,9 +1437,13 @@ impl<'a> Checker<'a> {
                 let ptr_t = self.tcx.mk_ptr(t);
                 let pt = self.check_expr(&args[0], Some(ptr_t));
                 if !matches!(self.tcx.kind(pt), TyKind::Ptr(_)) && !self.is_npo_union(pt) {
-                    self.emit(args[0].span, SemaErrorKind::Message(format!(
-                        "`Foreign.realloc` expects a raw pointer `*T`, got `{}`", self.display(pt)
-                    )));
+                    self.emit(
+                        args[0].span,
+                        SemaErrorKind::Message(format!(
+                            "`Foreign.realloc` expects a raw pointer `*T`, got `{}`",
+                            self.display(pt)
+                        )),
+                    );
                 }
                 let usize_t = self.tcx.int(IntTy::Usize);
                 let szt = self.check_expr(&args[1], Some(usize_t));
@@ -1075,14 +1452,24 @@ impl<'a> Checker<'a> {
             }
             "alloc_flex" => {
                 if generics.len() != 2 {
-                    self.emit(span, SemaErrorKind::Message(
-                        "`Foreign.alloc_flex` needs two type arguments, e.g. \
-                         `Foreign.alloc_flex<Msg, u8>(n)` (`docs/19` §5)".into(),
-                    ));
+                    self.emit(
+                        span,
+                        SemaErrorKind::Message(
+                            "`Foreign.alloc_flex` needs two type arguments, e.g. \
+                         `Foreign.alloc_flex<Msg, u8>(n)` (`docs/19` §5)"
+                                .into(),
+                        ),
+                    );
                     return self.tcx.error;
                 }
                 if args.len() != 1 {
-                    self.emit(span, SemaErrorKind::ArgCount { expected: 1, found: args.len() });
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 1,
+                            found: args.len(),
+                        },
+                    );
                     return self.tcx.error;
                 }
                 let env = self.local_env();
@@ -1090,10 +1477,15 @@ impl<'a> Checker<'a> {
                 let e = self.lower_ty(&generics[1], &env);
                 for (ty, n) in [(t, 0), (e, 1)] {
                     if !self.is_repr_c(ty) && !self.is_extern_struct(ty) {
-                        self.emit(span, SemaErrorKind::Message(format!(
-                            "`Foreign.alloc_flex` type argument {} (`{}`) must be C-ABI \
-                             (`ReprC`) (`docs/19` §5)", n + 1, self.display(ty)
-                        )));
+                        self.emit(
+                            span,
+                            SemaErrorKind::Message(format!(
+                                "`Foreign.alloc_flex` type argument {} (`{}`) must be C-ABI \
+                             (`ReprC`) (`docs/19` §5)",
+                                n + 1,
+                                self.display(ty)
+                            )),
+                        );
                     }
                 }
                 let usize_t = self.tcx.int(IntTy::Usize);
@@ -1104,10 +1496,13 @@ impl<'a> Checker<'a> {
                 self.tcx.mk_union([ptr_t, self.tcx.null])
             }
             other => {
-                self.emit(span, SemaErrorKind::Message(format!(
-                    "`Foreign` has no method `{other}`; expected `alloc`, \
+                self.emit(
+                    span,
+                    SemaErrorKind::Message(format!(
+                        "`Foreign` has no method `{other}`; expected `alloc`, \
                      `alloc_zeroed`, or `free` (`docs/19` §5)"
-                )));
+                    )),
+                );
                 self.tcx.error
             }
         }
@@ -1115,24 +1510,39 @@ impl<'a> Checker<'a> {
 
     /// `Shared<T>` builtin methods (`docs/20` §4): `lock`/`try_lock` run a
     /// closure under the mutex with exclusive access to the value.
-    pub(crate) fn check_shared_method(&mut self, elem: Ty, name: &Ident, args: &[Expr], span: Span) -> Ty {
+    pub(crate) fn check_shared_method(
+        &mut self,
+        elem: Ty,
+        name: &Ident,
+        args: &[Expr],
+        span: Span,
+    ) -> Ty {
         match name.name.as_str() {
             "lock" | "try_lock" => {
                 if args.len() != 1 {
-                    self.emit(span, SemaErrorKind::ArgCount { expected: 1, found: args.len() });
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 1,
+                            found: args.len(),
+                        },
+                    );
                     return self.tcx.error;
                 }
                 // `lock`/`try_lock` are ALWAYS async — they return a `Future<R>` the
                 // caller must `await` (`docs/20` §4). That requires an async context;
                 // a synchronous `Thread.spawn` worker cannot lock (`docs/20` §1/§4).
                 if !self.in_async {
-                    self.emit(name.span, SemaErrorKind::Message(format!(
-                        "`{}` is async and must be `await`ed inside an `async` function, \
+                    self.emit(
+                        name.span,
+                        SemaErrorKind::Message(format!(
+                            "`{}` is async and must be `await`ed inside an `async` function, \
                          `async` closure, or `async {{ … }}` block; a synchronous \
                          `Thread.spawn` worker cannot lock — run lock-using workers with \
                          the `spawn` keyword instead",
-                        name.name,
-                    )));
+                            name.name,
+                        )),
+                    );
                 }
                 // The body is `(T) => R`. An `async` body has been desugared (by
                 // the ANF pass, before checking) into a plain closure returning an
@@ -1160,9 +1570,10 @@ impl<'a> Checker<'a> {
                 self.tcx.mk_named(self.prog.future_def, vec![out])
             }
             other => {
-                self.emit(name.span, SemaErrorKind::Message(format!(
-                    "`Shared` has no method `{other}`"
-                )));
+                self.emit(
+                    name.span,
+                    SemaErrorKind::Message(format!("`Shared` has no method `{other}`")),
+                );
                 for a in args {
                     self.check_expr(a, None);
                 }
@@ -1204,17 +1615,29 @@ impl<'a> Checker<'a> {
     /// True if `e` evaluates to a live reference into the locked cell (a
     /// "lock-borrow"): the tainted parameter, or a managed projection of one.
     /// `.clone()` and any other call detach.
-    fn escape_is_borrow(&self, e: &Expr, tainted: &std::collections::HashSet<crate::ids::LocalId>) -> bool {
+    fn escape_is_borrow(
+        &self,
+        e: &Expr,
+        tainted: &std::collections::HashSet<crate::ids::LocalId>,
+    ) -> bool {
         use crate::ast::ExprKind as K;
         match &e.kind {
-            K::Ident(_) | K::SelfExpr => self.escape_local_of(e).is_some_and(|id| tainted.contains(&id)),
+            K::Ident(_) | K::SelfExpr => self
+                .escape_local_of(e)
+                .is_some_and(|id| tainted.contains(&id)),
             K::Paren(inner) => self.escape_is_borrow(inner, tainted),
-            K::Field { receiver, .. } | K::TupleIndex { receiver, .. } | K::Index { receiver, .. } => {
+            K::Field { receiver, .. }
+            | K::TupleIndex { receiver, .. }
+            | K::Index { receiver, .. } => {
                 self.escape_is_borrow(receiver, tainted)
                     && self.expr_ty(e.span).is_some_and(|t| self.lock_trackable(t))
             }
             // `e as T` keeps the borrow (a managed narrowing); `e is T` is a bool.
-            K::Cast { op: crate::ast::CastOp::As, expr, .. } => {
+            K::Cast {
+                op: crate::ast::CastOp::As,
+                expr,
+                ..
+            } => {
                 self.escape_is_borrow(expr, tainted)
                     && self.expr_ty(e.span).is_some_and(|t| self.lock_trackable(t))
             }
@@ -1245,9 +1668,9 @@ impl<'a> Checker<'a> {
                 None => true,
             },
             K::Paren(inner) => self.escape_assign_escapes(inner, tainted, body_span),
-            K::Field { receiver, .. } | K::TupleIndex { receiver, .. } | K::Index { receiver, .. } => {
-                !self.escape_is_borrow(receiver, tainted)
-            }
+            K::Field { receiver, .. }
+            | K::TupleIndex { receiver, .. }
+            | K::Index { receiver, .. } => !self.escape_is_borrow(receiver, tainted),
             _ => true, // `*p = …` and anything else: conservatively an escape
         }
     }
@@ -1267,9 +1690,17 @@ impl<'a> Checker<'a> {
     /// Entry point: run the escape analysis on a checked `lock`/`try_lock` body.
     pub(crate) fn check_lock_body_escapes(&mut self, body: &Expr) {
         use crate::ast::ExprKind as K;
-        let K::Closure { params, body: cbody, .. } = &body.kind else { return };
+        let K::Closure {
+            params,
+            body: cbody,
+            ..
+        } = &body.kind
+        else {
+            return;
+        };
         let body_span = cbody.span;
-        let mut tainted: std::collections::HashSet<crate::ids::LocalId> = std::collections::HashSet::new();
+        let mut tainted: std::collections::HashSet<crate::ids::LocalId> =
+            std::collections::HashSet::new();
         for p in params {
             if let Some(crate::sema::results::ValueRes::Local(id)) = self.resolution(p.name.span) {
                 if let Some(ty) = self.hir.local_types.get(&id).copied() {
@@ -1296,7 +1727,9 @@ impl<'a> Checker<'a> {
                     tainted.insert(l);
                 }
             }
-            P::TypeBinding { binding: Some(id), .. } => {
+            P::TypeBinding {
+                binding: Some(id), ..
+            } => {
                 if let Some(crate::sema::results::ValueRes::Local(l)) = self.resolution(id.span) {
                     tainted.insert(l);
                 }
@@ -1365,18 +1798,28 @@ impl<'a> Checker<'a> {
     ) {
         use crate::ast::ExprKind as K;
         match &e.kind {
-            K::Block(b) | K::Loop(b) | K::AsyncBlock(b) => self.escape_walk_block(b, tainted, body_span),
-            K::Call { callee, args, trailing_closure, .. } => {
+            K::Block(b) | K::Loop(b) | K::AsyncBlock(b) => {
+                self.escape_walk_block(b, tainted, body_span)
+            }
+            K::Call {
+                callee,
+                args,
+                trailing_closure,
+                ..
+            } => {
                 self.escape_walk_expr(callee, tainted, body_span);
                 let is_clone = Self::escape_is_clone_callee(callee);
                 for a in args {
                     if !is_clone && self.escape_is_borrow(a, tainted) {
-                        self.emit(a.span, SemaErrorKind::Message(
-                            "a reference into the locked value may not escape the lock body \
+                        self.emit(
+                            a.span,
+                            SemaErrorKind::Message(
+                                "a reference into the locked value may not escape the lock body \
                              (passing it to a call could retain it past the lock); pass a \
                              `.clone()` instead (`docs/20` §4)"
-                                .into(),
-                        ));
+                                    .into(),
+                            ),
+                        );
                     }
                     self.escape_walk_expr(a, tainted, body_span);
                 }
@@ -1384,13 +1827,21 @@ impl<'a> Checker<'a> {
                     self.escape_walk_expr(tc, tainted, body_span);
                 }
             }
-            K::If { cond, then_block, else_branch } => {
+            K::If {
+                cond,
+                then_block,
+                else_branch,
+            } => {
                 self.escape_walk_expr(cond, tainted, body_span);
                 self.escape_walk_block(then_block, tainted, body_span);
                 if let Some(eb) = else_branch {
                     match eb {
-                        crate::ast::ElseBranch::Block(b) => self.escape_walk_block(b, tainted, body_span),
-                        crate::ast::ElseBranch::If(x) => self.escape_walk_expr(x, tainted, body_span),
+                        crate::ast::ElseBranch::Block(b) => {
+                            self.escape_walk_block(b, tainted, body_span)
+                        }
+                        crate::ast::ElseBranch::If(x) => {
+                            self.escape_walk_expr(x, tainted, body_span)
+                        }
                     }
                 }
             }
@@ -1453,8 +1904,13 @@ impl<'a> Checker<'a> {
     /// `T.MIN`/`T.MAX` (integers) and `f*.INFINITY`/`NEG_INFINITY`/`NAN`
     /// (`docs/18` §10). Returns the constant's type, or `None` if `tyname` is not
     /// a primitive numeric type with that constant.
-    pub(crate) fn check_num_constant(&mut self, tyname: &str, name: &Ident, field_span: Span) -> Option<Ty> {
-        use crate::sema::results::{num_constant_of, NumIntrinsic};
+    pub(crate) fn check_num_constant(
+        &mut self,
+        tyname: &str,
+        name: &Ident,
+        field_span: Span,
+    ) -> Option<Ty> {
+        use crate::sema::results::{NumIntrinsic, num_constant_of};
         // Recognition lives in the shared `num_constant_of`; HIR lowering calls
         // the same helper, so no `num_intrinsics` side table is recorded.
         let _ = field_span;
@@ -1468,8 +1924,14 @@ impl<'a> Checker<'a> {
     /// Numeric-namespace methods on a primitive type (`docs/18` §10, `docs/14`
     /// §5): the `{wrapping,saturating,checked,overflowing}_{add,sub,mul}` integer
     /// families and the `f*.is_nan`/`is_infinite`/`is_finite` float predicates.
-    pub(crate) fn check_num_method(&mut self, tyname: &str, name: &Ident, args: &[Expr], span: Span) -> Option<Ty> {
-        use crate::sema::results::{num_method_of, NumIntrinsic};
+    pub(crate) fn check_num_method(
+        &mut self,
+        tyname: &str,
+        name: &Ident,
+        args: &[Expr],
+        span: Span,
+    ) -> Option<Ty> {
+        use crate::sema::results::{NumIntrinsic, num_method_of};
         // Recognition lives in the shared `num_method_of`; HIR lowering calls the
         // same helper, so no `num_intrinsics` side table is recorded here. This
         // function still validates argument arities and computes the result type.
@@ -1505,12 +1967,17 @@ impl<'a> Checker<'a> {
     /// intrinsics).
     pub(crate) fn check_num_args(&mut self, args: &[Expr], expect: &[Ty], span: Span) {
         if args.len() != expect.len() {
-            self.emit(span, SemaErrorKind::ArgCount { expected: expect.len(), found: args.len() });
+            self.emit(
+                span,
+                SemaErrorKind::ArgCount {
+                    expected: expect.len(),
+                    found: args.len(),
+                },
+            );
         }
         for (a, e) in args.iter().zip(expect) {
             let at = self.check_expr(a, Some(*e));
             self.expect(at, *e, a.span);
         }
     }
-
 }

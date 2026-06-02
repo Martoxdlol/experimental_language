@@ -1,0 +1,73 @@
+//@ kind: run
+//@ serial
+//@ env: OTTER_FUSION_TASK_WORKERS=2
+//@ description: repeated waves of Task.spawn workers reuse the executor queues, join registry, and channel endpoints without stale wakeups or lost work
+//@ stdout:
+//~ received=128020480 joined=128020480
+
+import { println } from "std:io";
+import { Future } from "core:prelude";
+import { List } from "core:collections";
+import { Task, JoinHandle, Joined, Panicked, Cancelled } from "std:task";
+import { Sender, Receiver, ChannelClosed, channel } from "std:sync";
+import { yield_now } from "std:async";
+
+function joined_value(r: Joined<i64> | Panicked | Cancelled): i64 {
+  match r {
+    Joined<i64> j => j.value,
+    Panicked p => -1,
+    Cancelled c => -2,
+  }
+}
+
+function main(): Future<null> async {
+  var total_received: i64 = 0;
+  var total_joined: i64 = 0;
+  var wave: i64 = 0;
+  while wave < 32 {
+    var ends = channel<i64>();
+    var tx: Sender<i64> = ends.0;
+    var rx: Receiver<i64> = ends.1;
+    var handles: List<JoinHandle<i64>> = [];
+
+    var i: i64 = 0;
+    while i < 256 {
+      var n = i;
+      var w = wave;
+      var tx_i = tx.clone();
+      handles.push(Task.spawn(() async => {
+        var rounds: i64 = (n % 5) + 1;
+        var r: i64 = 0;
+        while r < rounds {
+          var _ = await yield_now();
+          r = r + 1;
+        }
+        var value: i64 = (w * 1000) + n;
+        tx_i.send(value);
+        value
+      }));
+      i = i + 1;
+    }
+
+    var received: i64 = 0;
+    var count: i64 = 0;
+    while count < 256 {
+      match await rx.recv() {
+        i64 value => { received = received + value; },
+        ChannelClosed c => { received = -999999; },
+      }
+      count = count + 1;
+    }
+
+    var joined: i64 = 0;
+    for h in handles {
+      joined = joined + joined_value(await h.join());
+    }
+
+    total_received = total_received + received;
+    total_joined = total_joined + joined;
+    wave = wave + 1;
+  }
+
+  println("received=${total_received} joined=${total_joined}");
+}

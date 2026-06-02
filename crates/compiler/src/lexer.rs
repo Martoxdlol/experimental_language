@@ -34,13 +34,16 @@ pub fn lex(src: &str, file: FileId) -> (Vec<Token>, Vec<LexError>) {
         }
         match lx.current_mode() {
             Mode::Normal => {
-                if at_eof { break; }
+                if at_eof {
+                    break;
+                }
                 lx.lex_one_normal();
             }
             Mode::Interp { .. } => {
                 if at_eof {
                     let span = Span::empty(lx.file, BytePos(lx.pos as u32));
-                    lx.errors.push(LexError::new(LexErrorKind::UnbalancedInterpolation, span));
+                    lx.errors
+                        .push(LexError::new(LexErrorKind::UnbalancedInterpolation, span));
                     lx.modes.pop();
                 } else {
                     lx.lex_one_normal();
@@ -187,7 +190,9 @@ impl<'src> Lexer<'src> {
             '{' => {
                 self.emit(TokenKind::LBrace, lo);
                 if let Mode::Interp { brace_depth } = self.current_mode() {
-                    self.replace_top_mode(Mode::Interp { brace_depth: brace_depth + 1 });
+                    self.replace_top_mode(Mode::Interp {
+                        brace_depth: brace_depth + 1,
+                    });
                 }
             }
             '}' => {
@@ -197,7 +202,9 @@ impl<'src> Lexer<'src> {
                         // Closer of the surrounding `${ ... }`.
                         self.modes.pop();
                     } else {
-                        self.replace_top_mode(Mode::Interp { brace_depth: brace_depth - 1 });
+                        self.replace_top_mode(Mode::Interp {
+                            brace_depth: brace_depth - 1,
+                        });
                     }
                 }
             }
@@ -226,8 +233,14 @@ impl<'src> Lexer<'src> {
                 }
             }
             '=' => match self.peek_byte() {
-                Some(b'=') => { self.bump(); self.emit(TokenKind::EqEq, lo); }
-                Some(b'>') => { self.bump(); self.emit(TokenKind::FatArrow, lo); }
+                Some(b'=') => {
+                    self.bump();
+                    self.emit(TokenKind::EqEq, lo);
+                }
+                Some(b'>') => {
+                    self.bump();
+                    self.emit(TokenKind::FatArrow, lo);
+                }
                 _ => self.emit(TokenKind::Eq, lo),
             },
             '!' => {
@@ -239,13 +252,25 @@ impl<'src> Lexer<'src> {
                 }
             }
             '<' => match self.peek_byte() {
-                Some(b'=') => { self.bump(); self.emit(TokenKind::LtEq, lo); }
-                Some(b'<') => { self.bump(); self.emit(TokenKind::Shl, lo); }
+                Some(b'=') => {
+                    self.bump();
+                    self.emit(TokenKind::LtEq, lo);
+                }
+                Some(b'<') => {
+                    self.bump();
+                    self.emit(TokenKind::Shl, lo);
+                }
                 _ => self.emit(TokenKind::Lt, lo),
             },
             '>' => match self.peek_byte() {
-                Some(b'=') => { self.bump(); self.emit(TokenKind::GtEq, lo); }
-                Some(b'>') => { self.bump(); self.emit(TokenKind::Shr, lo); }
+                Some(b'=') => {
+                    self.bump();
+                    self.emit(TokenKind::GtEq, lo);
+                }
+                Some(b'>') => {
+                    self.bump();
+                    self.emit(TokenKind::Shr, lo);
+                }
                 _ => self.emit(TokenKind::Gt, lo),
             },
             '&' => {
@@ -284,7 +309,9 @@ impl<'src> Lexer<'src> {
                 }
                 // Non-ASCII whitespace (e.g. NBSP) — check via char.
                 Some(b) if b >= 0x80 => match self.peek_char() {
-                    Some(c) if c.is_whitespace() => { self.bump(); }
+                    Some(c) if c.is_whitespace() => {
+                        self.bump();
+                    }
                     _ => return,
                 },
                 Some(b'/') if self.peek_byte_at(1) == Some(b'/') => {
@@ -296,7 +323,9 @@ impl<'src> Lexer<'src> {
                     // Ordinary line comment: skip to end of line.
                     self.pos += 2;
                     while let Some(b) = self.peek_byte() {
-                        if b == b'\n' { break; }
+                        if b == b'\n' {
+                            break;
+                        }
                         self.bump();
                     }
                 }
@@ -310,9 +339,17 @@ impl<'src> Lexer<'src> {
                                 self.error(LexErrorKind::UnterminatedBlockComment, start, self.pos);
                                 return;
                             }
-                            (Some(b'/'), Some(b'*')) => { self.pos += 2; depth += 1; }
-                            (Some(b'*'), Some(b'/')) => { self.pos += 2; depth -= 1; }
-                            _ => { self.bump(); }
+                            (Some(b'/'), Some(b'*')) => {
+                                self.pos += 2;
+                                depth += 1;
+                            }
+                            (Some(b'*'), Some(b'/')) => {
+                                self.pos += 2;
+                                depth -= 1;
+                            }
+                            _ => {
+                                self.bump();
+                            }
                         }
                     }
                 }
@@ -325,7 +362,9 @@ impl<'src> Lexer<'src> {
         // Already validated we're at `///` or `//!`; consume to end of line.
         self.pos += 3;
         while let Some(b) = self.peek_byte() {
-            if b == b'\n' { break; }
+            if b == b'\n' {
+                break;
+            }
             self.bump();
         }
         self.emit(kind, lo);
@@ -335,7 +374,11 @@ impl<'src> Lexer<'src> {
         // First char already checked by caller.
         self.bump();
         while let Some(c) = self.peek_char() {
-            if is_ident_continue(c) { self.bump(); } else { break; }
+            if is_ident_continue(c) {
+                self.bump();
+            } else {
+                break;
+            }
         }
         let text = &self.src[lo..self.pos];
         let kind = if text == "_" {
@@ -401,7 +444,13 @@ impl<'src> Lexer<'src> {
         if is_float {
             self.emit(TokenKind::Float { has_suffix }, lo);
         } else {
-            self.emit(TokenKind::Int { base: IntBase::Dec, has_suffix }, lo);
+            self.emit(
+                TokenKind::Int {
+                    base: IntBase::Dec,
+                    has_suffix,
+                },
+                lo,
+            );
         }
     }
 
@@ -410,7 +459,9 @@ impl<'src> Lexer<'src> {
         let mut saw_digit = false;
         loop {
             match self.peek_byte() {
-                Some(b'_') => { self.pos += 1; }
+                Some(b'_') => {
+                    self.pos += 1;
+                }
                 Some(b) if is_digit_for_base(b, base) => {
                     saw_digit = true;
                     self.pos += 1;
@@ -457,7 +508,11 @@ impl<'src> Lexer<'src> {
             if matches!(c, 'i' | 'u' | 'f') {
                 self.bump();
                 while let Some(c) = self.peek_char() {
-                    if is_ident_continue(c) { self.bump(); } else { break; }
+                    if is_ident_continue(c) {
+                        self.bump();
+                    } else {
+                        break;
+                    }
                 }
             }
         }
@@ -509,7 +564,9 @@ impl<'src> Lexer<'src> {
             return;
         };
         match c {
-            'n' | 'r' | 't' | '\\' | '\'' | '"' | '$' | '0' => { self.bump(); }
+            'n' | 'r' | 't' | '\\' | '\'' | '"' | '$' | '0' => {
+                self.bump();
+            }
             'x' => {
                 self.bump();
                 let mut digits = 0;
@@ -532,7 +589,9 @@ impl<'src> Lexer<'src> {
                 while self.peek_byte().map_or(false, |b| b.is_ascii_hexdigit()) {
                     self.pos += 1;
                     digits += 1;
-                    if digits > 6 { break; }
+                    if digits > 6 {
+                        break;
+                    }
                 }
                 if self.peek_byte() == Some(b'}') {
                     self.pos += 1;
@@ -589,7 +648,11 @@ impl<'src> Lexer<'src> {
         if let Some(c) = self.peek_char() {
             if is_ident_start(c) {
                 while let Some(c) = self.peek_char() {
-                    if is_ident_continue(c) { self.bump(); } else { break; }
+                    if is_ident_continue(c) {
+                        self.bump();
+                    } else {
+                        break;
+                    }
                 }
                 self.emit(TokenKind::DollarIdent, lo);
                 return;
@@ -612,7 +675,9 @@ impl<'src> Lexer<'src> {
                     }
                     self.consume_escape_body(esc_lo);
                 }
-                _ => { self.bump(); }
+                _ => {
+                    self.bump();
+                }
             }
         }
         if self.pos > lo {
@@ -693,11 +758,26 @@ mod tests {
         assert_eq!(
             k,
             vec![
-                TokenKind::Int { base: IntBase::Dec, has_suffix: false },
-                TokenKind::Int { base: IntBase::Hex, has_suffix: false },
-                TokenKind::Int { base: IntBase::Oct, has_suffix: false },
-                TokenKind::Int { base: IntBase::Bin, has_suffix: false },
-                TokenKind::Int { base: IntBase::Dec, has_suffix: true },
+                TokenKind::Int {
+                    base: IntBase::Dec,
+                    has_suffix: false
+                },
+                TokenKind::Int {
+                    base: IntBase::Hex,
+                    has_suffix: false
+                },
+                TokenKind::Int {
+                    base: IntBase::Oct,
+                    has_suffix: false
+                },
+                TokenKind::Int {
+                    base: IntBase::Bin,
+                    has_suffix: false
+                },
+                TokenKind::Int {
+                    base: IntBase::Dec,
+                    has_suffix: true
+                },
                 TokenKind::Eof,
             ]
         );
@@ -725,7 +805,10 @@ mod tests {
         assert_eq!(
             k,
             vec![
-                TokenKind::Int { base: IntBase::Dec, has_suffix: false },
+                TokenKind::Int {
+                    base: IntBase::Dec,
+                    has_suffix: false
+                },
                 TokenKind::Dot,
                 TokenKind::Ident,
                 TokenKind::Eof,
@@ -739,9 +822,15 @@ mod tests {
         assert_eq!(
             k,
             vec![
-                TokenKind::Int { base: IntBase::Dec, has_suffix: false },
+                TokenKind::Int {
+                    base: IntBase::Dec,
+                    has_suffix: false
+                },
                 TokenKind::DotDot,
-                TokenKind::Int { base: IntBase::Dec, has_suffix: false },
+                TokenKind::Int {
+                    base: IntBase::Dec,
+                    has_suffix: false
+                },
                 TokenKind::Eof,
             ]
         );
@@ -774,7 +863,11 @@ mod tests {
         assert!(e.is_empty());
         assert_eq!(
             k,
-            vec![TokenKind::Kw(Keyword::Var), TokenKind::Ident, TokenKind::Eof]
+            vec![
+                TokenKind::Kw(Keyword::Var),
+                TokenKind::Ident,
+                TokenKind::Eof
+            ]
         );
     }
 
@@ -799,7 +892,12 @@ mod tests {
         assert!(e.is_empty(), "{e:?}");
         assert_eq!(
             k,
-            vec![TokenKind::StrStart, TokenKind::StrText, TokenKind::StrEnd, TokenKind::Eof]
+            vec![
+                TokenKind::StrStart,
+                TokenKind::StrText,
+                TokenKind::StrEnd,
+                TokenKind::Eof
+            ]
         );
     }
 
@@ -807,7 +905,10 @@ mod tests {
     fn empty_string() {
         let (k, e) = kinds(r#""""#);
         assert!(e.is_empty());
-        assert_eq!(k, vec![TokenKind::StrStart, TokenKind::StrEnd, TokenKind::Eof]);
+        assert_eq!(
+            k,
+            vec![TokenKind::StrStart, TokenKind::StrEnd, TokenKind::Eof]
+        );
     }
 
     #[test]
@@ -837,11 +938,14 @@ mod tests {
                 TokenKind::StrStart,
                 TokenKind::StrText, // "age: "
                 TokenKind::DollarLBrace,
-                TokenKind::Ident,   // u
+                TokenKind::Ident, // u
                 TokenKind::Dot,
-                TokenKind::Ident,   // age
+                TokenKind::Ident, // age
                 TokenKind::Plus,
-                TokenKind::Int { base: IntBase::Dec, has_suffix: false },
+                TokenKind::Int {
+                    base: IntBase::Dec,
+                    has_suffix: false
+                },
                 TokenKind::RBrace,  // closer of ${ ... }
                 TokenKind::StrText, // "!"
                 TokenKind::StrEnd,
@@ -865,14 +969,25 @@ mod tests {
     #[test]
     fn unterminated_string_reports_error() {
         let (_, e) = kinds(r#""unterminated"#);
-        assert!(e.iter().any(|er| er.kind == LexErrorKind::UnterminatedString));
+        assert!(
+            e.iter()
+                .any(|er| er.kind == LexErrorKind::UnterminatedString)
+        );
     }
 
     #[test]
     fn char_literal_basic() {
         let (k, e) = kinds(r"'a' '\n' '\u{1F600}'");
         assert!(e.is_empty(), "{e:?}");
-        assert_eq!(k, vec![TokenKind::Char, TokenKind::Char, TokenKind::Char, TokenKind::Eof]);
+        assert_eq!(
+            k,
+            vec![
+                TokenKind::Char,
+                TokenKind::Char,
+                TokenKind::Char,
+                TokenKind::Eof
+            ]
+        );
     }
 
     #[test]

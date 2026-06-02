@@ -4,8 +4,8 @@
 //! pointer is a raw `*T` (or `null` on failure) — the language types it as
 //! `*T | null` (NPO), never as a managed value.
 
-use crate::strings::{lang_str_from_utf8, str_bytes, LangStr};
-use std::alloc::{alloc, alloc_zeroed, dealloc, Layout};
+use crate::strings::{LangStr, lang_str_from_utf8, str_bytes};
+use std::alloc::{Layout, alloc, alloc_zeroed, dealloc};
 use std::sync::atomic::{AtomicI64, Ordering};
 
 /// The allocation-header size: we stash the `Layout` size just before the
@@ -54,7 +54,11 @@ fn foreign_alloc(size: usize, zeroed: bool) -> *mut u8 {
     };
     // SAFETY: `layout` has a non-zero size.
     let base = unsafe {
-        if zeroed { alloc_zeroed(layout) } else { alloc(layout) }
+        if zeroed {
+            alloc_zeroed(layout)
+        } else {
+            alloc(layout)
+        }
     };
     if base.is_null() {
         return std::ptr::null_mut();

@@ -178,24 +178,32 @@ impl fmt::Display for ImportPathError {
 /// why it is malformed. Mode-independent: this never decides availability.
 pub fn classify(raw: &str) -> Result<ImportPath, ImportPathError> {
     let Some((scheme_kw, body)) = raw.split_once(':') else {
-        return Err(ImportPathError::MissingScheme { path: raw.to_string() });
+        return Err(ImportPathError::MissingScheme {
+            path: raw.to_string(),
+        });
     };
 
     // Reserved scheme families (`docs/17` §17.14). A `<scheme>+<transport>`
     // form (e.g. `pkg+https`) and the URL family are recognized and rejected.
     if scheme_kw.contains('+') {
-        return Err(ImportPathError::ReservedScheme { scheme: scheme_kw.to_string() });
+        return Err(ImportPathError::ReservedScheme {
+            scheme: scheme_kw.to_string(),
+        });
     }
     match scheme_kw {
         "url" | "http" | "https" | "blob" => {
-            return Err(ImportPathError::ReservedScheme { scheme: scheme_kw.to_string() });
+            return Err(ImportPathError::ReservedScheme {
+                scheme: scheme_kw.to_string(),
+            });
         }
         _ => {}
     }
 
     let scheme_for_empty = scheme_kw.to_string();
     if body.is_empty() {
-        return Err(ImportPathError::EmptyPath { scheme: scheme_for_empty });
+        return Err(ImportPathError::EmptyPath {
+            scheme: scheme_for_empty,
+        });
     }
 
     match scheme_kw {
@@ -204,7 +212,9 @@ pub fn classify(raw: &str) -> Result<ImportPath, ImportPathError> {
         "pkg" => Ok(absolute(Scheme::Pkg, body)?),
         "self" => classify_self(body),
         "file" => classify_file(body),
-        other => Err(ImportPathError::UnknownScheme { scheme: other.to_string() }),
+        other => Err(ImportPathError::UnknownScheme {
+            scheme: other.to_string(),
+        }),
     }
 }
 
@@ -224,9 +234,16 @@ fn absolute(scheme: Scheme, body: &str) -> Result<ImportPath, ImportPathError> {
         segments.push(seg.to_string());
     }
     if segments.is_empty() {
-        return Err(ImportPathError::EmptyPath { scheme: scheme.keyword().to_string() });
+        return Err(ImportPathError::EmptyPath {
+            scheme: scheme.keyword().to_string(),
+        });
     }
-    Ok(ImportPath { scheme, segments, up: 0, body: body.to_string() })
+    Ok(ImportPath {
+        scheme,
+        segments,
+        up: 0,
+        body: body.to_string(),
+    })
 }
 
 /// `self:…` — either the root form (`self:util/log`) or the relative form
@@ -239,17 +256,29 @@ fn classify_self(body: &str) -> Result<ImportPath, ImportPathError> {
         return absolute(Scheme::SelfRoot, body);
     }
     let (up, segments) = split_relative(body, &parts)?;
-    Ok(ImportPath { scheme: Scheme::SelfRel, segments, up, body: body.to_string() })
+    Ok(ImportPath {
+        scheme: Scheme::SelfRel,
+        segments,
+        up,
+        body: body.to_string(),
+    })
 }
 
 /// `file:…` — a literal filesystem path, required to be relative (`./`/`../`).
 fn classify_file(body: &str) -> Result<ImportPath, ImportPathError> {
     let parts: Vec<&str> = body.split('/').filter(|s| !s.is_empty()).collect();
     if !matches!(parts.first(), Some(&".") | Some(&"..")) {
-        return Err(ImportPathError::FileNotRelative { body: body.to_string() });
+        return Err(ImportPathError::FileNotRelative {
+            body: body.to_string(),
+        });
     }
     let (up, segments) = split_relative(body, &parts)?;
-    Ok(ImportPath { scheme: Scheme::File, segments, up, body: body.to_string() })
+    Ok(ImportPath {
+        scheme: Scheme::File,
+        segments,
+        up,
+        body: body.to_string(),
+    })
 }
 
 /// Split a relative path's `/`-parts into a leading `../` hop count and the real
@@ -360,7 +389,9 @@ mod tests {
 
         assert_eq!(
             classify("file:data.csv"),
-            Err(ImportPathError::FileNotRelative { body: "data.csv".into() })
+            Err(ImportPathError::FileNotRelative {
+                body: "data.csv".into()
+            })
         );
     }
 
@@ -368,11 +399,15 @@ mod tests {
     fn prefixless_paths_are_rejected() {
         assert_eq!(
             classify("geometry/vec"),
-            Err(ImportPathError::MissingScheme { path: "geometry/vec".into() })
+            Err(ImportPathError::MissingScheme {
+                path: "geometry/vec".into()
+            })
         );
         assert_eq!(
             classify("util"),
-            Err(ImportPathError::MissingScheme { path: "util".into() })
+            Err(ImportPathError::MissingScheme {
+                path: "util".into()
+            })
         );
     }
 
@@ -387,7 +422,9 @@ mod tests {
         // No `pkg+https://…` form.
         assert_eq!(
             classify("pkg+https://x/y"),
-            Err(ImportPathError::ReservedScheme { scheme: "pkg+https".into() })
+            Err(ImportPathError::ReservedScheme {
+                scheme: "pkg+https".into()
+            })
         );
     }
 
@@ -395,14 +432,26 @@ mod tests {
     fn unknown_scheme_lists_the_valid_ones() {
         assert_eq!(
             classify("bogus:thing"),
-            Err(ImportPathError::UnknownScheme { scheme: "bogus".into() })
+            Err(ImportPathError::UnknownScheme {
+                scheme: "bogus".into()
+            })
         );
     }
 
     #[test]
     fn empty_bodies_are_rejected() {
-        assert_eq!(classify("core:"), Err(ImportPathError::EmptyPath { scheme: "core".into() }));
-        assert_eq!(classify("self:"), Err(ImportPathError::EmptyPath { scheme: "self".into() }));
+        assert_eq!(
+            classify("core:"),
+            Err(ImportPathError::EmptyPath {
+                scheme: "core".into()
+            })
+        );
+        assert_eq!(
+            classify("self:"),
+            Err(ImportPathError::EmptyPath {
+                scheme: "self".into()
+            })
+        );
     }
 
     #[test]

@@ -1,0 +1,12 @@
+//@ kind: compile-error
+//@ description: the executor driver is internal; user code awaits futures instead of calling block_on
+//@ stderr: cannot find value `block_on` in scope
+
+function answer(): Future<i64> async {
+  42
+}
+
+function main(): Future<null> async {
+  var n: i64 = block_on(answer());
+  println(n as str);
+}

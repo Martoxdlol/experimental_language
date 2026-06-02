@@ -8,7 +8,7 @@
 //! * `str` → FNV-1a over the UTF-8 bytes, so structurally-equal strings hash
 //!   to the same value (the `Eq` ⇒ `Hash` contract for `str`).
 
-use crate::strings::{str_bytes, LangStr};
+use crate::strings::{LangStr, str_bytes};
 
 /// SplitMix64 finalizer over a 64-bit value. Good avalanche, no allocation.
 #[inline]

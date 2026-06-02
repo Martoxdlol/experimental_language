@@ -1,0 +1,10 @@
+//@ kind: compile-error
+//@ description: Thread.spawn JoinHandle deliberately has no abort method; abort is only a cooperative cancellation alias on executor Task.spawn handles
+//@ stderr: no method `abort`
+
+import { Thread, JoinHandle } from "std:thread";
+
+function main() {
+  var h: JoinHandle<i64> = Thread.spawn(() => 7);
+  h.abort();
+}

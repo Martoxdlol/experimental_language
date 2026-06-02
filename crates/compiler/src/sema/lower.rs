@@ -12,11 +12,11 @@
 //! self-reference that does not reduce — `type X = X` — collapses to `never`
 //! and is reported as a non-reducing recursive alias.
 
+use crate::ast::ItemKind;
 use crate::ast::{Expr, ExprKind, Type, TypeKind};
 use crate::ids::{DefId, ModId};
 use crate::sema::diag::{SemaError, SemaErrorKind};
 use crate::sema::symbols::{DefKind, Program};
-use crate::ast::ItemKind;
 use crate::token::IntBase;
 use crate::ty::{FloatTy, IntTy, Ty, TyCtxt};
 use std::collections::{HashMap, HashSet};
@@ -36,7 +36,11 @@ pub struct TypeEnv {
 
 impl TypeEnv {
     pub fn new(module: ModId) -> Self {
-        TypeEnv { module, generics: HashMap::new(), self_ty: None }
+        TypeEnv {
+            module,
+            generics: HashMap::new(),
+            self_ty: None,
+        }
     }
 }
 
@@ -50,20 +54,19 @@ pub struct Lowerer<'a> {
 }
 
 impl<'a> Lowerer<'a> {
-    pub fn new(
-        prog: &'a Program,
-        tcx: &'a mut TyCtxt,
-        errors: &'a mut Vec<SemaError>,
-    ) -> Self {
-        Lowerer { prog, tcx, errors, expanding: HashSet::new() }
+    pub fn new(prog: &'a Program, tcx: &'a mut TyCtxt, errors: &'a mut Vec<SemaError>) -> Self {
+        Lowerer {
+            prog,
+            tcx,
+            errors,
+            expanding: HashSet::new(),
+        }
     }
 
     /// Lower a syntactic type to a semantic one in environment `env`.
     pub fn lower(&mut self, ty: &Type, env: &TypeEnv) -> Ty {
         match &ty.kind {
-            TypeKind::Named { name, generics } => {
-                self.lower_named(&name.name, generics, ty, env)
-            }
+            TypeKind::Named { name, generics } => self.lower_named(&name.name, generics, ty, env),
             TypeKind::Tuple(elems) => {
                 let lowered: Vec<Ty> = elems.iter().map(|e| self.lower(e, env)).collect();
                 self.tcx.mk_tuple(lowered)
@@ -89,12 +92,16 @@ impl<'a> Lowerer<'a> {
             TypeKind::Array { elem, len } => {
                 let e = self.lower(elem, env);
                 let n = self.const_eval_len(len);
-                self.tcx.intern(crate::ty::TyKind::Array { elem: e, len: n })
+                self.tcx
+                    .intern(crate::ty::TyKind::Array { elem: e, len: n })
             }
             TypeKind::SelfType => match env.self_ty {
                 Some(t) => t,
                 None => {
-                    self.error(ty, SemaErrorKind::Message("`Self` is not valid here".into()));
+                    self.error(
+                        ty,
+                        SemaErrorKind::Message("`Self` is not valid here".into()),
+                    );
                     self.tcx.error
                 }
             },
@@ -102,13 +109,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn lower_named(
-        &mut self,
-        name: &str,
-        generics: &[Type],
-        node: &Type,
-        env: &TypeEnv,
-    ) -> Ty {
+    fn lower_named(&mut self, name: &str, generics: &[Type], node: &Type, env: &TypeEnv) -> Ty {
         // 1. Primitive type names take no generic arguments.
         if let Some(prim) = self.primitive(name) {
             if !generics.is_empty() {
@@ -161,10 +162,9 @@ impl<'a> Lowerer<'a> {
 
         match self.prog.def(def).kind {
             DefKind::TypeAlias => self.expand_alias(def, &arg_tys, node, env),
-            DefKind::Struct
-            | DefKind::Interface
-            | DefKind::ExternStruct
-            | DefKind::ExternType => self.tcx.mk_named(def, arg_tys),
+            DefKind::Struct | DefKind::Interface | DefKind::ExternStruct | DefKind::ExternType => {
+                self.tcx.mk_named(def, arg_tys)
+            }
             other => {
                 self.error(
                     node,
@@ -206,7 +206,9 @@ impl<'a> Lowerer<'a> {
             // Did not reduce to anything: `type X = X` and friends.
             self.error(
                 node,
-                SemaErrorKind::RecursiveAlias { name: self.prog.def(def).name.clone() },
+                SemaErrorKind::RecursiveAlias {
+                    name: self.prog.def(def).name.clone(),
+                },
             );
             return self.tcx.error;
         }
@@ -323,8 +325,7 @@ mod tests {
     #[test]
     fn alias_is_expanded_structurally() {
         // `Maybe<i64>` should be exactly `i64 | null`.
-        let (ty, errs, tcx, _) =
-            lower_probe("type Maybe<T> = T | null;", "Maybe<i64>");
+        let (ty, errs, tcx, _) = lower_probe("type Maybe<T> = T | null;", "Maybe<i64>");
         assert!(errs.is_empty(), "{errs:?}");
         // Structurally `i64 | null`: a 2-variant union containing exactly those.
         match tcx.kind(ty) {
@@ -349,20 +350,29 @@ mod tests {
     fn non_reducing_recursive_alias_errors() {
         let (ty, errs, tcx, _) = lower_probe("type X = X;", "X");
         assert!(tcx.is_error(ty));
-        assert!(errs.iter().any(|e| matches!(e.kind, SemaErrorKind::RecursiveAlias { .. })));
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e.kind, SemaErrorKind::RecursiveAlias { .. }))
+        );
     }
 
     #[test]
     fn unknown_type_errors() {
         let (ty, errs, tcx, _) = lower_probe("", "Nope");
         assert!(tcx.is_error(ty));
-        assert!(errs.iter().any(|e| matches!(e.kind, SemaErrorKind::UnknownType { .. })));
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e.kind, SemaErrorKind::UnknownType { .. }))
+        );
     }
 
     #[test]
     fn generic_arity_mismatch_errors() {
         let (_, errs, _, _) = lower_probe("struct Box<T> { v: T }", "Box");
-        assert!(errs.iter().any(|e| matches!(e.kind, SemaErrorKind::GenericArity { .. })));
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e.kind, SemaErrorKind::GenericArity { .. }))
+        );
     }
 
     #[test]

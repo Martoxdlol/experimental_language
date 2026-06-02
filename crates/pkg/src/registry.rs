@@ -123,7 +123,10 @@ pub fn dl_url(template: &str, name: &str, version: &str, cksum: &str) -> String 
             .replace("{prefix}", &prefix)
             .replace("{sha256-checksum}", cksum)
     } else {
-        format!("{}/{name}/{version}/download", template.trim_end_matches('/'))
+        format!(
+            "{}/{name}/{version}/download",
+            template.trim_end_matches('/')
+        )
     }
 }
 
@@ -154,12 +157,25 @@ pub struct HttpRegistry {
 impl HttpRegistry {
     /// Connect to a registry, fetching its `config.json`. `index_url` may carry
     /// the `sparse+` scheme prefix from the manifest.
-    pub fn connect(name: &str, index_url: &str, token: Option<String>) -> Result<HttpRegistry, RegistryError> {
-        let base = index_url.strip_prefix("sparse+").unwrap_or(index_url).trim_end_matches('/').to_string();
+    pub fn connect(
+        name: &str,
+        index_url: &str,
+        token: Option<String>,
+    ) -> Result<HttpRegistry, RegistryError> {
+        let base = index_url
+            .strip_prefix("sparse+")
+            .unwrap_or(index_url)
+            .trim_end_matches('/')
+            .to_string();
         let cfg_text = http_get(&format!("{base}/config.json"), token.as_deref())?;
         let config: RegistryConfig = serde_json::from_str(&cfg_text)
             .map_err(|e| RegistryError::Protocol(format!("bad config.json: {e}")))?;
-        Ok(HttpRegistry { name: name.to_string(), base, config, token })
+        Ok(HttpRegistry {
+            name: name.to_string(),
+            base,
+            config,
+            token,
+        })
     }
 }
 
@@ -179,7 +195,12 @@ impl Registry for HttpRegistry {
     }
 
     fn download(&self, entry: &IndexEntry) -> Result<Vec<u8>, RegistryError> {
-        let url = dl_url(&self.config.dl, &entry.name, &entry.vers.to_string(), &entry.cksum);
+        let url = dl_url(
+            &self.config.dl,
+            &entry.name,
+            &entry.vers.to_string(),
+            &entry.cksum,
+        );
         http_get_bytes(&url, self.token.as_deref())
     }
 }
@@ -203,13 +224,19 @@ impl HttpRegistry {
     /// The API base URL (`config.json` `api`), required for write/query ops.
     fn api(&self) -> Result<&str, RegistryError> {
         self.config.api.as_deref().ok_or_else(|| {
-            RegistryError::Protocol("this registry has no `api` URL (publish/yank/search unavailable)".into())
+            RegistryError::Protocol(
+                "this registry has no `api` URL (publish/yank/search unavailable)".into(),
+            )
         })
     }
 
     /// Search the registry (`GET <api>/api/v1/crates?q=…`).
     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>, RegistryError> {
-        let url = format!("{}/api/v1/crates?q={}&per_page={limit}", self.api()?, urlencode(query));
+        let url = format!(
+            "{}/api/v1/crates?q={}&per_page={limit}",
+            self.api()?,
+            urlencode(query)
+        );
         let text = http_get(&url, self.token.as_deref())?;
         #[derive(Deserialize)]
         struct Resp {
@@ -230,10 +257,9 @@ impl HttpRegistry {
     /// Yank a published version (`DELETE <api>/api/v1/crates/<name>/<version>/yank`).
     pub fn yank(&self, name: &str, version: &str) -> Result<(), RegistryError> {
         let url = format!("{}/api/v1/crates/{name}/{version}/yank", self.api()?);
-        let token = self
-            .token
-            .as_deref()
-            .ok_or_else(|| RegistryError::Protocol("not logged in (run `otter_fusion login`)".into()))?;
+        let token = self.token.as_deref().ok_or_else(|| {
+            RegistryError::Protocol("not logged in (run `otter_fusion login`)".into())
+        })?;
         ureq::delete(&url)
             .set("Authorization", &format!("Bearer {token}"))
             .call()
@@ -242,10 +268,9 @@ impl HttpRegistry {
     }
 
     fn put_authed(&self, url: &str, body: &[u8]) -> Result<(), RegistryError> {
-        let token = self
-            .token
-            .as_deref()
-            .ok_or_else(|| RegistryError::Protocol("not logged in (run `otter_fusion login`)".into()))?;
+        let token = self.token.as_deref().ok_or_else(|| {
+            RegistryError::Protocol("not logged in (run `otter_fusion login`)".into())
+        })?;
         ureq::put(url)
             .set("Authorization", &format!("Bearer {token}"))
             .set("Content-Type", "application/octet-stream")
@@ -307,7 +332,10 @@ pub struct LocalRegistry {
 
 impl LocalRegistry {
     pub fn new(name: impl Into<String>, dir: PathBuf) -> LocalRegistry {
-        LocalRegistry { name: name.into(), dir }
+        LocalRegistry {
+            name: name.into(),
+            dir,
+        }
     }
 }
 
@@ -331,9 +359,8 @@ impl Registry for LocalRegistry {
             .join("crates")
             .join(&entry.name)
             .join(format!("{}.tar.gz", entry.vers));
-        std::fs::read(&path).map_err(|e| {
-            RegistryError::Transport(format!("reading {}: {e}", path.display()))
-        })
+        std::fs::read(&path)
+            .map_err(|e| RegistryError::Transport(format!("reading {}: {e}", path.display())))
     }
 }
 
@@ -374,9 +401,8 @@ impl RawIndexLine {
             .map_err(|e| RegistryError::Protocol(format!("bad version `{}`: {e}", self.vers)))?;
         let mut deps = Vec::new();
         for d in self.deps {
-            let req = VersionReq::parse(&d.req).map_err(|e| {
-                RegistryError::Protocol(format!("bad dep req `{}`: {e}", d.req))
-            })?;
+            let req = VersionReq::parse(&d.req)
+                .map_err(|e| RegistryError::Protocol(format!("bad dep req `{}`: {e}", d.req)))?;
             deps.push(IndexDep {
                 name: d.name,
                 req,
@@ -386,7 +412,13 @@ impl RawIndexLine {
                 registry: d.registry,
             });
         }
-        Ok(IndexEntry { name: self.name, vers, deps, cksum: self.cksum, yanked: self.yanked })
+        Ok(IndexEntry {
+            name: self.name,
+            vers,
+            deps,
+            cksum: self.cksum,
+            yanked: self.yanked,
+        })
     }
 }
 

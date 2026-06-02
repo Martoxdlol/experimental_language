@@ -50,10 +50,16 @@ pub fn expand_derives(module: &mut Module) {
     module.items.extend(generated);
     // Inline submodules are expanded in place.
     for item in &mut module.items {
-        if let ItemKind::Module(ModuleItem { kind: ModuleKind::Inline { items, .. }, .. }) =
-            &mut item.kind
+        if let ItemKind::Module(ModuleItem {
+            kind: ModuleKind::Inline { items, .. },
+            ..
+        }) = &mut item.kind
         {
-            let mut sub = Module { inner_docs: Vec::new(), items: std::mem::take(items), span: item.span };
+            let mut sub = Module {
+                inner_docs: Vec::new(),
+                items: std::mem::take(items),
+                span: item.span,
+            };
             expand_derives(&mut sub);
             *items = sub.items;
         }
@@ -70,7 +76,11 @@ fn derived_interfaces(attrs: &[Attribute]) -> Vec<&'static str> {
             continue;
         }
         for arg in &a.args {
-            if let AttrArg::Positional(Expr { kind: ExprKind::Ident(id), .. }) = arg {
+            if let AttrArg::Positional(Expr {
+                kind: ExprKind::Ident(id),
+                ..
+            }) = arg
+            {
                 if let Some(known) = known_derive(&id.name) {
                     out.push(known);
                 }
@@ -140,9 +150,20 @@ fn synth_impl(s: &StructItem, derives: &[&str]) -> Option<Item> {
             })
             .collect();
         let args = gp.params.iter().map(|p| named_ty(&p.name.name)).collect();
-        let target =
-            Type { kind: TypeKind::Named { name: ident(&s.name.name), generics: args }, span: nsp() };
-        (Some(GenericParams { params, span: nsp() }), target)
+        let target = Type {
+            kind: TypeKind::Named {
+                name: ident(&s.name.name),
+                generics: args,
+            },
+            span: nsp(),
+        };
+        (
+            Some(GenericParams {
+                params,
+                span: nsp(),
+            }),
+            target,
+        )
     } else {
         (None, named_ty(&s.name.name))
     };
@@ -225,15 +246,25 @@ fn cmp_method(name: &str, other_ty: Type, body: Expr) -> FunctionItem {
         name: ident(name),
         generics: None,
         params: vec![
-            Param { kind: ParamKind::SelfParam, span: nsp() },
             Param {
-                kind: ParamKind::Normal { name: ident("other"), ty: other_ty },
+                kind: ParamKind::SelfParam,
+                span: nsp(),
+            },
+            Param {
+                kind: ParamKind::Normal {
+                    name: ident("other"),
+                    ty: other_ty,
+                },
                 span: nsp(),
             },
         ],
         return_type: Some(named_ty("bool")),
         is_async: false,
-        body: Some(Block { stmts: Vec::new(), trailing: Some(Box::new(body)), span: nsp() }),
+        body: Some(Block {
+            stmts: Vec::new(),
+            trailing: Some(Box::new(body)),
+            span: nsp(),
+        }),
     }
 }
 
@@ -344,14 +375,24 @@ fn synth_to_str(s: &StructItem, generic: bool) -> FunctionItem {
     // Render one field to `str`: a direct `as str` cast for a concrete field, or
     // a `.to_str()` call (dispatched through the field's `T: ToStr` bound) for a
     // generic field — `as str` does not apply to a bare type parameter.
-    let render = |e: Expr| if generic { to_str_call(e) } else { cast_to_str(e) };
+    let render = |e: Expr| {
+        if generic {
+            to_str_call(e)
+        } else {
+            cast_to_str(e)
+        }
+    };
     let name = &s.name.name;
     let body = match &s.kind {
         StructKind::Unit => str_lit(name),
         StructKind::Record(fields) => {
             let mut pieces = vec![str_lit(&format!("{name} {{ "))];
             for (i, f) in fields.iter().enumerate() {
-                let sep = if i == 0 { String::new() } else { ", ".to_string() };
+                let sep = if i == 0 {
+                    String::new()
+                } else {
+                    ", ".to_string()
+                };
                 pieces.push(str_lit(&format!("{sep}{}: ", f.name.name)));
                 pieces.push(render(field_access(self_expr(), &f.name.name)));
             }
@@ -373,10 +414,17 @@ fn synth_to_str(s: &StructItem, generic: bool) -> FunctionItem {
     FunctionItem {
         name: ident("to_str"),
         generics: None,
-        params: vec![Param { kind: ParamKind::SelfParam, span: nsp() }],
+        params: vec![Param {
+            kind: ParamKind::SelfParam,
+            span: nsp(),
+        }],
         return_type: Some(named_ty("str")),
         is_async: false,
-        body: Some(Block { stmts: Vec::new(), trailing: Some(Box::new(body)), span: nsp() }),
+        body: Some(Block {
+            stmts: Vec::new(),
+            trailing: Some(Box::new(body)),
+            span: nsp(),
+        }),
     }
 }
 
@@ -384,7 +432,10 @@ fn synth_to_str(s: &StructItem, generic: bool) -> FunctionItem {
 /// `T: ToStr` bound for a generic field).
 fn to_str_call(receiver: Expr) -> Expr {
     let callee = Expr {
-        kind: ExprKind::Field { receiver: Box::new(receiver), name: ident("to_str") },
+        kind: ExprKind::Field {
+            receiver: Box::new(receiver),
+            name: ident("to_str"),
+        },
         span: nsp(),
     };
     Expr {
@@ -417,7 +468,11 @@ fn synth_clone(s: &StructItem, ret_ty: Type) -> FunctionItem {
                 .collect();
             Expr {
                 kind: ExprKind::StructLit {
-                    path: TypePath { name: ident(name), generics: Vec::new(), span: nsp() },
+                    path: TypePath {
+                        name: ident(name),
+                        generics: Vec::new(),
+                        span: nsp(),
+                    },
                     fields: inits,
                     spread: None,
                 },
@@ -443,17 +498,27 @@ fn synth_clone(s: &StructItem, ret_ty: Type) -> FunctionItem {
     FunctionItem {
         name: ident("clone"),
         generics: None,
-        params: vec![Param { kind: ParamKind::SelfParam, span: nsp() }],
+        params: vec![Param {
+            kind: ParamKind::SelfParam,
+            span: nsp(),
+        }],
         return_type: Some(ret_ty),
         is_async: false,
-        body: Some(Block { stmts: Vec::new(), trailing: Some(Box::new(body)), span: nsp() }),
+        body: Some(Block {
+            stmts: Vec::new(),
+            trailing: Some(Box::new(body)),
+            span: nsp(),
+        }),
     }
 }
 
 /// `receiver.clone()` — a zero-argument method call.
 fn clone_call(receiver: Expr) -> Expr {
     let callee = Expr {
-        kind: ExprKind::Field { receiver: Box::new(receiver), name: ident("clone") },
+        kind: ExprKind::Field {
+            receiver: Box::new(receiver),
+            name: ident("clone"),
+        },
         span: nsp(),
     };
     Expr {
@@ -486,17 +551,27 @@ fn synth_hash(s: &StructItem) -> FunctionItem {
     FunctionItem {
         name: ident("hash"),
         generics: None,
-        params: vec![Param { kind: ParamKind::SelfParam, span: nsp() }],
+        params: vec![Param {
+            kind: ParamKind::SelfParam,
+            span: nsp(),
+        }],
         return_type: Some(named_ty("u64")),
         is_async: false,
-        body: Some(Block { stmts: Vec::new(), trailing: Some(Box::new(body)), span: nsp() }),
+        body: Some(Block {
+            stmts: Vec::new(),
+            trailing: Some(Box::new(body)),
+            span: nsp(),
+        }),
     }
 }
 
 /// `receiver.hash()` — a zero-argument method call.
 fn hash_call(receiver: Expr) -> Expr {
     let callee = Expr {
-        kind: ExprKind::Field { receiver: Box::new(receiver), name: ident("hash") },
+        kind: ExprKind::Field {
+            receiver: Box::new(receiver),
+            name: ident("hash"),
+        },
         span: nsp(),
     };
     Expr {
@@ -517,7 +592,10 @@ fn u64_lit(n: u64) -> Expr {
         base: crate::token::IntBase::Dec,
         suffix: Some("u64".to_string()),
     };
-    Expr { kind: ExprKind::Int(lit), span: nsp() }
+    Expr {
+        kind: ExprKind::Int(lit),
+        span: nsp(),
+    }
 }
 
 /// Fold string-valued expressions with `+` (concatenation).
@@ -542,42 +620,76 @@ fn conjoin(parts: impl Iterator<Item = Expr>) -> Expr {
 // -- small AST builders (each node gets a unique synthetic span) --------------
 
 fn ident(name: &str) -> Ident {
-    Ident { name: name.to_string(), span: nsp() }
+    Ident {
+        name: name.to_string(),
+        span: nsp(),
+    }
 }
 fn ident_expr(name: &str) -> Expr {
-    Expr { kind: ExprKind::Ident(ident(name)), span: nsp() }
+    Expr {
+        kind: ExprKind::Ident(ident(name)),
+        span: nsp(),
+    }
 }
 fn self_expr() -> Expr {
-    Expr { kind: ExprKind::SelfExpr, span: nsp() }
+    Expr {
+        kind: ExprKind::SelfExpr,
+        span: nsp(),
+    }
 }
 fn bool_lit(b: bool) -> Expr {
-    Expr { kind: ExprKind::Bool(b), span: nsp() }
+    Expr {
+        kind: ExprKind::Bool(b),
+        span: nsp(),
+    }
 }
 fn field_access(receiver: Expr, name: &str) -> Expr {
-    Expr { kind: ExprKind::Field { receiver: Box::new(receiver), name: ident(name) }, span: nsp() }
+    Expr {
+        kind: ExprKind::Field {
+            receiver: Box::new(receiver),
+            name: ident(name),
+        },
+        span: nsp(),
+    }
 }
 fn tuple_index(receiver: Expr, index: u32) -> Expr {
     Expr {
-        kind: ExprKind::TupleIndex { receiver: Box::new(receiver), index, index_span: nsp() },
+        kind: ExprKind::TupleIndex {
+            receiver: Box::new(receiver),
+            index,
+            index_span: nsp(),
+        },
         span: nsp(),
     }
 }
 fn binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {
     Expr {
-        kind: ExprKind::Binary { op, op_span: nsp(), left: Box::new(left), right: Box::new(right) },
+        kind: ExprKind::Binary {
+            op,
+            op_span: nsp(),
+            left: Box::new(left),
+            right: Box::new(right),
+        },
         span: nsp(),
     }
 }
 fn not(operand: Expr) -> Expr {
     Expr {
-        kind: ExprKind::Unary { op: UnaryOp::Not, op_span: nsp(), operand: Box::new(operand) },
+        kind: ExprKind::Unary {
+            op: UnaryOp::Not,
+            op_span: nsp(),
+            operand: Box::new(operand),
+        },
         span: nsp(),
     }
 }
 /// `receiver.<name>(arg)` — a single-argument method call.
 fn method_call(receiver: Expr, name: &str, arg: Expr) -> Expr {
     let callee = Expr {
-        kind: ExprKind::Field { receiver: Box::new(receiver), name: ident(name) },
+        kind: ExprKind::Field {
+            receiver: Box::new(receiver),
+            name: ident(name),
+        },
         span: nsp(),
     };
     Expr {
@@ -591,12 +703,27 @@ fn method_call(receiver: Expr, name: &str, arg: Expr) -> Expr {
     }
 }
 fn named_ty(name: &str) -> Type {
-    Type { kind: TypeKind::Named { name: ident(name), generics: Vec::new() }, span: nsp() }
+    Type {
+        kind: TypeKind::Named {
+            name: ident(name),
+            generics: Vec::new(),
+        },
+        span: nsp(),
+    }
 }
 fn str_lit(text: &str) -> Expr {
     let sp = nsp();
-    let lit = StringLit { parts: vec![StringPart::Text { text: text.to_string(), span: sp }], span: sp };
-    Expr { kind: ExprKind::Str(lit), span: nsp() }
+    let lit = StringLit {
+        parts: vec![StringPart::Text {
+            text: text.to_string(),
+            span: sp,
+        }],
+        span: sp,
+    };
+    Expr {
+        kind: ExprKind::Str(lit),
+        span: nsp(),
+    }
 }
 fn cast_to_str(expr: Expr) -> Expr {
     Expr {

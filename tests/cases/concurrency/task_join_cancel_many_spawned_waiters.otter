@@ -1,0 +1,65 @@
+//@ kind: run
+//@ serial
+//@ env: OTTER_FUSION_TASK_WORKERS=4
+//@ description: many spawned waiter tasks concurrently await the same Task.spawn JoinHandle.join() future and are all woken as Cancelled
+//@ stdout:
+//~ cancelled=128 total=-256
+
+import { println } from "std:io";
+import { Future } from "core:prelude";
+import { List } from "core:collections";
+import { Task, JoinHandle, Joined, Panicked, Cancelled } from "std:task";
+import { sleep } from "std:async";
+import { Sender, Receiver, ChannelClosed, channel } from "std:sync";
+
+function joined_value(r: Joined<i64> | Panicked | Cancelled): i64 {
+  match r {
+    Joined<i64> j => j.value,
+    Panicked p => -1,
+    Cancelled c => -2,
+  }
+}
+
+function wait_on(h: JoinHandle<i64>, ready: Sender<i64>, index: i64): Future<i64> async {
+  ready.send(index);
+  joined_value(await h.join())
+}
+
+function main(): Future<null> async {
+  var h: JoinHandle<i64> = Task.spawn(() async => {
+    var _ = await sleep(1000);
+    42
+  });
+  var ends = channel<i64>();
+  var tx: Sender<i64> = ends.0;
+  var rx: Receiver<i64> = ends.1;
+
+  var waiters: List<Future<i64>> = [];
+  var i: i64 = 0;
+  while i < 128 {
+    waiters.push(spawn wait_on(h, tx.clone(), i));
+    i = i + 1;
+  }
+
+  var registered: i64 = 0;
+  while registered < 128 {
+    match await rx.recv() {
+      i64 n => { registered = registered + 1; },
+      ChannelClosed c => { registered = -999999; },
+    }
+  }
+  var _yield_after_registered = await sleep(1);
+  h.cancel();
+
+  var cancelled: i64 = 0;
+  var total: i64 = 0;
+  var j: i64 = 0;
+  while j < waiters.size() {
+    var v = await waiters[j];
+    if v == -2 { cancelled = cancelled + 1; }
+    total = total + v;
+    j = j + 1;
+  }
+
+  println("cancelled=${cancelled} total=${total}");
+}

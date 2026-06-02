@@ -1,0 +1,18 @@
+//@ kind: compile-error
+//@ description: Task.spawn generic captures require a Clone snapshot when instantiated with a mutable non-shareable type
+//@ stderr: Task.spawn
+//@ stderr: cannot be snapshotted
+
+import { Future } from "core:prelude";
+import { Task, JoinHandle } from "std:task";
+
+struct Counter { n: i64 }
+
+function spawn_value<T>(value: T): Future<null> async {
+  var h: JoinHandle<T> = Task.spawn(() async => value);
+  var _ = await h.join();
+}
+
+function main(): Future<null> async {
+  await spawn_value<Counter>(Counter { n: 1 });
+}

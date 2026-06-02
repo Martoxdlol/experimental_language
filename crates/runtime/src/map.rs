@@ -6,7 +6,7 @@
 use crate::gc;
 use crate::hash::{hash_str_bytes, hash_u64};
 use crate::list::*;
-use crate::strings::{str_bytes, LangStr};
+use crate::strings::{LangStr, str_bytes};
 
 // --- Map<K, V> -------------------------------------------------------------
 //
@@ -83,7 +83,12 @@ unsafe fn map_key_eq(h: *mut u8, a: i64, b: i64) -> bool {
     }
     let key_is_ptr = unsafe { lfield(h, M_KEYPTR) } != 0;
     if key_is_ptr {
-        let (x, y) = unsafe { (str_bytes(a as *const LangStr), str_bytes(b as *const LangStr)) };
+        let (x, y) = unsafe {
+            (
+                str_bytes(a as *const LangStr),
+                str_bytes(b as *const LangStr),
+            )
+        };
         x == y
     } else {
         a == b
@@ -204,7 +209,7 @@ pub unsafe extern "C" fn lang_map_clone(h: *mut u8) -> *mut u8 {
         unsafe { std::ptr::copy_nonoverlapping(old_buf, new_buf, cap * SLOT) };
         unsafe { lset(new, M_BUF, new_buf as u64) };
     }
-    gc::resume();
+    gc::resume_with_return_root(new as usize);
     new
 }
 
@@ -355,7 +360,7 @@ pub unsafe extern "C" fn lang_map_entries(h: *mut u8, want_keys: i64) -> *mut u8
         let v = unsafe { (slot_ptr(buf, i).add(off) as *const i64).read() };
         unsafe { lang_list_push(list, v) };
     }
-    gc::resume();
+    gc::resume_with_return_root(list as usize);
     list
 }
 

@@ -23,7 +23,10 @@ fn parse_src(src: &str) -> (Module, Vec<ParseError>, Vec<Token>) {
 
 fn parse_ok(src: &str) -> Module {
     let (m, e, _) = parse_src(src);
-    assert!(e.is_empty(), "expected no parse errors, got:\n{e:#?}\nsrc:\n{src}");
+    assert!(
+        e.is_empty(),
+        "expected no parse errors, got:\n{e:#?}\nsrc:\n{src}"
+    );
     m
 }
 
@@ -210,7 +213,10 @@ fn self_param_in_extend_method() {
     match &m.items[0].kind {
         ItemKind::Extend(e) => {
             assert_eq!(e.members.len(), 1);
-            assert!(matches!(e.members[0].function.params[0].kind, ParamKind::SelfParam));
+            assert!(matches!(
+                e.members[0].function.params[0].kind,
+                ParamKind::SelfParam
+            ));
         }
         _ => panic!(),
     }
@@ -324,7 +330,11 @@ fn extend_static_function_is_just_a_function_without_self() {
     match &m.items[0].kind {
         ItemKind::Extend(e) => {
             let params = &e.members[0].function.params;
-            assert!(params.iter().all(|p| !matches!(p.kind, ParamKind::SelfParam)));
+            assert!(
+                params
+                    .iter()
+                    .all(|p| !matches!(p.kind, ParamKind::SelfParam))
+            );
         }
         _ => panic!(),
     }
@@ -400,7 +410,8 @@ fn nested_external_mod_inside_inline_errors() {
     let src = "mod outer { mod inner; }";
     let (_, errs, _) = parse_src(src);
     assert!(
-        errs.iter().any(|e| matches!(e.kind, ParseErrorKind::NestedExternalMod)),
+        errs.iter()
+            .any(|e| matches!(e.kind, ParseErrorKind::NestedExternalMod)),
         "expected NestedExternalMod, got: {errs:?}"
     );
 }
@@ -781,7 +792,9 @@ fn string_with_nested_string_in_interp() {
 
 fn binop(e: &Expr) -> (BinaryOp, &Expr, &Expr) {
     match &e.kind {
-        ExprKind::Binary { op, left, right, .. } => (*op, left, right),
+        ExprKind::Binary {
+            op, left, right, ..
+        } => (*op, left, right),
         _ => panic!("not a binary"),
     }
 }
@@ -827,7 +840,8 @@ fn precedence_cast_above_arith() {
 fn non_associative_eq_chain_is_error() {
     let (_, errs, _) = parse_src("var x = a == b == c;");
     assert!(
-        errs.iter().any(|e| matches!(e.kind, ParseErrorKind::NonAssociativeChain { .. })),
+        errs.iter()
+            .any(|e| matches!(e.kind, ParseErrorKind::NonAssociativeChain { .. })),
         "got: {errs:?}"
     );
 }
@@ -836,7 +850,8 @@ fn non_associative_eq_chain_is_error() {
 fn non_associative_lt_chain_is_error() {
     let (_, errs, _) = parse_src("var x = a < b < c;");
     assert!(
-        errs.iter().any(|e| matches!(e.kind, ParseErrorKind::NonAssociativeChain { .. })),
+        errs.iter()
+            .any(|e| matches!(e.kind, ParseErrorKind::NonAssociativeChain { .. })),
         "got: {errs:?}"
     );
 }
@@ -847,7 +862,13 @@ fn unary_minus_and_not() {
     match e.kind {
         ExprKind::Unary { op, operand, .. } => {
             assert_eq!(op, UnaryOp::Neg);
-            assert!(matches!(operand.kind, ExprKind::Unary { op: UnaryOp::Not, .. }));
+            assert!(matches!(
+                operand.kind,
+                ExprKind::Unary {
+                    op: UnaryOp::Not,
+                    ..
+                }
+            ));
         }
         _ => panic!(),
     }
@@ -856,7 +877,13 @@ fn unary_minus_and_not() {
 #[test]
 fn unary_bitnot() {
     let e = parse_expr_ok("~x");
-    assert!(matches!(e.kind, ExprKind::Unary { op: UnaryOp::BitNot, .. }));
+    assert!(matches!(
+        e.kind,
+        ExprKind::Unary {
+            op: UnaryOp::BitNot,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -920,7 +947,9 @@ fn generic_call() {
 fn generic_call_with_double_close() {
     let e = parse_expr_ok("Map.new<str, List<i64>>()");
     match e.kind {
-        ExprKind::Call { callee, generics, .. } => {
+        ExprKind::Call {
+            callee, generics, ..
+        } => {
             assert_eq!(generics.len(), 2);
             assert!(matches!(callee.kind, ExprKind::Field { .. }));
         }
@@ -1214,7 +1243,9 @@ fn anonymous_function_expression() {
 fn trailing_closure_on_method() {
     let e = parse_expr_ok("xs.map { x => x * 2 }");
     match e.kind {
-        ExprKind::Call { trailing_closure, .. } => {
+        ExprKind::Call {
+            trailing_closure, ..
+        } => {
             let tc = trailing_closure.expect("expected trailing closure");
             assert!(matches!(tc.kind, ExprKind::Closure { .. }));
         }
@@ -1228,10 +1259,14 @@ fn trailing_closure_async_no_params() {
     // trailing closure. The `async` keyword (no params) precedes the `=>`.
     let e = parse_expr_ok("Thread.spawn { async => 7 }");
     match e.kind {
-        ExprKind::Call { trailing_closure, .. } => {
+        ExprKind::Call {
+            trailing_closure, ..
+        } => {
             let tc = trailing_closure.expect("expected trailing closure");
             match tc.kind {
-                ExprKind::Closure { is_async, params, .. } => {
+                ExprKind::Closure {
+                    is_async, params, ..
+                } => {
                     assert!(is_async, "trailing `{{ async => … }}` is an async closure");
                     assert!(params.is_empty());
                 }
@@ -1248,10 +1283,14 @@ fn trailing_closure_async_with_params() {
     // parameter. The `async` keyword sits between the params and the `=>`.
     let e = parse_expr_ok("s.lock { c async => c }");
     match e.kind {
-        ExprKind::Call { trailing_closure, .. } => {
+        ExprKind::Call {
+            trailing_closure, ..
+        } => {
             let tc = trailing_closure.expect("expected trailing closure");
             match tc.kind {
-                ExprKind::Closure { is_async, params, .. } => {
+                ExprKind::Closure {
+                    is_async, params, ..
+                } => {
                     assert!(is_async);
                     assert_eq!(params.len(), 1);
                 }
@@ -1269,7 +1308,9 @@ fn trailing_closure_with_inner_async_block_not_async_closure() {
     // closure with an async-block body, not `{ async => … }`.
     let e = parse_expr_ok("Thread.spawn { async { 1 } }");
     match e.kind {
-        ExprKind::Call { trailing_closure, .. } => {
+        ExprKind::Call {
+            trailing_closure, ..
+        } => {
             let tc = trailing_closure.expect("expected trailing closure");
             match tc.kind {
                 ExprKind::Closure { is_async, .. } => assert!(!is_async),
@@ -1284,7 +1325,11 @@ fn trailing_closure_with_inner_async_block_not_async_closure() {
 fn trailing_closure_after_call_args() {
     let e = parse_expr_ok("xs.fold(0) { acc, n => acc + n }");
     match e.kind {
-        ExprKind::Call { trailing_closure, args, .. } => {
+        ExprKind::Call {
+            trailing_closure,
+            args,
+            ..
+        } => {
             assert_eq!(args.len(), 1);
             assert!(trailing_closure.is_some());
         }
@@ -1296,7 +1341,10 @@ fn trailing_closure_after_call_args() {
 fn trailing_closure_implicit_it() {
     let e = parse_expr_ok("xs.map { it * 2 }");
     match e.kind {
-        ExprKind::Call { trailing_closure: Some(tc), .. } => match tc.kind {
+        ExprKind::Call {
+            trailing_closure: Some(tc),
+            ..
+        } => match tc.kind {
             ExprKind::Closure { params, .. } => assert!(params.is_empty()),
             _ => panic!(),
         },
@@ -1369,7 +1417,10 @@ fn parse_match_arm_pattern(src: &str) -> Pattern {
 
 #[test]
 fn pattern_wildcard() {
-    assert!(matches!(parse_match_arm_pattern("_").kind, PatternKind::Wildcard));
+    assert!(matches!(
+        parse_match_arm_pattern("_").kind,
+        PatternKind::Wildcard
+    ));
 }
 
 #[test]
@@ -1451,7 +1502,9 @@ fn pattern_tuple_struct_with_rest() {
 fn pattern_record_struct() {
     let p = parse_match_arm_pattern("Person { name, age }");
     match p.kind {
-        PatternKind::RecordStruct { fields, has_rest, .. } => {
+        PatternKind::RecordStruct {
+            fields, has_rest, ..
+        } => {
             assert_eq!(fields.len(), 2);
             assert!(!has_rest);
         }
@@ -1789,7 +1842,9 @@ fn method_call_chain_with_generics() {
     let e = parse_expr_ok("obj.foo<i64>().bar<str>()");
     // Outermost is the second call.
     match e.kind {
-        ExprKind::Call { callee, generics, .. } => {
+        ExprKind::Call {
+            callee, generics, ..
+        } => {
             assert_eq!(generics.len(), 1);
             assert!(matches!(callee.kind, ExprKind::Field { .. }));
         }
@@ -1865,9 +1920,7 @@ fn if_as_var_initializer() {
 
 #[test]
 fn match_arm_with_block_body() {
-    let e = parse_expr_ok(
-        "match x { 1 => { var y = 2; y + 1 }, _ => 0 }",
-    );
+    let e = parse_expr_ok("match x { 1 => { var y = 2; y + 1 }, _ => 0 }");
     match e.kind {
         ExprKind::Match { arms, .. } => {
             assert!(matches!(arms[0].body.kind, ExprKind::Block(_)));
@@ -1950,7 +2003,11 @@ fn nested_closures() {
 fn closure_with_no_params_typed_return() {
     let e = parse_expr_ok("(): i64 => 42");
     match e.kind {
-        ExprKind::Closure { params, return_type, .. } => {
+        ExprKind::Closure {
+            params,
+            return_type,
+            ..
+        } => {
             assert!(params.is_empty());
             assert!(return_type.is_some());
         }
@@ -2054,7 +2111,13 @@ fn parens_grouping_of_lt_compare() {
     let e = parse_expr_ok("(a < b)");
     match e.kind {
         ExprKind::Paren(inner) => {
-            assert!(matches!(inner.kind, ExprKind::Binary { op: BinaryOp::Lt, .. }))
+            assert!(matches!(
+                inner.kind,
+                ExprKind::Binary {
+                    op: BinaryOp::Lt,
+                    ..
+                }
+            ))
         }
         _ => panic!(),
     }
@@ -2229,7 +2292,9 @@ fn parser_continues_past_bad_item_to_next() {
     assert!(!errs.is_empty());
     // The good item should still be parsed.
     assert!(
-        m.items.iter().any(|it| matches!(&it.kind, ItemKind::Function(f) if f.name.name == "ok"))
+        m.items
+            .iter()
+            .any(|it| matches!(&it.kind, ItemKind::Function(f) if f.name.name == "ok"))
     );
 }
 
@@ -2243,7 +2308,8 @@ fn dangling_else_without_if_is_an_error() {
 fn non_assoc_lt_gt_chain_errors() {
     let (_, errs, _) = parse_src("var x = a < b > c;");
     assert!(
-        errs.iter().any(|e| matches!(e.kind, ParseErrorKind::NonAssociativeChain { .. })),
+        errs.iter()
+            .any(|e| matches!(e.kind, ParseErrorKind::NonAssociativeChain { .. })),
         "got: {errs:?}"
     );
 }
@@ -2283,7 +2349,10 @@ fn record_struct_pattern_in_for_loop() {
 fn nested_trailing_closure() {
     let e = parse_expr_ok("xs.flat_map { x => x.map { it * 2 } }");
     match e.kind {
-        ExprKind::Call { trailing_closure: Some(tc), .. } => match tc.kind {
+        ExprKind::Call {
+            trailing_closure: Some(tc),
+            ..
+        } => match tc.kind {
             ExprKind::Closure { body, .. } => match body.kind {
                 ExprKind::Block(b) => {
                     let t = b.trailing.expect("trailing");
@@ -2369,8 +2438,20 @@ fn precedence_logical_and_below_bitor() {
     let e = parse_expr_ok("a | b && c | d");
     let (top, l, r) = binop(&e);
     assert_eq!(top, BinaryOp::And);
-    assert!(matches!(l.kind, ExprKind::Binary { op: BinaryOp::BitOr, .. }));
-    assert!(matches!(r.kind, ExprKind::Binary { op: BinaryOp::BitOr, .. }));
+    assert!(matches!(
+        l.kind,
+        ExprKind::Binary {
+            op: BinaryOp::BitOr,
+            ..
+        }
+    ));
+    assert!(matches!(
+        r.kind,
+        ExprKind::Binary {
+            op: BinaryOp::BitOr,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -2380,7 +2461,13 @@ fn precedence_compare_below_bitor() {
     let e = parse_expr_ok("a == b | c");
     let (top, _, r) = binop(&e);
     assert_eq!(top, BinaryOp::Eq);
-    assert!(matches!(r.kind, ExprKind::Binary { op: BinaryOp::BitOr, .. }));
+    assert!(matches!(
+        r.kind,
+        ExprKind::Binary {
+            op: BinaryOp::BitOr,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -2405,7 +2492,8 @@ fn duplicate_rest_in_tuple_pattern_errors() {
     let wrap = format!("function f() {{ {src} }}");
     let (_, errs, _) = parse_src(&wrap);
     assert!(
-        errs.iter().any(|e| matches!(e.kind, ParseErrorKind::DuplicateRestBinding)),
+        errs.iter()
+            .any(|e| matches!(e.kind, ParseErrorKind::DuplicateRestBinding)),
         "got: {errs:?}"
     );
 }

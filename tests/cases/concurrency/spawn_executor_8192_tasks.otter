@@ -1,0 +1,34 @@
+//@ kind: run
+//@ serial
+//@ env: OTTER_FUSION_TASK_WORKERS=4
+//@ description: the spawn keyword sustains 8192 yielding async tasks on a small M:N executor and awaits every Future handle
+//@ stdout:
+//~ total=33550336
+import { println } from "std:io";
+import { Future } from "core:prelude";
+import { List } from "core:collections";
+import { yield_now } from "std:async";
+
+function work(n: i64): Future<i64> async {
+  var _a = await yield_now();
+  var _b = await yield_now();
+  n
+}
+
+function main(): Future<null> async {
+  var handles: List<Future<i64>> = [];
+  var i: i64 = 0;
+  while i < 8192 {
+    handles.push(spawn work(i));
+    i = i + 1;
+  }
+
+  var total: i64 = 0;
+  var j: i64 = 0;
+  while j < handles.size() {
+    total = total + await handles[j];
+    j = j + 1;
+  }
+
+  println("total=${total}");
+}

@@ -1,0 +1,48 @@
+//@ kind: run
+//@ serial
+//@ description: Task.spawn async worker consumes a cross-task channel with await recv(), proving endpoint capture works on the M:N executor
+//@ stdout:
+//~ sum=30
+import { println } from "std:io";
+import { Future } from "core:prelude";
+import { Task, JoinHandle, Joined, Panicked, Cancelled } from "std:task";
+import { Thread } from "std:thread";
+import { Sender, Receiver, ChannelClosed, channel } from "std:sync";
+
+function produce(tx: Sender<i64>, n: i64) {
+  var i = 1;
+  while i <= n {
+    tx.send(i * i);
+    i = i + 1;
+  }
+}
+
+function value_of(r: Joined<i64> | Panicked | Cancelled): i64 {
+  match r {
+    Joined<i64> j => j.value,
+    Panicked p => -1,
+    Cancelled c => -2,
+  }
+}
+
+function main(): Future<null> async {
+  var ends = channel<i64>();
+  var tx = ends.0;
+  var rx = ends.1;
+  var worker: JoinHandle<i64> = Task.spawn(() async => {
+    var total = 0;
+    var run = true;
+    while run {
+      var v: i64 | ChannelClosed = await rx.recv();
+      match v {
+        i64 x => { total = total + x; },
+        ChannelClosed c => { run = false; },
+      }
+    }
+    total
+  });
+  var feeder = Thread.spawn(() => produce(tx, 4));
+  var _ = await feeder.join();
+  var r: Joined<i64> | Panicked | Cancelled = await worker.join();
+  println("sum=${value_of(r)}");
+}

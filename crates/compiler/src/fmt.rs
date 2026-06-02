@@ -176,9 +176,9 @@ pub fn token_stream_preserved(before: &str, after: &str) -> bool {
     if ta.len() != tb.len() {
         return false;
     }
-    ta.iter().zip(tb.iter()).all(|(x, y)| {
-        x.kind == y.kind && tok_text(before, x) == tok_text(after, y)
-    })
+    ta.iter()
+        .zip(tb.iter())
+        .all(|(x, y)| x.kind == y.kind && tok_text(before, x) == tok_text(after, y))
 }
 
 fn tok_text<'a>(src: &'a str, t: &crate::token::Token) -> &'a str {
@@ -233,7 +233,10 @@ mod tests {
         let src = "function f() {\n/* a\n    b\n  c */\nvar x = 1;\n}\n";
         let out = format_source(src);
         // The comment's interior lines keep their original leading spaces.
-        assert!(out.contains("/* a\n    b\n  c */"), "block comment changed: {out:?}");
+        assert!(
+            out.contains("/* a\n    b\n  c */"),
+            "block comment changed: {out:?}"
+        );
         assert!(token_stream_preserved(src, &out));
     }
 

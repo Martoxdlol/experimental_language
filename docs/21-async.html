@@ -342,6 +342,12 @@ default work-stealing executor. There is no user-visible <code>block_on</code>
 — sync code cannot "wait" on a future synchronously, because doing so would
 block the OS thread (which the language forbids).</p>
 
+<p>The default executor sizes its worker pool from hardware parallelism, capped
+to a small bounded pool for predictable resource use. Runtime deployments and
+stress tests may override the pool width with
+<code>OTTER_FUSION_TASK_WORKERS=N</code> (clamped to a safe implementation
+limit); this is a runtime tuning knob, not a language feature.</p>
+
 <pre><code>function main(): Future&lt;null&gt; async {
   var r = await some_top_level_task()
   println(r)
@@ -354,15 +360,17 @@ var v: i64         = await f;</code></pre>
 
 <p><code>spawn</code> is a prefix keyword (like <code>await</code>). It takes a
 future-producing expression — usually a call to an <code>async</code> function
-— hands it to a worker thread, and itself evaluates to a fresh
+— hands it to the shared work-stealing executor, and itself evaluates to a fresh
 <code>Future&lt;T&gt;</code>. Awaiting that future resolves to the spawned task's
 result. This mirrors Tokio's <code>JoinHandle</code>, but typed as a
 <code>Future&lt;T&gt;</code> directly (in the JS/Dart spirit).</p>
 
 <div class="callout">
   <strong><code>spawn EXPR</code> vs. an async <code>Thread.spawn</code> worker</strong>
-  Both run an async task on a worker OS thread (same one-OS-thread-per-task
-  executor today). They differ only in the handle: <code>spawn EXPR</code>
+  Both run an async task, but on different scheduling contracts:
+  <code>spawn EXPR</code> uses the shared executor, while
+  <code>Thread.spawn</code> owns a dedicated OS thread. They differ also in the
+  handle: <code>spawn EXPR</code>
   yields a bare <code>Future&lt;T&gt;</code> you <code>await</code>;
   <code>Thread.spawn { async =&gt; … }</code> (<a href="20-concurrency.html">20-concurrency</a>
   §1) yields a <code>JoinHandle&lt;T&gt;</code> with <code>join</code>/<code>detach</code>
@@ -385,6 +393,16 @@ var sum: i64 = (await a) + (await b) + (await c);</code></pre>
   <code>Pending</code> and rely on a waker. Synchronous blocking calls (sync
   file I/O, sync DB) should go through a "blocking task" mechanism the executor
   provides (implementation-defined).
+</div>
+
+<div class="callout">
+  <strong>Reactor handoff</strong>
+  Timer futures and future I/O backends use the same shape: register the current
+  <code>waker_data</code>/<code>wake_fn</code> pair, return <code>Pending</code>,
+  and let the timer driver or I/O readiness callback wake the task for a later
+  poll. Registrations are one-shot and cancellable, so losing
+  <code>timeout()</code>/<code>select</code>-style branches can release their
+  readiness interest promptly.
 </div>
 
 <!-- =========================================================== -->
@@ -458,13 +476,17 @@ winner completes.</p>
   (<a href="20-concurrency.html">20-concurrency</a> §1, <code>Thread.spawn</code>)
   there is <em>no</em> hard kill at all — signal it cooperatively with a
   <code>Shared&lt;bool&gt;</code>/channel and let it return.
-  <br><strong style="margin-top: 0.4rem;">Task-level cancellation lands with the executor</strong>
-  <code>.cancel()</code> on a compute-only future is a no-op today (nothing to
-  stop). Real teeth — plus <code>Task.spawn</code>'s
-  <code>JoinHandle.cancel()</code>/<code>abort()</code> and a <code>Cancelled</code>
-  result so <code>join()</code> resolves to
-  <code>Joined&lt;R&gt; | Panicked | Cancelled</code> — arrive with the planned M:N
+  <br><strong style="margin-top: 0.4rem;">Task-level cancellation</strong>
+  The executor is now the place where cancellation is enforced.
+  <code>.cancel()</code> on a <code>spawn EXPR</code> future stops scheduling the
+  spawned task and releases any <code>Shared</code> locks it held while
+  suspended. <code>Task.spawn</code>'s <code>JoinHandle.cancel()</code> and
+  <code>abort()</code> use the same path; after cancellation,
+  <code>join()</code> resolves to
+  <code>Joined&lt;R&gt; | Panicked | Cancelled</code> on the M:N
   work-stealing executor (<a href="20-concurrency.html">20-concurrency</a> §1).
+  <code>timeout()</code> uses the same hook when the timer wins, so cancellable
+  loser futures (notably <code>spawn EXPR</code>) are stopped and cleaned up.
 </div>
 
 <!-- =========================================================== -->
@@ -475,6 +497,8 @@ winner completes.</p>
 pub struct TimedOut;</code></pre>
 
 <p>Races <code>fut</code> against a timer. Whichever finishes first wins; <code>.cancel()</code> is called on the loser.</p>
+<p>The runtime drives deadlines through the shared timer driver used by
+<code>sleep</code>; it does not create one OS thread per timer.</p>
 
 <!-- =========================================================== -->
 <h2 id="asynciter">10. <code>AsyncIterator&lt;T&gt;</code></h2>

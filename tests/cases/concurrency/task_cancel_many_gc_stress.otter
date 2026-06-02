@@ -1,0 +1,62 @@
+//@ kind: run
+//@ serial
+//@ env: OTTER_FUSION_TASK_WORKERS=4
+//@ env: OTTER_FUSION_GC=stress
+//@ description: mass Task.spawn cancellation under stress GC releases future state, sender endpoints, and executor wake registrations
+//@ stdout:
+//~ cancelled=512 recv=closed
+
+import { println } from "std:io";
+import { Future } from "core:prelude";
+import { List } from "core:collections";
+import { Task, JoinHandle, Joined, Panicked, Cancelled } from "std:task";
+import { Receiver, ChannelClosed, channel } from "std:sync";
+import { sleep } from "std:async";
+
+function main(): Future<null> async {
+  var receivers: List<Receiver<i64>> = [];
+  var handles: List<JoinHandle<i64>> = [];
+
+  var i: i64 = 0;
+  while i < 512 {
+    var ends = channel<i64>();
+    var tx = ends.0;
+    receivers.push(ends.1);
+    var n = i;
+    var h: JoinHandle<i64> = Task.spawn(() async => {
+      var _ = await sleep(1000);
+      tx.send(n);
+      n
+    });
+    h.cancel();
+    handles.push(h);
+    i = i + 1;
+  }
+
+  var cancelled: i64 = 0;
+  var j: i64 = 0;
+  while j < handles.size() {
+    match await handles[j].join() {
+      Joined<i64> v => {},
+      Panicked p => {},
+      Cancelled c => { cancelled = cancelled + 1; },
+    }
+    j = j + 1;
+  }
+
+  var closed: i64 = 0;
+  var k: i64 = 0;
+  while k < receivers.size() {
+    match await receivers[k].recv() {
+      i64 n => {},
+      ChannelClosed c => { closed = closed + 1; },
+    }
+    k = k + 1;
+  }
+
+  if closed == 512 {
+    println("cancelled=${cancelled} recv=closed");
+  } else {
+    println("cancelled=${cancelled} recv=open ${closed}");
+  }
+}

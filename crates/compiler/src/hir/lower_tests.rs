@@ -6,7 +6,7 @@
 use super::*;
 use crate::lexer::lex;
 use crate::parser::parse;
-use crate::sema::{analyze, Analysis};
+use crate::sema::{Analysis, analyze};
 use crate::span::{FileId, Span};
 
 /// Toolchain imports prepended to every test program (near-empty prelude,
@@ -141,10 +141,14 @@ fn walk_expr(e: &Expr, f: &mut dyn FnMut(&Expr)) {
         | ExprKind::Ref(expr)
         | ExprKind::Deref(expr)
         | ExprKind::Adjust { expr, .. } => walk_expr(expr, f),
-        ExprKind::Try { expr, .. } | ExprKind::Await { expr, .. } | ExprKind::Spawn { expr, .. } => {
-            walk_expr(expr, f)
-        }
-        ExprKind::If { cond, then_block, else_branch } => {
+        ExprKind::Try { expr, .. }
+        | ExprKind::Await { expr, .. }
+        | ExprKind::Spawn { expr, .. } => walk_expr(expr, f),
+        ExprKind::If {
+            cond,
+            then_block,
+            else_branch,
+        } => {
             walk_expr(cond, f);
             walk_block(then_block, f);
             if let Some(e) = else_branch {
@@ -241,7 +245,10 @@ fn expr_types_match_the_checker_table() {
             checked += 1;
         }
     });
-    assert!(checked > 10, "expected to verify many node types, saw {checked}");
+    assert!(
+        checked > 10,
+        "expected to verify many node types, saw {checked}"
+    );
 }
 
 #[test]
@@ -289,7 +296,12 @@ fn function_body_shape_add() {
     // trailing expression is `x + y` — a primitive Add with two Name operands.
     let trailing = body.block.trailing.as_ref().expect("trailing expr");
     match &trailing.kind {
-        ExprKind::Binary { op, left, right, overload } => {
+        ExprKind::Binary {
+            op,
+            left,
+            right,
+            overload,
+        } => {
             assert_eq!(*op, BinaryOp::Add);
             assert!(overload.is_none());
             assert!(matches!(left.kind, ExprKind::Name(Res::Local(_))));
@@ -517,10 +529,16 @@ function main(): i64 {
     for stmt in &body.block.stmts {
         if let StmtKind::Let { init, .. } = &stmt.kind {
             walk_expr(init, &mut |e| {
-                if let ExprKind::Intrinsic { intrinsic: Intrinsic::Num(n), .. } = &e.kind {
+                if let ExprKind::Intrinsic {
+                    intrinsic: Intrinsic::Num(n),
+                    ..
+                } = &e.kind
+                {
                     match n {
                         NumIntrinsic::IntBound { max: true, .. } => bound = true,
-                        NumIntrinsic::IntArith { family: 0, op: 0, .. } => arith = true,
+                        NumIntrinsic::IntArith {
+                            family: 0, op: 0, ..
+                        } => arith = true,
                         _ => {}
                     }
                 }
@@ -528,7 +546,10 @@ function main(): i64 {
         }
     }
     assert!(bound, "expected i32.MAX → IntBound{{max:true}}");
-    assert!(arith, "expected i32.wrapping_add → IntArith{{wrapping,add}}");
+    assert!(
+        arith,
+        "expected i32.wrapping_add → IntArith{{wrapping,add}}"
+    );
 }
 
 #[test]
@@ -548,7 +569,11 @@ function main() {
     for stmt in &body.block.stmts {
         if let StmtKind::Let { init, .. } = &stmt.kind {
             walk_expr(init, &mut |e| {
-                if let ExprKind::Intrinsic { intrinsic: Intrinsic::ForeignAlloc { ty, zeroed }, .. } = &e.kind {
+                if let ExprKind::Intrinsic {
+                    intrinsic: Intrinsic::ForeignAlloc { ty, zeroed },
+                    ..
+                } = &e.kind
+                {
                     assert_eq!(
                         a.tcx.display(*ty, &|id| a.program.def(id).name.clone()),
                         "Pair"
@@ -573,15 +598,79 @@ fn thread_spawn_lowers_with_output_from_join_handle_type() {
     for stmt in &body.block.stmts {
         if let StmtKind::Let { init, .. } = &stmt.kind {
             walk_expr(init, &mut |e| {
-                if let ExprKind::Intrinsic { intrinsic: Intrinsic::ThreadSpawn { output, is_async }, .. } = &e.kind {
+                if let ExprKind::Intrinsic {
+                    intrinsic: Intrinsic::ThreadSpawn { output, is_async },
+                    ..
+                } = &e.kind
+                {
                     found = Some((*output, *is_async));
                 }
             });
         }
     }
     let (out, is_async) = found.expect("expected a ThreadSpawn intrinsic");
-    assert_eq!(a.tcx.display(out, &|id| a.program.def(id).name.clone()), "i64");
-    assert!(!is_async, "a synchronous `() => R` closure is not an async worker");
+    assert_eq!(
+        a.tcx.display(out, &|id| a.program.def(id).name.clone()),
+        "i64"
+    );
+    assert!(
+        !is_async,
+        "a synchronous `() => R` closure is not an async worker"
+    );
+}
+
+#[test]
+fn task_spawn_lowers_to_task_intrinsic() {
+    let src = "import { Task, JoinHandle, Joined, Panicked, Cancelled } from \"std:task\";\n\
+        import { Future } from \"core:prelude\";\n\
+        function main(): Future<null> async {\n\
+          var h: JoinHandle<i64> = Task.spawn(() => 7);\n\
+          h.cancel();\n\
+          var r: Joined<i64> | Panicked | Cancelled = await h.join();\n\
+        }";
+    let (a, hir) = lower(src);
+    let body = body_named(&a, &hir, "main");
+    let mut found = None;
+    let mut saw_cancel = false;
+    let mut saw_join = false;
+    for stmt in &body.block.stmts {
+        if let StmtKind::Let { init, .. } = &stmt.kind {
+            walk_expr(init, &mut |e| {
+                if let ExprKind::Intrinsic {
+                    intrinsic: Intrinsic::TaskSpawn { output, is_async },
+                    ..
+                } = &e.kind
+                {
+                    found = Some((*output, *is_async));
+                }
+                if let ExprKind::Intrinsic {
+                    intrinsic: Intrinsic::TaskJoin { .. },
+                    ..
+                } = &e.kind
+                {
+                    saw_join = true;
+                }
+            });
+        } else if let StmtKind::Expr(e) = &stmt.kind {
+            walk_expr(e, &mut |e| {
+                if let ExprKind::Intrinsic {
+                    intrinsic: Intrinsic::TaskCancel,
+                    ..
+                } = &e.kind
+                {
+                    saw_cancel = true;
+                }
+            });
+        }
+    }
+    let (out, is_async) = found.expect("expected a TaskSpawn intrinsic");
+    assert_eq!(
+        a.tcx.display(out, &|id| a.program.def(id).name.clone()),
+        "i64"
+    );
+    assert!(!is_async);
+    assert!(saw_cancel, "expected TaskCancel intrinsic");
+    assert!(saw_join, "expected TaskJoin intrinsic");
 }
 
 #[test]
@@ -601,13 +690,22 @@ function main() {
     for stmt in &body.block.stmts {
         if let StmtKind::Let { init, .. } = &stmt.kind {
             walk_expr(init, &mut |e| {
-                if matches!(&e.kind, ExprKind::Intrinsic { intrinsic: Intrinsic::CollectionCtor, .. }) {
+                if matches!(
+                    &e.kind,
+                    ExprKind::Intrinsic {
+                        intrinsic: Intrinsic::CollectionCtor,
+                        ..
+                    }
+                ) {
                     ctors += 1;
                 }
             });
         }
     }
-    assert_eq!(ctors, 2, "expected both List and Map ctors to lower to CollectionCtor");
+    assert_eq!(
+        ctors, 2,
+        "expected both List and Map ctors to lower to CollectionCtor"
+    );
 }
 
 #[test]
@@ -622,7 +720,10 @@ function main(): i64 { sleep(5) }
     let body = body_named(&a, &hir, "main");
     let trailing = body.block.trailing.as_ref().expect("trailing call");
     match &trailing.kind {
-        ExprKind::Call { kind: CallKind::Direct { .. }, .. } => {}
+        ExprKind::Call {
+            kind: CallKind::Direct { .. },
+            ..
+        } => {}
         other => panic!("expected a direct call to user `sleep`, got {other:?}"),
     }
 }
@@ -636,20 +737,35 @@ function main(): i64 { sleep(5) }
 // change when their source moves from a side table onto the checker's nodes.
 
 /// Find the first HIR expression in `name`'s body matching `pred`.
-fn find_expr<'h>(a: &Analysis, hir: &'h Hir, name: &str, mut pred: impl FnMut(&Expr) -> bool) -> bool {
+fn find_expr<'h>(
+    a: &Analysis,
+    hir: &'h Hir,
+    name: &str,
+    mut pred: impl FnMut(&Expr) -> bool,
+) -> bool {
     let body = body_named(a, hir, name);
     let mut hit = false;
     for stmt in &body.block.stmts {
         match &stmt.kind {
-            StmtKind::Let { init, .. } => walk_expr(init, &mut |e| if pred(e) { hit = true }),
-            StmtKind::Expr(e) | StmtKind::Assign { value: e, .. } => {
-                walk_expr(e, &mut |e| if pred(e) { hit = true })
-            }
+            StmtKind::Let { init, .. } => walk_expr(init, &mut |e| {
+                if pred(e) {
+                    hit = true
+                }
+            }),
+            StmtKind::Expr(e) | StmtKind::Assign { value: e, .. } => walk_expr(e, &mut |e| {
+                if pred(e) {
+                    hit = true
+                }
+            }),
             StmtKind::Item(_) => {}
         }
     }
     if let Some(t) = &body.block.trailing {
-        walk_expr(t, &mut |e| if pred(e) { hit = true });
+        walk_expr(t, &mut |e| {
+            if pred(e) {
+                hit = true
+            }
+        });
     }
     hit
 }
@@ -670,7 +786,12 @@ fn checker_builds_hir_leaf_nodes_directly() {
         "checker should have built the `true` literal node"
     );
     assert!(
-        any_in(&a, &hir, "f", |e| matches!(&e.kind, ExprKind::Char(c) if *c == 'A' as u32)),
+        any_in(
+            &a,
+            &hir,
+            "f",
+            |e| matches!(&e.kind, ExprKind::Char(c) if *c == 'A' as u32)
+        ),
         "checker should have built the `'A'` literal node"
     );
 }
@@ -691,7 +812,10 @@ fn checker_builds_hir_recursive_nodes_directly() {
         "checker should have built the `xs[1]` index node"
     );
     assert!(
-        any_in(&a, &hir, "f", |e| matches!(e.kind, ExprKind::TupleIndex { index: 0, .. })),
+        any_in(&a, &hir, "f", |e| matches!(
+            e.kind,
+            ExprKind::TupleIndex { index: 0, .. }
+        )),
         "checker should have built the `t.0` tuple-index node"
     );
     assert!(
@@ -738,14 +862,20 @@ fn checker_builds_hir_call_nodes_directly() {
     assert!(
         any_in(&a, &hir, "f", |e| matches!(
             &e.kind,
-            ExprKind::Call { kind: CallKind::Direct { .. }, .. }
+            ExprKind::Call {
+                kind: CallKind::Direct { .. },
+                ..
+            }
         )),
         "checker should have built the direct call `g(..)`"
     );
     assert!(
         any_in(&a, &hir, "f", |e| matches!(
             &e.kind,
-            ExprKind::Call { kind: CallKind::BuiltinMethod { .. }, .. }
+            ExprKind::Call {
+                kind: CallKind::BuiltinMethod { .. },
+                ..
+            }
         )),
         "checker should have built the builtin method call `xs.push(..)`/`xs.len()`"
     );
@@ -793,11 +923,17 @@ fn checker_builds_hir_closure_and_async_block_directly() {
          function g(): Future<i64> { async { 7 } }",
     );
     assert!(
-        any_in(&a, &hir, "f", |e| matches!(e.kind, ExprKind::Closure { .. })),
+        any_in(&a, &hir, "f", |e| matches!(
+            e.kind,
+            ExprKind::Closure { .. }
+        )),
         "checker should have built the closure node"
     );
     assert!(
-        any_in(&a, &hir, "g", |e| matches!(e.kind, ExprKind::AsyncBlock { .. })),
+        any_in(&a, &hir, "g", |e| matches!(
+            e.kind,
+            ExprKind::AsyncBlock { .. }
+        )),
         "checker should have built the `async` block node"
     );
 }
@@ -818,7 +954,10 @@ function f(a: V, b: V): i64 { var c = a + b; (c.x as i64) }
     assert!(
         find_expr(&a, &hir, "f", |e| matches!(
             &e.kind,
-            ExprKind::Binary { overload: Some(_), .. }
+            ExprKind::Binary {
+                overload: Some(_),
+                ..
+            }
         )),
         "overloaded `+` must carry its OpOverload on the Binary node"
     );
@@ -850,21 +989,33 @@ function f(): i64 {
     assert!(
         find_expr(&a, &hir, "f", |e| matches!(
             &e.kind,
-            ExprKind::Intrinsic { intrinsic: Intrinsic::Clone(_), .. }
+            ExprKind::Intrinsic {
+                intrinsic: Intrinsic::Clone(_),
+                ..
+            }
         )),
         "`xs.clone()` must lower to a Clone intrinsic (was `clone_kinds`)"
     );
     assert!(
         find_expr(&a, &hir, "f", |e| matches!(
             &e.kind,
-            ExprKind::Call { kind: CallKind::Method { is_static: true, .. }, .. }
+            ExprKind::Call {
+                kind: CallKind::Method {
+                    is_static: true,
+                    ..
+                },
+                ..
+            }
         )),
         "`B.make(7)` must be a static method call (was `static_calls`/`static_recv`)"
     );
     assert!(
         find_expr(&a, &hir, "f", |e| matches!(
             &e.kind,
-            ExprKind::For { driver: ForDriver::ListFast { .. }, .. }
+            ExprKind::For {
+                driver: ForDriver::ListFast { .. },
+                ..
+            }
         )),
         "`for x in ys` must carry its List-fast driver (was `for_iters`/`for_maps`)"
     );
@@ -912,12 +1063,33 @@ extend P: Show { function show(self): str { "p" } }
 function f(p: P): i64 { var y = p.x; y }
 "#;
     let a = analyzed(src);
-    let pdef = a.program.defs.iter().position(|d| d.name == "P").map(|i| crate::ids::DefId(i as u32)).unwrap();
-    assert!(a.hir.structs.contains_key(&pdef), "checker emitted struct layout onto hir");
-    assert!(!a.hir.fn_sigs.is_empty(), "checker emitted fn sigs onto hir");
-    assert!(!a.hir.extern_sigs.is_empty(), "checker emitted extern sig onto hir (`abs`)");
-    assert!(!a.hir.iface_impls.is_empty(), "checker emitted the P:Show impl onto hir");
-    assert!(!a.hir.local_decls.is_empty(), "checker emitted local decls onto hir");
+    let pdef = a
+        .program
+        .defs
+        .iter()
+        .position(|d| d.name == "P")
+        .map(|i| crate::ids::DefId(i as u32))
+        .unwrap();
+    assert!(
+        a.hir.structs.contains_key(&pdef),
+        "checker emitted struct layout onto hir"
+    );
+    assert!(
+        !a.hir.fn_sigs.is_empty(),
+        "checker emitted fn sigs onto hir"
+    );
+    assert!(
+        !a.hir.extern_sigs.is_empty(),
+        "checker emitted extern sig onto hir (`abs`)"
+    );
+    assert!(
+        !a.hir.iface_impls.is_empty(),
+        "checker emitted the P:Show impl onto hir"
+    );
+    assert!(
+        !a.hir.local_decls.is_empty(),
+        "checker emitted local decls onto hir"
+    );
 }
 
 #[test]
@@ -931,7 +1103,10 @@ fn resolutions_live_on_hir_name_nodes_not_a_table() {
     assert!(
         find_expr(&a, &hir, "f", |e| matches!(
             &e.kind,
-            ExprKind::Call { kind: CallKind::Direct { .. }, .. }
+            ExprKind::Call {
+                kind: CallKind::Direct { .. },
+                ..
+            }
         )),
         "`g(x)` must resolve to a direct call via the HIR (was `resolutions`)"
     );
@@ -957,7 +1132,10 @@ fn pattern_test_type_is_built_into_the_hir_not_a_table() {
         if let ExprKind::Match { arms, .. } = &e.kind {
             for arm in arms {
                 if let crate::hir::PatternKind::TypeBind { test_ty, .. } = &arm.pattern.kind {
-                    assert!(!a.tcx.is_error(*test_ty), "TypeBind test_ty must be resolved");
+                    assert!(
+                        !a.tcx.is_error(*test_ty),
+                        "TypeBind test_ty must be resolved"
+                    );
                     found = true;
                 }
             }
@@ -976,7 +1154,10 @@ fn narrowing_unbox_is_baked_into_the_hir_not_a_table() {
     assert!(
         find_expr(&a, &hir, "f", |e| matches!(
             &e.kind,
-            ExprKind::Adjust { adjust: crate::sema::results::Adjust::Unbox(_), .. }
+            ExprKind::Adjust {
+                adjust: crate::sema::results::Adjust::Unbox(_),
+                ..
+            }
         )),
         "the narrowed read of `x` must carry a baked `Unbox` adjust"
     );
@@ -993,14 +1174,29 @@ function f(n: i64): i64 { var t = 0; for i in [1, 2, 3] { t = t + i; } t + n }
 function g(): i64 { f(10) }
 ";
     let (a, hir) = lower(src);
-    let f = a.program.defs.iter().position(|d| d.name == "f").map(|i| crate::ids::DefId(i as u32)).unwrap();
+    let f = a
+        .program
+        .defs
+        .iter()
+        .position(|d| d.name == "f")
+        .map(|i| crate::ids::DefId(i as u32))
+        .unwrap();
     let hir_body = hir.body(f).expect("f has an HIR body");
     // `var t = 0;` and the `for` loop are the two statements; `t + n` trails.
     assert_eq!(hir_body.block.stmts.len(), 2, "f's body has two statements");
-    assert!(hir_body.block.trailing.is_some(), "f's body has a trailing expression");
-    assert!(hir_body.block.span.lo.0 < hir_body.block.span.hi.0, "body block keeps its span");
+    assert!(
+        hir_body.block.trailing.is_some(),
+        "f's body has a trailing expression"
+    );
+    assert!(
+        hir_body.block.span.lo.0 < hir_body.block.span.hi.0,
+        "body block keeps its span"
+    );
     // The same `Hir` is the one the analysis owns (the clone is structural).
-    assert_eq!(a.hir.body(f).unwrap().block.stmts.len(), hir_body.block.stmts.len());
+    assert_eq!(
+        a.hir.body(f).unwrap().block.stmts.len(),
+        hir_body.block.stmts.len()
+    );
 }
 
 #[test]
@@ -1014,13 +1210,31 @@ function spin(): Future<null> async { }
     let (a, hir) = lower(src);
     // The checker populated `fn_sigs`; lowering carried it onto the HIR verbatim.
     assert_eq!(hir.fn_sigs.len(), a.hir.fn_sigs.len());
-    let add = a.program.defs.iter().position(|d| d.name == "add").map(|i| crate::ids::DefId(i as u32)).unwrap();
+    let add = a
+        .program
+        .defs
+        .iter()
+        .position(|d| d.name == "add")
+        .map(|i| crate::ids::DefId(i as u32))
+        .unwrap();
     let sig = &hir.fn_sigs[&add];
     assert_eq!(sig.params.len(), 2, "add has two params");
-    assert_eq!(a.tcx.display(sig.ret, &|id| a.program.def(id).name.clone()), "i64");
+    assert_eq!(
+        a.tcx.display(sig.ret, &|id| a.program.def(id).name.clone()),
+        "i64"
+    );
     assert!(sig.async_output.is_none(), "add is not async");
-    let spin = a.program.defs.iter().position(|d| d.name == "spin").map(|i| crate::ids::DefId(i as u32)).unwrap();
-    assert!(hir.fn_sigs[&spin].async_output.is_some(), "spin is async — has an output type");
+    let spin = a
+        .program
+        .defs
+        .iter()
+        .position(|d| d.name == "spin")
+        .map(|i| crate::ids::DefId(i as u32))
+        .unwrap();
+    assert!(
+        hir.fn_sigs[&spin].async_output.is_some(),
+        "spin is async — has an output type"
+    );
 }
 
 #[test]
@@ -1030,7 +1244,10 @@ fn builtin_clone_lowers_to_clone_intrinsic() {
     assert!(
         find_expr(&a, &hir, "f", |e| matches!(
             &e.kind,
-            ExprKind::Intrinsic { intrinsic: Intrinsic::Clone(_), .. }
+            ExprKind::Intrinsic {
+                intrinsic: Intrinsic::Clone(_),
+                ..
+            }
         )),
         "expected a Clone intrinsic for `xs.clone()`"
     );
@@ -1047,7 +1264,13 @@ function f(): Box { Box.make(7) }
     assert!(
         find_expr(&a, &hir, "f", |e| matches!(
             &e.kind,
-            ExprKind::Call { kind: CallKind::Method { is_static: true, .. }, .. }
+            ExprKind::Call {
+                kind: CallKind::Method {
+                    is_static: true,
+                    ..
+                },
+                ..
+            }
         )),
         "expected a static Method call for `Box.make(7)`"
     );
@@ -1064,7 +1287,10 @@ function f(a: V, b: V): V { a + b }
     assert!(
         find_expr(&a, &hir, "f", |e| matches!(
             &e.kind,
-            ExprKind::Binary { overload: Some(_), .. }
+            ExprKind::Binary {
+                overload: Some(_),
+                ..
+            }
         )),
         "expected `a + b` to carry an operator-overload method"
     );
@@ -1102,7 +1328,13 @@ function f() { var c = Count { n: 3 }; for x in c { var y = x; } }
     let body = body_named(&a, &hir, "f");
     let mut iter_driver = false;
     walk_block(&body.block, &mut |e| {
-        if matches!(&e.kind, ExprKind::For { driver: ForDriver::Iter(_), .. }) {
+        if matches!(
+            &e.kind,
+            ExprKind::For {
+                driver: ForDriver::Iter(_),
+                ..
+            }
+        ) {
             iter_driver = true;
         }
     });
@@ -1133,7 +1365,10 @@ fn closure_lowers_with_captures_and_body() {
     let body = body_named(&a, &hir, "f");
     let mut saw_closure = false;
     walk_block(&body.block, &mut |e| {
-        if let ExprKind::Closure { captures, is_async, .. } = &e.kind {
+        if let ExprKind::Closure {
+            captures, is_async, ..
+        } = &e.kind
+        {
             assert!(!is_async, "plain closure");
             assert!(captures.iter().any(|(_, _)| true), "captures recorded");
             saw_closure = true;
@@ -1186,7 +1421,13 @@ function f() {
     let body = body_named(&a, &hir, "f");
     let mut map_driver = false;
     walk_block(&body.block, &mut |e| {
-        if matches!(&e.kind, ExprKind::For { driver: ForDriver::Map { .. }, .. }) {
+        if matches!(
+            &e.kind,
+            ExprKind::For {
+                driver: ForDriver::Map { .. },
+                ..
+            }
+        ) {
             map_driver = true;
         }
     });
@@ -1227,12 +1468,22 @@ function f(p: P): str { \"p=$p\" }
     let (a, hir) = lower(src);
     let body = body_named(&a, &hir, "f");
     let trailing = body.block.trailing.as_ref().expect("trailing str");
-    let ExprKind::Str(parts) = &trailing.kind else { panic!("expected a Str node") };
-    let has_stringify = parts.iter().any(|p| matches!(
-        p,
-        StrPart::Interp { stringify: Some(_), .. }
-    ));
-    assert!(has_stringify, "interpolated user value records its `to_str`");
+    let ExprKind::Str(parts) = &trailing.kind else {
+        panic!("expected a Str node")
+    };
+    let has_stringify = parts.iter().any(|p| {
+        matches!(
+            p,
+            StrPart::Interp {
+                stringify: Some(_),
+                ..
+            }
+        )
+    });
+    assert!(
+        has_stringify,
+        "interpolated user value records its `to_str`"
+    );
 }
 
 #[test]
@@ -1302,7 +1553,10 @@ function main() {
             errors += 1;
         }
     });
-    assert_eq!(errors, 0, "valid program lowered with {errors} Error node(s)");
+    assert_eq!(
+        errors, 0,
+        "valid program lowered with {errors} Error node(s)"
+    );
 }
 
 /// Provenance survives arbitrarily deep nesting: every node keeps a real span,
@@ -1332,7 +1586,13 @@ function f(x: i64 | str | bool): i64 {
     let (_a, hir) = lower(src);
     let mut unboxes = 0;
     for_each_expr(&hir, &mut |e| {
-        if matches!(&e.kind, ExprKind::Adjust { adjust: crate::sema::results::Adjust::Unbox(_), .. }) {
+        if matches!(
+            &e.kind,
+            ExprKind::Adjust {
+                adjust: crate::sema::results::Adjust::Unbox(_),
+                ..
+            }
+        ) {
             unboxes += 1;
         }
     });
@@ -1346,7 +1606,13 @@ fn chained_builtin_methods_each_lower() {
     let (a, hir) = lower(src);
     let mut builtin_methods = 0;
     walk_block(&body_named(&a, &hir, "f").block, &mut |e| {
-        if matches!(&e.kind, ExprKind::Call { kind: CallKind::BuiltinMethod { .. }, .. }) {
+        if matches!(
+            &e.kind,
+            ExprKind::Call {
+                kind: CallKind::BuiltinMethod { .. },
+                ..
+            }
+        ) {
             builtin_methods += 1;
         }
     });
@@ -1377,9 +1643,14 @@ fn tuple_destructuring_patterns_lower() {
         StmtKind::Let { pattern, .. } => pattern,
         _ => panic!("first stmt is a let"),
     };
-    let PatternKind::Tuple { elems, .. } = &outer.kind else { panic!("outer tuple pattern") };
+    let PatternKind::Tuple { elems, .. } = &outer.kind else {
+        panic!("outer tuple pattern")
+    };
     assert_eq!(elems.len(), 2);
-    assert!(matches!(elems[1].kind, PatternKind::Tuple { .. }), "nested tuple pattern");
+    assert!(
+        matches!(elems[1].kind, PatternKind::Tuple { .. }),
+        "nested tuple pattern"
+    );
 }
 
 /// All three statement kinds (`Let`, `Assign`, `Expr`) + a trailing expr lower.
@@ -1404,7 +1675,8 @@ fn all_statement_kinds_lower() {
 /// `match` over a union lowers every arm; the `TypeBind` arm carries `test_ty`.
 #[test]
 fn match_arms_carry_patterns_and_test_types() {
-    let src = "function f(x: i64 | str | null): i64 { match x { i64 n => n, str s => 1, null => 2 } }";
+    let src =
+        "function f(x: i64 | str | null): i64 { match x { i64 n => n, str s => 1, null => 2 } }";
     let (a, hir) = lower(src);
     let mut arm_count = 0;
     let mut type_binds = 0;
@@ -1457,10 +1729,21 @@ function f(): str { var p = P { v: 1 }; var n = 9; "a=${n} b=${p} c=${n + 1}" }
     let mut found = false;
     walk_block(&body_named(&a, &hir, "f").block, &mut |e| {
         if let ExprKind::Str(parts) = &e.kind {
-            let interps = parts.iter().filter(|p| matches!(p, StrPart::Interp { .. })).count();
+            let interps = parts
+                .iter()
+                .filter(|p| matches!(p, StrPart::Interp { .. }))
+                .count();
             let with_tostr = parts
                 .iter()
-                .filter(|p| matches!(p, StrPart::Interp { stringify: Some(_), .. }))
+                .filter(|p| {
+                    matches!(
+                        p,
+                        StrPart::Interp {
+                            stringify: Some(_),
+                            ..
+                        }
+                    )
+                })
                 .count();
             assert_eq!(interps, 3, "three holes");
             assert_eq!(with_tostr, 1, "only `${{p}}` needs to_str");
@@ -1480,7 +1763,13 @@ function f(): i64 { var a = P { x: 1, y: 2 }; var b = P { x: 9, ..a }; b.x + b.y
     let (_a, hir) = lower(src);
     let mut spreads = 0;
     for_each_expr(&hir, &mut |e| {
-        if matches!(&e.kind, ExprKind::Struct { spread: Some(_), .. }) {
+        if matches!(
+            &e.kind,
+            ExprKind::Struct {
+                spread: Some(_),
+                ..
+            }
+        ) {
             spreads += 1;
         }
     });
@@ -1494,7 +1783,13 @@ fn for_over_map_uses_map_driver() {
     let (_a, hir) = lower(src);
     let mut map_drivers = 0;
     for_each_expr(&hir, &mut |e| {
-        if matches!(&e.kind, ExprKind::For { driver: ForDriver::Map { .. }, .. }) {
+        if matches!(
+            &e.kind,
+            ExprKind::For {
+                driver: ForDriver::Map { .. },
+                ..
+            }
+        ) {
             map_drivers += 1;
         }
     });
@@ -1518,7 +1813,13 @@ function f(): i64 { var s = 0; for v in (Count { n: 0, max: 3 }) { s = s + v; } 
     let (_a, hir) = lower(src);
     let mut iter_drivers = 0;
     for_each_expr(&hir, &mut |e| {
-        if matches!(&e.kind, ExprKind::For { driver: ForDriver::Iter(_), .. }) {
+        if matches!(
+            &e.kind,
+            ExprKind::For {
+                driver: ForDriver::Iter(_),
+                ..
+            }
+        ) {
             iter_drivers += 1;
         }
     });
@@ -1574,7 +1875,11 @@ fn generic_call_carries_type_args() {
     let (_a, hir) = lower(src);
     let mut found = false;
     for_each_expr(&hir, &mut |e| {
-        if let ExprKind::Call { kind: CallKind::Direct { type_args, .. }, .. } = &e.kind {
+        if let ExprKind::Call {
+            kind: CallKind::Direct { type_args, .. },
+            ..
+        } = &e.kind
+        {
             if !type_args.is_empty() {
                 found = true;
             }

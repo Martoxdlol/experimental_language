@@ -1,0 +1,55 @@
+//@ kind: run
+//@ serial
+//@ env: OTTER_FUSION_TASK_WORKERS=4
+//@ description: timeout() cancellation scales across many losing spawn futures and releases every captured Sender endpoint
+//@ stdout:
+//~ timed_out=512 closed=512
+
+import { println } from "std:io";
+import { Future } from "core:prelude";
+import { List } from "core:collections";
+import { Sender, Receiver, ChannelClosed, channel } from "std:sync";
+import { sleep, timeout, TimedOut } from "std:async";
+
+function send_after_long_sleep(tx: Sender<i64>, n: i64): Future<i64> async {
+  var _ = await sleep(10000);
+  tx.send(n);
+  n
+}
+
+function make_timed_out_receiver(n: i64): Future<(Receiver<i64>, i64)> async {
+  var ends = channel<i64>();
+  var tx = ends.0;
+  var fut: Future<i64> = spawn send_after_long_sleep(tx, n);
+  var timed_out: i64 = 0;
+  match await timeout(fut, 0) {
+    i64 value => {},
+    TimedOut t => { timed_out = 1; },
+  };
+  (ends.1, timed_out)
+}
+
+function main(): Future<null> async {
+  var receivers: List<Receiver<i64>> = [];
+  var timed_out: i64 = 0;
+
+  var i: i64 = 0;
+  while i < 512 {
+    var result = await make_timed_out_receiver(i);
+    receivers.push(result.0);
+    timed_out = timed_out + result.1;
+    i = i + 1;
+  }
+
+  var closed: i64 = 0;
+  var j: i64 = 0;
+  while j < receivers.size() {
+    match await receivers[j].recv() {
+      i64 n => {},
+      ChannelClosed c => { closed = closed + 1; },
+    };
+    j = j + 1;
+  }
+
+  println("timed_out=${timed_out} closed=${closed}");
+}

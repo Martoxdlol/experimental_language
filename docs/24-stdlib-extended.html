@@ -1141,12 +1141,14 @@ pub function info_with(message: str, fields: Map&lt;str, str&gt;): null
         <td><code>Instant</code>, <code>SystemTime</code>, <code>DateTime</code>, <code>TimeZone</code>, <code>sleep</code></td></tr>
     <tr><td><code>std:thread</code></td><td>std</td><td><span class="pill spec">spec</span></td>
         <td><code>Thread.spawn</code>, <code>JoinHandle</code>, <code>Joined</code>, <code>Panicked</code></td></tr>
+    <tr><td><code>std:task</code></td><td>std</td><td><span class="pill spec">spec</span></td>
+        <td><code>Task.spawn</code>, <code>JoinHandle</code>, <code>Joined</code>, <code>Panicked</code>, <code>Cancelled</code></td></tr>
     <tr><td><code>std:sync</code></td><td>std</td><td><span class="pill spec">spec</span></td>
         <td><code>Shared</code>, channels, <code>RwLock</code>, <code>Once</code>, <code>Lazy</code></td></tr>
     <tr><td><code>std:sync:atomic</code></td><td>std</td><td></td>
         <td><code>AtomicI32/I64/U32/U64/Bool/Ptr</code>, <code>Ordering</code></td></tr>
     <tr><td><code>std:async</code></td><td>std</td><td><span class="pill spec">spec</span></td>
-        <td>Executor, <code>spawn</code>, <code>block_on</code>, <code>timeout</code></td></tr>
+        <td>Executor, <code>yield_now</code>, <code>sleep</code>, <code>timeout</code></td></tr>
     <tr><td><code>std:process</code></td><td>std</td><td></td>
         <td><code>args</code>, <code>env</code>, <code>exit</code>, <code>Command</code>, <code>Child</code></td></tr>
     <tr><td><code>std:rand</code></td><td>std</td><td></td>

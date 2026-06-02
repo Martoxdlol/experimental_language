@@ -1,0 +1,60 @@
+//@ kind: run
+//@ serial
+//@ env: OTTER_FUSION_TASK_WORKERS=4
+//@ description: hundreds of spawn keyword futures yield, contend on Shared, send over channels, and await deterministically on the M:N executor
+//@ stdout:
+//~ shared=3072 received=784896 awaited=784896
+import { println } from "std:io";
+import { Future } from "core:prelude";
+import { List } from "core:collections";
+import { Shared, Sender, Receiver, ChannelClosed, channel } from "std:sync";
+import { yield_now } from "std:async";
+
+struct Counter { value: i64 }
+
+function work(s: Shared<Counter>, tx: Sender<i64>, n: i64): Future<i64> async {
+  var local: i64 = 0;
+  var round: i64 = 0;
+  while round < 6 {
+    var _ = await yield_now();
+    await s.lock((c) => { c.value = c.value + 1; 0 });
+    local = local + n;
+    round = round + 1;
+  }
+  tx.send(local);
+  local
+}
+
+function main(): Future<null> async {
+  var state: Shared<Counter> = Shared.new(Counter { value: 0 });
+  var ends = channel<i64>();
+  var tx: Sender<i64> = ends.0;
+  var rx: Receiver<i64> = ends.1;
+  var handles: List<Future<i64>> = [];
+
+  var i: i64 = 0;
+  while i < 512 {
+    handles.push(spawn work(state.clone(), tx.clone(), i));
+    i = i + 1;
+  }
+
+  var received: i64 = 0;
+  var rcount: i64 = 0;
+  while rcount < 512 {
+    match await rx.recv() {
+      i64 value => { received = received + value; },
+      ChannelClosed c => { received = -999999; },
+    }
+    rcount = rcount + 1;
+  }
+
+  var awaited: i64 = 0;
+  var j: i64 = 0;
+  while j < handles.size() {
+    awaited = awaited + await handles[j];
+    j = j + 1;
+  }
+
+  var shared_total: i64 = await state.lock((c) => c.value);
+  println("shared=${shared_total} received=${received} awaited=${awaited}");
+}

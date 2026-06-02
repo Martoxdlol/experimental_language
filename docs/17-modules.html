@@ -930,8 +930,9 @@ var ys: List&lt;i64&gt; = List.new()    // …but naming the type List does
 <tbody>
 <tr><td><code>std:io</code></td><td><code>print</code>, <code>println</code>, file handles, byte streams</td><td>Needs an OS (stdout/stderr, file descriptors).</td></tr>
 <tr><td><code>std:thread</code></td><td><code>Thread.spawn</code>, <code>JoinHandle</code>, <code>Joined</code>, <code>Panicked</code></td><td>Needs OS threads.</td></tr>
+<tr><td><code>std:task</code></td><td><code>Task.spawn</code>, <code>JoinHandle</code>, <code>Joined</code>, <code>Panicked</code>, <code>Cancelled</code></td><td>Needs the work-stealing executor.</td></tr>
 <tr><td><code>std:sync</code></td><td><code>Shared&lt;T&gt;</code>, <code>LockBusy</code>, channels (<code>channel</code>, <code>channel_bounded</code>, <code>channel_mpmc</code>, <code>channel_mpmc_bounded</code>), <code>Sender&lt;T&gt;</code>, <code>Receiver&lt;T&gt;</code>, <code>MpmcSender&lt;T&gt;</code>, <code>MpmcReceiver&lt;T&gt;</code>, <code>ChannelClosed</code></td><td>Needs OS mutexes / condvars.</td></tr>
-<tr><td><code>std:async</code></td><td><code>spawn</code>, <code>block_on</code>, <code>timeout</code>, the default executor, <code>AsyncIterator</code> adapters</td><td>Needs an executor; default impl uses OS threads.</td></tr>
+<tr><td><code>std:async</code></td><td><code>yield_now</code>, <code>sleep</code>, <code>timeout</code>, the default work-stealing executor, <code>AsyncIterator</code> adapters</td><td>Needs an executor, timers, and future I/O readiness.</td></tr>
 <tr><td><code>std:time</code></td><td>wall-clock, monotonic time, durations</td><td>Needs an OS clock.</td></tr>
 <tr><td><code>std:fs</code></td><td>filesystem</td><td>Needs an OS filesystem.</td></tr>
 <tr><td><code>std:net</code></td><td>sockets, TCP, UDP</td><td>Needs an OS network stack.</td></tr>
@@ -942,8 +943,9 @@ var ys: List&lt;i64&gt; = List.new()    // …but naming the type List does
 
 <pre><code>import { print, println } from "std:io"
 import { Thread, JoinHandle } from "std:thread"
+import { Task } from "std:task"
 import { Shared, channel } from "std:sync"
-import { spawn, block_on } from "std:async"
+import { yield_now, sleep, timeout } from "std:async"
 </code></pre>
 
 <p>A freestanding (no-OS) target compiles fine without any <code>std:*</code> import; <code>core:prelude</code> is enough to define types, run pure computation, and interact with FFI.</p>

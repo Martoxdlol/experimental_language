@@ -161,7 +161,11 @@ pub unsafe extern "C" fn lang_str_ends_with(s: *const LangStr, p: *const LangStr
 /// # Safety
 /// `s` must be a valid `str` pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn lang_str_substring(s: *const LangStr, start: i64, end: i64) -> *const LangStr {
+pub unsafe extern "C" fn lang_str_substring(
+    s: *const LangStr,
+    start: i64,
+    end: i64,
+) -> *const LangStr {
     let chars: Vec<char> = unsafe { s_str(s) }.chars().collect();
     let n = chars.len();
     if start < 0 || end < 0 || start > end || end as usize > n {
@@ -258,7 +262,7 @@ pub unsafe extern "C" fn lang_str_split(s: *const LangStr, sep: *const LangStr) 
         let item = make_str(p.as_bytes()) as i64;
         unsafe { crate::list::lang_list_push(list, item) };
     }
-    gc::resume();
+    gc::resume_with_return_root(list as usize);
     list
 }
 
@@ -277,7 +281,7 @@ pub unsafe extern "C" fn lang_str_to_chars(s: *const LangStr) -> *mut u8 {
     for c in &chars {
         unsafe { crate::list::lang_list_push(list, *c as i64) };
     }
-    gc::resume();
+    gc::resume_with_return_root(list as usize);
     list
 }
 
@@ -295,7 +299,7 @@ pub unsafe extern "C" fn lang_str_to_bytes(s: *const LangStr) -> *mut u8 {
     for b in &bytes {
         unsafe { crate::list::lang_list_push(list, i64::from(*b)) };
     }
-    gc::resume();
+    gc::resume_with_return_root(list as usize);
     list
 }
 

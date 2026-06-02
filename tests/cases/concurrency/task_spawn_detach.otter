@@ -1,0 +1,28 @@
+//@ kind: run
+//@ serial
+//@ description: detached Task.spawn async worker still runs on the executor and signals completion without joining
+//@ stdout:
+//~ done=1 value=7
+import { println } from "std:io";
+import { Future } from "core:prelude";
+import { Task } from "std:task";
+import { Shared, ChannelClosed, channel } from "std:sync";
+
+struct C { value: i64 }
+
+function main(): Future<null> async {
+  var state: Shared<C> = Shared.new(C { value: 0 });
+  var s: Shared<C> = state.clone();
+  var ends = channel<i64>();
+  var tx = ends.0;
+  var rx = ends.1;
+  Task.spawn(() async => {
+    await s.lock((c) => { c.value = 7; 0 });
+    tx.send(1);
+    0
+  }).detach();
+  var sig: i64 | ChannelClosed = await rx.recv();
+  var done = match sig { i64 x => x, ChannelClosed c => -1 };
+  var value: i64 = await state.lock((c) => c.value);
+  println("done=${done} value=${value}");
+}

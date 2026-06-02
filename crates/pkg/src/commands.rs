@@ -2,7 +2,7 @@
 //! CLI exposes as `tree`, `why`, `add`, `remove`, `lock`, and `update`. Kept
 //! here (not in the driver) so they are unit-testable without spawning a process.
 
-use toml_edit::{value, DocumentMut, Item, Table};
+use toml_edit::{DocumentMut, Item, Table, value};
 
 use crate::resolve::Resolved;
 
@@ -30,7 +30,10 @@ fn render_children(
     for (i, child) in children.iter().enumerate() {
         let last = i + 1 == n;
         let branch = if last { "└── " } else { "├── " };
-        let version = resolved.get(child).map(|p| p.version.as_str()).unwrap_or("?");
+        let version = resolved
+            .get(child)
+            .map(|p| p.version.as_str())
+            .unwrap_or("?");
         let cyclic = on_path.contains(child);
         out.push_str(prefix);
         out.push_str(branch);
@@ -57,7 +60,14 @@ pub fn explain_why(resolved: &Resolved, target: &str) -> Option<String> {
     let mut paths = Vec::new();
     let mut stack = vec![resolved.root_name.clone()];
     let mut visited = std::collections::HashSet::new();
-    find_paths(resolved, &resolved.root_name, target, &mut stack, &mut visited, &mut paths);
+    find_paths(
+        resolved,
+        &resolved.root_name,
+        target,
+        &mut stack,
+        &mut visited,
+        &mut paths,
+    );
     if paths.is_empty() {
         return None;
     }
@@ -105,8 +115,9 @@ pub enum AddSpec {
 /// Add (or replace) a dependency in a manifest's `[dependencies]` table,
 /// preserving the rest of the document's formatting and comments.
 pub fn add_dependency(manifest_text: &str, name: &str, spec: AddSpec) -> Result<String, String> {
-    let mut doc: DocumentMut =
-        manifest_text.parse().map_err(|e| format!("invalid manifest: {e}"))?;
+    let mut doc: DocumentMut = manifest_text
+        .parse()
+        .map_err(|e| format!("invalid manifest: {e}"))?;
     let deps = ensure_table(&mut doc, "dependencies");
     match spec {
         AddSpec::Version(v) => {
@@ -129,8 +140,9 @@ pub fn add_dependency(manifest_text: &str, name: &str, spec: AddSpec) -> Result<
 /// Remove a dependency from a manifest's `[dependencies]` table. Returns the new
 /// text and whether anything was removed.
 pub fn remove_dependency(manifest_text: &str, name: &str) -> Result<(String, bool), String> {
-    let mut doc: DocumentMut =
-        manifest_text.parse().map_err(|e| format!("invalid manifest: {e}"))?;
+    let mut doc: DocumentMut = manifest_text
+        .parse()
+        .map_err(|e| format!("invalid manifest: {e}"))?;
     let removed = doc
         .get_mut("dependencies")
         .and_then(Item::as_table_mut)
@@ -151,7 +163,7 @@ fn ensure_table<'a>(doc: &'a mut DocumentMut, key: &str) -> &'a mut Table {
 mod tests {
     use super::*;
     use crate::lockfile::{LockSource, Lockfile};
-    use crate::resolve::{ResolvedPackage, Resolved};
+    use crate::resolve::{Resolved, ResolvedPackage};
     use std::collections::BTreeMap;
     use std::path::PathBuf;
 
@@ -159,7 +171,9 @@ mod tests {
         ResolvedPackage {
             name: name.into(),
             version: version.into(),
-            source: LockSource::Path { path: format!("../{name}") },
+            source: LockSource::Path {
+                path: format!("../{name}"),
+            },
             root: PathBuf::from(format!("/{name}")),
             direct: true,
         }

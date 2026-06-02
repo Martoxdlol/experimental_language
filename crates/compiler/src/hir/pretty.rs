@@ -14,7 +14,13 @@ use super::*;
 
 /// Render a whole program's HIR to a stable string.
 pub fn print_program(hir: &Hir, tcx: &TyCtxt, program: &Program) -> String {
-    let mut p = Printer { hir, tcx, program, out: String::new(), indent: 0 };
+    let mut p = Printer {
+        hir,
+        tcx,
+        program,
+        out: String::new(),
+        indent: 0,
+    };
     p.program();
     p.out
 }
@@ -60,12 +66,19 @@ impl<'a> Printer<'a> {
                     format!("tuple({})", parts.join(", "))
                 }
                 StructFields::Record(fs) => {
-                    let parts: Vec<String> =
-                        fs.iter().map(|(n, t)| format!("{n}: {}", self.ty(*t))).collect();
+                    let parts: Vec<String> = fs
+                        .iter()
+                        .map(|(n, t)| format!("{n}: {}", self.ty(*t)))
+                        .collect();
                     format!("record({})", parts.join(", "))
                 }
             };
-            self.line(&format!("struct {} {} = {}", def_tag(def), self.name_of(def), layout));
+            self.line(&format!(
+                "struct {} {} = {}",
+                def_tag(def),
+                self.name_of(def),
+                layout
+            ));
         }
 
         // Extern signatures, in DefId order.
@@ -96,9 +109,19 @@ impl<'a> Printer<'a> {
         let params: Vec<String> = body
             .params
             .iter()
-            .map(|l| format!("{}: {}", local_tag(*l), self.ty(body.local_ty(*l).unwrap_or(self.tcx.error))))
+            .map(|l| {
+                format!(
+                    "{}: {}",
+                    local_tag(*l),
+                    self.ty(body.local_ty(*l).unwrap_or(self.tcx.error))
+                )
+            })
             .collect();
-        let async_marker = if body.async_output.is_some() { "async " } else { "" };
+        let async_marker = if body.async_output.is_some() {
+            "async "
+        } else {
+            ""
+        };
         self.line(&format!(
             "{}fn {} {}({}): {} {{",
             async_marker,
@@ -162,7 +185,9 @@ impl<'a> Printer<'a> {
                     .iter()
                     .map(|p| match p {
                         StrPart::Text(t) => format!("{t:?}"),
-                        StrPart::Interp { expr, stringify, .. } => {
+                        StrPart::Interp {
+                            expr, stringify, ..
+                        } => {
                             let inner = self.expr(expr);
                             match stringify {
                                 Some(m) => format!("${{{inner} via {}}}", def_tag(*m)),
@@ -188,16 +213,29 @@ impl<'a> Printer<'a> {
                     .collect();
                 format!("(map {})", parts.join(" "))
             }
-            ExprKind::Struct { def, fields, spread, .. } => {
+            ExprKind::Struct {
+                def,
+                fields,
+                spread,
+                ..
+            } => {
                 let fs: Vec<String> = fields
                     .iter()
                     .map(|f| format!("{}#{}={}", f.name, f.index, self.expr(&f.value)))
                     .collect();
-                let sp = spread.as_ref().map(|s| format!(" ..{}", self.expr(s))).unwrap_or_default();
+                let sp = spread
+                    .as_ref()
+                    .map(|s| format!(" ..{}", self.expr(s)))
+                    .unwrap_or_default();
                 format!("(struct {} {}{})", def_tag(*def), fs.join(" "), sp)
             }
             ExprKind::Field { receiver, field } => {
-                format!("(field {} .{}#{})", self.expr(receiver), field.name, field.index)
+                format!(
+                    "(field {} .{}#{})",
+                    self.expr(receiver),
+                    field.name,
+                    field.index
+                )
             }
             ExprKind::TupleIndex { receiver, index } => {
                 format!("(tupidx {} .{index})", self.expr(receiver))
@@ -209,15 +247,38 @@ impl<'a> Printer<'a> {
                 format!("(call {} {})", self.call_kind(kind), self.exprs(args))
             }
             ExprKind::Intrinsic { intrinsic, args } => {
-                format!("(intrinsic {} {})", intrinsic_str(intrinsic), self.exprs(args))
+                format!(
+                    "(intrinsic {} {})",
+                    intrinsic_str(intrinsic),
+                    self.exprs(args)
+                )
             }
-            ExprKind::Unary { op, operand, overload } => {
-                let ov = overload.as_ref().map(|o| format!(" via {}", def_tag(o.method))).unwrap_or_default();
+            ExprKind::Unary {
+                op,
+                operand,
+                overload,
+            } => {
+                let ov = overload
+                    .as_ref()
+                    .map(|o| format!(" via {}", def_tag(o.method)))
+                    .unwrap_or_default();
                 format!("(unary {op:?} {}{ov})", self.expr(operand))
             }
-            ExprKind::Binary { op, left, right, overload } => {
-                let ov = overload.as_ref().map(|o| format!(" via {}", def_tag(o.method))).unwrap_or_default();
-                format!("(binary {op:?} {} {}{ov})", self.expr(left), self.expr(right))
+            ExprKind::Binary {
+                op,
+                left,
+                right,
+                overload,
+            } => {
+                let ov = overload
+                    .as_ref()
+                    .map(|o| format!(" via {}", def_tag(o.method)))
+                    .unwrap_or_default();
+                format!(
+                    "(binary {op:?} {} {}{ov})",
+                    self.expr(left),
+                    self.expr(right)
+                )
             }
             ExprKind::Cast { op, expr, target } => {
                 format!("(cast {op:?} {} to {})", self.expr(expr), self.ty(*target))
@@ -234,7 +295,11 @@ impl<'a> Printer<'a> {
             ExprKind::Spawn { expr, output } => {
                 format!("(spawn {} -> {})", self.expr(expr), self.ty(*output))
             }
-            ExprKind::If { cond, then_block, else_branch } => {
+            ExprKind::If {
+                cond,
+                then_block,
+                else_branch,
+            } => {
                 let c = self.expr(cond);
                 let t = self.block_str(then_block);
                 let e = else_branch
@@ -260,7 +325,13 @@ impl<'a> Printer<'a> {
             ExprKind::While { cond, body } => {
                 format!("(while {} {})", self.expr(cond), self.block_str(body))
             }
-            ExprKind::For { pattern, iter, body, driver, in_async } => {
+            ExprKind::For {
+                pattern,
+                iter,
+                body,
+                driver,
+                in_async,
+            } => {
                 let pat = self.pattern(pattern);
                 let aw = if *in_async { "await " } else { "" };
                 format!(
@@ -271,13 +342,25 @@ impl<'a> Printer<'a> {
                 )
             }
             ExprKind::Return(v) => {
-                format!("(return {})", v.as_ref().map(|e| self.expr(e)).unwrap_or_default())
+                format!(
+                    "(return {})",
+                    v.as_ref().map(|e| self.expr(e)).unwrap_or_default()
+                )
             }
             ExprKind::Break(v) => {
-                format!("(break {})", v.as_ref().map(|e| self.expr(e)).unwrap_or_default())
+                format!(
+                    "(break {})",
+                    v.as_ref().map(|e| self.expr(e)).unwrap_or_default()
+                )
             }
             ExprKind::Continue => "(continue)".to_string(),
-            ExprKind::Closure { params, captures, ret, is_async, body } => {
+            ExprKind::Closure {
+                params,
+                captures,
+                ret,
+                is_async,
+                body,
+            } => {
                 let ps: Vec<String> = params.iter().map(|(l, _)| local_tag(*l)).collect();
                 let cs: Vec<String> = captures.iter().map(|(l, _)| local_tag(*l)).collect();
                 let a = if *is_async { "async " } else { "" };
@@ -289,7 +372,12 @@ impl<'a> Printer<'a> {
                     self.expr(body)
                 )
             }
-            ExprKind::AsyncBlock { output, captures, body, .. } => {
+            ExprKind::AsyncBlock {
+                output,
+                captures,
+                body,
+                ..
+            } => {
                 let cs: Vec<String> = captures.iter().map(|(l, _)| local_tag(*l)).collect();
                 format!(
                     "(async-block caps[{}] -> {} {})",
@@ -336,7 +424,12 @@ impl<'a> Printer<'a> {
             CallKind::Direct { def, type_args } => {
                 format!("direct {}{}", def_tag(*def), targs(type_args, self))
             }
-            CallKind::Method { def, type_args, is_static, .. } => {
+            CallKind::Method {
+                def,
+                type_args,
+                is_static,
+                ..
+            } => {
                 let s = if *is_static { "static-" } else { "" };
                 format!("{s}method {}{}", def_tag(*def), targs(type_args, self))
             }
@@ -354,7 +447,9 @@ impl<'a> Printer<'a> {
             PatternKind::Bind(l) => format!("bind {}", local_tag(*l)),
             PatternKind::Literal(e) => format!("lit {}", self.expr(e)),
             PatternKind::TypeBind { test_ty, bind } => {
-                let b = bind.map(|l| format!(" {}", local_tag(l))).unwrap_or_default();
+                let b = bind
+                    .map(|l| format!(" {}", local_tag(l)))
+                    .unwrap_or_default();
                 format!("typebind {}{b}", self.ty(*test_ty))
             }
             PatternKind::UnitPath { def, .. } => format!("unit {}", def_tag(*def)),
@@ -362,7 +457,11 @@ impl<'a> Printer<'a> {
                 let fs: Vec<String> = fields.iter().map(|f| self.pattern(f)).collect();
                 format!("tuplestruct {} ({})", def_tag(*def), fs.join(" "))
             }
-            PatternKind::RecordStruct { def, fields, has_rest } => {
+            PatternKind::RecordStruct {
+                def,
+                fields,
+                has_rest,
+            } => {
                 let fs: Vec<String> = fields
                     .iter()
                     .map(|f| format!("{}#{}: {}", f.name, f.index, self.pattern(&f.pattern)))
@@ -442,8 +541,12 @@ fn intrinsic_str(i: &Intrinsic) -> &'static str {
         Intrinsic::SharedNew => "shared-new",
         Intrinsic::ChannelNew => "channel-new",
         Intrinsic::ThreadSpawn { .. } => "thread-spawn",
+        Intrinsic::TaskSpawn { .. } => "task-spawn",
         Intrinsic::ThreadJoin { .. } => "thread-join",
         Intrinsic::ThreadDetach => "thread-detach",
+        Intrinsic::TaskJoin { .. } => "task-join",
+        Intrinsic::TaskDetach => "task-detach",
+        Intrinsic::TaskCancel => "task-cancel",
         Intrinsic::YieldNow => "yield-now",
         Intrinsic::AsyncSleep => "async-sleep",
         Intrinsic::AsyncTimeout { .. } => "async-timeout",
@@ -479,9 +582,7 @@ mod tests {
 
     #[test]
     fn prints_function_with_typed_nodes() {
-        let out = print(
-            "function add(x: i64, y: i64): i64 { x + y }\nfunction main() {}",
-        );
+        let out = print("function add(x: i64, y: i64): i64 { x + y }\nfunction main() {}");
         // Signature line with parameter and return types.
         assert!(out.contains("fn "), "no fn header:\n{out}");
         assert!(out.contains("add(local"), "no add params:\n{out}");
@@ -518,7 +619,10 @@ mod tests {
             "#,
         );
         assert!(out.contains("call direct"), "no direct call:\n{out}");
-        assert!(out.contains("call builtin Println"), "no builtin call:\n{out}");
+        assert!(
+            out.contains("call builtin Println"),
+            "no builtin call:\n{out}"
+        );
         assert!(out.contains("name local"), "no resolved local name:\n{out}");
     }
 
@@ -530,7 +634,10 @@ mod tests {
             function main() { var p = Point { y: 2, x: 1 }; }
             "#,
         );
-        assert!(out.contains("record(x: i64, y: i64)"), "no struct layout:\n{out}");
+        assert!(
+            out.contains("record(x: i64, y: i64)"),
+            "no struct layout:\n{out}"
+        );
         // Field initializers carry their resolved declaration index.
         assert!(out.contains("x#0="), "no x index:\n{out}");
         assert!(out.contains("y#1="), "no y index:\n{out}");

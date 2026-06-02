@@ -89,4 +89,3 @@ pub extern "C" fn lang_exit(code: i32) -> ! {
 pub extern "C" fn lang_abort() -> ! {
     std::process::abort();
 }
-

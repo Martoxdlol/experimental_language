@@ -281,4 +281,3 @@ pub struct ForIter {
     /// The `Item<U>` variant type (the boxed payload to unwrap each step).
     pub item_ty: Ty,
 }
-

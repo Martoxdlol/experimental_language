@@ -192,8 +192,9 @@ pub struct Panicked  { pub message: str }</code></pre>
   <code>await</code>. The two differ only in the handle they yield:
   <code>Thread.spawn</code> gives a <code>JoinHandle&lt;R&gt;</code> (with
   <code>join</code>/<code>detach</code>), the <code>spawn</code> keyword gives a
-  bare <code>Future&lt;T&gt;</code>. Both run on the same one-OS-thread-per-task
-  executor today. Only a <em>synchronous</em> <code>Thread.spawn</code> closure
+  bare <code>Future&lt;T&gt;</code>. <code>Thread.spawn</code> keeps its dedicated
+  OS-thread guarantee; <code>spawn EXPR</code> runs on the shared work-stealing
+  executor. Only a <em>synchronous</em> <code>Thread.spawn</code> closure
   cannot <code>await</code> or lock (§4).
 </div>
 
@@ -211,8 +212,8 @@ pub struct Panicked  { pub message: str }</code></pre>
 </div>
 
 <div class="callout">
-  <strong>Future direction — <code>Task.spawn</code> on a work-stealing executor</strong>
-  A planned <code>std:task</code> module will add <code>Task.spawn</code>: the same
+  <strong><code>Task.spawn</code> on the work-stealing executor</strong>
+  The <code>std:task</code> module provides <code>Task.spawn</code>: the same
   surface as <code>Thread.spawn</code> (the same closure forms, the same
   <code>JoinHandle&lt;R&gt;</code> with <code>join</code>/<code>detach</code>, and
   the <em>same</em> safety model — by-value capture snapshots for cross-task
@@ -223,7 +224,19 @@ pub struct Panicked  { pub message: str }</code></pre>
   concurrency without one OS thread each. It <em>complements</em>
   <code>Thread.spawn</code> rather than replacing it: keep <code>Thread.spawn</code>
   for dedicated/blocking work, reach for <code>Task.spawn</code> for high task
-  counts. (Stackful, goroutine-style green threads — transparent blocking with no
+  counts. The executor is a small worker pool with local run queues, stealing,
+  and a global injector; <code>sleep</code>/<code>timeout</code> deadlines are
+  driven by a shared timer driver, future I/O sources register one-shot readiness
+  wakeups with the same reactor core, and the <code>spawn</code> keyword also
+  schedules onto it. Runtime deployments can tune the pool width with
+  <code>OTTER_FUSION_TASK_WORKERS=N</code> without changing program semantics.
+  Task handles additionally support cooperative <code>cancel()</code> /
+  <code>abort()</code>: cancellation stops future polls at the next suspension
+  point, drops the task state, releases task-held <code>Shared</code> locks, and
+  makes <code>join()</code> resolve to
+  <code>Joined&lt;R&gt; | Panicked | Cancelled</code>. OS-thread
+  <code>Thread.spawn</code> handles deliberately do not have <code>cancel()</code>.
+  (Stackful, goroutine-style green threads — transparent blocking with no
   <code>async</code>/<code>await</code> coloring — are deliberately <em>not</em>
   planned: they are a second concurrency model in tension with this language's
   explicit-async design and would require Go-runtime-level syscall handoff and

@@ -1,0 +1,41 @@
+//@ kind: run
+//@ serial
+//@ env: OTTER_FUSION_TASK_WORKERS=4
+//@ env: OTTER_FUSION_GC=stress
+//@ description: spawn keyword futures keep managed List locals live across awaits while stress GC runs on the M:N executor
+//@ stdout:
+//~ total=98688
+import { println } from "std:io";
+import { Future } from "core:prelude";
+import { List } from "core:collections";
+import { yield_now } from "std:async";
+
+function work(n: i64): Future<i64> async {
+  var local: i64 = 0;
+  var round: i64 = 0;
+  while round < 3 {
+    var junk: List<i64> = [n, round, n + round];
+    var _ = await yield_now();
+    local = local + junk[0] + junk[1];
+    round = round + 1;
+  }
+  local
+}
+
+function main(): Future<null> async {
+  var handles: List<Future<i64>> = [];
+  var i: i64 = 0;
+  while i < 256 {
+    handles.push(spawn work(i));
+    i = i + 1;
+  }
+
+  var total: i64 = 0;
+  var j: i64 = 0;
+  while j < handles.size() {
+    total = total + await handles[j];
+    j = j + 1;
+  }
+
+  println("total=${total}");
+}

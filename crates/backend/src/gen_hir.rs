@@ -74,6 +74,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                     if self.is_rc_local(*local) {
                         self.rc_manage_bind(*local, v, init_owned);
                     }
+                    self.endpoint_manage_bind(*local, ty, v, pattern.span)?;
                     self.bind_local(*local, ct, v);
                 }
                 Ok(())
@@ -81,20 +82,29 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             hir::PatternKind::Wildcard => Ok(()),
             // Irrefutable tuple destructuring: load each element and bind it.
             hir::PatternKind::Tuple { elems, rest: None } => {
-                let ptr = val
-                    .ok_or_else(|| CodegenError::new(pattern.span, "destructured value has no pointer"))?;
-                let layout = self
-                    .layout_for_ty(ty)
-                    .ok_or_else(|| CodegenError::new(pattern.span, "tuple pattern on non-aggregate"))?;
+                let ptr = val.ok_or_else(|| {
+                    CodegenError::new(pattern.span, "destructured value has no pointer")
+                })?;
+                let layout = self.layout_for_ty(ty).ok_or_else(|| {
+                    CodegenError::new(pattern.span, "tuple pattern on non-aggregate")
+                })?;
                 let elem_tys = match self.cx.analysis.tcx.kind(ty).clone() {
                     TyKind::Tuple(ts) => ts,
-                    _ => return Err(CodegenError::new(pattern.span, "tuple pattern on non-tuple")),
+                    _ => {
+                        return Err(CodegenError::new(
+                            pattern.span,
+                            "tuple pattern on non-tuple",
+                        ));
+                    }
                 };
                 for (i, sub) in elems.iter().enumerate() {
                     let elem_val = match layout.cltys.get(i) {
-                        Some(Some(ct)) => {
-                            Some(self.b.ins().load(*ct, MemFlags::trusted(), ptr, layout.offsets[i] as i32))
-                        }
+                        Some(Some(ct)) => Some(self.b.ins().load(
+                            *ct,
+                            MemFlags::trusted(),
+                            ptr,
+                            layout.offsets[i] as i32,
+                        )),
                         _ => None,
                     };
                     self.h_bind_pattern(sub, elem_val, elem_tys[i], false)?;
@@ -104,14 +114,19 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             // Irrefutable tuple-struct destructuring `Pair(a, b)`: load each
             // field (positionally) from the struct's layout and bind it.
             hir::PatternKind::TupleStruct { fields, .. } => {
-                let ptr = val
-                    .ok_or_else(|| CodegenError::new(pattern.span, "destructured value has no pointer"))?;
-                let layout = self
-                    .layout_for_ty(ty)
-                    .ok_or_else(|| CodegenError::new(pattern.span, "struct pattern on non-aggregate"))?;
+                let ptr = val.ok_or_else(|| {
+                    CodegenError::new(pattern.span, "destructured value has no pointer")
+                })?;
+                let layout = self.layout_for_ty(ty).ok_or_else(|| {
+                    CodegenError::new(pattern.span, "struct pattern on non-aggregate")
+                })?;
                 for (i, sub) in fields.iter().enumerate() {
                     let fv = self.h_load_field(ptr, &layout, i);
-                    let fty = layout.tys.get(i).copied().unwrap_or(self.cx.analysis.tcx.error);
+                    let fty = layout
+                        .tys
+                        .get(i)
+                        .copied()
+                        .unwrap_or(self.cx.analysis.tcx.error);
                     self.h_bind_pattern(sub, fv, fty, false)?;
                 }
                 Ok(())
@@ -119,20 +134,28 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             // Irrefutable record destructuring `Point { x, y }` / `{ x: a, .. }`:
             // each field carries its index into the struct layout.
             hir::PatternKind::RecordStruct { fields, .. } => {
-                let ptr = val
-                    .ok_or_else(|| CodegenError::new(pattern.span, "destructured value has no pointer"))?;
-                let layout = self
-                    .layout_for_ty(ty)
-                    .ok_or_else(|| CodegenError::new(pattern.span, "struct pattern on non-aggregate"))?;
+                let ptr = val.ok_or_else(|| {
+                    CodegenError::new(pattern.span, "destructured value has no pointer")
+                })?;
+                let layout = self.layout_for_ty(ty).ok_or_else(|| {
+                    CodegenError::new(pattern.span, "struct pattern on non-aggregate")
+                })?;
                 for fp in fields {
                     let i = fp.index as usize;
                     let fv = self.h_load_field(ptr, &layout, i);
-                    let fty = layout.tys.get(i).copied().unwrap_or(self.cx.analysis.tcx.error);
+                    let fty = layout
+                        .tys
+                        .get(i)
+                        .copied()
+                        .unwrap_or(self.cx.analysis.tcx.error);
                     self.h_bind_pattern(&fp.pattern, fv, fty, false)?;
                 }
                 Ok(())
             }
-            _ => Err(CodegenError::new(pattern.span, "HIR codegen: pattern not yet supported")),
+            _ => Err(CodegenError::new(
+                pattern.span,
+                "HIR codegen: pattern not yet supported",
+            )),
         }
     }
 
@@ -141,7 +164,10 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     fn h_load_field(&mut self, ptr: Value, layout: &Layout, i: usize) -> Option<Value> {
         match layout.cltys.get(i) {
             Some(Some(ct)) => {
-                let v = self.b.ins().load(*ct, MemFlags::trusted(), ptr, layout.offsets[i] as i32);
+                let v = self
+                    .b
+                    .ins()
+                    .load(*ct, MemFlags::trusted(), ptr, layout.offsets[i] as i32);
                 Some(v)
             }
             _ => None,
@@ -165,7 +191,13 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                             self.emit_rc_release(old);
                         }
                     }
+                    if let Some(ty) = self.cx.analysis.hir.local_ty(*local) {
+                        self.endpoint_release_assignment_old(*local, ty, target.span)?;
+                    }
                     self.write_local(*local, v, target.span)?;
+                    if let Some(ty) = self.cx.analysis.hir.local_ty(*local) {
+                        self.endpoint_pin_assignment_new(ty, v);
+                    }
                 }
                 Ok(())
             }
@@ -189,9 +221,9 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             hir::ExprKind::Index { receiver, index } => self.h_index_store(receiver, index, val),
             // `*p = v` — store a scalar through a raw pointer (`docs/19` §2).
             hir::ExprKind::Deref(inner) => {
-                let p = self
-                    .h_expr(inner)?
-                    .ok_or_else(|| CodegenError::new(inner.span, "dereference operand has no value"))?;
+                let p = self.h_expr(inner)?.ok_or_else(|| {
+                    CodegenError::new(inner.span, "dereference operand has no value")
+                })?;
                 let zero = self.b.ins().iconst(PTR, 0);
                 let is_null = self.b.ins().icmp(IntCC::Equal, p, zero);
                 self.guard_panic(is_null, "dereference of a null pointer");
@@ -201,14 +233,21 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 Ok(())
             }
             hir::ExprKind::Discard => Ok(()),
-            _ => Err(CodegenError::new(target.span, "HIR codegen: assignment target not yet supported")),
+            _ => Err(CodegenError::new(
+                target.span,
+                "HIR codegen: assignment target not yet supported",
+            )),
         }
     }
 
     /// Store into a field/tuple position (mirrors the AST `gen_field_store`).
-    fn h_field_store(&mut self, receiver: &hir::Expr, idx: usize, val: Option<Value>, owned: bool)
-        -> CgResult<()>
-    {
+    fn h_field_store(
+        &mut self,
+        receiver: &hir::Expr,
+        idx: usize,
+        val: Option<Value>,
+        owned: bool,
+    ) -> CgResult<()> {
         let rty = receiver.ty;
         let layout = self
             .layout_for_ty(rty)
@@ -253,7 +292,8 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         // offset, so Cranelift carries source provenance to the machine code
         // (the basis for `--emit`-level debugging and DWARF line tables). The
         // innermost expression being generated is the active location.
-        self.b.set_srcloc(cranelift_codegen::ir::SourceLoc::new(e.span.lo.0));
+        self.b
+            .set_srcloc(cranelift_codegen::ir::SourceLoc::new(e.span.lo.0));
         let v = self.h_expr_inner(e)?;
         // A managed-ref result is a GC root if it stays live across a later
         // allocation; mark it so Cranelift records it in stack maps (mirrors the
@@ -286,13 +326,22 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             K::Char(c) => Ok(Some(self.b.ins().iconst(types::I32, *c as i64))),
             K::Null => Ok(None),
             K::Name(res) => self.h_name(*res, ty, e.span),
-            K::Unary { op, operand, overload } => {
+            K::Unary {
+                op,
+                operand,
+                overload,
+            } => {
                 // Only binary operators can be overloaded (`docs/15`); the checker
                 // never records a unary overload, so `overload` is always `None`.
                 debug_assert!(overload.is_none(), "unary operator overloads do not exist");
                 self.h_unary(*op, operand, ty)
             }
-            K::Binary { op, left, right, overload } => {
+            K::Binary {
+                op,
+                left,
+                right,
+                overload,
+            } => {
                 if let Some(ov) = overload {
                     return self.h_binary_overload(*op, ov, left, right, e.span);
                 }
@@ -308,9 +357,11 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                     .ok_or_else(|| CodegenError::new(right.span, "operand has no value"))?;
                 self.emit_binop(hir_to_ast_binop(*op), lty, l, r)
             }
-            K::If { cond, then_block, else_branch } => {
-                self.h_if(cond, then_block, else_branch.as_deref(), ty)
-            }
+            K::If {
+                cond,
+                then_block,
+                else_branch,
+            } => self.h_if(cond, then_block, else_branch.as_deref(), ty),
             K::Block(b) => self.h_block(b),
             K::Return(v) => {
                 let val = match v {
@@ -318,6 +369,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                     None => None,
                 };
                 let val = self.rc_return_value(v.as_deref(), val);
+                self.endpoint_return_value(v.as_deref(), val)?;
                 self.emit_return(val)?;
                 Ok(None)
             }
@@ -327,7 +379,12 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             K::Continue => self.h_continue(e.span),
             K::Call { kind, args, .. } => self.h_call(kind, args, ty, e.span),
             K::Adjust { adjust, expr } => self.h_adjust(adjust, expr),
-            K::Struct { def, type_args, fields, spread } => Ok(Some(self.h_struct_lit(
+            K::Struct {
+                def,
+                type_args,
+                fields,
+                spread,
+            } => Ok(Some(self.h_struct_lit(
                 *def,
                 type_args,
                 fields,
@@ -352,14 +409,26 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             K::Index { receiver, index } => self.h_index_load(receiver, index),
             K::Ref(inner) => self.h_ref(inner),
             K::Deref(inner) => self.h_deref(inner, ty),
-            K::Try { expr, branch, residual_conversions } => {
-                self.h_try(expr, branch.as_ref(), residual_conversions, ty)
-            }
+            K::Try {
+                expr,
+                branch,
+                residual_conversions,
+            } => self.h_try(expr, branch.as_ref(), residual_conversions, ty),
             K::Match { scrutinee, arms } => self.h_match(scrutinee, arms, ty),
-            K::For { pattern, iter, body, driver, .. } => self.h_for(pattern, iter, body, driver),
-            K::Closure { params, captures, ret, is_async, body } => {
-                self.h_closure(params, captures, *ret, *is_async, body, e.span)
-            }
+            K::For {
+                pattern,
+                iter,
+                body,
+                driver,
+                ..
+            } => self.h_for(pattern, iter, body, driver),
+            K::Closure {
+                params,
+                captures,
+                ret,
+                is_async,
+                body,
+            } => self.h_closure(params, captures, *ret, *is_async, body, e.span),
             K::Intrinsic { intrinsic, args } => self.h_intrinsic(intrinsic, args, ty, e.span),
             K::Spawn { expr, output } => {
                 let fut = self
@@ -368,18 +437,24 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 self.emit_spawn(fut, *output)
             }
             K::Await { expr, output } => {
-                let fut = self
-                    .h_expr(expr)?
-                    .ok_or_else(|| CodegenError::new(expr.span, "awaited expression has no value"))?;
+                let fut = self.h_expr(expr)?.ok_or_else(|| {
+                    CodegenError::new(expr.span, "awaited expression has no value")
+                })?;
                 // Key the suspend site by the `Await` node's span — the same span
                 // `h_scan_stmt_awaits` records, so the resume map in
                 // `build_stateful_poll` matches.
                 self.emit_await_suspend(fut, e.span, *output)
             }
-            K::AsyncBlock { output, params, captures, body } => {
-                self.h_async_block(*output, params, captures, body, e.span)
-            }
-            _ => Err(CodegenError::new(e.span, "HIR codegen: expression not yet supported")),
+            K::AsyncBlock {
+                output,
+                params,
+                captures,
+                body,
+            } => self.h_async_block(*output, params, captures, body, e.span),
+            _ => Err(CodegenError::new(
+                e.span,
+                "HIR codegen: expression not yet supported",
+            )),
         }
     }
 
@@ -402,11 +477,19 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                     None => Ok(None),
                 }
             }
-            _ => Err(CodegenError::new(span, "HIR codegen: value reference not yet supported")),
+            _ => Err(CodegenError::new(
+                span,
+                "HIR codegen: value reference not yet supported",
+            )),
         }
     }
 
-    fn h_unary(&mut self, op: hir::UnaryOp, operand: &hir::Expr, ty: Ty) -> CgResult<Option<Value>> {
+    fn h_unary(
+        &mut self,
+        op: hir::UnaryOp,
+        operand: &hir::Expr,
+        ty: Ty,
+    ) -> CgResult<Option<Value>> {
         let v = self
             .h_expr(operand)?
             .ok_or_else(|| CodegenError::new(operand.span, "operand has no value"))?;
@@ -424,9 +507,12 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         Ok(Some(out))
     }
 
-    fn h_logical(&mut self, op: hir::BinaryOp, left: &hir::Expr, right: &hir::Expr)
-        -> CgResult<Option<Value>>
-    {
+    fn h_logical(
+        &mut self,
+        op: hir::BinaryOp,
+        left: &hir::Expr,
+        right: &hir::Expr,
+    ) -> CgResult<Option<Value>> {
         let l = self
             .h_expr(left)?
             .ok_or_else(|| CodegenError::new(left.span, "operand has no value"))?;
@@ -514,16 +600,21 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             let u = self
                 .emit_call(tb.method, targs, &[raw_v], operand.span)?
                 .ok_or_else(|| CodegenError::new(operand.span, "`branch` returned no value"))?;
-            (u, resolve_shallow(self.cx.analysis, tb.union_ty, &self.subst))
+            (
+                u,
+                resolve_shallow(self.cx.analysis, tb.union_ty, &self.subst),
+            )
         } else {
-            (raw_v, resolve_shallow(self.cx.analysis, operand.ty, &self.subst))
+            (
+                raw_v,
+                resolve_shallow(self.cx.analysis, operand.ty, &self.subst),
+            )
         };
         let tag = self.b.ins().load(types::I64, MemFlags::trusted(), ptr, 0);
 
         let r = self.ret_ty;
         let r_variants = self.cx.analysis.tcx.variants(r);
-        let conv_residuals: Vec<Ty> =
-            residual_conversions.iter().map(|(rv, _, _)| *rv).collect();
+        let conv_residuals: Vec<Ty> = residual_conversions.iter().map(|(rv, _, _)| *rv).collect();
         let failures: Vec<Ty> = match branch {
             Some(tb) => self
                 .cx
@@ -556,7 +647,10 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             self.term = true;
 
             self.switch(ret_block);
-            let ret_val = if matches!(self.cx.analysis.tcx.kind(r), TyKind::Union(_) | TyKind::Dynamic) {
+            let ret_val = if matches!(
+                self.cx.analysis.tcx.kind(r),
+                TyKind::Union(_) | TyKind::Dynamic
+            ) {
                 Some(ptr)
             } else {
                 clty_of(self.cx.analysis, r)
@@ -587,8 +681,13 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             };
             let converted = self
                 .emit_call(method, Vec::new(), &[payload], operand.span)?
-                .ok_or_else(|| CodegenError::new(operand.span, "`from_residual` returned no value"))?;
-            let ret_val = if matches!(self.cx.analysis.tcx.kind(r), TyKind::Union(_) | TyKind::Dynamic) {
+                .ok_or_else(|| {
+                    CodegenError::new(operand.span, "`from_residual` returned no value")
+                })?;
+            let ret_val = if matches!(
+                self.cx.analysis.tcx.kind(r),
+                TyKind::Union(_) | TyKind::Dynamic
+            ) {
                 Some(self.box_value(Some(converted), target))
             } else {
                 Some(converted)
@@ -599,7 +698,10 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         }
 
         // Success path: narrow the box to the success type.
-        if matches!(self.cx.analysis.tcx.kind(success_ty), TyKind::Union(_) | TyKind::Dynamic) {
+        if matches!(
+            self.cx.analysis.tcx.kind(success_ty),
+            TyKind::Union(_) | TyKind::Dynamic
+        ) {
             Ok(Some(ptr))
         } else {
             match clty_of(self.cx.analysis, success_ty) {
@@ -658,7 +760,11 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         self.b.ins().brif(c, body_bb, &[], exit, &[]);
         self.term = true;
         self.switch(body_bb);
-        self.loops.push(LoopCg { continue_block: header, break_block: exit, has_value: false });
+        self.loops.push(LoopCg {
+            continue_block: header,
+            break_block: exit,
+            has_value: false,
+        });
         self.h_block(body)?;
         if !self.term {
             self.b.ins().jump(header, &[]);
@@ -732,9 +838,13 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         Ok(None)
     }
 
-    fn h_call(&mut self, kind: &hir::CallKind, args: &[hir::Expr], ty: Ty, span: Span)
-        -> CgResult<Option<Value>>
-    {
+    fn h_call(
+        &mut self,
+        kind: &hir::CallKind,
+        args: &[hir::Expr],
+        ty: Ty,
+        span: Span,
+    ) -> CgResult<Option<Value>> {
         match kind {
             hir::CallKind::Direct { def, type_args } => {
                 let targs: Vec<Ty> = type_args
@@ -773,9 +883,12 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 let ret_clty = self.cx_clty(ret);
                 Ok(self.emit_closure_call(env, &arg_vals, ret_clty))
             }
-            hir::CallKind::Method { def, type_args, recv_static, is_static } => {
-                self.h_method_call(*def, type_args, *recv_static, *is_static, args, ty, span)
-            }
+            hir::CallKind::Method {
+                def,
+                type_args,
+                recv_static,
+                is_static,
+            } => self.h_method_call(*def, type_args, *recv_static, *is_static, args, ty, span),
         }
     }
 
@@ -783,7 +896,12 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     /// Dispatches by the receiver's type to the shared `emit_*_method` helpers.
     /// (List and channel/`Shared` methods stay on the AST path for now; the
     /// coverage predicate keeps those bodies off the HIR walk.)
-    fn h_builtin_method(&mut self, name: &str, args: &[hir::Expr], ty: Ty) -> CgResult<Option<Value>> {
+    fn h_builtin_method(
+        &mut self,
+        name: &str,
+        args: &[hir::Expr],
+        ty: Ty,
+    ) -> CgResult<Option<Value>> {
         let receiver = &args[0];
         let recv_span = receiver.span;
         let rty = receiver.ty;
@@ -812,6 +930,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             let list = self
                 .h_expr(receiver)?
                 .ok_or_else(|| CodegenError::new(recv_span, "list has no value"))?;
+            self.mark_root(list);
             let mut argv = Vec::with_capacity(args.len().saturating_sub(1));
             let mut arg_tys = Vec::with_capacity(args.len().saturating_sub(1));
             for a in &args[1..] {
@@ -849,22 +968,20 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 // drive the body future to completion under the lock.
                 let body = &args[1];
                 let fret = self.func_ret(body.ty);
-                let (r_ty, body_is_async) = match self
-                    .cx
-                    .analysis
-                    .tcx
-                    .kind(resolve_shallow(self.cx.analysis, fret, &self.subst))
-                {
-                    TyKind::Named { def: fd, args: fargs }
-                        if *fd == p.future_def && !fargs.is_empty() =>
-                    {
-                        (fargs[0], true)
-                    }
+                let (r_ty, body_is_async) = match self.cx.analysis.tcx.kind(resolve_shallow(
+                    self.cx.analysis,
+                    fret,
+                    &self.subst,
+                )) {
+                    TyKind::Named {
+                        def: fd,
+                        args: fargs,
+                    } if *fd == p.future_def && !fargs.is_empty() => (fargs[0], true),
                     _ => (fret, false),
                 };
-                let ptr = self
-                    .h_expr(receiver)?
-                    .ok_or_else(|| CodegenError::new(recv_span, "`Shared` receiver has no value"))?;
+                let ptr = self.h_expr(receiver)?.ok_or_else(|| {
+                    CodegenError::new(recv_span, "`Shared` receiver has no value")
+                })?;
                 let id = self.emit_shared_id(ptr, rty, recv_span)?;
                 let env = self
                     .h_expr(body)?
@@ -872,7 +989,10 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 return self.emit_shared_lock(id, elem, name, env, r_ty, body_is_async, recv_span);
             }
         }
-        Err(CodegenError::new(recv_span, "HIR codegen: builtin method on this type pending"))
+        Err(CodegenError::new(
+            recv_span,
+            "HIR codegen: builtin method on this type pending",
+        ))
     }
 
     /// `list[i]` / `map[k]` index load (mirrors the AST `gen_index_load`, List
@@ -890,7 +1010,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 return Err(CodegenError::new(
                     place.span,
                     "fixed-array access is only supported on an extern struct field",
-                ))
+                ));
             }
         };
         let layout = self
@@ -955,9 +1075,9 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         let rty = receiver.ty;
         // A fixed-size FFI array `[T; N]` field — `arr[i]` loads element `T`.
         if matches!(self.cx.analysis.tcx.kind(rty), TyKind::Array { .. }) {
-            let ct = self
-                .array_elem_clty(rty)
-                .ok_or_else(|| CodegenError::new(receiver.span, "array element has no scalar type"))?;
+            let ct = self.array_elem_clty(rty).ok_or_else(|| {
+                CodegenError::new(receiver.span, "array element has no scalar type")
+            })?;
             let base = self.h_aggregate_field_addr(receiver)?;
             let idx = self
                 .h_expr(index)?
@@ -973,13 +1093,18 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             let kv = self.h_expr(index)?;
             let key = self.elem_to_i64(kv, kt, index.span)?;
             let raw = self
-                .call_intrinsic("lang_map_index", &[PTR, types::I64], Some(types::I64), &[map, key])
+                .call_intrinsic(
+                    "lang_map_index",
+                    &[PTR, types::I64],
+                    Some(types::I64),
+                    &[map, key],
+                )
                 .expect("map_index returns a value");
             return self.i64_to_elem(raw, vt, receiver.span);
         }
-        let elem = self
-            .list_elem_of(rty)
-            .ok_or_else(|| CodegenError::new(receiver.span, "HIR codegen: indexing only on List/Map"))?;
+        let elem = self.list_elem_of(rty).ok_or_else(|| {
+            CodegenError::new(receiver.span, "HIR codegen: indexing only on List/Map")
+        })?;
         let list = self
             .h_expr(receiver)?
             .ok_or_else(|| CodegenError::new(receiver.span, "list has no value"))?;
@@ -987,21 +1112,29 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             .h_expr(index)?
             .ok_or_else(|| CodegenError::new(index.span, "index has no value"))?;
         let raw = self
-            .call_intrinsic("lang_list_get", &[PTR, types::I64], Some(types::I64), &[list, idx])
+            .call_intrinsic(
+                "lang_list_get",
+                &[PTR, types::I64],
+                Some(types::I64),
+                &[list, idx],
+            )
             .expect("list_get returns a value");
         self.i64_to_elem(raw, elem, receiver.span)
     }
 
     /// `list[i] = v` / `map[k] = v` index store (mirrors the AST `gen_index_store`).
-    fn h_index_store(&mut self, receiver: &hir::Expr, index: &hir::Expr, val: Option<Value>)
-        -> CgResult<()>
-    {
+    fn h_index_store(
+        &mut self,
+        receiver: &hir::Expr,
+        index: &hir::Expr,
+        val: Option<Value>,
+    ) -> CgResult<()> {
         let rty = receiver.ty;
         // A fixed-size FFI array `[T; N]` field — `arr[i] = v` stores element `T`.
         if matches!(self.cx.analysis.tcx.kind(rty), TyKind::Array { .. }) {
-            let ct = self
-                .array_elem_clty(rty)
-                .ok_or_else(|| CodegenError::new(receiver.span, "array element has no scalar type"))?;
+            let ct = self.array_elem_clty(rty).ok_or_else(|| {
+                CodegenError::new(receiver.span, "array element has no scalar type")
+            })?;
             let base = self.h_aggregate_field_addr(receiver)?;
             let idx = self
                 .h_expr(index)?
@@ -1028,9 +1161,9 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             );
             return Ok(());
         }
-        let elem = self
-            .list_elem_of(rty)
-            .ok_or_else(|| CodegenError::new(receiver.span, "HIR codegen: indexed store only on List/Map"))?;
+        let elem = self.list_elem_of(rty).ok_or_else(|| {
+            CodegenError::new(receiver.span, "HIR codegen: indexed store only on List/Map")
+        })?;
         let list = self
             .h_expr(receiver)?
             .ok_or_else(|| CodegenError::new(receiver.span, "list has no value"))?;
@@ -1084,9 +1217,9 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                     );
                 }
                 hir::MapEntry::Spread(base) => {
-                    let src = self
-                        .h_expr(base)?
-                        .ok_or_else(|| CodegenError::new(base.span, "map spread source has no value"))?;
+                    let src = self.h_expr(base)?.ok_or_else(|| {
+                        CodegenError::new(base.span, "map spread source has no value")
+                    })?;
                     self.call_intrinsic("lang_map_extend", &[PTR, PTR], None, &[map, src]);
                 }
             }
@@ -1098,13 +1231,19 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     /// `gen_tuple_ctor`): a `@Transparent` newtype is its single field's value;
     /// otherwise allocate the field block (laid out for the result type's
     /// inferred generics) and store each argument.
-    fn h_tuple_ctor(&mut self, def: DefId, args: &[hir::Expr], ty: Ty, span: Span)
-        -> CgResult<Option<Value>>
-    {
+    fn h_tuple_ctor(
+        &mut self,
+        def: DefId,
+        args: &[hir::Expr],
+        ty: Ty,
+        span: Span,
+    ) -> CgResult<Option<Value>> {
         if transparent_inner(self.cx.analysis, ty).is_some() {
             return self.h_expr(&args[0]);
         }
-        let layout = self.layout_for_ty(ty).unwrap_or_else(|| self.struct_layout(def, &[]));
+        let layout = self
+            .layout_for_ty(ty)
+            .unwrap_or_else(|| self.struct_layout(def, &[]));
         let ptr = if self.is_extern_struct_def(def) {
             self.alloc_extern(&layout)
         } else {
@@ -1158,7 +1297,10 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         for fi in fields {
             let idx = fi.index as usize;
             if idx >= layout.offsets.len() {
-                return Err(CodegenError::new(fi.span, "unknown field in struct literal"));
+                return Err(CodegenError::new(
+                    fi.span,
+                    "unknown field in struct literal",
+                ));
             }
             let off = layout.offsets[idx] as i32;
             let field_owned = Self::is_owned_rc_expr(&fi.value);
@@ -1194,8 +1336,11 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     fn h_field_at(&mut self, receiver: &hir::Expr, idx: usize) -> CgResult<Option<Value>> {
         let rty = receiver.ty;
         // A `@Transparent` newtype's value *is* its single field.
-        if transparent_inner(self.cx.analysis, resolve_shallow(self.cx.analysis, rty, &self.subst))
-            .is_some()
+        if transparent_inner(
+            self.cx.analysis,
+            resolve_shallow(self.cx.analysis, rty, &self.subst),
+        )
+        .is_some()
         {
             return self.h_expr(receiver);
         }
@@ -1223,10 +1368,14 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     fn h_builtin_call(&mut self, b: Builtin, args: &[hir::Expr]) -> CgResult<Option<Value>> {
         match b {
             Builtin::Print | Builtin::Println => {
-                let arg = self
-                    .h_expr(&args[0])?
-                    .ok_or_else(|| CodegenError::new(args[0].span, "builtin argument has no value"))?;
-                let name = if matches!(b, Builtin::Print) { "lang_print" } else { "lang_println" };
+                let arg = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "builtin argument has no value")
+                })?;
+                let name = if matches!(b, Builtin::Print) {
+                    "lang_print"
+                } else {
+                    "lang_println"
+                };
                 self.call_intrinsic(name, &[PTR], None, &[arg]);
                 Ok(None)
             }
@@ -1261,9 +1410,12 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         }
     }
 
-    fn h_extern_call(&mut self, def: DefId, args: &[hir::Expr], span: Span)
-        -> CgResult<Option<Value>>
-    {
+    fn h_extern_call(
+        &mut self,
+        def: DefId,
+        args: &[hir::Expr],
+        span: Span,
+    ) -> CgResult<Option<Value>> {
         // A `@Variadic` extern (`docs/19` §13) cannot be lowered as a plain
         // Cranelift call — Cranelift has no fixed/variadic ABI boundary — so it
         // is marshalled through `libffi` instead.
@@ -1279,7 +1431,8 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         let (ptys, rty) = (esig.params.clone(), esig.ret);
         let mut sig = self.module.make_signature();
         // Honor the `@CallConv` decorator (`docs/19` §7); absent → platform C.
-        sig.call_conv = extern_call_conv(self.cx.analysis, def, self.module.isa().default_call_conv());
+        sig.call_conv =
+            extern_call_conv(self.cx.analysis, def, self.module.isa().default_call_conv());
         for pt in &ptys {
             let ct = clty_of(self.cx.analysis, *pt)
                 .ok_or_else(|| CodegenError::new(span, "extern parameter is zero-sized"))?;
@@ -1315,9 +1468,12 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     /// buffers, the fixed/total counts, and a return slot are handed to
     /// [`runtime::variadic::lang_variadic_call`], which builds the correct
     /// per-target call interface and invokes the function.
-    fn h_variadic_call(&mut self, def: DefId, args: &[hir::Expr], span: Span)
-        -> CgResult<Option<Value>>
-    {
+    fn h_variadic_call(
+        &mut self,
+        def: DefId,
+        args: &[hir::Expr],
+        span: Span,
+    ) -> CgResult<Option<Value>> {
         let analysis = self.cx.analysis;
         let esig = self
             .cx
@@ -1340,7 +1496,10 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             let promote = i >= n_fixed;
             let aty = resolve_shallow(analysis, a.ty, &self.subst);
             let tag = variadic_tag(analysis, aty, promote).ok_or_else(|| {
-                CodegenError::new(a.span, "argument type cannot be passed to a variadic function")
+                CodegenError::new(
+                    a.span,
+                    "argument type cannot be passed to a variadic function",
+                )
             })?;
             let raw = self
                 .h_expr(a)?
@@ -1353,21 +1512,34 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         // plus an 8-byte return slot (>= sizeof(ffi_arg), as `ffi_call` wants).
         let slot_bytes = runtime::variadic::VARIADIC_SLOT_BYTES as u32;
         let values_slot = self.b.create_sized_stack_slot(StackSlotData::new(
-            StackSlotKind::ExplicitSlot, n_total as u32 * slot_bytes, 3,
+            StackSlotKind::ExplicitSlot,
+            n_total as u32 * slot_bytes,
+            3,
         ));
         let tags_slot = self.b.create_sized_stack_slot(StackSlotData::new(
-            StackSlotKind::ExplicitSlot, n_total.max(1) as u32, 0,
+            StackSlotKind::ExplicitSlot,
+            n_total.max(1) as u32,
+            0,
         ));
         let ret_slot = self.b.create_sized_stack_slot(StackSlotData::new(
-            StackSlotKind::ExplicitSlot, slot_bytes, 3,
+            StackSlotKind::ExplicitSlot,
+            slot_bytes,
+            3,
         ));
         let values_ptr = self.b.ins().stack_addr(PTR, values_slot, 0);
         let tags_ptr = self.b.ins().stack_addr(PTR, tags_slot, 0);
         let ret_ptr = self.b.ins().stack_addr(PTR, ret_slot, 0);
         for (i, (v, tag)) in marshalled.iter().enumerate() {
-            self.b.ins().store(MemFlags::trusted(), *v, values_ptr, (i as i32) * slot_bytes as i32);
+            self.b.ins().store(
+                MemFlags::trusted(),
+                *v,
+                values_ptr,
+                (i as i32) * slot_bytes as i32,
+            );
             let tagv = self.b.ins().iconst(types::I8, *tag as i64);
-            self.b.ins().store(MemFlags::trusted(), tagv, tags_ptr, i as i32);
+            self.b
+                .ins()
+                .store(MemFlags::trusted(), tagv, tags_ptr, i as i32);
         }
 
         // The callee address: declare the imported symbol (with an address-only
@@ -1391,7 +1563,9 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             "lang_variadic_call",
             &[PTR, types::I32, types::I32, PTR, PTR, types::I8, PTR],
             None,
-            &[fn_addr, n_fixed_v, n_total_v, tags_ptr, values_ptr, ret_tag_v, ret_ptr],
+            &[
+                fn_addr, n_fixed_v, n_total_v, tags_ptr, values_ptr, ret_tag_v, ret_ptr,
+            ],
         );
 
         // Load the return value (if any) from the return slot.
@@ -1461,7 +1635,9 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 if self.is_rc_ty(elem_tys[i]) && !elem_owned {
                     self.emit_rc_retain(v);
                 }
-                self.b.ins().store(MemFlags::trusted(), v, ptr, layout.offsets[i] as i32);
+                self.b
+                    .ins()
+                    .store(MemFlags::trusted(), v, ptr, layout.offsets[i] as i32);
             }
         }
         Ok(Some(ptr))
@@ -1479,9 +1655,19 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                     unescape_into(text, &mut bytes);
                     vals.push(self.emit_str_bytes(bytes));
                 }
-                hir::StrPart::Interp { expr, stringify, stringify_targs } => {
+                hir::StrPart::Interp {
+                    expr,
+                    stringify,
+                    stringify_targs,
+                } => {
                     let v = self.h_expr(expr)?;
-                    vals.push(self.h_stringify(v, expr.ty, *stringify, stringify_targs, expr.span)?);
+                    vals.push(self.h_stringify(
+                        v,
+                        expr.ty,
+                        *stringify,
+                        stringify_targs,
+                        expr.span,
+                    )?);
                 }
             }
         }
@@ -1516,7 +1702,8 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         // A user type with a `to_str(self): str` method — call it with the value
         // as the receiver, monomorphized by the recorded type args.
         if let Some(mdef) = stringify {
-            let recv = v.ok_or_else(|| CodegenError::new(span, "interpolated value has no payload"))?;
+            let recv =
+                v.ok_or_else(|| CodegenError::new(span, "interpolated value has no payload"))?;
             let targs: Vec<Ty> = stringify_targs
                 .iter()
                 .map(|t| resolve_shallow(self.cx.analysis, *t, &self.subst))
@@ -1538,12 +1725,18 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
 
     // -- match ---------------------------------------------------------------
 
-    fn h_match(&mut self, scrutinee: &hir::Expr, arms: &[hir::MatchArm], result_ty: Ty)
-        -> CgResult<Option<Value>>
-    {
+    fn h_match(
+        &mut self,
+        scrutinee: &hir::Expr,
+        arms: &[hir::MatchArm],
+        result_ty: Ty,
+    ) -> CgResult<Option<Value>> {
         let sty = scrutinee.ty;
         let scrut = self.h_expr(scrutinee)?;
-        let is_union = matches!(self.cx.analysis.tcx.kind(sty), TyKind::Union(_) | TyKind::Dynamic);
+        let is_union = matches!(
+            self.cx.analysis.tcx.kind(sty),
+            TyKind::Union(_) | TyKind::Dynamic
+        );
         let tag = if is_union {
             scrut.map(|p| self.b.ins().load(types::I64, MemFlags::trusted(), p, 0))
         } else {
@@ -1584,9 +1777,13 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         Ok(result_ct.map(|_| self.b.block_params(merge)[0]))
     }
 
-    fn h_pattern_matches(&mut self, pattern: &hir::Pattern, sty: Ty, scrut: Option<Value>, tag: Option<Value>)
-        -> CgResult<Value>
-    {
+    fn h_pattern_matches(
+        &mut self,
+        pattern: &hir::Pattern,
+        sty: Ty,
+        scrut: Option<Value>,
+        tag: Option<Value>,
+    ) -> CgResult<Value> {
         use hir::PatternKind as P;
         let one = self.b.ins().iconst(types::I8, 1);
         match &pattern.kind {
@@ -1616,8 +1813,8 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 let lit = self
                     .h_expr(e)?
                     .ok_or_else(|| CodegenError::new(e.span, "literal pattern has no value"))?;
-                let scrut =
-                    scrut.ok_or_else(|| CodegenError::new(pattern.span, "scrutinee has no value"))?;
+                let scrut = scrut
+                    .ok_or_else(|| CodegenError::new(pattern.span, "scrutinee has no value"))?;
                 match self.cx.analysis.tcx.kind(sty) {
                     TyKind::Float(_) => Ok(self.b.ins().fcmp(FloatCC::Equal, scrut, lit)),
                     _ => Ok(self.b.ins().icmp(IntCC::Equal, scrut, lit)),
@@ -1634,8 +1831,9 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             }
             // `[a, b]` / `[head, ..tail]` — a length test on the list.
             P::List { elems, rest } => {
-                let lv = scrut
-                    .ok_or_else(|| CodegenError::new(pattern.span, "list scrutinee has no value"))?;
+                let lv = scrut.ok_or_else(|| {
+                    CodegenError::new(pattern.span, "list scrutinee has no value")
+                })?;
                 let n = self
                     .call_intrinsic("lang_list_size", &[PTR], Some(types::I64), &[lv])
                     .expect("list size");
@@ -1678,9 +1876,13 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         sty
     }
 
-    fn h_bind_match_pattern(&mut self, pattern: &hir::Pattern, sty: Ty, scrut: Option<Value>, _tag: Option<Value>)
-        -> CgResult<()>
-    {
+    fn h_bind_match_pattern(
+        &mut self,
+        pattern: &hir::Pattern,
+        sty: Ty,
+        scrut: Option<Value>,
+        _tag: Option<Value>,
+    ) -> CgResult<()> {
         use hir::PatternKind as P;
         match &pattern.kind {
             P::Wildcard | P::Literal(_) | P::UnitPath { .. } => Ok(()),
@@ -1690,7 +1892,10 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 }
                 Ok(())
             }
-            P::TypeBind { test_ty, bind: Some(local) } => {
+            P::TypeBind {
+                test_ty,
+                bind: Some(local),
+            } => {
                 let t = *test_ty;
                 // Extract the payload: unbox from a union, else use as-is.
                 let val = match (scrut, self.cx_clty(t)) {
@@ -1712,20 +1917,29 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             }
             P::TypeBind { bind: None, .. } => Ok(()),
             P::Tuple { elems, rest: None } => {
-                let layout = self
-                    .layout_for_ty(sty)
-                    .ok_or_else(|| CodegenError::new(pattern.span, "tuple pattern on non-aggregate"))?;
+                let layout = self.layout_for_ty(sty).ok_or_else(|| {
+                    CodegenError::new(pattern.span, "tuple pattern on non-aggregate")
+                })?;
                 let elem_tys = match self.cx.analysis.tcx.kind(sty).clone() {
                     TyKind::Tuple(ts) => ts,
-                    _ => return Err(CodegenError::new(pattern.span, "tuple pattern on non-tuple")),
+                    _ => {
+                        return Err(CodegenError::new(
+                            pattern.span,
+                            "tuple pattern on non-tuple",
+                        ));
+                    }
                 };
-                let ptr = scrut
-                    .ok_or_else(|| CodegenError::new(pattern.span, "tuple scrutinee has no value"))?;
+                let ptr = scrut.ok_or_else(|| {
+                    CodegenError::new(pattern.span, "tuple scrutinee has no value")
+                })?;
                 for (i, sub) in elems.iter().enumerate() {
                     let elem_val = match layout.cltys.get(i) {
-                        Some(Some(ct)) => {
-                            Some(self.b.ins().load(*ct, MemFlags::trusted(), ptr, layout.offsets[i] as i32))
-                        }
+                        Some(Some(ct)) => Some(self.b.ins().load(
+                            *ct,
+                            MemFlags::trusted(),
+                            ptr,
+                            layout.offsets[i] as i32,
+                        )),
                         _ => None,
                     };
                     self.h_bind_match_pattern(sub, elem_tys[i], elem_val, None)?;
@@ -1737,14 +1951,20 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             // `[a, b]` / `[head, ..tail]`: bind the leading/trailing elements and
             // the `..rest` as a fresh sub-list.
             P::List { elems, rest } => {
-                let lv = scrut
-                    .ok_or_else(|| CodegenError::new(pattern.span, "list scrutinee has no value"))?;
+                let lv = scrut.ok_or_else(|| {
+                    CodegenError::new(pattern.span, "list scrutinee has no value")
+                })?;
                 let elem = self
                     .list_elem_of(sty)
                     .ok_or_else(|| CodegenError::new(pattern.span, "list pattern on non-list"))?;
                 let load_at = |this: &mut Self, idx: Value| -> CgResult<Option<Value>> {
                     let raw = this
-                        .call_intrinsic("lang_list_get", &[PTR, types::I64], Some(types::I64), &[lv, idx])
+                        .call_intrinsic(
+                            "lang_list_get",
+                            &[PTR, types::I64],
+                            Some(types::I64),
+                            &[lv, idx],
+                        )
                         .expect("list get");
                     this.i64_to_elem(raw, elem, pattern.span)
                 };
@@ -1780,7 +2000,12 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                             let start = self.b.ins().iconst(types::I64, rp as i64);
                             let end = self.b.ins().iadd_imm(n, -(trailing as i64));
                             let sub = self
-                                .call_intrinsic("lang_list_slice", &[PTR, types::I64, types::I64], Some(PTR), &[lv, start, end])
+                                .call_intrinsic(
+                                    "lang_list_slice",
+                                    &[PTR, types::I64, types::I64],
+                                    Some(PTR),
+                                    &[lv, start, end],
+                                )
                                 .expect("list slice");
                             self.bind_local(local, PTR, sub);
                         }
@@ -1803,15 +2028,22 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 };
                 self.h_bind_pattern(pattern, payload, vt, false)
             }
-            _ => Err(CodegenError::new(pattern.span, "HIR codegen: pattern not yet supported in match")),
+            _ => Err(CodegenError::new(
+                pattern.span,
+                "HIR codegen: pattern not yet supported in match",
+            )),
         }
     }
 
     // -- for -----------------------------------------------------------------
 
-    fn h_for(&mut self, pattern: &hir::Pattern, iter: &hir::Expr, body: &hir::Block, driver: &hir::ForDriver)
-        -> CgResult<Option<Value>>
-    {
+    fn h_for(
+        &mut self,
+        pattern: &hir::Pattern,
+        iter: &hir::Expr,
+        body: &hir::Block,
+        driver: &hir::ForDriver,
+    ) -> CgResult<Option<Value>> {
         match driver {
             hir::ForDriver::Iter(info) => self.h_for_iterator(pattern, iter, body, info),
             hir::ForDriver::Map { key, value, entry } => {
@@ -1831,18 +2063,22 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     /// synchronous `Receiver: Iterator` drainer; the recv parks the OS thread
     /// (cooperating with the GC) while waiting, so a closed sender promptly
     /// terminates it.
-    fn h_for_channel(&mut self, pattern: &hir::Pattern, iter: &hir::Expr, body: &hir::Block, elem: Ty)
-        -> CgResult<Option<Value>>
-    {
+    fn h_for_channel(
+        &mut self,
+        pattern: &hir::Pattern,
+        iter: &hir::Expr,
+        body: &hir::Block,
+        elem: Ty,
+    ) -> CgResult<Option<Value>> {
         let rty = iter.ty;
         let rxv = self
             .h_expr(iter)?
             .ok_or_else(|| CodegenError::new(iter.span, "receiver has no value"))?;
         self.mark_root(rxv);
         let chan = self.emit_channel_id(rxv, rty, iter.span)?;
-        let got_slot = self.b.create_sized_stack_slot(StackSlotData::new(
-            StackSlotKind::ExplicitSlot, 8, 3,
-        ));
+        let got_slot =
+            self.b
+                .create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, 8, 3));
         let header = self.b.create_block();
         let body_bb = self.b.create_block();
         let exit = self.b.create_block();
@@ -1852,22 +2088,37 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         self.emit_safepoint();
         let got_ptr = self.b.ins().stack_addr(PTR, got_slot, 0);
         let raw = self
-            .call_intrinsic("lang_chan_recv_blocking", &[types::I64, PTR], Some(types::I64), &[chan, got_ptr])
+            .call_intrinsic(
+                "lang_chan_recv_blocking",
+                &[types::I64, PTR],
+                Some(types::I64),
+                &[chan, got_ptr],
+            )
             .expect("blocking recv");
-        let got = self.b.ins().load(types::I64, MemFlags::trusted(), got_ptr, 0);
+        let got = self
+            .b
+            .ins()
+            .load(types::I64, MemFlags::trusted(), got_ptr, 0);
         let zero = self.b.ins().iconst(types::I64, 0);
         let have = self.b.ins().icmp(IntCC::NotEqual, got, zero);
         self.b.ins().brif(have, body_bb, &[], exit, &[]);
         self.term = true;
         self.switch(body_bb);
         let elem_val = self.i64_to_elem(raw, elem, iter.span)?;
-        if is_managed_ptr(self.cx.analysis, resolve_shallow(self.cx.analysis, elem, &self.subst)) {
+        if is_managed_ptr(
+            self.cx.analysis,
+            resolve_shallow(self.cx.analysis, elem, &self.subst),
+        ) {
             if let Some(v) = elem_val {
                 self.mark_root(v);
             }
         }
         self.h_bind_pattern(pattern, elem_val, elem, false)?;
-        self.loops.push(LoopCg { continue_block: header, break_block: exit, has_value: false });
+        self.loops.push(LoopCg {
+            continue_block: header,
+            break_block: exit,
+            has_value: false,
+        });
         self.h_block(body)?;
         if !self.term {
             self.b.ins().jump(header, &[]);
@@ -1882,9 +2133,12 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     /// into a `List<char>` (`lang_str_to_chars`) and index-loop them — exactly
     /// the desugaring `for ch in s.chars()` with no intermediate iterator
     /// struct. The snapshot is rooted across the loop's safepoints.
-    fn h_for_str_chars(&mut self, pattern: &hir::Pattern, iter: &hir::Expr, body: &hir::Block)
-        -> CgResult<Option<Value>>
-    {
+    fn h_for_str_chars(
+        &mut self,
+        pattern: &hir::Pattern,
+        iter: &hir::Expr,
+        body: &hir::Block,
+    ) -> CgResult<Option<Value>> {
         let slots = self.for_async_slots(iter.span);
         let s = self
             .h_expr(iter)?
@@ -1923,11 +2177,20 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         let i2 = self.load_for_index(slots, iv);
         let list_b = self.load_for_iterable(slots, list);
         let raw = self
-            .call_intrinsic("lang_list_get", &[PTR, types::I64], Some(types::I64), &[list_b, i2])
+            .call_intrinsic(
+                "lang_list_get",
+                &[PTR, types::I64],
+                Some(types::I64),
+                &[list_b, i2],
+            )
             .expect("get");
         let elem_val = self.i64_to_elem(raw, elem, iter.span)?;
         self.h_bind_pattern(pattern, elem_val, elem, false)?;
-        self.loops.push(LoopCg { continue_block: latch, break_block: exit, has_value: false });
+        self.loops.push(LoopCg {
+            continue_block: latch,
+            break_block: exit,
+            has_value: false,
+        });
         self.h_block(body)?;
         if !self.term {
             self.b.ins().jump(latch, &[]);
@@ -1979,7 +2242,8 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         // Resolve `next_async`: an interface-object stream dispatches through the
         // vtable; a concrete `extend … : AsyncIterator` resolves to the impl
         // (mirrors the synchronous `h_for_iterator`).
-        let fut = if self.cx.analysis.program.def(info.next_async).kind == DefKind::InterfaceMethod {
+        let fut = if self.cx.analysis.program.def(info.next_async).kind == DefKind::InterfaceMethod
+        {
             let recv = resolve_shallow(self.cx.analysis, info.iter_ty, &self.subst);
             if self.is_interface_ty(recv) {
                 let slot = self
@@ -2034,7 +2298,11 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             None => None,
         };
         self.h_bind_pattern(pattern, value, info.elem, false)?;
-        self.loops.push(LoopCg { continue_block: header, break_block: exit, has_value: false });
+        self.loops.push(LoopCg {
+            continue_block: header,
+            break_block: exit,
+            has_value: false,
+        });
         self.h_block(body)?;
         if !self.term {
             self.b.ins().jump(header, &[]);
@@ -2060,37 +2328,57 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
 
     /// Read the loop's primary iterable pointer: from its state slot (async) or
     /// the already-evaluated SSA value (ordinary loop).
-    fn load_for_iterable(&mut self, slots: Option<(Value, i32, i32, i32)>, fallback: Value) -> Value {
+    fn load_for_iterable(
+        &mut self,
+        slots: Option<(Value, i32, i32, i32)>,
+        fallback: Value,
+    ) -> Value {
         match slots {
             Some((sv, primary, _, _)) => self.b.ins().load(PTR, MemFlags::trusted(), sv, primary),
             None => fallback,
         }
     }
     /// Read the loop's secondary iterable pointer (the `Map` driver's map handle).
-    fn load_for_secondary(&mut self, slots: Option<(Value, i32, i32, i32)>, fallback: Value) -> Value {
+    fn load_for_secondary(
+        &mut self,
+        slots: Option<(Value, i32, i32, i32)>,
+        fallback: Value,
+    ) -> Value {
         match slots {
-            Some((sv, _, secondary, _)) => self.b.ins().load(PTR, MemFlags::trusted(), sv, secondary),
+            Some((sv, _, secondary, _)) => {
+                self.b.ins().load(PTR, MemFlags::trusted(), sv, secondary)
+            }
             None => fallback,
         }
     }
     /// Read the loop's index counter (state slot when async, else the var).
     fn load_for_index(&mut self, slots: Option<(Value, i32, i32, i32)>, iv: Variable) -> Value {
         match slots {
-            Some((sv, _, _, idx_off)) => self.b.ins().load(types::I64, MemFlags::trusted(), sv, idx_off),
+            Some((sv, _, _, idx_off)) => {
+                self.b
+                    .ins()
+                    .load(types::I64, MemFlags::trusted(), sv, idx_off)
+            }
             None => self.b.use_var(iv),
         }
     }
     /// Write the loop's index counter (state slot when async, else the var).
     fn store_for_index(&mut self, slots: Option<(Value, i32, i32, i32)>, iv: Variable, v: Value) {
         match slots {
-            Some((sv, _, _, idx_off)) => { self.b.ins().store(MemFlags::trusted(), v, sv, idx_off); }
+            Some((sv, _, _, idx_off)) => {
+                self.b.ins().store(MemFlags::trusted(), v, sv, idx_off);
+            }
             None => self.b.def_var(iv, v),
         }
     }
 
-    fn h_for_list(&mut self, pattern: &hir::Pattern, iter: &hir::Expr, body: &hir::Block, elem: Ty)
-        -> CgResult<Option<Value>>
-    {
+    fn h_for_list(
+        &mut self,
+        pattern: &hir::Pattern,
+        iter: &hir::Expr,
+        body: &hir::Block,
+        elem: Ty,
+    ) -> CgResult<Option<Value>> {
         let slots = self.for_async_slots(iter.span);
         let list = self
             .h_expr(iter)?
@@ -2125,11 +2413,20 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         let i2 = self.load_for_index(slots, iv);
         let list_b = self.load_for_iterable(slots, list);
         let raw = self
-            .call_intrinsic("lang_list_get", &[PTR, types::I64], Some(types::I64), &[list_b, i2])
+            .call_intrinsic(
+                "lang_list_get",
+                &[PTR, types::I64],
+                Some(types::I64),
+                &[list_b, i2],
+            )
             .expect("get");
         let elem_val = self.i64_to_elem(raw, elem, iter.span)?;
         self.h_bind_pattern(pattern, elem_val, elem, false)?;
-        self.loops.push(LoopCg { continue_block: latch, break_block: exit, has_value: false });
+        self.loops.push(LoopCg {
+            continue_block: latch,
+            break_block: exit,
+            has_value: false,
+        });
         self.h_block(body)?;
         if !self.term {
             self.b.ins().jump(latch, &[]);
@@ -2147,16 +2444,22 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         Ok(None)
     }
 
-    fn h_for_iterator(&mut self, pattern: &hir::Pattern, iter: &hir::Expr, body: &hir::Block, info: &ForIter)
-        -> CgResult<Option<Value>>
-    {
+    fn h_for_iterator(
+        &mut self,
+        pattern: &hir::Pattern,
+        iter: &hir::Expr,
+        body: &hir::Block,
+        info: &ForIter,
+    ) -> CgResult<Option<Value>> {
         let slots = self.for_async_slots(iter.span);
         let iter_val0 = self
             .h_expr(iter)?
             .ok_or_else(|| CodegenError::new(iter.span, "iterator has no value"))?;
         self.mark_root(iter_val0);
         if let Some((sv, primary, _, _)) = slots {
-            self.b.ins().store(MemFlags::trusted(), iter_val0, sv, primary);
+            self.b
+                .ins()
+                .store(MemFlags::trusted(), iter_val0, sv, primary);
         }
         let header = self.b.create_block();
         let body_bb = self.b.create_block();
@@ -2172,14 +2475,15 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         let u = if self.cx.analysis.program.def(info.next).kind == DefKind::InterfaceMethod {
             let recv = resolve_shallow(self.cx.analysis, info.iter_ty, &self.subst);
             if self.is_interface_ty(recv) {
-                let slot = self
-                    .vtable_slot(info.next)
-                    .ok_or_else(|| CodegenError::new(iter.span, "iterator method not in interface"))?;
+                let slot = self.vtable_slot(info.next).ok_or_else(|| {
+                    CodegenError::new(iter.span, "iterator method not in interface")
+                })?;
                 self.emit_vtable_call(slot, iter_val, &[], Some(PTR))?
             } else {
-                let (target, targs) = self
-                    .resolve_iface_method(info.next, recv)
-                    .ok_or_else(|| CodegenError::new(iter.span, "cannot resolve iterator `next`"))?;
+                let (target, targs) =
+                    self.resolve_iface_method(info.next, recv).ok_or_else(|| {
+                        CodegenError::new(iter.span, "cannot resolve iterator `next`")
+                    })?;
                 self.emit_call(target, targs, &[iter_val], iter.span)?
             }
         } else {
@@ -2219,7 +2523,11 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             None => None,
         };
         self.h_bind_pattern(pattern, value, info.elem, false)?;
-        self.loops.push(LoopCg { continue_block: header, break_block: exit, has_value: false });
+        self.loops.push(LoopCg {
+            continue_block: header,
+            break_block: exit,
+            has_value: false,
+        });
         self.h_block(body)?;
         if !self.term {
             self.b.ins().jump(header, &[]);
@@ -2246,7 +2554,12 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         self.mark_root(map);
         let one = self.b.ins().iconst(types::I64, 1);
         let keys = self
-            .call_intrinsic("lang_map_entries", &[PTR, types::I64], Some(PTR), &[map, one])
+            .call_intrinsic(
+                "lang_map_entries",
+                &[PTR, types::I64],
+                Some(PTR),
+                &[map, one],
+            )
             .expect("map_entries returns a list");
         self.mark_root(keys);
         // In an awaiting loop, the keys snapshot (primary) and the map
@@ -2271,7 +2584,9 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         let iv = self.b.declare_var(types::I64);
         let zero = self.b.ins().iconst(types::I64, 0);
         match slots {
-            Some((sv, _, _, idx_off)) => { self.b.ins().store(MemFlags::trusted(), zero, sv, idx_off); }
+            Some((sv, _, _, idx_off)) => {
+                self.b.ins().store(MemFlags::trusted(), zero, sv, idx_off);
+            }
             None => self.b.def_var(iv, zero),
         }
         let header = self.b.create_block();
@@ -2295,24 +2610,42 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         let keys_b = self.load_for_iterable(slots, keys);
         let map_b = self.load_for_secondary(slots, map);
         let key_raw = self
-            .call_intrinsic("lang_list_get", &[PTR, types::I64], Some(types::I64), &[keys_b, i2])
+            .call_intrinsic(
+                "lang_list_get",
+                &[PTR, types::I64],
+                Some(types::I64),
+                &[keys_b, i2],
+            )
             .expect("get key");
         let val_raw = self
-            .call_intrinsic("lang_map_index", &[PTR, types::I64], Some(types::I64), &[map_b, key_raw])
+            .call_intrinsic(
+                "lang_map_index",
+                &[PTR, types::I64],
+                Some(types::I64),
+                &[map_b, key_raw],
+            )
             .expect("get value");
         let entry = self.alloc_struct(&layout);
         if let Some(ko) = layout.index_of("key") {
             if let Some(kv) = self.i64_to_elem(key_raw, kt, iter.span)? {
-                self.b.ins().store(MemFlags::trusted(), kv, entry, layout.offsets[ko] as i32);
+                self.b
+                    .ins()
+                    .store(MemFlags::trusted(), kv, entry, layout.offsets[ko] as i32);
             }
         }
         if let Some(vo) = layout.index_of("value") {
             if let Some(vv) = self.i64_to_elem(val_raw, vt, iter.span)? {
-                self.b.ins().store(MemFlags::trusted(), vv, entry, layout.offsets[vo] as i32);
+                self.b
+                    .ins()
+                    .store(MemFlags::trusted(), vv, entry, layout.offsets[vo] as i32);
             }
         }
         self.h_bind_pattern(pattern, Some(entry), entry_ty, false)?;
-        self.loops.push(LoopCg { continue_block: latch, break_block: exit, has_value: false });
+        self.loops.push(LoopCg {
+            continue_block: latch,
+            break_block: exit,
+            has_value: false,
+        });
         self.h_block(body)?;
         if !self.term {
             self.b.ins().jump(latch, &[]);
@@ -2396,7 +2729,14 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     /// (e.g. a variable already holding a closure) falls back to the ordinary
     /// evaluation.
     fn h_spawn_closure_arg(&mut self, arg: &hir::Expr) -> CgResult<Option<Value>> {
-        if let hir::ExprKind::Closure { params, captures, ret, is_async, body } = &arg.kind {
+        if let hir::ExprKind::Closure {
+            params,
+            captures,
+            ret,
+            is_async,
+            body,
+        } = &arg.kind
+        {
             return self.h_closure_kind(params, captures, *ret, *is_async, body, arg.span, true);
         }
         self.h_expr(arg)
@@ -2420,7 +2760,10 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         let dk = self.cx.analysis.program.def(def).kind;
         let is_iface = dk == DefKind::InterfaceMethod;
         let prog_targs = |this: &Self| -> Vec<Ty> {
-            type_args.iter().map(|t| resolve_shallow(this.cx.analysis, *t, &this.subst)).collect()
+            type_args
+                .iter()
+                .map(|t| resolve_shallow(this.cx.analysis, *t, &this.subst))
+                .collect()
         };
 
         // -- static call: no receiver; `args` are the call arguments ---------
@@ -2432,7 +2775,10 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                     &self.subst,
                 );
                 self.resolve_iface_method(def, recv).ok_or_else(|| {
-                    CodegenError::new(span, "cannot resolve static interface method to a concrete impl")
+                    CodegenError::new(
+                        span,
+                        "cannot resolve static interface method to a concrete impl",
+                    )
                 })?
             } else {
                 (def, prog_targs(self))
@@ -2440,7 +2786,8 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             let mut arg_vals = Vec::with_capacity(args.len());
             for a in args {
                 arg_vals.push(
-                    self.h_expr(a)?.ok_or_else(|| CodegenError::new(a.span, "argument has no value"))?,
+                    self.h_expr(a)?
+                        .ok_or_else(|| CodegenError::new(a.span, "argument has no value"))?,
                 );
             }
             return self.emit_call(target, targs, &arg_vals, span);
@@ -2460,25 +2807,29 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             let slot = self
                 .vtable_slot(def)
                 .ok_or_else(|| CodegenError::new(span, "method not found in interface"))?;
-            let obj = self
-                .h_expr(receiver)?
-                .ok_or_else(|| CodegenError::new(receiver.span, "interface receiver has no value"))?;
+            let obj = self.h_expr(receiver)?.ok_or_else(|| {
+                CodegenError::new(receiver.span, "interface receiver has no value")
+            })?;
             let mut arg_vals = Vec::with_capacity(method_args.len());
             for a in method_args {
                 arg_vals.push(
-                    self.h_expr(a)?.ok_or_else(|| CodegenError::new(a.span, "argument has no value"))?,
+                    self.h_expr(a)?
+                        .ok_or_else(|| CodegenError::new(a.span, "argument has no value"))?,
                 );
             }
-            let ret_clty = clty_of(self.cx.analysis, resolve_shallow(self.cx.analysis, ty, &self.subst));
+            let ret_clty = clty_of(
+                self.cx.analysis,
+                resolve_shallow(self.cx.analysis, ty, &self.subst),
+            );
             return self.emit_vtable_call(slot, obj, &arg_vals, ret_clty);
         }
 
         // `Clone.clone` through a `T: Clone` bound on a builtin-cloneable type.
         if is_iface && prog.def(def).parent == Some(prog.clone_def) {
             if let Some(kind) = self.builtin_clone_kind(recv_ty) {
-                let v = self
-                    .h_expr(receiver)?
-                    .ok_or_else(|| CodegenError::new(receiver.span, "clone receiver has no value"))?;
+                let v = self.h_expr(receiver)?.ok_or_else(|| {
+                    CodegenError::new(receiver.span, "clone receiver has no value")
+                })?;
                 return self.emit_builtin_clone(v, recv_ty, kind, receiver.span);
             }
         }
@@ -2490,12 +2841,12 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         {
             if let Some(op) = crate::gen_call::compare_op(&prog.def(def).name) {
                 if self.is_primitive_comparable(recv_ty) {
-                    let l = self
-                        .h_expr(receiver)?
-                        .ok_or_else(|| CodegenError::new(receiver.span, "comparison receiver has no value"))?;
-                    let r = self
-                        .h_expr(&method_args[0])?
-                        .ok_or_else(|| CodegenError::new(span, "comparison argument has no value"))?;
+                    let l = self.h_expr(receiver)?.ok_or_else(|| {
+                        CodegenError::new(receiver.span, "comparison receiver has no value")
+                    })?;
+                    let r = self.h_expr(&method_args[0])?.ok_or_else(|| {
+                        CodegenError::new(span, "comparison argument has no value")
+                    })?;
                     return self.emit_primitive_compare(op, recv_ty, l, r);
                 }
             }
@@ -2504,11 +2855,16 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         if is_iface && parent == Some(prog.to_str_def) && prog.to_str_def != DefId(0) {
             if matches!(
                 self.cx.analysis.tcx.kind(recv_ty),
-                TyKind::Int(_) | TyKind::Float(_) | TyKind::Bool | TyKind::Char | TyKind::Str | TyKind::Null
+                TyKind::Int(_)
+                    | TyKind::Float(_)
+                    | TyKind::Bool
+                    | TyKind::Char
+                    | TyKind::Str
+                    | TyKind::Null
             ) {
-                let v = self
-                    .h_expr(receiver)?
-                    .ok_or_else(|| CodegenError::new(receiver.span, "to_str receiver has no value"))?;
+                let v = self.h_expr(receiver)?.ok_or_else(|| {
+                    CodegenError::new(receiver.span, "to_str receiver has no value")
+                })?;
                 return Ok(Some(self.cast_to_str(v, recv_ty, span)?));
             }
         }
@@ -2518,9 +2874,9 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 self.cx.analysis.tcx.kind(recv_ty),
                 TyKind::Int(_) | TyKind::Float(_) | TyKind::Bool | TyKind::Char | TyKind::Str
             ) {
-                let v = self
-                    .h_expr(receiver)?
-                    .ok_or_else(|| CodegenError::new(receiver.span, "hash receiver has no value"))?;
+                let v = self.h_expr(receiver)?.ok_or_else(|| {
+                    CodegenError::new(receiver.span, "hash receiver has no value")
+                })?;
                 return Ok(Some(self.gen_primitive_hash(v, recv_ty)));
             }
         }
@@ -2539,7 +2895,8 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         let mut arg_vals = vec![self_val];
         for a in method_args {
             arg_vals.push(
-                self.h_expr(a)?.ok_or_else(|| CodegenError::new(a.span, "argument has no value"))?,
+                self.h_expr(a)?
+                    .ok_or_else(|| CodegenError::new(a.span, "argument has no value"))?,
             );
         }
         self.emit_call(target, targs, &arg_vals, span)
@@ -2579,6 +2936,13 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             .module
             .declare_function(&name, Linkage::Local, &sig)
             .expect("declare async block poll");
+        let mut drop_sig = self.module.make_signature();
+        drop_sig.params.push(AbiParam::new(PTR));
+        let drop_name = format!("{name}$drop");
+        let drop_fid = self
+            .module
+            .declare_function(&drop_name, Linkage::Local, &drop_sig)
+            .expect("declare async block drop");
 
         let (size, ptr_offsets, cap_offs): (u32, Vec<u32>, Vec<i32>) = if h_block_has_await(block) {
             let cap_ids: Vec<LocalId> = captures.iter().map(|(l, _)| *l).collect();
@@ -2588,6 +2952,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 &cap_ids,
                 BodyView(block),
                 self.cx.captured_locals,
+                &self.value_capture_locals,
             );
             let offs = cap_ids.iter().map(|l| layout.slot_off[l]).collect();
             (layout.state_size, layout.ptr_offsets, offs)
@@ -2604,14 +2969,21 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         let zero = self.b.ins().iconst(types::I64, 0);
         self.b.ins().store(MemFlags::trusted(), zero, state, 0);
         for (k, (local, _)) in captures.iter().enumerate() {
-            let var = *self
-                .vars
-                .get(local)
-                .ok_or_else(|| CodegenError::new(span, "captured local has no slot"))?;
-            let v = self.b.use_var(var);
-            self.b.ins().store(MemFlags::trusted(), v, state, cap_offs[k]);
+            let v = if self.value_capture_locals.contains(local) {
+                self.read_local(*local)
+                    .ok_or_else(|| CodegenError::new(span, "captured local has no slot"))?
+            } else {
+                let var = *self
+                    .vars
+                    .get(local)
+                    .ok_or_else(|| CodegenError::new(span, "captured local has no slot"))?;
+                self.b.use_var(var)
+            };
+            self.b
+                .ins()
+                .store(MemFlags::trusted(), v, state, cap_offs[k]);
         }
-        let fut = self.emit_future_box(poll_fid, state);
+        let fut = self.emit_future_box(poll_fid, Some(drop_fid), state);
         let info = compiler::sema::results::AsyncInfo {
             output,
             params: params.to_vec(),
@@ -2624,6 +2996,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         };
         self.async_jobs.push(crate::AsyncJob {
             poll_fid,
+            drop_fid,
             info,
             body,
             subst: self.subst.clone(),
@@ -2633,6 +3006,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             // by-value `Thread.spawn` async worker (the future then owns and
             // releases the captured endpoints); empty for an ordinary block.
             owned_endpoints: Vec::new(),
+            value_capture_locals: self.value_capture_locals.clone(),
         });
         Ok(Some(fut))
     }
@@ -2641,9 +3015,13 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     /// covered so far (empty collection constructors and builtin `.clone()`);
     /// the coverage predicate keeps the rest (numeric/foreign/concurrency/async
     /// intrinsics) on the AST path.
-    fn h_intrinsic(&mut self, intrinsic: &hir::Intrinsic, args: &[hir::Expr], ty: Ty, span: Span)
-        -> CgResult<Option<Value>>
-    {
+    fn h_intrinsic(
+        &mut self,
+        intrinsic: &hir::Intrinsic,
+        args: &[hir::Expr],
+        ty: Ty,
+        span: Span,
+    ) -> CgResult<Option<Value>> {
         match intrinsic {
             hir::Intrinsic::CollectionCtor => {
                 if let Some((kt, vt)) = self.map_kv_of(ty) {
@@ -2657,9 +3035,9 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             hir::Intrinsic::Clone(kind) => {
                 let receiver = &args[0];
                 let rty = receiver.ty;
-                let v = self
-                    .h_expr(receiver)?
-                    .ok_or_else(|| CodegenError::new(receiver.span, "clone receiver has no value"))?;
+                let v = self.h_expr(receiver)?.ok_or_else(|| {
+                    CodegenError::new(receiver.span, "clone receiver has no value")
+                })?;
                 self.emit_builtin_clone(v, rty, *kind, receiver.span)
             }
             hir::Intrinsic::Num(intr) => {
@@ -2675,28 +3053,37 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             hir::Intrinsic::ForeignAlloc { ty: t, zeroed } => {
                 let size = self.sizeof_ty(*t);
                 let sz = self.b.ins().iconst(types::I64, size as i64);
-                let f = if *zeroed { "lang_foreign_alloc_zeroed" } else { "lang_foreign_alloc" };
+                let f = if *zeroed {
+                    "lang_foreign_alloc_zeroed"
+                } else {
+                    "lang_foreign_alloc"
+                };
                 Ok(self.call_intrinsic(f, &[types::I64], Some(PTR), &[sz]))
             }
             hir::Intrinsic::ForeignFlex { ty: t, elem } => {
                 let base = self.sizeof_ty(*t) as i64;
                 let esz = self.sizeof_ty(*elem) as i64;
-                let n = self
-                    .h_expr(&args[0])?
-                    .ok_or_else(|| CodegenError::new(args[0].span, "alloc_flex count has no value"))?;
+                let n = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "alloc_flex count has no value")
+                })?;
                 let extra = self.b.ins().imul_imm(n, esz);
                 let base_v = self.b.ins().iconst(types::I64, base);
                 let total = self.b.ins().iadd(base_v, extra);
                 Ok(self.call_intrinsic("lang_foreign_alloc", &[types::I64], Some(PTR), &[total]))
             }
             hir::Intrinsic::ForeignRealloc => {
-                let p = self
-                    .h_expr(&args[0])?
-                    .ok_or_else(|| CodegenError::new(args[0].span, "realloc pointer has no value"))?;
+                let p = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "realloc pointer has no value")
+                })?;
                 let sz = self
                     .h_expr(&args[1])?
                     .ok_or_else(|| CodegenError::new(args[1].span, "realloc size has no value"))?;
-                Ok(self.call_intrinsic("lang_foreign_realloc", &[PTR, types::I64], Some(PTR), &[p, sz]))
+                Ok(self.call_intrinsic(
+                    "lang_foreign_realloc",
+                    &[PTR, types::I64],
+                    Some(PTR),
+                    &[p, sz],
+                ))
             }
             hir::Intrinsic::ForeignFree => {
                 let p = self
@@ -2719,6 +3106,12 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                     .ok_or_else(|| CodegenError::new(args[0].span, "spawn closure has no value"))?;
                 self.emit_thread_spawn(env, *output, *is_async, span)
             }
+            hir::Intrinsic::TaskSpawn { output, is_async } => {
+                let env = self.h_spawn_closure_arg(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "task spawn closure has no value")
+                })?;
+                self.emit_task_spawn(env, *output, *is_async, span)
+            }
             hir::Intrinsic::ThreadJoin { output } => {
                 let jh = self
                     .h_expr(&args[0])?
@@ -2726,9 +3119,9 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 self.emit_thread_join(jh, *output, span)
             }
             hir::Intrinsic::ThreadDetach => {
-                let jh = self
-                    .h_expr(&args[0])?
-                    .ok_or_else(|| CodegenError::new(args[0].span, "detach receiver has no value"))?;
+                let jh = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "detach receiver has no value")
+                })?;
                 // The handle's `R` is the `JoinHandle<R>` receiver's type arg; it
                 // selects the struct layout the `id` field is read from.
                 let recv_ty = resolve_shallow(self.cx.analysis, args[0].ty, &self.subst);
@@ -2740,17 +3133,54 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 };
                 self.emit_thread_detach(jh, r, span)
             }
+            hir::Intrinsic::TaskJoin { output } => {
+                let jh = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "task join receiver has no value")
+                })?;
+                self.emit_task_join(jh, *output, span)
+            }
+            hir::Intrinsic::TaskDetach => {
+                let jh = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "task detach receiver has no value")
+                })?;
+                let recv_ty = resolve_shallow(self.cx.analysis, args[0].ty, &self.subst);
+                let r = match self.cx.analysis.tcx.kind(recv_ty) {
+                    TyKind::Named { args: targs, .. } => {
+                        targs.first().copied().unwrap_or(self.cx.analysis.tcx.error)
+                    }
+                    _ => self.cx.analysis.tcx.error,
+                };
+                self.emit_task_detach(jh, r, span)
+            }
+            hir::Intrinsic::TaskCancel => {
+                let jh = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "task cancel receiver has no value")
+                })?;
+                let recv_ty = resolve_shallow(self.cx.analysis, args[0].ty, &self.subst);
+                let r = match self.cx.analysis.tcx.kind(recv_ty) {
+                    TyKind::Named { args: targs, .. } => {
+                        targs.first().copied().unwrap_or(self.cx.analysis.tcx.error)
+                    }
+                    _ => self.cx.analysis.tcx.error,
+                };
+                self.emit_task_cancel(jh, r, span)
+            }
             hir::Intrinsic::YieldNow => {
                 let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
                 let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
                 let rt = self.b.ins().iconst(types::I64, ready_tid);
                 let pt = self.b.ins().iconst(types::I64, pending_tid);
-                Ok(self.call_intrinsic("lang_async_yield", &[types::I64, types::I64], Some(PTR), &[rt, pt]))
+                Ok(self.call_intrinsic(
+                    "lang_async_yield",
+                    &[types::I64, types::I64],
+                    Some(PTR),
+                    &[rt, pt],
+                ))
             }
             hir::Intrinsic::AsyncSleep => {
-                let ms = self
-                    .h_expr(&args[0])?
-                    .ok_or_else(|| CodegenError::new(args[0].span, "sleep argument has no value"))?;
+                let ms = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "sleep argument has no value")
+                })?;
                 let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
                 let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
                 let rt = self.b.ins().iconst(types::I64, ready_tid);
@@ -2763,35 +3193,50 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 ))
             }
             hir::Intrinsic::AsyncTimeout { output } => {
-                let fut = self
-                    .h_expr(&args[0])?
-                    .ok_or_else(|| CodegenError::new(args[0].span, "timeout future has no value"))?;
+                let fut = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "timeout future has no value")
+                })?;
                 self.mark_root(fut);
-                let ms = self
-                    .h_expr(&args[1])?
-                    .ok_or_else(|| CodegenError::new(args[1].span, "timeout duration has no value"))?;
+                let ms = self.h_expr(&args[1])?.ok_or_else(|| {
+                    CodegenError::new(args[1].span, "timeout duration has no value")
+                })?;
                 let out = resolve_shallow(self.cx.analysis, *output, &self.subst);
                 let t_id = self.type_id_of(out);
                 let t_is_ptr = i64::from(is_managed_ptr(self.cx.analysis, out));
+                let t_is_union = i64::from(matches!(
+                    self.cx.analysis.tcx.kind(out),
+                    TyKind::Union(_) | TyKind::Dynamic
+                ));
                 let timedout_tid = 1000 + self.cx.analysis.program.timed_out_def.index() as i64;
                 let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
                 let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
                 let t_id = self.b.ins().iconst(types::I64, t_id);
                 let tp = self.b.ins().iconst(types::I64, t_is_ptr);
+                let tu = self.b.ins().iconst(types::I64, t_is_union);
                 let to = self.b.ins().iconst(types::I64, timedout_tid);
                 let rt = self.b.ins().iconst(types::I64, ready_tid);
                 let pt = self.b.ins().iconst(types::I64, pending_tid);
                 Ok(self.call_intrinsic(
                     "lang_async_timeout",
-                    &[PTR, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64],
+                    &[
+                        PTR,
+                        types::I64,
+                        types::I64,
+                        types::I64,
+                        types::I64,
+                        types::I64,
+                        types::I64,
+                        types::I64,
+                    ],
                     Some(PTR),
-                    &[fut, ms, t_id, tp, to, rt, pt],
+                    &[fut, ms, t_id, tp, tu, to, rt, pt],
                 ))
             }
             hir::Intrinsic::FutureCancel => {
-                // A compute-only future has nothing to release; evaluate the
-                // receiver for effect and yield no value.
-                self.h_expr(&args[0])?;
+                let fut = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "future cancel receiver has no value")
+                })?;
+                self.call_intrinsic("lang_future_cancel", &[PTR], None, &[fut]);
                 Ok(None)
             }
         }
@@ -2917,7 +3362,11 @@ fn h_expr_has_await(e: &hir::Expr) -> bool {
             hir::StrPart::Interp { expr, .. } => h_expr_has_await(expr),
             hir::StrPart::Text(_) => false,
         }),
-        K::If { cond, then_block, else_branch } => {
+        K::If {
+            cond,
+            then_block,
+            else_branch,
+        } => {
             h_expr_has_await(cond)
                 || h_block_has_await(then_block)
                 || else_branch.as_deref().is_some_and(h_expr_has_await)
@@ -2930,9 +3379,12 @@ fn h_expr_has_await(e: &hir::Expr) -> bool {
         }
         K::Block(b) | K::Loop(b) => h_block_has_await(b),
         K::While { cond, body } => h_expr_has_await(cond) || h_block_has_await(body),
-        K::For { in_async, iter, body, .. } => {
-            *in_async || h_expr_has_await(iter) || h_block_has_await(body)
-        }
+        K::For {
+            in_async,
+            iter,
+            body,
+            ..
+        } => *in_async || h_expr_has_await(iter) || h_block_has_await(body),
         K::Return(v) | K::Break(v) => v.as_deref().is_some_and(h_expr_has_await),
         _ => false,
     }
@@ -2971,9 +3423,11 @@ fn h_scan_value_await(e: &hir::Expr, out: &mut Vec<Span>) {
         // it is `await`-free here. The right operand runs only conditionally and
         // keeps its `await` (directly, or inside an ANF-introduced block) — that
         // `await` is a genuine suspend site, so recurse into it (`docs/21` §4).
-        K::Binary { op: hir::BinaryOp::And | hir::BinaryOp::Or, right, .. } => {
-            h_scan_value_await(right, out)
-        }
+        K::Binary {
+            op: hir::BinaryOp::And | hir::BinaryOp::Or,
+            right,
+            ..
+        } => h_scan_value_await(right, out),
         K::Block(b) | K::Loop(b) => h_scan_stmt_awaits(b, out),
         // A `while` condition is re-evaluated each iteration; an `await` there
         // suspends once per iteration. ANF rewrote the condition as its own scope,
@@ -2982,13 +3436,22 @@ fn h_scan_value_await(e: &hir::Expr, out: &mut Vec<Span>) {
             h_scan_value_await(cond, out);
             h_scan_stmt_awaits(body, out);
         }
-        K::For { in_async, iter, body, .. } => {
+        K::For {
+            in_async,
+            iter,
+            body,
+            ..
+        } => {
             if *in_async {
                 out.push(iter.span);
             }
             h_scan_stmt_awaits(body, out);
         }
-        K::If { then_block, else_branch, .. } => {
+        K::If {
+            then_block,
+            else_branch,
+            ..
+        } => {
             h_scan_stmt_awaits(then_block, out);
             if let Some(e) = else_branch {
                 h_scan_value_await(e, out);
@@ -3027,7 +3490,12 @@ pub(crate) fn h_scan_for_state(block: &hir::Block, out: &mut Vec<Span>) {
 fn h_scan_for_state_expr(e: &hir::Expr, out: &mut Vec<Span>) {
     use hir::ExprKind as K;
     match &e.kind {
-        K::For { in_async, iter, body, .. } => {
+        K::For {
+            in_async,
+            iter,
+            body,
+            ..
+        } => {
             if !*in_async && h_block_has_await(body) {
                 out.push(iter.span);
             }
@@ -3041,13 +3509,19 @@ fn h_scan_for_state_expr(e: &hir::Expr, out: &mut Vec<Span>) {
             h_scan_for_state_expr(cond, out);
             h_scan_for_state(body, out);
         }
-        K::Binary { op: hir::BinaryOp::And | hir::BinaryOp::Or, right, .. } => {
-            h_scan_for_state_expr(right, out)
-        }
+        K::Binary {
+            op: hir::BinaryOp::And | hir::BinaryOp::Or,
+            right,
+            ..
+        } => h_scan_for_state_expr(right, out),
         K::Adjust { expr, .. } | K::Return(Some(expr)) | K::Break(Some(expr)) => {
             h_scan_for_state_expr(expr, out)
         }
-        K::If { then_block, else_branch, .. } => {
+        K::If {
+            then_block,
+            else_branch,
+            ..
+        } => {
             h_scan_for_state(then_block, out);
             if let Some(e) = else_branch {
                 h_scan_for_state_expr(e, out);
@@ -3067,7 +3541,11 @@ fn h_scan_for_state_expr(e: &hir::Expr, out: &mut Vec<Span>) {
 /// `async {}` blocks. Mirrors `collect_block_locals`; HIR bindings are
 /// `LocalId`s on the pattern, so no resolution lookup.
 #[allow(dead_code)] // wired into HIR async codegen next
-pub(crate) fn h_collect_block_locals(block: &hir::Block, out: &mut Vec<LocalId>, seen: &mut std::collections::HashSet<LocalId>) {
+pub(crate) fn h_collect_block_locals(
+    block: &hir::Block,
+    out: &mut Vec<LocalId>,
+    seen: &mut std::collections::HashSet<LocalId>,
+) {
     for s in &block.stmts {
         match &s.kind {
             hir::StmtKind::Let { pattern, init } => {
@@ -3088,14 +3566,22 @@ pub(crate) fn h_collect_block_locals(block: &hir::Block, out: &mut Vec<LocalId>,
 }
 
 #[allow(dead_code)] // wired into HIR async codegen next
-fn push_local_id(id: LocalId, out: &mut Vec<LocalId>, seen: &mut std::collections::HashSet<LocalId>) {
+fn push_local_id(
+    id: LocalId,
+    out: &mut Vec<LocalId>,
+    seen: &mut std::collections::HashSet<LocalId>,
+) {
     if seen.insert(id) {
         out.push(id);
     }
 }
 
 #[allow(dead_code)] // wired into HIR async codegen next
-fn h_collect_pat_locals(p: &hir::Pattern, out: &mut Vec<LocalId>, seen: &mut std::collections::HashSet<LocalId>) {
+fn h_collect_pat_locals(
+    p: &hir::Pattern,
+    out: &mut Vec<LocalId>,
+    seen: &mut std::collections::HashSet<LocalId>,
+) {
     use hir::PatternKind as P;
     match &p.kind {
         P::Bind(l) => push_local_id(*l, out, seen),
@@ -3135,7 +3621,11 @@ fn h_collect_pat_locals(p: &hir::Pattern, out: &mut Vec<LocalId>, seen: &mut std
 }
 
 #[allow(dead_code)] // wired into HIR async codegen next
-fn h_collect_expr_locals(e: &hir::Expr, out: &mut Vec<LocalId>, seen: &mut std::collections::HashSet<LocalId>) {
+fn h_collect_expr_locals(
+    e: &hir::Expr,
+    out: &mut Vec<LocalId>,
+    seen: &mut std::collections::HashSet<LocalId>,
+) {
     use hir::ExprKind as K;
     match &e.kind {
         K::Closure { .. } | K::AsyncBlock { .. } => {}
@@ -3201,7 +3691,11 @@ fn h_collect_expr_locals(e: &hir::Expr, out: &mut Vec<LocalId>, seen: &mut std::
                 }
             }
         }
-        K::If { cond, then_block, else_branch } => {
+        K::If {
+            cond,
+            then_block,
+            else_branch,
+        } => {
             h_collect_expr_locals(cond, out, seen);
             h_collect_block_locals(then_block, out, seen);
             if let Some(e) = else_branch {
@@ -3223,7 +3717,12 @@ fn h_collect_expr_locals(e: &hir::Expr, out: &mut Vec<LocalId>, seen: &mut std::
             h_collect_expr_locals(cond, out, seen);
             h_collect_block_locals(body, out, seen);
         }
-        K::For { pattern, iter, body, .. } => {
+        K::For {
+            pattern,
+            iter,
+            body,
+            ..
+        } => {
             h_collect_pat_locals(pattern, out, seen);
             h_collect_expr_locals(iter, out, seen);
             h_collect_block_locals(body, out, seen);

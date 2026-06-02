@@ -1,0 +1,55 @@
+//@ kind: run
+//@ serial
+//@ env: OTTER_FUSION_TASK_WORKERS=2
+//@ description: 8192 unevenly-yielding spawn-keyword tasks all make progress, send through cloned channel endpoints, and await every Future on a small M:N executor
+//@ stdout:
+//~ received=33550336 awaited=33550336
+
+import { println } from "std:io";
+import { Future } from "core:prelude";
+import { List } from "core:collections";
+import { Sender, Receiver, ChannelClosed, channel } from "std:sync";
+import { yield_now } from "std:async";
+
+function send_after_yields(tx: Sender<i64>, n: i64): Future<i64> async {
+  var rounds: i64 = (n % 7) + 1;
+  var r: i64 = 0;
+  while r < rounds {
+    var _ = await yield_now();
+    r = r + 1;
+  }
+  tx.send(n);
+  n
+}
+
+function main(): Future<null> async {
+  var ends = channel<i64>();
+  var tx: Sender<i64> = ends.0;
+  var rx: Receiver<i64> = ends.1;
+  var handles: List<Future<i64>> = [];
+
+  var i: i64 = 0;
+  while i < 8192 {
+    handles.push(spawn send_after_yields(tx.clone(), i));
+    i = i + 1;
+  }
+
+  var received: i64 = 0;
+  var count: i64 = 0;
+  while count < 8192 {
+    match await rx.recv() {
+      i64 value => { received = received + value; },
+      ChannelClosed c => { received = -999999; },
+    }
+    count = count + 1;
+  }
+
+  var awaited: i64 = 0;
+  var j: i64 = 0;
+  while j < handles.size() {
+    awaited = awaited + await handles[j];
+    j = j + 1;
+  }
+
+  println("received=${received} awaited=${awaited}");
+}

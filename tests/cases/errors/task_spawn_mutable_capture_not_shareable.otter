@@ -1,0 +1,13 @@
+//@ kind: compile-error
+//@ description: Task.spawn uses the same cross-task isolation rules as Thread.spawn and rejects non-cloneable mutable captures
+//@ stderr: Task.spawn
+//@ stderr: `Clone` values that can be snapshotted
+
+import { Task, JoinHandle } from "std:task";
+
+struct Counter { n: i64 }
+
+function main() {
+  var c: Counter = Counter { n: 0 };
+  var h: JoinHandle<i64> = Task.spawn(() => c.n);
+}

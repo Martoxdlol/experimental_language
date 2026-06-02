@@ -8,6 +8,7 @@
 //! Editor positions are UTF-16 (the LSP default); the compiler works in UTF-8
 //! byte offsets. The free conversion functions at the bottom bridge the two.
 
+use compiler::ast::ModuleKind;
 use compiler::ast::{
     ExternItem, FunctionItem, FunctionSig, GenericParams, Item, ItemKind, Module, ParamKind,
     StructItem, StructKind, Type, TypeKind,
@@ -16,10 +17,9 @@ use compiler::hir::{self, Hir};
 use compiler::ids::{DefId, LocalId};
 use compiler::lexer::lex;
 use compiler::parser::parse;
-use compiler::ast::ModuleKind;
 use compiler::sema::resolve_ctx::normalize;
 use compiler::sema::symbols::{Def, DefKind, Externals, Program};
-use compiler::sema::{analyze_multi_ctx, Analysis, Builtin, ResolveContext, ValueRes};
+use compiler::sema::{Analysis, Builtin, ResolveContext, ValueRes, analyze_multi_ctx};
 use compiler::span::{FileId, SourceMap, Span};
 use compiler::token::{Token, TokenKind};
 use compiler::ty::Ty;
@@ -198,7 +198,12 @@ impl HirIndex {
                 self.walk_expr(receiver);
                 self.walk_expr(index);
             }
-            K::Call { kind, args, callee_span, callee_ty } => {
+            K::Call {
+                kind,
+                args,
+                callee_span,
+                callee_ty,
+            } => {
                 // The callee name folded into the dispatch kind: re-expose its
                 // type (for hover) and resolution (for go-to-definition).
                 self.expr_types.push((*callee_span, *callee_ty));
@@ -222,7 +227,11 @@ impl HirIndex {
             K::Try { expr, .. } | K::Await { expr, .. } | K::Spawn { expr, .. } => {
                 self.walk_expr(expr)
             }
-            K::If { cond, then_block, else_branch } => {
+            K::If {
+                cond,
+                then_block,
+                else_branch,
+            } => {
                 self.walk_expr(cond);
                 self.walk_block(then_block);
                 if let Some(e) = else_branch {
@@ -244,7 +253,12 @@ impl HirIndex {
                 self.walk_expr(cond);
                 self.walk_block(body);
             }
-            K::For { pattern, iter, body, .. } => {
+            K::For {
+                pattern,
+                iter,
+                body,
+                ..
+            } => {
                 self.walk_pattern(pattern);
                 self.walk_expr(iter);
                 self.walk_block(body);
@@ -256,8 +270,14 @@ impl HirIndex {
             }
             K::Closure { body, .. } => self.walk_expr(body),
             K::AsyncBlock { body, .. } => self.walk_block(body),
-            K::Int(_) | K::Float(_) | K::Bool(_) | K::Null | K::Char(_) | K::Continue
-            | K::Discard | K::Error => {}
+            K::Int(_)
+            | K::Float(_)
+            | K::Bool(_)
+            | K::Null
+            | K::Char(_)
+            | K::Continue
+            | K::Discard
+            | K::Error => {}
         }
     }
 }
@@ -278,12 +298,16 @@ fn load_subs(
     read: &dyn Fn(&Path) -> Option<String>,
 ) {
     for item in &module.items {
-        let ItemKind::Module(m) = &item.kind else { continue };
+        let ItemKind::Module(m) = &item.kind else {
+            continue;
+        };
         if !matches!(m.kind, ModuleKind::External) {
             continue;
         }
         let child_path = dir.join(format!("{}.otter", m.name.name));
-        let Some(src) = read(&child_path) else { continue };
+        let Some(src) = read(&child_path) else {
+            continue;
+        };
         let file = map.add_file(child_path.display().to_string(), src.clone());
         let (tokens, _lex_errors) = lex(&src, file);
         let (child_module, _parse_errors) = parse(&src, &tokens);
@@ -291,7 +315,15 @@ fn load_subs(
         file_of.insert(mod_path.clone(), normalize(&child_path));
         // A child's own submodules live under `<dir>/<name>/` (`docs/17` §17.2).
         let child_dir = dir.join(&m.name.name);
-        load_subs(map, &child_dir, &child_module, mod_path, externals, file_of, read);
+        load_subs(
+            map,
+            &child_dir,
+            &child_module,
+            mod_path,
+            externals,
+            file_of,
+            read,
+        );
         externals.insert(mod_path.clone(), child_module);
         mod_path.pop();
     }
@@ -352,9 +384,20 @@ impl Compiled {
         let mut ctx = ResolveContext::direct();
         if let Some((base_dir, stem)) = project {
             // The entry's own file, keyed at the root path `[]`.
-            file_of.insert(Vec::new(), normalize(&base_dir.join(format!("{stem}.otter"))));
+            file_of.insert(
+                Vec::new(),
+                normalize(&base_dir.join(format!("{stem}.otter"))),
+            );
             let mut mod_path = Vec::new();
-            load_subs(&mut map, &base_dir, &module, &mut mod_path, &mut externals, &mut file_of, read);
+            load_subs(
+                &mut map,
+                &base_dir,
+                &module,
+                &mut mod_path,
+                &mut externals,
+                &mut file_of,
+                read,
+            );
             ctx = ResolveContext {
                 project: true,
                 package_name: None,
@@ -377,8 +420,7 @@ impl Compiled {
         // cost (and runs no macro code).
         let mut expanded = module.clone();
         let mut exp_externals = externals.clone();
-        let macro_errors =
-            macros::expand_user_macros(&mut expanded, &mut exp_externals, &ctx);
+        let macro_errors = macros::expand_user_macros(&mut expanded, &mut exp_externals, &ctx);
 
         let analysis = analyze_multi_ctx(&expanded, &exp_externals, &ctx);
         let index = HirIndex::build(&analysis.hir);
@@ -401,7 +443,15 @@ impl Compiled {
         // have no editor location in this document.
         diagnostics.retain(|(s, _)| s.file == DOC_FILE);
 
-        Compiled { text, map, tokens, module, analysis, index, diagnostics }
+        Compiled {
+            text,
+            map,
+            tokens,
+            module,
+            analysis,
+            index,
+            diagnostics,
+        }
     }
 
     /// The names of every `@ProcMacro` function defined in the open document
@@ -417,10 +467,15 @@ impl Compiled {
                     }
                 }
                 if let ItemKind::Module(ModuleItem {
-                    kind: ModuleKind::Inline { items, .. }, ..
+                    kind: ModuleKind::Inline { items, .. },
+                    ..
                 }) = &it.kind
                 {
-                    let sub = Module { inner_docs: Vec::new(), items: items.clone(), span: it.span };
+                    let sub = Module {
+                        inner_docs: Vec::new(),
+                        items: items.clone(),
+                        span: it.span,
+                    };
                     walk(&sub, out);
                 }
             }
@@ -433,7 +488,13 @@ impl Compiled {
     /// Render a type using the program's definition names.
     pub fn display_ty(&self, ty: Ty) -> String {
         let prog = &self.analysis.program;
-        self.analysis.tcx.display(ty, &|id| prog.def(id).name.clone())
+        self.analysis.tcx.display(ty, &|id| {
+            if id == prog.task_join_handle_def {
+                "JoinHandle".to_string()
+            } else {
+                prog.def(id).name.clone()
+            }
+        })
     }
 
     fn program(&self) -> &Program {
@@ -598,9 +659,7 @@ impl Compiled {
         // `List`, a generic param like `T`, an attribute target like `Clone`)
         // would otherwise fall through to `Variable` and override the grammar's
         // type coloring. Recover the type intent from shape.
-        if is_primitive_type_name(name)
-            || name.chars().next().is_some_and(char::is_uppercase)
-        {
+        if is_primitive_type_name(name) || name.chars().next().is_some_and(char::is_uppercase) {
             return TokenClass::Type;
         }
         TokenClass::Variable
@@ -883,7 +942,8 @@ pub fn position_at(text: &str, off: usize) -> Position {
 /// (test helper, kept here so both test modules can use it).
 #[cfg(test)]
 pub(crate) fn find_at(text: &str, needle: &str) -> usize {
-    text.find(needle).unwrap_or_else(|| panic!("`{needle}` not found"))
+    text.find(needle)
+        .unwrap_or_else(|| panic!("`{needle}` not found"))
 }
 
 /// Convert a document-file span to an LSP range.
@@ -947,7 +1007,10 @@ pub fn dot_completion_context(text: &str, off: usize) -> Option<DotContext> {
     } else {
         None
     };
-    Some(DotContext { dot_offset, receiver_ident })
+    Some(DotContext {
+        dot_offset,
+        receiver_ident,
+    })
 }
 
 fn is_ident_byte(b: u8) -> bool {
@@ -975,10 +1038,9 @@ impl Compiled {
     /// Look up a top-level type def in the document's module by name.
     pub fn lookup_type_def(&self, name: &str) -> Option<DefId> {
         // Document file lives in ROOT until multi-module support lands.
-        self.analysis.program.resolve_type_in(
-            compiler::ids::ModId::ROOT,
-            name,
-        )
+        self.analysis
+            .program
+            .resolve_type_in(compiler::ids::ModId::ROOT, name)
     }
 
     /// Every direct field of a struct/extern-struct def, in declaration order.
@@ -1000,7 +1062,9 @@ impl Compiled {
             .iter()
             .filter(|d| d.kind == DefKind::ExtendMethod && d.is_static == want_static)
             .filter(|d| {
-                let Some(parent_id) = d.parent else { return false };
+                let Some(parent_id) = d.parent else {
+                    return false;
+                };
                 let Some(ItemKind::Extend(e)) = &prog.def(parent_id).item else {
                     return false;
                 };
@@ -1192,9 +1256,36 @@ pub fn int_instance_methods() -> &'static [(&'static str, &'static str)] {
 /// `compiler::token::Keyword`.
 pub fn keyword_texts() -> &'static [&'static str] {
     &[
-        "var", "function", "struct", "interface", "type", "mod", "extend", "extern", "import",
-        "pub", "async", "spawn", "self", "Self", "if", "else", "match", "return", "for", "in",
-        "while", "loop", "break", "continue", "await", "as", "is", "true", "false", "null",
+        "var",
+        "function",
+        "struct",
+        "interface",
+        "type",
+        "mod",
+        "extend",
+        "extern",
+        "import",
+        "pub",
+        "async",
+        "spawn",
+        "self",
+        "Self",
+        "if",
+        "else",
+        "match",
+        "return",
+        "for",
+        "in",
+        "while",
+        "loop",
+        "break",
+        "continue",
+        "await",
+        "as",
+        "is",
+        "true",
+        "false",
+        "null",
         "yield",
     ]
 }
@@ -1229,7 +1320,10 @@ impl LineIndex {
         for ch in text[line_start..off].chars() {
             character += ch.len_utf16() as u32;
         }
-        Position { line: line as u32, character }
+        Position {
+            line: line as u32,
+            character,
+        }
     }
 }
 
@@ -1260,7 +1354,10 @@ function main() {
         assert_eq!(pos.line, 1);
         assert_eq!(offset_at(text, pos), off);
         // A column past the (UTF-16-short) accented line clamps to its end.
-        let p = Position { line: 0, character: 100 };
+        let p = Position {
+            line: 0,
+            character: 100,
+        };
         let o = offset_at(text, p);
         assert_eq!(&text[..o], "// café");
     }
@@ -1381,7 +1478,11 @@ function main() {
                     function main() { var x = double(21); }";
         let util = "pub function double(x: i64): i64 { x * 2 }";
         let read = |p: &Path| -> Option<String> {
-            if p.ends_with("util.otter") { Some(util.to_string()) } else { None }
+            if p.ends_with("util.otter") {
+                Some(util.to_string())
+            } else {
+                None
+            }
         };
         let c = Compiled::new_multi(
             main.into(),
@@ -1413,7 +1514,9 @@ function main() {
         assert!(c.diagnostics.is_empty(), "unexpected: {:?}", c.diagnostics);
         // Cursor on `Point` in the `from: Point` field type.
         let field_use = src.find("from: Point").unwrap() + "from: ".len();
-        let def = c.type_def_span_at(field_use).expect("type def span (field)");
+        let def = c
+            .type_def_span_at(field_use)
+            .expect("type def span (field)");
         assert_eq!(c.map.slice(def), "Point");
         assert_eq!(def.lo.to_usize(), src.find("Point").unwrap());
         // Cursor on `Point` in the `mid` return type also resolves.
@@ -1437,7 +1540,11 @@ function main() {
         let util = "pub function double(x: i64): i64 { x * 2 }\n\
                     pub function quad(x: i64): i64 { double(double(x)) }";
         let read = |p: &Path| -> Option<String> {
-            if p.ends_with("util.otter") { Some(util.to_string()) } else { None }
+            if p.ends_with("util.otter") {
+                Some(util.to_string())
+            } else {
+                None
+            }
         };
         let c = Compiled::new_multi(
             main.into(),
@@ -1458,12 +1565,21 @@ function main() {
             .map(|(s, _)| s.file.0)
             .collect();
         // Uses appear in the open document (main) and the submodule (util).
-        assert!(files.len() >= 2, "references should span ≥2 files, got {files:?}");
-        assert!(files.contains(&DOC_FILE.0), "missing the open-document use site");
+        assert!(
+            files.len() >= 2,
+            "references should span ≥2 files, got {files:?}"
+        );
+        assert!(
+            files.contains(&DOC_FILE.0),
+            "missing the open-document use site"
+        );
         let util_fid = (0..c.map.file_count() as u32)
             .find(|&i| c.map.file(FileId(i)).name.ends_with("util.otter"))
             .expect("util file loaded");
-        assert!(files.contains(&util_fid), "missing the cross-file (util) use sites");
+        assert!(
+            files.contains(&util_fid),
+            "missing the cross-file (util) use sites"
+        );
     }
 
     #[test]
@@ -1479,7 +1595,11 @@ function main() {
             struct W { x: i64 }\n\
             function main() { var w = W { x: 0 }; var t = w.tag(); }\n";
         let c = Compiled::new(src.into());
-        assert!(c.diagnostics.is_empty(), "unexpected diagnostics: {:?}", c.diagnostics);
+        assert!(
+            c.diagnostics.is_empty(),
+            "unexpected diagnostics: {:?}",
+            c.diagnostics
+        );
         assert_eq!(c.proc_macro_names(), vec!["Tag".to_string()]);
     }
 
@@ -1541,20 +1661,23 @@ function main() {
                 && s.lo.to_usize() == PROG.find("add(1").unwrap()
         }));
         // The `total` local use is classified as a variable.
-        assert!(toks
-            .iter()
-            .any(|(s, k)| c.map.slice(*s) == "total" && *k == TokenClass::Variable));
+        assert!(
+            toks.iter()
+                .any(|(s, k)| c.map.slice(*s) == "total" && *k == TokenClass::Variable)
+        );
         // Parameters get their own class.
-        assert!(toks
-            .iter()
-            .any(|(s, k)| c.map.slice(*s) == "a" && *k == TokenClass::Parameter));
+        assert!(
+            toks.iter()
+                .any(|(s, k)| c.map.slice(*s) == "a" && *k == TokenClass::Parameter)
+        );
         // Type-position primitives are classified as Type (not Variable) — the
         // checker only records value-position resolutions, so without this
         // recovery `i64` in `a: i64` would otherwise paint with the variable
         // color and override the grammar's primitive scope.
-        assert!(toks
-            .iter()
-            .any(|(s, k)| c.map.slice(*s) == "i64" && *k == TokenClass::Type));
+        assert!(
+            toks.iter()
+                .any(|(s, k)| c.map.slice(*s) == "i64" && *k == TokenClass::Type)
+        );
     }
 
     #[test]
@@ -1592,6 +1715,62 @@ function main(): Future<null> async {
     }
 
     #[test]
+    fn task_spawn_hovers_as_joinhandle() {
+        let src = "\
+import { Future } from \"core:prelude\";
+import { Task, JoinHandle, Joined, Panicked, Cancelled } from \"std:task\";
+function main(): Future<null> async {
+  var h = Task.spawn(() async => { 1 + 2 });
+  var r: Joined<i64> | Panicked | Cancelled = await h.join();
+}
+";
+        let c = Compiled::new(src.into());
+        let off = find_at(src, "Task.spawn(");
+        let (_, ty) = c.expr_ty_at(off).expect("expr type at Task.spawn");
+        assert_eq!(c.display_ty(ty), "JoinHandle<i64>");
+    }
+
+    #[test]
+    fn task_joinhandle_methods_surface_cancelled_to_lsp() {
+        // `std:task::JoinHandle` is intentionally distinct from
+        // `std:thread::JoinHandle`: the task handle exposes cooperative
+        // cancellation, and its join future includes the `Cancelled` variant.
+        // Keep the LSP type table in lockstep with the checker so hovers and
+        // completion-detail UI do not erase that distinction.
+        let src = "\
+import { Future } from \"core:prelude\";
+import { Task, JoinHandle, Joined, Panicked, Cancelled } from \"std:task\";
+function main(): Future<null> async {
+  var h: JoinHandle<i64> = Task.spawn(() async => { 1 + 2 });
+  h.cancel();
+  h.abort();
+  var r = await h.join();
+}
+";
+        let c = Compiled::new(src.into());
+        assert!(c.diagnostics.is_empty(), "unexpected: {:?}", c.diagnostics);
+
+        let cancel = find_at(src, "h.cancel()") + "h.cancel(".len();
+        let (_, cancel_ty) = c.expr_ty_at(cancel).expect("expr type at h.cancel");
+        assert_eq!(c.display_ty(cancel_ty), "null");
+
+        let abort = find_at(src, "h.abort()") + "h.abort(".len();
+        let (_, abort_ty) = c.expr_ty_at(abort).expect("expr type at h.abort");
+        assert_eq!(c.display_ty(abort_ty), "null");
+
+        let join = find_at(src, "h.join()") + "h.join(".len();
+        let (_, join_ty) = c.expr_ty_at(join).expect("expr type at h.join");
+        assert_eq!(
+            c.display_ty(join_ty),
+            "Future<Joined<i64> | Panicked | Cancelled>"
+        );
+
+        let await_join = find_at(src, "await h.join()");
+        let (_, await_ty) = c.expr_ty_at(await_join).expect("expr type at await h.join");
+        assert_eq!(c.display_ty(await_ty), "Joined<i64> | Panicked | Cancelled");
+    }
+
+    #[test]
     fn async_closure_hovers_as_future_returning_callable() {
         // An async closure `(p) async => E` / `function(p): Future<T> async { … }`
         // has the value type `(p) => Future<T>`: hovering it surfaces a callable
@@ -1616,7 +1795,9 @@ function main(): Future<null> async {
         assert_eq!(c.display_ty(fty), "(i64) => Future<i64>");
         // The arrow `(p) async => E` form renders identically.
         let goff = find_at(src, "(n: i64): Future<i64> async =>");
-        let (_, gty) = c.expr_ty_at(goff).expect("expr type at async arrow closure");
+        let (_, gty) = c
+            .expr_ty_at(goff)
+            .expect("expr type at async arrow closure");
         assert_eq!(c.display_ty(gty), "(i64) => Future<i64>");
     }
 
@@ -1683,9 +1864,36 @@ function main(): Future<null> async {
         // keyword can't be added in one place and forgotten in the other.
         // If this list grows, update `keyword_texts` (and the TextMate grammar).
         let expected = [
-            "var", "function", "struct", "interface", "type", "mod", "extend", "extern", "import",
-            "pub", "async", "spawn", "self", "Self", "if", "else", "match", "return", "for", "in",
-            "while", "loop", "break", "continue", "await", "as", "is", "true", "false", "null",
+            "var",
+            "function",
+            "struct",
+            "interface",
+            "type",
+            "mod",
+            "extend",
+            "extern",
+            "import",
+            "pub",
+            "async",
+            "spawn",
+            "self",
+            "Self",
+            "if",
+            "else",
+            "match",
+            "return",
+            "for",
+            "in",
+            "while",
+            "loop",
+            "break",
+            "continue",
+            "await",
+            "as",
+            "is",
+            "true",
+            "false",
+            "null",
             "yield",
         ];
         for kw in expected {
@@ -1798,7 +2006,9 @@ function main() {
         // resolution — only uses are).
         let off = second(PROG, "total");
         let (_, res) = c.resolution_at(off).expect("local resolution");
-        let ValueRes::Local(id) = res else { panic!("expected a local, got {res:?}") };
+        let ValueRes::Local(id) = res else {
+            panic!("expected a local, got {res:?}")
+        };
         let ty = *c.index.local_types.get(&id).expect("local type in index");
         assert_eq!(c.display_ty(ty), "i64");
     }
@@ -1858,10 +2068,16 @@ mod lint_diag_tests {
         // is error-free; here we exercise the underlying analysis.
         // Self-contained (no imports needed): `dead` is unused, `k` is returned.
         let c = Compiled::new("function f(): i64 { var dead = 5; var k = 1; k }".into());
-        assert!(c.diagnostics.is_empty(), "program should be error-free: {:?}", c.diagnostics);
+        assert!(
+            c.diagnostics.is_empty(),
+            "program should be error-free: {:?}",
+            c.diagnostics
+        );
         let warns = compiler::lint::collect_lints(&c.analysis, &c.map);
         assert!(
-            warns.iter().any(|(_, m)| m.contains("unused variable `dead`")),
+            warns
+                .iter()
+                .any(|(_, m)| m.contains("unused variable `dead`")),
             "expected an unused-variable warning; got: {warns:?}"
         );
     }
@@ -1877,11 +2093,18 @@ mod code_action_tests {
         // confirm the lint reports the binding span the action would edit.
         let c = Compiled::new("function f(): i64 { var unused = 5; var k = 1; k }".into());
         let l = compiler::lint::analyze(&c.analysis, &c.map);
-        let (span, name) = l.unused_locals.iter().find(|(_, n)| n == "unused").expect("unused var");
+        let (span, name) = l
+            .unused_locals
+            .iter()
+            .find(|(_, n)| n == "unused")
+            .expect("unused var");
         assert_eq!(c.map.slice(*span), "unused");
         // The insertion point is the binding's start column.
         let at = span_to_range(&c.text, *span).start;
-        assert_eq!(c.text.lines().nth(at.line as usize).unwrap().as_bytes()[at.character as usize], b'u');
+        assert_eq!(
+            c.text.lines().nth(at.line as usize).unwrap().as_bytes()[at.character as usize],
+            b'u'
+        );
         let _ = name;
     }
 }

@@ -1,0 +1,36 @@
+//@ kind: run
+//@ serial
+//@ description: timeout cancels a losing spawn EXPR future through the executor cancellation path and releases held Shared locks
+//@ stdout:
+//~ timeout = timed out
+//~ after timeout = 1
+import { println } from "std:io";
+import { Future } from "core:prelude";
+import { Shared, LockBusy } from "std:sync";
+import { sleep, timeout, TimedOut } from "std:async";
+
+struct C { value: i64 }
+
+function hold_lock(state: Shared<C>): Future<i64> async {
+  await state.lock((c) async => {
+    c.value = 1;
+    var _ = await sleep(1000);
+    c.value = 2;
+    c.value
+  })
+}
+
+function main(): Future<null> async {
+  var state: Shared<C> = Shared.new(C { value: 0 });
+  var s: Shared<C> = state.clone();
+  var fut: Future<i64> = spawn hold_lock(s);
+  match await timeout(fut, 20) {
+    i64 n => println("timeout = value ${n}"),
+    TimedOut t => println("timeout = timed out"),
+  };
+  var _settle = await sleep(10);
+  match await state.try_lock((c) => c.value) {
+    i64 n => println("after timeout = ${n}"),
+    LockBusy b => println("after timeout = still locked"),
+  };
+}

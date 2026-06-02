@@ -19,14 +19,18 @@ impl Credentials {
         let base = std::env::var_os("OTTER_FUSION_HOME")
             .map(PathBuf::from)
             .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".otter_fusion")))
-            .or_else(|| std::env::var_os("USERPROFILE").map(|h| PathBuf::from(h).join(".otter_fusion")))
+            .or_else(|| {
+                std::env::var_os("USERPROFILE").map(|h| PathBuf::from(h).join(".otter_fusion"))
+            })
             .unwrap_or_else(|| PathBuf::from(".otter_fusion"));
         base.join("credentials.toml")
     }
 
     /// Load the credentials file (empty if absent or unparseable).
     pub fn load() -> Credentials {
-        let Ok(text) = std::fs::read_to_string(Self::path()) else { return Credentials::default() };
+        let Ok(text) = std::fs::read_to_string(Self::path()) else {
+            return Credentials::default();
+        };
         Self::parse(&text)
     }
 

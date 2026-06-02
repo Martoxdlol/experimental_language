@@ -1,0 +1,10 @@
+//@ kind: compile-error
+//@ description: Thread.spawn JoinHandle deliberately has no cancel method; only executor Task.spawn handles can be cooperatively cancelled
+//@ stderr: no method `cancel`
+
+import { Thread, JoinHandle } from "std:thread";
+
+function main() {
+  var h: JoinHandle<i64> = Thread.spawn(() => 7);
+  h.cancel();
+}

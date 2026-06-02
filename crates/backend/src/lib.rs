@@ -29,12 +29,12 @@ use compiler::ty::{FloatTy, IntTy, Ty, TyKind};
 
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
 use cranelift_codegen::ir::{
-    types, AbiParam, InstBuilder, MemFlags, StackSlotData, StackSlotKind, Type as ClType, Value,
+    AbiParam, InstBuilder, MemFlags, StackSlotData, StackSlotKind, Type as ClType, Value, types,
 };
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
-use cranelift_module::{DataDescription, DataId, FuncId, Linkage, Module};
 use cranelift_jit::{JITBuilder, JITModule};
+use cranelift_module::{DataDescription, DataId, FuncId, Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -45,12 +45,12 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 mod support;
 use support::*;
 mod dwarf;
-mod gen_cast;
-mod gen_expr;
-mod gen_collections;
-mod gen_struct;
 mod gen_call;
+mod gen_cast;
+mod gen_collections;
+mod gen_expr;
 mod gen_hir;
+mod gen_struct;
 pub mod macro_host;
 
 /// Pointer-width integer type on the host (str/reference values are pointers).
@@ -73,49 +73,180 @@ static DATA_CTR: AtomicU64 = AtomicU64::new(0);
 fn register_runtime_symbols(b: &mut JITBuilder) {
     b.symbol("lang_alloc", runtime::lang_alloc as *const u8);
     b.symbol("lang_panic", runtime::lang_panic as *const u8);
-    b.symbol("lang_gc_safepoint", runtime::gc::lang_gc_safepoint as *const u8);
+    b.symbol(
+        "lang_gc_safepoint",
+        runtime::gc::lang_gc_safepoint as *const u8,
+    );
     b.symbol("lang_gc_pin", runtime::gc::lang_gc_pin as *const u8);
     b.symbol("lang_gc_unpin", runtime::gc::lang_gc_unpin as *const u8);
-    b.symbol("lang_gc_register_drop", runtime::gc::lang_gc_register_drop as *const u8);
-    b.symbol("lang_block_on", runtime::async_rt::lang_block_on as *const u8);
-    b.symbol("lang_async_yield", runtime::async_rt::lang_async_yield as *const u8);
-    b.symbol("lang_async_sleep", runtime::async_rt::lang_async_sleep as *const u8);
-    b.symbol("lang_async_timeout", runtime::async_rt::lang_async_timeout as *const u8);
-    b.symbol("lang_async_spawn", runtime::threads::lang_async_spawn as *const u8);
-    b.symbol("lang_async_spawn_future", runtime::threads::lang_async_spawn_future as *const u8);
-    b.symbol("lang_thread_spawn", runtime::threads::lang_thread_spawn as *const u8);
-    b.symbol("lang_thread_spawn_async", runtime::threads::lang_thread_spawn_async as *const u8);
-    b.symbol("lang_thread_join_future", runtime::threads::lang_thread_join_future as *const u8);
-    b.symbol("lang_thread_detach", runtime::threads::lang_thread_detach as *const u8);
-    b.symbol("lang_channel_new", runtime::channels::lang_channel_new as *const u8);
-    b.symbol("lang_chan_send", runtime::channels::lang_chan_send as *const u8);
-    b.symbol("lang_chan_recv_future", runtime::channels::lang_chan_recv_future as *const u8);
-    b.symbol("lang_chan_try_recv", runtime::channels::lang_chan_try_recv as *const u8);
-    b.symbol("lang_chan_recv_blocking", runtime::channels::lang_chan_recv_blocking as *const u8);
-    b.symbol("lang_chan_sender_acquire", runtime::channels::lang_chan_sender_acquire as *const u8);
-    b.symbol("lang_chan_sender_release", runtime::channels::lang_chan_sender_release as *const u8);
-    b.symbol("lang_chan_receiver_acquire", runtime::channels::lang_chan_receiver_acquire as *const u8);
-    b.symbol("lang_chan_receiver_release", runtime::channels::lang_chan_receiver_release as *const u8);
+    b.symbol(
+        "lang_gc_register_drop",
+        runtime::gc::lang_gc_register_drop as *const u8,
+    );
+    b.symbol(
+        "lang_block_on",
+        runtime::async_rt::lang_block_on as *const u8,
+    );
+    b.symbol(
+        "lang_async_yield",
+        runtime::async_rt::lang_async_yield as *const u8,
+    );
+    b.symbol(
+        "lang_async_sleep",
+        runtime::async_rt::lang_async_sleep as *const u8,
+    );
+    b.symbol(
+        "lang_async_timeout",
+        runtime::async_rt::lang_async_timeout as *const u8,
+    );
+    b.symbol(
+        "lang_async_spawn",
+        runtime::threads::lang_async_spawn as *const u8,
+    );
+    b.symbol(
+        "lang_async_spawn_future",
+        runtime::threads::lang_async_spawn_future as *const u8,
+    );
+    b.symbol(
+        "lang_future_cancel",
+        runtime::threads::lang_future_cancel as *const u8,
+    );
+    b.symbol(
+        "lang_thread_spawn",
+        runtime::threads::lang_thread_spawn as *const u8,
+    );
+    b.symbol(
+        "lang_thread_spawn_async",
+        runtime::threads::lang_thread_spawn_async as *const u8,
+    );
+    b.symbol(
+        "lang_task_spawn",
+        runtime::threads::lang_task_spawn as *const u8,
+    );
+    b.symbol(
+        "lang_task_spawn_async",
+        runtime::threads::lang_task_spawn_async as *const u8,
+    );
+    b.symbol(
+        "lang_thread_join_future",
+        runtime::threads::lang_thread_join_future as *const u8,
+    );
+    b.symbol(
+        "lang_task_join_future",
+        runtime::threads::lang_task_join_future as *const u8,
+    );
+    b.symbol(
+        "lang_task_cancel",
+        runtime::threads::lang_task_cancel as *const u8,
+    );
+    b.symbol(
+        "lang_thread_detach",
+        runtime::threads::lang_thread_detach as *const u8,
+    );
+    b.symbol(
+        "lang_channel_new",
+        runtime::channels::lang_channel_new as *const u8,
+    );
+    b.symbol(
+        "lang_chan_send",
+        runtime::channels::lang_chan_send as *const u8,
+    );
+    b.symbol(
+        "lang_chan_recv_future",
+        runtime::channels::lang_chan_recv_future as *const u8,
+    );
+    b.symbol(
+        "lang_chan_try_recv",
+        runtime::channels::lang_chan_try_recv as *const u8,
+    );
+    b.symbol(
+        "lang_chan_recv_blocking",
+        runtime::channels::lang_chan_recv_blocking as *const u8,
+    );
+    b.symbol(
+        "lang_chan_sender_acquire",
+        runtime::channels::lang_chan_sender_acquire as *const u8,
+    );
+    b.symbol(
+        "lang_chan_sender_release",
+        runtime::channels::lang_chan_sender_release as *const u8,
+    );
+    b.symbol(
+        "lang_chan_receiver_acquire",
+        runtime::channels::lang_chan_receiver_acquire as *const u8,
+    );
+    b.symbol(
+        "lang_chan_receiver_release",
+        runtime::channels::lang_chan_receiver_release as *const u8,
+    );
     b.symbol("lang_rc_retain", runtime::gc::lang_rc_retain as *const u8);
     b.symbol("lang_rc_release", runtime::gc::lang_rc_release as *const u8);
-    b.symbol("lang_shared_new", runtime::shared::lang_shared_new as *const u8);
-    b.symbol("lang_shared_lock_future", runtime::shared::lang_shared_lock_future as *const u8);
-    b.symbol("lang_shared_try_acquire", runtime::shared::lang_shared_try_acquire as *const u8);
-    b.symbol("lang_shared_read", runtime::shared::lang_shared_read as *const u8);
-    b.symbol("lang_shared_release", runtime::shared::lang_shared_release as *const u8);
-    b.symbol("lang_shared_release_all", runtime::shared::lang_shared_release_all as *const u8);
+    b.symbol(
+        "lang_shared_new",
+        runtime::shared::lang_shared_new as *const u8,
+    );
+    b.symbol(
+        "lang_shared_lock_future",
+        runtime::shared::lang_shared_lock_future as *const u8,
+    );
+    b.symbol(
+        "lang_shared_try_acquire",
+        runtime::shared::lang_shared_try_acquire as *const u8,
+    );
+    b.symbol(
+        "lang_shared_read",
+        runtime::shared::lang_shared_read as *const u8,
+    );
+    b.symbol(
+        "lang_shared_release",
+        runtime::shared::lang_shared_release as *const u8,
+    );
+    b.symbol(
+        "lang_shared_release_all",
+        runtime::shared::lang_shared_release_all as *const u8,
+    );
     b.symbol("lang_exit", runtime::lang_exit as *const u8);
     b.symbol("lang_abort", runtime::lang_abort as *const u8);
-    b.symbol("lang_foreign_alloc", runtime::foreign::lang_foreign_alloc as *const u8);
-    b.symbol("lang_foreign_alloc_zeroed", runtime::foreign::lang_foreign_alloc_zeroed as *const u8);
-    b.symbol("lang_foreign_free", runtime::foreign::lang_foreign_free as *const u8);
-    b.symbol("lang_foreign_realloc", runtime::foreign::lang_foreign_realloc as *const u8);
-    b.symbol("lang_cstring_from_str", runtime::foreign::lang_cstring_from_str as *const u8);
-    b.symbol("lang_cstr_to_str", runtime::foreign::lang_cstr_to_str as *const u8);
-    b.symbol("lang_cstr_len", runtime::foreign::lang_cstr_len as *const u8);
-    b.symbol("lang_buffer_read", runtime::foreign::lang_buffer_read as *const u8);
-    b.symbol("lang_buffer_write", runtime::foreign::lang_buffer_write as *const u8);
-    b.symbol("lang_foreign_outstanding", runtime::foreign::lang_foreign_outstanding as *const u8);
+    b.symbol(
+        "lang_foreign_alloc",
+        runtime::foreign::lang_foreign_alloc as *const u8,
+    );
+    b.symbol(
+        "lang_foreign_alloc_zeroed",
+        runtime::foreign::lang_foreign_alloc_zeroed as *const u8,
+    );
+    b.symbol(
+        "lang_foreign_free",
+        runtime::foreign::lang_foreign_free as *const u8,
+    );
+    b.symbol(
+        "lang_foreign_realloc",
+        runtime::foreign::lang_foreign_realloc as *const u8,
+    );
+    b.symbol(
+        "lang_cstring_from_str",
+        runtime::foreign::lang_cstring_from_str as *const u8,
+    );
+    b.symbol(
+        "lang_cstr_to_str",
+        runtime::foreign::lang_cstr_to_str as *const u8,
+    );
+    b.symbol(
+        "lang_cstr_len",
+        runtime::foreign::lang_cstr_len as *const u8,
+    );
+    b.symbol(
+        "lang_buffer_read",
+        runtime::foreign::lang_buffer_read as *const u8,
+    );
+    b.symbol(
+        "lang_buffer_write",
+        runtime::foreign::lang_buffer_write as *const u8,
+    );
+    b.symbol(
+        "lang_foreign_outstanding",
+        runtime::foreign::lang_foreign_outstanding as *const u8,
+    );
     b.symbol("lang_list_new", runtime::lang_list_new as *const u8);
     b.symbol("lang_list_push", runtime::lang_list_push as *const u8);
     b.symbol("lang_list_size", runtime::lang_list_size as *const u8);
@@ -126,7 +257,10 @@ fn register_runtime_symbols(b: &mut JITBuilder) {
     b.symbol("lang_list_pop", runtime::lang_list_pop as *const u8);
     b.symbol("lang_list_insert", runtime::lang_list_insert as *const u8);
     b.symbol("lang_list_remove", runtime::lang_list_remove as *const u8);
-    b.symbol("lang_list_truncate", runtime::lang_list_truncate as *const u8);
+    b.symbol(
+        "lang_list_truncate",
+        runtime::lang_list_truncate as *const u8,
+    );
     b.symbol("lang_list_slice", runtime::lang_list_slice as *const u8);
     b.symbol("lang_map_new", runtime::lang_map_new as *const u8);
     b.symbol("lang_map_set", runtime::lang_map_set as *const u8);
@@ -139,15 +273,30 @@ fn register_runtime_symbols(b: &mut JITBuilder) {
     b.symbol("lang_map_entries", runtime::lang_map_entries as *const u8);
     b.symbol("lang_map_extend", runtime::lang_map_extend as *const u8);
     b.symbol("lang_map_clone", runtime::lang_map_clone as *const u8);
-    b.symbol("lang_str_from_utf8", runtime::lang_str_from_utf8 as *const u8);
+    b.symbol(
+        "lang_str_from_utf8",
+        runtime::lang_str_from_utf8 as *const u8,
+    );
     b.symbol("lang_str_size", runtime::lang_str_size as *const u8);
-    b.symbol("lang_str_byte_size", runtime::lang_str_byte_size as *const u8);
+    b.symbol(
+        "lang_str_byte_size",
+        runtime::lang_str_byte_size as *const u8,
+    );
     b.symbol("lang_str_eq", runtime::lang_str_eq as *const u8);
     b.symbol("lang_str_cmp", runtime::lang_str_cmp as *const u8);
     b.symbol("lang_str_contains", runtime::lang_str_contains as *const u8);
-    b.symbol("lang_str_starts_with", runtime::lang_str_starts_with as *const u8);
-    b.symbol("lang_str_ends_with", runtime::lang_str_ends_with as *const u8);
-    b.symbol("lang_str_substring", runtime::lang_str_substring as *const u8);
+    b.symbol(
+        "lang_str_starts_with",
+        runtime::lang_str_starts_with as *const u8,
+    );
+    b.symbol(
+        "lang_str_ends_with",
+        runtime::lang_str_ends_with as *const u8,
+    );
+    b.symbol(
+        "lang_str_substring",
+        runtime::lang_str_substring as *const u8,
+    );
     b.symbol("lang_str_to_upper", runtime::lang_str_to_upper as *const u8);
     b.symbol("lang_str_to_lower", runtime::lang_str_to_lower as *const u8);
     b.symbol("lang_str_trim", runtime::lang_str_trim as *const u8);
@@ -172,7 +321,10 @@ fn register_runtime_symbols(b: &mut JITBuilder) {
     b.symbol("lang_print", runtime::lang_print as *const u8);
     b.symbol("lang_println", runtime::lang_println as *const u8);
     // Variadic `extern function` calls (`docs/19` §13) route through `libffi`.
-    b.symbol("lang_variadic_call", runtime::variadic::lang_variadic_call as *const u8);
+    b.symbol(
+        "lang_variadic_call",
+        runtime::variadic::lang_variadic_call as *const u8,
+    );
     // Procedural-macro host functions (`docs/22`): the prelude's
     // `extend ASTNode/MacroContext` methods are seeded into every JIT, so their
     // `__ast_*`/`__mctx_*` externs must always resolve (dead code in a normal
@@ -189,7 +341,10 @@ pub struct CodegenError {
 
 impl CodegenError {
     fn new(span: Span, msg: impl Into<String>) -> Self {
-        CodegenError { message: msg.into(), span }
+        CodegenError {
+            message: msg.into(),
+            span,
+        }
     }
 }
 
@@ -224,7 +379,9 @@ impl Jit {
 
     /// Raw code pointer for a compiled function by language name.
     pub fn func_ptr(&self, name: &str) -> Option<*const u8> {
-        self.funcs.get(name).map(|id| self.module.get_finalized_function(*id))
+        self.funcs
+            .get(name)
+            .map(|id| self.module.get_finalized_function(*id))
     }
 
     /// Run the program's `main` — calling it directly if sync, or driving its
@@ -236,7 +393,9 @@ impl Jit {
     /// `main` must exist with the standard zero-arg signature; for async main
     /// it must return a `Future<…>` box (constructor ABI).
     pub unsafe fn run_main(&self) -> bool {
-        let Some(ptr) = self.func_ptr("main") else { return false };
+        let Some(ptr) = self.func_ptr("main") else {
+            return false;
+        };
         if self.main_is_async {
             let pending_tid = self.pending_tid.unwrap_or(0);
             let ctor: extern "C" fn() -> *mut u8 = unsafe { std::mem::transmute(ptr) };
@@ -260,7 +419,9 @@ impl Jit {
     /// # Safety
     /// The named function must exist and take no arguments / return nothing.
     pub unsafe fn run_void(&self, name: &str) -> bool {
-        let Some(ptr) = self.func_ptr(name) else { return false };
+        let Some(ptr) = self.func_ptr(name) else {
+            return false;
+        };
         let f: extern "C" fn() = unsafe { std::mem::transmute(ptr) };
         f();
         true
@@ -311,7 +472,9 @@ type Safepoint = (FuncId, u32, u32, Vec<u32>);
 fn make_isa(triple: target_lexicon::Triple, pic: bool) -> cranelift_codegen::isa::OwnedTargetIsa {
     let mut flags = settings::builder();
     flags.set("use_colocated_libcalls", "false").unwrap();
-    flags.set("is_pic", if pic { "true" } else { "false" }).unwrap();
+    flags
+        .set("is_pic", if pic { "true" } else { "false" })
+        .unwrap();
     // Frame pointers let the GC walk the stack to find precise roots.
     flags.set("preserve_frame_pointers", "true").unwrap();
     cranelift_codegen::isa::lookup(triple)
@@ -406,9 +569,16 @@ fn dlopen_link_libs(hir: &Hir) {
     // RTLD_NOW (2) | RTLD_GLOBAL (8) — resolve now, export symbols process-wide.
     const FLAGS: i32 = 2 | 8;
     unsafe extern "C" {
-        fn dlopen(filename: *const std::os::raw::c_char, flag: std::os::raw::c_int) -> *mut std::os::raw::c_void;
+        fn dlopen(
+            filename: *const std::os::raw::c_char,
+            flag: std::os::raw::c_int,
+        ) -> *mut std::os::raw::c_void;
     }
-    let ext = if cfg!(target_os = "macos") { "dylib" } else { "so" };
+    let ext = if cfg!(target_os = "macos") {
+        "dylib"
+    } else {
+        "so"
+    };
     for lib in &hir.link_libs {
         let name = format!("lib{lib}.{ext}\0");
         // SAFETY: a NUL-terminated path; a failed open just leaves the symbol
@@ -473,7 +643,12 @@ fn compile_jit(analysis: &Analysis, extra_symbols: &[(&str, *const u8)]) -> CgRe
         let base = module.get_finalized_function(*func_id) as usize;
         let pc = base + *code_offset as usize;
         unsafe {
-            runtime::gc::lang_gc_register_safepoint(pc, *frame_to_fp, offsets.as_ptr(), offsets.len());
+            runtime::gc::lang_gc_register_safepoint(
+                pc,
+                *frame_to_fp,
+                offsets.as_ptr(),
+                offsets.len(),
+            );
         }
     }
 
@@ -486,26 +661,27 @@ fn compile_jit(analysis: &Analysis, extra_symbols: &[(&str, *const u8)]) -> CgRe
 
     let main_is_async = main_is_async(analysis, hir);
     let pending_tid = Some(1000 + analysis.program.pending_def.index() as i64);
-    Ok(Jit { module, funcs: by_name, pending_tid, main_is_async, line_info })
+    Ok(Jit {
+        module,
+        funcs: by_name,
+        pending_tid,
+        main_is_async,
+        line_info,
+    })
 }
 
 /// Whether the user `main` is declared `async function` — its compiled symbol
 /// returns a `Future<…>` box and must be driven by the runtime executor.
 fn main_is_async(analysis: &Analysis, hir: &Hir) -> bool {
-    analysis
-        .program
-        .defs
-        .iter()
-        .enumerate()
-        .any(|(idx, d)| {
-            d.name == "main"
-                && matches!(d.kind, DefKind::Function)
-                && hir
-                    .fn_sigs
-                    .get(&compiler::ids::DefId(idx as u32))
-                    .and_then(|s| s.async_output)
-                    .is_some()
-        })
+    analysis.program.defs.iter().enumerate().any(|(idx, d)| {
+        d.name == "main"
+            && matches!(d.kind, DefKind::Function)
+            && hir
+                .fn_sigs
+                .get(&compiler::ids::DefId(idx as u32))
+                .and_then(|s| s.async_output)
+                .is_some()
+    })
 }
 
 /// Compile `analysis` to a native relocatable object file at `out`, suitable
@@ -523,7 +699,11 @@ pub fn compile_object(analysis: &Analysis, out: &Path, src: &str, src_name: &str
     // "unknown" platform that the linker rejects; promote it to `macosx` with a
     // deployment target so a proper `LC_BUILD_VERSION` is emitted.
     if let target_lexicon::OperatingSystem::Darwin(v) = triple.operating_system {
-        let dt = v.unwrap_or(target_lexicon::DeploymentTarget { major: 11, minor: 0, patch: 0 });
+        let dt = v.unwrap_or(target_lexicon::DeploymentTarget {
+            major: 11,
+            minor: 0,
+            patch: 0,
+        });
         triple.operating_system = target_lexicon::OperatingSystem::MacOSX(Some(dt));
     }
     let isa = make_isa(triple, true);
@@ -548,7 +728,14 @@ pub fn compile_object(analysis: &Analysis, out: &Path, src: &str, src_name: &str
 
     let main_async = main_is_async(analysis, hir);
     let pending_tid = 1000 + analysis.program.pending_def.index() as i64;
-    emit_native_entry(&mut module, user_main, main_async, pending_tid, &safepoints, &drops)?;
+    emit_native_entry(
+        &mut module,
+        user_main,
+        main_async,
+        pending_tid,
+        &safepoints,
+        &drops,
+    )?;
 
     // Attach DWARF `.debug_line`/`.debug_info` (source-level debug info) to the
     // object: a `gimli` line program over the captured per-function source-line
@@ -693,16 +880,18 @@ fn emit_native_entry<M: Module>(
             b.ins().call(drop_reg_ref, &[tid, faddr]);
         }
 
-        let en_ref = module.declare_func_in_func(en_id, b.func);
-        let on = b.ins().iconst(types::I8, 1);
-        b.ins().call(en_ref, &[on]);
-
         let main_ref = module.declare_func_in_func(user_main, b.func);
         if main_is_async {
             // Async `main`: calling the symbol just builds the root future.
-            // Hand it to the runtime executor to drive to completion.
+            // Do that before enabling GC: until `lang_block_on` starts, the
+            // returned future is only a native-entry temporary and is not yet
+            // pinned or reachable from a generated stack map. No user body has
+            // run at this point; `lang_block_on` pins the future before polling.
             let call = b.ins().call(main_ref, &[]);
             let fut = b.inst_results(call)[0];
+            let en_ref = module.declare_func_in_func(en_id, b.func);
+            let on = b.ins().iconst(types::I8, 1);
+            b.ins().call(en_ref, &[on]);
             let ptid = b.ins().iconst(types::I64, pending_tid);
             let bo_ref = module.declare_func_in_func(
                 block_on_id.expect("block_on declared when main is async"),
@@ -710,6 +899,9 @@ fn emit_native_entry<M: Module>(
             );
             b.ins().call(bo_ref, &[fut, ptid]);
         } else {
+            let en_ref = module.declare_func_in_func(en_id, b.func);
+            let on = b.ins().iconst(types::I8, 1);
+            b.ins().call(en_ref, &[on]);
             b.ins().call(main_ref, &[]);
         }
 
@@ -750,6 +942,7 @@ struct ClosureJob {
 /// the future `Output` type.
 struct AsyncJob {
     poll_fid: FuncId,
+    drop_fid: FuncId,
     info: compiler::sema::results::AsyncInfo,
     body: compiler::hir::Expr,
     subst: HashMap<DefId, Ty>,
@@ -765,6 +958,10 @@ struct AsyncJob {
     /// ordinary `async { … }` block, which borrows its captures and never owns
     /// them.
     owned_endpoints: Vec<(LocalId, Ty, bool)>,
+    /// Captures that a spawned async worker future must snapshot as values even
+    /// if the generic closure analysis marked the local cell-backed for nested
+    /// captures. Used for channel endpoints transferred into the future.
+    value_capture_locals: HashSet<LocalId>,
 }
 
 /// A clone-out thunk awaiting code generation (`docs/20` §4). A
@@ -793,7 +990,14 @@ struct AsyncCtx {
     /// saved at each suspend point and restored on resume.
     save_locals: Vec<(LocalId, i32)>,
     /// `await` keyword span → (state discriminant, poll block, resume block).
-    awaits: HashMap<Span, (i64, cranelift_codegen::ir::Block, cranelift_codegen::ir::Block)>,
+    awaits: HashMap<
+        Span,
+        (
+            i64,
+            cranelift_codegen::ir::Block,
+            cranelift_codegen::ir::Block,
+        ),
+    >,
     /// Shared block that builds a `Pending` result and returns it.
     pending_block: cranelift_codegen::ir::Block,
     /// Sync `for` loop `iter.span` → `(primary, secondary, index)` state-struct
@@ -902,8 +1106,12 @@ impl<'a, M: Module> Codegen<'a, M> {
             if def.kind == DefKind::Test {
                 let did = DefId(i as u32);
                 if let Some(fid) = declare_instance(
-                    self.module, &mut self.funcs, &mut self.worklist,
-                    self.analysis, did, Vec::new(),
+                    self.module,
+                    &mut self.funcs,
+                    &mut self.worklist,
+                    self.analysis,
+                    did,
+                    Vec::new(),
                 )? {
                     self.by_name.entry(def.name.clone()).or_insert(fid);
                 }
@@ -929,10 +1137,16 @@ impl<'a, M: Module> Codegen<'a, M> {
             // externs that only exist inside the macro JIT; compile them lazily
             // (when a macro calls them) rather than seeding them into every
             // program — otherwise native object output gets unresolved symbols.
-            if self.analysis.program.is_macro_surface_method(DefId(i as u32)) {
+            if self
+                .analysis
+                .program
+                .is_macro_surface_method(DefId(i as u32))
+            {
                 continue;
             }
-            let Some(ItemKind::Function(f)) = &def.item else { continue };
+            let Some(ItemKind::Function(f)) = &def.item else {
+                continue;
+            };
             if f.body.is_none() {
                 continue;
             }
@@ -1003,7 +1217,10 @@ impl<'a, M: Module> Codegen<'a, M> {
             }
             let hir = self.hir;
             let hb = hir.bodies.get(&def).ok_or_else(|| {
-                CodegenError::new(self.analysis.program.def(def).span, "async function has no HIR body")
+                CodegenError::new(
+                    self.analysis.program.def(def).span,
+                    "async function has no HIR body",
+                )
             })?;
             return self.define_async_fn(def, args, func_id, BodyView(&hb.block), out);
         }
@@ -1019,8 +1236,9 @@ impl<'a, M: Module> Codegen<'a, M> {
 
         let fsig = self.hir.fn_sigs.get(&def);
         let ret_ty = fsig.map(|s| s.ret).unwrap_or(self.analysis.tcx.null);
-        let param_locals: Vec<LocalId> =
-            fsig.map(|s| s.params.iter().map(|(l, _)| *l).collect()).unwrap_or_default();
+        let param_locals: Vec<LocalId> = fsig
+            .map(|s| s.params.iter().map(|(l, _)| *l).collect())
+            .unwrap_or_default();
 
         {
             let mut b = FunctionBuilder::new(&mut ctx.func, &mut fctx);
@@ -1031,7 +1249,11 @@ impl<'a, M: Module> Codegen<'a, M> {
 
             {
                 let mut fg = FnGen {
-                    cx: CgShared { analysis: self.analysis, hir: self.hir, captured_locals: &self.captured_locals },
+                    cx: CgShared {
+                        analysis: self.analysis,
+                        hir: self.hir,
+                        captured_locals: &self.captured_locals,
+                    },
                     module: self.module,
                     funcs: &mut self.funcs,
                     worklist: &mut self.worklist,
@@ -1048,6 +1270,8 @@ impl<'a, M: Module> Codegen<'a, M> {
                     async_out: None,
                     async_ctx: None,
                     endpoint_releases: Vec::new(),
+                    endpoint_owned: Vec::new(),
+                    value_capture_locals: HashSet::new(),
                     rc_owned: Vec::new(),
                 };
                 for (i, local) in param_locals.iter().enumerate() {
@@ -1066,6 +1290,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                 })?;
                 let val = fg.h_block(&hb.block)?;
                 let val = fg.rc_return_value(hb.block.trailing.as_deref(), val);
+                fg.endpoint_return_value(hb.block.trailing.as_deref(), val)?;
                 fg.emit_return(val)?;
             }
             b.seal_all_blocks();
@@ -1074,9 +1299,11 @@ impl<'a, M: Module> Codegen<'a, M> {
 
         let clif_label = self.analysis.program.def(def).name.clone();
         self.record_clif(&clif_label, &ctx);
-        self.module.define_function(func_id, &mut ctx)
-            .map_err(|e| CodegenError::new(self.analysis.program.def(def).span,
-                format!("define: {e}")))?;
+        self.module
+            .define_function(func_id, &mut ctx)
+            .map_err(|e| {
+                CodegenError::new(self.analysis.program.def(def).span, format!("define: {e}"))
+            })?;
 
         // Capture this function's GC safepoints (precise root scan) and its
         // source-line provenance (debug info).
@@ -1088,7 +1315,14 @@ impl<'a, M: Module> Codegen<'a, M> {
     /// Define a lifted closure function: `(env, params…) -> ret`. Captured
     /// locals are loaded from the environment; parameters come from the block.
     fn define_closure(&mut self, job: ClosureJob) -> CgResult<()> {
-        let ClosureJob { func_id, info, body, subst, span, by_value } = job;
+        let ClosureJob {
+            func_id,
+            info,
+            body,
+            subst,
+            span,
+            by_value,
+        } = job;
         let mut ctx = self.module.make_context();
         // Signature: env pointer, then each (substituted) parameter.
         let mut sig = self.module.make_signature();
@@ -1119,7 +1353,11 @@ impl<'a, M: Module> Codegen<'a, M> {
             let block_params: Vec<Value> = b.block_params(entry).to_vec();
             {
                 let mut fg = FnGen {
-                    cx: CgShared { analysis: self.analysis, hir: self.hir, captured_locals: &self.captured_locals },
+                    cx: CgShared {
+                        analysis: self.analysis,
+                        hir: self.hir,
+                        captured_locals: &self.captured_locals,
+                    },
                     module: self.module,
                     funcs: &mut self.funcs,
                     worklist: &mut self.worklist,
@@ -1136,6 +1374,8 @@ impl<'a, M: Module> Codegen<'a, M> {
                     async_out: None,
                     async_ctx: None,
                     endpoint_releases: Vec::new(),
+                    endpoint_owned: Vec::new(),
+                    value_capture_locals: HashSet::new(),
                     rc_owned: Vec::new(),
                 };
                 let env = block_params[0];
@@ -1175,6 +1415,12 @@ impl<'a, M: Module> Codegen<'a, M> {
                     let ct = fg.cx_clty(*ty).expect("param clty");
                     fg.bind_local(*local, ct, block_params[i + 1]);
                 }
+                if is_async_worker && !worker_endpoints.is_empty() {
+                    fg.value_capture_locals = worker_endpoints
+                        .iter()
+                        .map(|(local, _, _)| *local)
+                        .collect();
+                }
                 let val = fg.h_expr(&body)?;
                 // A closure returning a borrowed `@RefCounted` value must hand the
                 // caller an owned `+1` that survives `emit_return`'s release of the
@@ -1185,6 +1431,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     _ => Some(&body),
                 };
                 let val = fg.rc_return_value(ret_expr, val);
+                fg.endpoint_return_value(ret_expr, val)?;
                 fg.emit_return(val)?;
             }
             // Transfer endpoint ownership to the async worker's future (the
@@ -1199,7 +1446,8 @@ impl<'a, M: Module> Codegen<'a, M> {
             b.finalize();
         }
         self.record_clif("<closure>", &ctx);
-        self.module.define_function(func_id, &mut ctx)
+        self.module
+            .define_function(func_id, &mut ctx)
             .map_err(|e| CodegenError::new(span, format!("define closure: {e}")))?;
         self.capture_safepoints(func_id, &ctx);
         self.module.clear_context(&mut ctx);
@@ -1211,7 +1459,12 @@ impl<'a, M: Module> Codegen<'a, M> {
     /// lock future calls it to detach the body's returned value from the cell
     /// while the lock is still held. Only generated for a managed (pointer) `R`.
     fn define_clone_thunk(&mut self, job: CloneThunkJob) -> CgResult<()> {
-        let CloneThunkJob { func_id, r_ty, subst, span } = job;
+        let CloneThunkJob {
+            func_id,
+            r_ty,
+            subst,
+            span,
+        } = job;
         let mut ctx = self.module.make_context();
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(PTR));
@@ -1226,7 +1479,11 @@ impl<'a, M: Module> Codegen<'a, M> {
             let arg = b.block_params(entry)[0];
             {
                 let mut fg = FnGen {
-                    cx: CgShared { analysis: self.analysis, hir: self.hir, captured_locals: &self.captured_locals },
+                    cx: CgShared {
+                        analysis: self.analysis,
+                        hir: self.hir,
+                        captured_locals: &self.captured_locals,
+                    },
                     module: self.module,
                     funcs: &mut self.funcs,
                     worklist: &mut self.worklist,
@@ -1243,6 +1500,8 @@ impl<'a, M: Module> Codegen<'a, M> {
                     async_out: None,
                     async_ctx: None,
                     endpoint_releases: Vec::new(),
+                    endpoint_owned: Vec::new(),
+                    value_capture_locals: HashSet::new(),
                     rc_owned: Vec::new(),
                 };
                 fg.mark_root(arg);
@@ -1253,7 +1512,8 @@ impl<'a, M: Module> Codegen<'a, M> {
             b.finalize();
         }
         self.record_clif("<clone thunk>", &ctx);
-        self.module.define_function(func_id, &mut ctx)
+        self.module
+            .define_function(func_id, &mut ctx)
             .map_err(|e| CodegenError::new(span, format!("define clone thunk: {e}")))?;
         self.capture_safepoints(func_id, &ctx);
         self.module.clear_context(&mut ctx);
@@ -1264,12 +1524,16 @@ impl<'a, M: Module> Codegen<'a, M> {
     /// references at each call) for the runtime's precise root scan.
     fn capture_safepoints(&mut self, func_id: FuncId, ctx: &cranelift_codegen::Context) {
         if let Some(cc) = ctx.compiled_code() {
-            let frame_to_fp =
-                cc.buffer.frame_layout().map(|fl| fl.frame_to_fp_offset).unwrap_or(0);
+            let frame_to_fp = cc
+                .buffer
+                .frame_layout()
+                .map(|fl| fl.frame_to_fp_offset)
+                .unwrap_or(0);
             for (code_offset, _span, map) in cc.buffer.user_stack_maps() {
                 let offsets: Vec<u32> = map.entries().map(|(_, off)| off).collect();
                 if !offsets.is_empty() {
-                    self.safepoints.push((func_id, *code_offset, frame_to_fp, offsets));
+                    self.safepoints
+                        .push((func_id, *code_offset, frame_to_fp, offsets));
                 }
             }
             // Source-line provenance for debug info: each `MachSrcLoc` maps a
@@ -1322,7 +1586,11 @@ impl<'a, M: Module> Codegen<'a, M> {
         let mut param_cltys = Vec::with_capacity(param_locals.len());
         let mut ptr_offsets = Vec::new();
         for (i, local) in param_locals.iter().enumerate() {
-            let ty = self.analysis.hir.local_ty(*local).unwrap_or(self.analysis.tcx.error);
+            let ty = self
+                .analysis
+                .hir
+                .local_ty(*local)
+                .unwrap_or(self.analysis.tcx.error);
             let resolved = resolve_shallow(self.analysis, ty, &subst);
             let ct = clty_of(self.analysis, resolved);
             if is_managed_ptr(self.analysis, resolved) {
@@ -1338,10 +1606,15 @@ impl<'a, M: Module> Codegen<'a, M> {
         poll_sig.params.push(AbiParam::new(PTR));
         poll_sig.returns.push(AbiParam::new(PTR));
         let poll_name = format!("{}$poll", mangle(self.analysis, def, &args));
-        let poll_fid = self.module
+        let poll_fid = self
+            .module
             .declare_function(&poll_name, Linkage::Local, &poll_sig)
-            .map_err(|e| CodegenError::new(self.analysis.program.def(def).span,
-                format!("declare poll: {e}")))?;
+            .map_err(|e| {
+                CodegenError::new(
+                    self.analysis.program.def(def).span,
+                    format!("declare poll: {e}"),
+                )
+            })?;
 
         // -- poll function body --------------------------------------------
         let mut ctx = self.module.make_context();
@@ -1355,7 +1628,11 @@ impl<'a, M: Module> Codegen<'a, M> {
             let self_val = b.block_params(entry)[0];
             {
                 let mut fg = FnGen {
-                    cx: CgShared { analysis: self.analysis, hir: self.hir, captured_locals: &self.captured_locals },
+                    cx: CgShared {
+                        analysis: self.analysis,
+                        hir: self.hir,
+                        captured_locals: &self.captured_locals,
+                    },
                     module: self.module,
                     funcs: &mut self.funcs,
                     worklist: &mut self.worklist,
@@ -1372,6 +1649,8 @@ impl<'a, M: Module> Codegen<'a, M> {
                     async_out: Some(out),
                     async_ctx: None,
                     endpoint_releases: Vec::new(),
+                    endpoint_owned: Vec::new(),
+                    value_capture_locals: HashSet::new(),
                     rc_owned: Vec::new(),
                 };
                 // The state struct holds GC roots and must stay live across the
@@ -1387,6 +1666,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                 }
                 let val = fg.gen_body_view(&body)?;
                 let val = fg.rc_return_value(body.0.trailing.as_deref(), val);
+                fg.endpoint_return_value(body.0.trailing.as_deref(), val)?;
                 fg.emit_return(val)?;
             }
             b.seal_all_blocks();
@@ -1394,9 +1674,14 @@ impl<'a, M: Module> Codegen<'a, M> {
         }
         let clif_label = format!("{}$poll", self.analysis.program.def(def).name);
         self.record_clif(&clif_label, &ctx);
-        self.module.define_function(poll_fid, &mut ctx)
-            .map_err(|e| CodegenError::new(self.analysis.program.def(def).span,
-                format!("define poll: {e}")))?;
+        self.module
+            .define_function(poll_fid, &mut ctx)
+            .map_err(|e| {
+                CodegenError::new(
+                    self.analysis.program.def(def).span,
+                    format!("define poll: {e}"),
+                )
+            })?;
         self.capture_safepoints(poll_fid, &ctx);
         self.module.clear_context(&mut ctx);
 
@@ -1413,7 +1698,11 @@ impl<'a, M: Module> Codegen<'a, M> {
             let pvals: Vec<Value> = b.block_params(entry).to_vec();
             {
                 let mut fg = FnGen {
-                    cx: CgShared { analysis: self.analysis, hir: self.hir, captured_locals: &self.captured_locals },
+                    cx: CgShared {
+                        analysis: self.analysis,
+                        hir: self.hir,
+                        captured_locals: &self.captured_locals,
+                    },
                     module: self.module,
                     funcs: &mut self.funcs,
                     worklist: &mut self.worklist,
@@ -1430,6 +1719,8 @@ impl<'a, M: Module> Codegen<'a, M> {
                     async_out: None,
                     async_ctx: None,
                     endpoint_releases: Vec::new(),
+                    endpoint_owned: Vec::new(),
+                    value_capture_locals: HashSet::new(),
                     rc_owned: Vec::new(),
                 };
                 // Managed arguments must survive the state allocation (a
@@ -1440,14 +1731,16 @@ impl<'a, M: Module> Codegen<'a, M> {
                     }
                 }
                 let desc = fg.emit_descriptor(state_size, GC_KIND_PLAIN, &ptr_offsets);
-                let state = fg.call_intrinsic("lang_alloc", &[PTR], Some(PTR), &[desc])
+                let state = fg
+                    .call_intrinsic("lang_alloc", &[PTR], Some(PTR), &[desc])
                     .expect("lang_alloc returns a pointer");
                 let zero = fg.b.ins().iconst(types::I64, 0);
                 fg.b.ins().store(MemFlags::trusted(), zero, state, 0);
                 for (i, v) in pvals.iter().enumerate() {
-                    fg.b.ins().store(MemFlags::trusted(), *v, state, (8 + i * 8) as i32);
+                    fg.b.ins()
+                        .store(MemFlags::trusted(), *v, state, (8 + i * 8) as i32);
                 }
-                let fut = fg.emit_future_box(poll_fid, state);
+                let fut = fg.emit_future_box(poll_fid, None, state);
                 fg.b.ins().return_(&[fut]);
             }
             b.seal_all_blocks();
@@ -1455,9 +1748,14 @@ impl<'a, M: Module> Codegen<'a, M> {
         }
         let clif_label = format!("{}$ctor", self.analysis.program.def(def).name);
         self.record_clif(&clif_label, &cctx);
-        self.module.define_function(ctor_fid, &mut cctx)
-            .map_err(|e| CodegenError::new(self.analysis.program.def(def).span,
-                format!("define async ctor: {e}")))?;
+        self.module
+            .define_function(ctor_fid, &mut cctx)
+            .map_err(|e| {
+                CodegenError::new(
+                    self.analysis.program.def(def).span,
+                    format!("define async ctor: {e}"),
+                )
+            })?;
         self.capture_safepoints(ctor_fid, &cctx);
         self.module.clear_context(&mut cctx);
         Ok(())
@@ -1480,6 +1778,7 @@ impl<'a, M: Module> Codegen<'a, M> {
         live: &[(LocalId, i32, ClType)],
         for_slots: &HashMap<Span, (i32, i32, i32)>,
         owned_endpoints: &[(LocalId, Ty, bool)],
+        value_capture_locals: &HashSet<LocalId>,
         err_span: Span,
     ) -> CgResult<()> {
         let mut await_spans = Vec::new();
@@ -1501,8 +1800,14 @@ impl<'a, M: Module> Codegen<'a, M> {
             let ctx_val = b.block_params(entry)[1];
             let body_entry = b.create_block();
             let pending_block = b.create_block();
-            let mut awaits: HashMap<Span, (i64, cranelift_codegen::ir::Block, cranelift_codegen::ir::Block)>
-                = HashMap::new();
+            let mut awaits: HashMap<
+                Span,
+                (
+                    i64,
+                    cranelift_codegen::ir::Block,
+                    cranelift_codegen::ir::Block,
+                ),
+            > = HashMap::new();
             for (k, sp) in await_spans.iter().enumerate() {
                 let pb = b.create_block();
                 let rb = b.create_block();
@@ -1510,7 +1815,11 @@ impl<'a, M: Module> Codegen<'a, M> {
             }
             {
                 let mut fg = FnGen {
-                    cx: CgShared { analysis: self.analysis, hir: self.hir, captured_locals: &self.captured_locals },
+                    cx: CgShared {
+                        analysis: self.analysis,
+                        hir: self.hir,
+                        captured_locals: &self.captured_locals,
+                    },
                     module: self.module,
                     funcs: &mut self.funcs,
                     worklist: &mut self.worklist,
@@ -1527,6 +1836,8 @@ impl<'a, M: Module> Codegen<'a, M> {
                     async_out: Some(out),
                     async_ctx: None,
                     endpoint_releases: Vec::new(),
+                    endpoint_owned: Vec::new(),
+                    value_capture_locals: value_capture_locals.clone(),
                     rc_owned: Vec::new(),
                 };
                 fg.mark_root(self_val);
@@ -1534,7 +1845,9 @@ impl<'a, M: Module> Codegen<'a, M> {
                     fg.fresh_var(*l, *ct);
                 }
                 // Entry dispatch: resume at the block matching `state`, else start.
-                let state_v = fg.b.ins().load(types::I64, MemFlags::trusted(), self_val, 0);
+                let state_v =
+                    fg.b.ins()
+                        .load(types::I64, MemFlags::trusted(), self_val, 0);
                 for (state_n, _pb, rb) in awaits.values() {
                     let nv = fg.b.ins().iconst(types::I64, *state_n);
                     let c = fg.b.ins().icmp(IntCC::Equal, state_v, nv);
@@ -1559,12 +1872,17 @@ impl<'a, M: Module> Codegen<'a, M> {
                 let save_locals: Vec<(LocalId, i32)> =
                     live.iter().map(|(l, off, _)| (*l, *off)).collect();
                 fg.async_ctx = Some(AsyncCtx {
-                    self_val, ctx_val, inner_off: ASYNC_INNER_OFF, save_locals,
-                    awaits: awaits.clone(), pending_block,
+                    self_val,
+                    ctx_val,
+                    inner_off: ASYNC_INNER_OFF,
+                    save_locals,
+                    awaits: awaits.clone(),
+                    pending_block,
                     for_slots: for_slots.clone(),
                 });
                 let val = fg.gen_body_view(&body)?;
                 let val = fg.rc_return_value(body.0.trailing.as_deref(), val);
+                fg.endpoint_return_value(body.0.trailing.as_deref(), val)?;
                 // Release each owned channel endpoint on the completion path (the
                 // building closure transferred ownership instead of releasing it,
                 // `docs/20` §1/§2). Read the endpoint through its capture local
@@ -1572,7 +1890,8 @@ impl<'a, M: Module> Codegen<'a, M> {
                 // `emit_return` that follows (a value computed in `body_entry`
                 // would not dominate completion reached via a resume block).
                 for (local, ty, is_sender) in owned_endpoints {
-                    let ep = fg.read_local(*local)
+                    let ep = fg
+                        .read_local(*local)
                         .ok_or_else(|| CodegenError::new(err_span, "owned endpoint has no slot"))?;
                     let chan = fg.emit_channel_id(ep, *ty, err_span)?;
                     fg.endpoint_releases.push((chan, *is_sender));
@@ -1599,9 +1918,125 @@ impl<'a, M: Module> Codegen<'a, M> {
             b.finalize();
         }
         self.record_clif("<async poll>", &ctx);
-        self.module.define_function(poll_fid, &mut ctx)
+        self.module
+            .define_function(poll_fid, &mut ctx)
             .map_err(|e| CodegenError::new(err_span, format!("define poll: {e}")))?;
         self.capture_safepoints(poll_fid, &ctx);
+        self.module.clear_context(&mut ctx);
+        Ok(())
+    }
+
+    /// Define the generated cleanup hook stored in a generated `Future` box.
+    /// Normal completion releases owned channel endpoints on the poll function's
+    /// return path; cancellation reaches this hook instead, using the same state
+    /// slots to release those endpoints promptly.
+    fn define_async_drop(
+        &mut self,
+        drop_fid: FuncId,
+        subst: &HashMap<DefId, Ty>,
+        info: &compiler::sema::results::AsyncInfo,
+        block_view: Option<BodyView<'_>>,
+        owned_endpoints: &[(LocalId, Ty, bool)],
+        value_capture_locals: &HashSet<LocalId>,
+        span: Span,
+    ) -> CgResult<()> {
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(PTR));
+        let mut ctx = self.module.make_context();
+        ctx.func.signature = sig;
+        let mut fctx = FunctionBuilderContext::new();
+        {
+            let mut b = FunctionBuilder::new(&mut ctx.func, &mut fctx);
+            let entry = b.create_block();
+            b.append_block_params_for_function_params(entry);
+            b.switch_to_block(entry);
+            let state = b.block_params(entry)[0];
+            {
+                let mut fg = FnGen {
+                    cx: CgShared {
+                        analysis: self.analysis,
+                        hir: self.hir,
+                        captured_locals: &self.captured_locals,
+                    },
+                    module: self.module,
+                    funcs: &mut self.funcs,
+                    worklist: &mut self.worklist,
+                    closures: &mut self.closures,
+                    async_jobs: &mut self.async_jobs,
+                    clone_thunks: &mut self.clone_thunks,
+                    subst: subst.clone(),
+                    b: &mut b,
+                    vars: HashMap::new(),
+                    cell_content: HashMap::new(),
+                    term: false,
+                    loops: Vec::new(),
+                    ret_ty: self.analysis.tcx.null,
+                    async_out: None,
+                    async_ctx: None,
+                    endpoint_releases: Vec::new(),
+                    endpoint_owned: Vec::new(),
+                    value_capture_locals: HashSet::new(),
+                    rc_owned: Vec::new(),
+                };
+                let mut offsets = HashMap::new();
+                if let Some(bv) = block_view {
+                    if bv.has_await() {
+                        let cap_ids: Vec<LocalId> = info.captures.iter().map(|(l, _)| *l).collect();
+                        let layout = async_state_layout(
+                            self.analysis,
+                            subst,
+                            &cap_ids,
+                            bv,
+                            &self.captured_locals,
+                            value_capture_locals,
+                        );
+                        for local in cap_ids {
+                            offsets.insert(local, layout.slot_off[&local]);
+                        }
+                    }
+                }
+                if offsets.is_empty() {
+                    for (k, (local, _ty)) in info.captures.iter().enumerate() {
+                        offsets.insert(*local, (8 + k * 8) as i32);
+                    }
+                }
+                for (local, ty) in &info.captures {
+                    let Some(off) = offsets.get(local).copied() else {
+                        continue;
+                    };
+                    if let Some(ct) = fg.cx_clty(*ty) {
+                        if fg.cx.captured_locals.contains(local)
+                            && !value_capture_locals.contains(local)
+                        {
+                            let cell_ptr = fg.b.ins().load(PTR, MemFlags::trusted(), state, off);
+                            fg.bind_local_cell(*local, ct, cell_ptr);
+                        } else {
+                            let loaded = fg.b.ins().load(ct, MemFlags::trusted(), state, off);
+                            fg.bind_local(*local, ct, loaded);
+                        }
+                    }
+                }
+                for (local, ty, is_sender) in owned_endpoints {
+                    let ep = fg.read_local(*local).ok_or_else(|| {
+                        CodegenError::new(span, "owned endpoint has no state slot")
+                    })?;
+                    let chan = fg.emit_channel_id(ep, *ty, span)?;
+                    let name = if *is_sender {
+                        "lang_chan_sender_release"
+                    } else {
+                        "lang_chan_receiver_release"
+                    };
+                    fg.call_intrinsic(name, &[types::I64], None, &[chan]);
+                }
+            }
+            b.ins().return_(&[]);
+            b.seal_all_blocks();
+            b.finalize();
+        }
+        self.module
+            .define_function(drop_fid, &mut ctx)
+            .map_err(|e| CodegenError::new(span, format!("define async drop: {e}")))?;
+        self.capture_safepoints(drop_fid, &ctx);
         self.module.clear_context(&mut ctx);
         Ok(())
     }
@@ -1628,11 +2063,17 @@ impl<'a, M: Module> Codegen<'a, M> {
             .unwrap_or_default();
 
         // Lay out the state struct and build the poll function.
-        let layout = async_state_layout(self.analysis, &subst, &param_locals, body, &self.captured_locals);
+        let layout = async_state_layout(
+            self.analysis,
+            &subst,
+            &param_locals,
+            body,
+            &self.captured_locals,
+            &HashSet::new(),
+        );
         let entry_set: HashSet<LocalId> = param_locals.iter().copied().collect();
         // Parameter values are stored by the constructor into these slots.
-        let param_offs: Vec<i32> =
-            param_locals.iter().map(|l| layout.slot_off[l]).collect();
+        let param_offs: Vec<i32> = param_locals.iter().map(|l| layout.slot_off[l]).collect();
         let state_size = layout.state_size;
         let ptr_offsets = layout.ptr_offsets.clone();
         let span = self.analysis.program.def(def).span;
@@ -1642,13 +2083,25 @@ impl<'a, M: Module> Codegen<'a, M> {
         poll_sig.params.push(AbiParam::new(PTR));
         poll_sig.returns.push(AbiParam::new(PTR));
         let poll_name = format!("{}$poll", mangle(self.analysis, def, &args));
-        let poll_fid = self.module
+        let poll_fid = self
+            .module
             .declare_function(&poll_name, Linkage::Local, &poll_sig)
             .map_err(|e| CodegenError::new(span, format!("declare poll: {e}")))?;
         // An async function owns its endpoint *parameters* through the ordinary
         // param/return refcount discipline, not the by-value-capture path — so it
         // transfers no owned endpoints here.
-        self.build_stateful_poll(poll_fid, &subst, out, body, &entry_set, &layout.live, &layout.for_slots, &[], span)?;
+        self.build_stateful_poll(
+            poll_fid,
+            &subst,
+            out,
+            body,
+            &entry_set,
+            &layout.live,
+            &layout.for_slots,
+            &[],
+            &HashSet::new(),
+            span,
+        )?;
 
         // -- constructor body ----------------------------------------------
         let mut cctx = self.module.make_context();
@@ -1663,7 +2116,11 @@ impl<'a, M: Module> Codegen<'a, M> {
             let pvals: Vec<Value> = b.block_params(entry).to_vec();
             {
                 let mut fg = FnGen {
-                    cx: CgShared { analysis: self.analysis, hir: self.hir, captured_locals: &self.captured_locals },
+                    cx: CgShared {
+                        analysis: self.analysis,
+                        hir: self.hir,
+                        captured_locals: &self.captured_locals,
+                    },
                     module: self.module,
                     funcs: &mut self.funcs,
                     worklist: &mut self.worklist,
@@ -1680,6 +2137,8 @@ impl<'a, M: Module> Codegen<'a, M> {
                     async_out: None,
                     async_ctx: None,
                     endpoint_releases: Vec::new(),
+                    endpoint_owned: Vec::new(),
+                    value_capture_locals: HashSet::new(),
                     rc_owned: Vec::new(),
                 };
                 // Managed arguments must survive the state allocation.
@@ -1689,14 +2148,16 @@ impl<'a, M: Module> Codegen<'a, M> {
                     }
                 }
                 let desc = fg.emit_descriptor(state_size, GC_KIND_PLAIN, &ptr_offsets);
-                let state = fg.call_intrinsic("lang_alloc", &[PTR], Some(PTR), &[desc])
+                let state = fg
+                    .call_intrinsic("lang_alloc", &[PTR], Some(PTR), &[desc])
                     .expect("lang_alloc returns a pointer");
                 let zero = fg.b.ins().iconst(types::I64, 0);
                 fg.b.ins().store(MemFlags::trusted(), zero, state, 0);
                 for (i, v) in pvals.iter().enumerate() {
-                    fg.b.ins().store(MemFlags::trusted(), *v, state, param_offs[i]);
+                    fg.b.ins()
+                        .store(MemFlags::trusted(), *v, state, param_offs[i]);
                 }
-                let fut = fg.emit_future_box(poll_fid, state);
+                let fut = fg.emit_future_box(poll_fid, None, state);
                 fg.b.ins().return_(&[fut]);
             }
             b.seal_all_blocks();
@@ -1704,9 +2165,14 @@ impl<'a, M: Module> Codegen<'a, M> {
         }
         let clif_label = format!("{}$ctor", self.analysis.program.def(def).name);
         self.record_clif(&clif_label, &cctx);
-        self.module.define_function(ctor_fid, &mut cctx)
-            .map_err(|e| CodegenError::new(self.analysis.program.def(def).span,
-                format!("define async ctor: {e}")))?;
+        self.module
+            .define_function(ctor_fid, &mut cctx)
+            .map_err(|e| {
+                CodegenError::new(
+                    self.analysis.program.def(def).span,
+                    format!("define async ctor: {e}"),
+                )
+            })?;
         self.capture_safepoints(ctor_fid, &cctx);
         self.module.clear_context(&mut cctx);
         Ok(())
@@ -1716,7 +2182,17 @@ impl<'a, M: Module> Codegen<'a, M> {
     /// captured locals from the state struct, run the body, and return the
     /// result wrapped in `Ready<Output> | Pending` (`docs/21`).
     fn define_async_job(&mut self, job: AsyncJob) -> CgResult<()> {
-        let AsyncJob { poll_fid, info, body, subst, span, out, owned_endpoints } = job;
+        let AsyncJob {
+            poll_fid,
+            drop_fid,
+            info,
+            body,
+            subst,
+            span,
+            out,
+            owned_endpoints,
+            value_capture_locals,
+        } = job;
         // A view of the wrapped HIR block.
         let block_view = match &body.kind {
             compiler::hir::ExprKind::Block(b) => Some(BodyView(b)),
@@ -1727,14 +2203,47 @@ impl<'a, M: Module> Codegen<'a, M> {
         if let Some(bv) = block_view {
             if bv.has_await() {
                 let cap_ids: Vec<LocalId> = info.captures.iter().map(|(l, _)| *l).collect();
-                let layout = async_state_layout(self.analysis, &subst, &cap_ids, bv, &self.captured_locals);
+                let layout = async_state_layout(
+                    self.analysis,
+                    &subst,
+                    &cap_ids,
+                    bv,
+                    &self.captured_locals,
+                    &value_capture_locals,
+                );
                 let entry_set: HashSet<LocalId> = cap_ids.into_iter().collect();
+                self.define_async_drop(
+                    drop_fid,
+                    &subst,
+                    &info,
+                    block_view,
+                    &owned_endpoints,
+                    &value_capture_locals,
+                    span,
+                )?;
                 return self.build_stateful_poll(
-                    poll_fid, &subst, out, bv, &entry_set, &layout.live, &layout.for_slots,
-                    &owned_endpoints, span,
+                    poll_fid,
+                    &subst,
+                    out,
+                    bv,
+                    &entry_set,
+                    &layout.live,
+                    &layout.for_slots,
+                    &owned_endpoints,
+                    &value_capture_locals,
+                    span,
                 );
             }
         }
+        self.define_async_drop(
+            drop_fid,
+            &subst,
+            &info,
+            block_view,
+            &owned_endpoints,
+            &value_capture_locals,
+            span,
+        )?;
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(PTR));
         sig.params.push(AbiParam::new(PTR));
@@ -1750,7 +2259,11 @@ impl<'a, M: Module> Codegen<'a, M> {
             let self_val = b.block_params(entry)[0];
             {
                 let mut fg = FnGen {
-                    cx: CgShared { analysis: self.analysis, hir: self.hir, captured_locals: &self.captured_locals },
+                    cx: CgShared {
+                        analysis: self.analysis,
+                        hir: self.hir,
+                        captured_locals: &self.captured_locals,
+                    },
                     module: self.module,
                     funcs: &mut self.funcs,
                     worklist: &mut self.worklist,
@@ -1767,6 +2280,8 @@ impl<'a, M: Module> Codegen<'a, M> {
                     async_out: Some(out),
                     async_ctx: None,
                     endpoint_releases: Vec::new(),
+                    endpoint_owned: Vec::new(),
+                    value_capture_locals: HashSet::new(),
                     rc_owned: Vec::new(),
                 };
                 fg.mark_root(self_val);
@@ -1791,7 +2306,8 @@ impl<'a, M: Module> Codegen<'a, M> {
                 // it); `emit_return` emits the releases on the single completion
                 // path (`docs/20` §1/§2).
                 for (local, ty, is_sender) in &owned_endpoints {
-                    let ep = fg.read_local(*local)
+                    let ep = fg
+                        .read_local(*local)
                         .ok_or_else(|| CodegenError::new(span, "owned endpoint has no slot"))?;
                     let chan = fg.emit_channel_id(ep, *ty, span)?;
                     fg.endpoint_releases.push((chan, *is_sender));
@@ -1802,13 +2318,15 @@ impl<'a, M: Module> Codegen<'a, M> {
                     _ => Some(&body),
                 };
                 let val = fg.rc_return_value(ret_expr, val);
+                fg.endpoint_return_value(ret_expr, val)?;
                 fg.emit_return(val)?;
             }
             b.seal_all_blocks();
             b.finalize();
         }
         self.record_clif("<async block poll>", &ctx);
-        self.module.define_function(poll_fid, &mut ctx)
+        self.module
+            .define_function(poll_fid, &mut ctx)
             .map_err(|e| CodegenError::new(span, format!("define async block poll: {e}")))?;
         self.capture_safepoints(poll_fid, &ctx);
         self.module.clear_context(&mut ctx);
@@ -1875,6 +2393,13 @@ struct FnGen<'a, 'b, 'f, M: Module> {
     /// releasing them when the worker returns is what closes the channel on the
     /// last-sender drop. `emit_return` drains this on every return path.
     endpoint_releases: Vec<(Value, bool)>,
+    /// Channel endpoint locals owned by this frame. Ordinary function/closure
+    /// endpoint locals release on return; a returned endpoint local is retained
+    /// first so ownership transfers to the caller instead of closing in the
+    /// callee.
+    endpoint_owned: Vec<(LocalId, Ty, bool)>,
+    /// Locals that nested async blocks should capture as values, not cells.
+    value_capture_locals: HashSet<LocalId>,
     /// Owned `@RefCounted` locals (`docs/16` §8.1), in binding order: non-captured,
     /// `let`-bound locals whose type is a `@RefCounted` struct. Each holds one
     /// strong reference (`+1`); `emit_return` releases them on every return path
@@ -1901,11 +2426,14 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
 
     /// Runtime type id of `ty` under this instance's substitution.
     pub(crate) fn type_id_of(&self, ty: Ty) -> i64 {
-        type_id(self.cx.analysis, resolve_shallow(self.cx.analysis, ty, &self.subst))
+        type_id(
+            self.cx.analysis,
+            resolve_shallow(self.cx.analysis, ty, &self.subst),
+        )
     }
 
     pub(crate) fn fresh_var(&mut self, local: LocalId, ct: ClType) -> Variable {
-        if self.cx.captured_locals.contains(&local) {
+        if self.cx.captured_locals.contains(&local) && !self.value_capture_locals.contains(&local) {
             // Cell-backed: the Cranelift variable holds the cell *pointer*;
             // reads/writes route through `read_local`/`write_local`. The cell
             // ptr is itself a managed-heap root.
@@ -1935,17 +2463,24 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     /// share the cell through `read_local`/`write_local`.
     pub(crate) fn bind_local(&mut self, local: LocalId, ct: ClType, init: Value) {
         let var = self.fresh_var(local, ct);
+        let init_is_managed = self
+            .cx
+            .analysis
+            .hir
+            .local_ty(local)
+            .map(|ty| {
+                let resolved = resolve_shallow(self.cx.analysis, ty, &self.subst);
+                is_managed_ptr(self.cx.analysis, resolved)
+            })
+            .unwrap_or(false);
+        if init_is_managed {
+            self.mark_root(init);
+        }
         if self.cell_content.contains_key(&local) {
             // If `init` is a managed pointer, it must be a stack-map root
             // across the cell allocation — otherwise a GC stress collect
             // between `lang_alloc` and the store would free the pointee
             // (this bit the closure-tagger GC-stress test).
-            if let Some(ty) = self.cx.analysis.hir.local_ty(local) {
-                let resolved = resolve_shallow(self.cx.analysis, ty, &self.subst);
-                if is_managed_ptr(self.cx.analysis, resolved) {
-                    self.mark_root(init);
-                }
-            }
             let cell = self.alloc_local_cell(local);
             self.b.ins().store(MemFlags::trusted(), init, cell, 0);
             self.b.def_var(var, cell);
@@ -1997,9 +2532,10 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     /// plain locals use Cranelift's `def_var`. Returns an error only if the
     /// local is unbound.
     pub(crate) fn write_local(&mut self, local: LocalId, v: Value, span: Span) -> CgResult<()> {
-        let var = *self.vars.get(&local).ok_or_else(|| {
-            CodegenError::new(span, "write to unbound local")
-        })?;
+        let var = *self
+            .vars
+            .get(&local)
+            .ok_or_else(|| CodegenError::new(span, "write to unbound local"))?;
         if self.cell_content.contains_key(&local) {
             let cell = self.b.use_var(var);
             self.b.ins().store(MemFlags::trusted(), v, cell, 0);
@@ -2058,6 +2594,12 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 self.call_intrinsic(name, &[cranelift_codegen::ir::types::I64], None, &[chan]);
             }
         }
+        // Ordinary endpoint locals own runtime endpoint references just like
+        // worker-captured endpoints above, except their channel id must be read
+        // from the local at the actual return path.
+        if !self.endpoint_owned.is_empty() {
+            self.endpoint_release_owned_locals()?;
+        }
         // In an async `poll` body, a return value is the future's `Output`; wrap
         // it in `Ready<Output>` and box into the `Ready<Output> | Pending` union
         // the `poll` ABI returns (`docs/21` §1).
@@ -2097,7 +2639,6 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         self.term = true;
         Ok(())
     }
-
 }
 
 /// Map a language type to a Cranelift value type, or `None` for zero-sized

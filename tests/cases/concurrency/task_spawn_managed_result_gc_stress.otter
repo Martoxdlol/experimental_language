@@ -1,0 +1,64 @@
+//@ kind: run
+//@ serial
+//@ env: OTTER_FUSION_TASK_WORKERS=4
+//@ env: OTTER_FUSION_GC=stress
+//@ description: Task.spawn workers return managed List graphs at fanout under stress GC and join keeps every result reachable
+//@ stdout:
+//~ total=33280
+import { println } from "std:io";
+import { Future } from "core:prelude";
+import { List } from "core:collections";
+import { Task, JoinHandle, Joined, Panicked, Cancelled } from "std:task";
+import { yield_now } from "std:async";
+
+function build_list(n: i64): Future<List<i64>> async {
+  var churn: i64 = 0;
+  while churn < 8 {
+    var garbage: List<i64> = [n, churn, n + churn];
+    var _ = await yield_now();
+    churn = churn + garbage.size();
+  }
+
+  var out: List<i64> = [];
+  var i: i64 = 0;
+  while i < 4 {
+    out.push(n + i);
+    i = i + 1;
+  }
+  out
+}
+
+function sum_list(xs: List<i64>): i64 {
+  var total: i64 = 0;
+  for value in xs {
+    total = total + value;
+  }
+  total
+}
+
+function joined_sum(r: Joined<List<i64>> | Panicked | Cancelled): i64 {
+  match r {
+    Joined<List<i64>> j => sum_list(j.value),
+    Panicked p => -1,
+    Cancelled c => -2,
+  }
+}
+
+function main(): Future<null> async {
+  var handles: List<JoinHandle<List<i64>>> = [];
+  var i: i64 = 0;
+  while i < 128 {
+    var n = i;
+    handles.push(Task.spawn(() async => await build_list(n)));
+    i = i + 1;
+  }
+
+  var total: i64 = 0;
+  var j: i64 = 0;
+  while j < handles.size() {
+    total = total + joined_sum(await handles[j].join());
+    j = j + 1;
+  }
+
+  println("total=${total}");
+}

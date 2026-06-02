@@ -113,11 +113,7 @@ struct ClosureFrame {
 }
 
 impl<'a> Checker<'a> {
-    pub fn new(
-        prog: &'a Program,
-        tcx: &'a mut TyCtxt,
-        errors: &'a mut Vec<SemaError>,
-    ) -> Self {
+    pub fn new(prog: &'a Program, tcx: &'a mut TyCtxt, errors: &'a mut Vec<SemaError>) -> Self {
         let null = tcx.null;
         Checker {
             prog,
@@ -217,7 +213,10 @@ impl<'a> Checker<'a> {
         for id in 0..self.prog.defs.len() {
             let def = DefId(id as u32);
             let d = self.prog.def(def);
-            if !matches!(d.kind, DefKind::Function | DefKind::ExtendMethod | DefKind::Test) {
+            if !matches!(
+                d.kind,
+                DefKind::Function | DefKind::ExtendMethod | DefKind::Test
+            ) {
                 continue;
             }
             // The body span comes from the function body or the test block.
@@ -256,7 +255,15 @@ impl<'a> Checker<'a> {
             record_block_locals(&block, &self.hir.local_types, err, &mut locals);
             self.hir.bodies.insert(
                 def,
-                Body { def, params, locals, ret, async_output, block, span },
+                Body {
+                    def,
+                    params,
+                    locals,
+                    ret,
+                    async_output,
+                    block,
+                    span,
+                },
             );
         }
         self.hir
@@ -298,7 +305,13 @@ impl<'a> Checker<'a> {
             Some(t) => self.lower_ty(t, &env),
             None => self.tcx.null,
         };
-        self.hir.extern_sigs.insert(def, crate::hir::ExternSig { params: ptys, ret: rty });
+        self.hir.extern_sigs.insert(
+            def,
+            crate::hir::ExternSig {
+                params: ptys,
+                ret: rty,
+            },
+        );
         // `@Link(lib = "…")` libraries (`docs/19` §13) are no longer recorded
         // here: they are derived from the program's attributes by
         // `hir::collect_link_libs` (consumed as `Hir::link_libs`).
@@ -342,46 +355,71 @@ impl<'a> Checker<'a> {
             let name = self.prog.def(def).name.clone();
             // `@Transparent` (ABI newtype, `docs/19` §3): the struct must have
             // exactly one field, whose representation/ABI it inherits.
-            if self.prog.def(def).attrs.iter().any(|a| a.name.name == "Transparent") {
+            if self
+                .prog
+                .def(def)
+                .attrs
+                .iter()
+                .any(|a| a.name.name == "Transparent")
+            {
                 match self.hir.structs.get(&def) {
                     Some(SF::Tuple(ts)) if ts.len() == 1 => {}
-                    Some(SF::Tuple(ts)) => self.emit(span, SemaErrorKind::Message(format!(
-                        "`@Transparent` requires exactly one field, but `{}` has {} \
-                         (`docs/19` §3)", name, ts.len()
-                    ))),
-                    _ => self.emit(span, SemaErrorKind::Message(format!(
-                        "`@Transparent` requires a single-field tuple struct, e.g. \
-                         `@Transparent struct {}(i32)` (`docs/19` §3)", name
-                    ))),
+                    Some(SF::Tuple(ts)) => self.emit(
+                        span,
+                        SemaErrorKind::Message(format!(
+                            "`@Transparent` requires exactly one field, but `{}` has {} \
+                         (`docs/19` §3)",
+                            name,
+                            ts.len()
+                        )),
+                    ),
+                    _ => self.emit(
+                        span,
+                        SemaErrorKind::Message(format!(
+                            "`@Transparent` requires a single-field tuple struct, e.g. \
+                         `@Transparent struct {}(i32)` (`docs/19` §3)",
+                            name
+                        )),
+                    ),
                 }
             }
             // The C-layout decorators only apply to `extern struct` (`docs/19` §3).
             if !is_extern {
                 for a in &self.prog.def(def).attrs {
                     if matches!(a.name.name.as_str(), "Packed" | "Align" | "Union") {
-                        self.emit(a.span, SemaErrorKind::Message(format!(
-                            "`@{}` is only valid on an `extern struct` (`docs/19` §3)",
-                            a.name.name
-                        )));
+                        self.emit(
+                            a.span,
+                            SemaErrorKind::Message(format!(
+                                "`@{}` is only valid on an `extern struct` (`docs/19` §3)",
+                                a.name.name
+                            )),
+                        );
                     }
                 }
                 continue;
             }
             let fields: Vec<(String, Ty)> = match self.hir.structs.get(&def) {
                 Some(SF::Record(fs)) => fs.clone(),
-                Some(SF::Tuple(ts)) => {
-                    ts.iter().enumerate().map(|(i, t)| (i.to_string(), *t)).collect()
-                }
+                Some(SF::Tuple(ts)) => ts
+                    .iter()
+                    .enumerate()
+                    .map(|(i, t)| (i.to_string(), *t))
+                    .collect(),
                 _ => Vec::new(),
             };
             for (fname, fty) in fields {
                 if !self.is_repr_c(fty) {
-                    self.emit(span, SemaErrorKind::Message(format!(
-                        "field `{}` of `extern struct {}` has type `{}`, which is not \
+                    self.emit(
+                        span,
+                        SemaErrorKind::Message(format!(
+                            "field `{}` of `extern struct {}` has type `{}`, which is not \
                          C-ABI-compatible; extern struct fields must be numeric, `bool`, \
                          `char`, or a raw pointer `*T` (`docs/19` §3)",
-                        fname, name, self.display(fty)
-                    )));
+                            fname,
+                            name,
+                            self.display(fty)
+                        )),
+                    );
                 }
             }
         }
@@ -409,22 +447,37 @@ impl<'a> Checker<'a> {
             let name = self.prog.def(def).name.clone();
             match kind {
                 DefKind::Struct => {
-                    if self.prog.def(def).attrs.iter().any(|a| a.name.name == "Transparent") {
-                        self.emit(attr.span, SemaErrorKind::Message(format!(
-                            "`@RefCounted` cannot be combined with `@Transparent`: a \
+                    if self
+                        .prog
+                        .def(def)
+                        .attrs
+                        .iter()
+                        .any(|a| a.name.name == "Transparent")
+                    {
+                        self.emit(
+                            attr.span,
+                            SemaErrorKind::Message(format!(
+                                "`@RefCounted` cannot be combined with `@Transparent`: a \
                              transparent newtype has its field's ABI and no object header to \
                              hold the strong count (`docs/16` §8.1)"
-                        )));
+                            )),
+                        );
                     }
                 }
-                DefKind::ExternStruct => self.emit(attr.span, SemaErrorKind::Message(format!(
-                    "`@RefCounted` cannot be applied to `extern struct {name}`: extern \
+                DefKind::ExternStruct => self.emit(
+                    attr.span,
+                    SemaErrorKind::Message(format!(
+                        "`@RefCounted` cannot be applied to `extern struct {name}`: extern \
                      structs are C-ABI, header-less, and unmanaged, so they cannot be \
                      reference counted (`docs/16` §8.1)"
-                ))),
-                _ => self.emit(attr.span, SemaErrorKind::Message(format!(
-                    "`@RefCounted` may only decorate a `struct`, not `{name}` (`docs/16` §8.1)"
-                ))),
+                    )),
+                ),
+                _ => self.emit(
+                    attr.span,
+                    SemaErrorKind::Message(format!(
+                        "`@RefCounted` may only decorate a `struct`, not `{name}` (`docs/16` §8.1)"
+                    )),
+                ),
             }
         }
     }
@@ -449,11 +502,15 @@ impl<'a> Checker<'a> {
             };
             // Placement: only `extern function` carries a C ABI.
             if self.prog.def(def).kind != DefKind::ExternFunction {
-                self.emit(attr.span, SemaErrorKind::Message(
-                    "`@CallConv` is only valid on an `extern function` — ordinary \
+                self.emit(
+                    attr.span,
+                    SemaErrorKind::Message(
+                        "`@CallConv` is only valid on an `extern function` — ordinary \
                      functions use the language's internal calling convention \
-                     (`docs/19` §7)".into(),
-                ));
+                     (`docs/19` §7)"
+                            .into(),
+                    ),
+                );
                 continue;
             }
             // Exactly one positional string literal, one of the four conventions.
@@ -469,11 +526,15 @@ impl<'a> Checker<'a> {
             };
             match conv.as_deref() {
                 Some("c") | Some("system") | Some("stdcall") | Some("fastcall") => {}
-                _ => self.emit(attr.span, SemaErrorKind::Message(
-                    "`@CallConv` takes one string argument, one of `\"c\"`, \
+                _ => self.emit(
+                    attr.span,
+                    SemaErrorKind::Message(
+                        "`@CallConv` takes one string argument, one of `\"c\"`, \
                      `\"system\"`, `\"stdcall\"`, or `\"fastcall\"` (default `\"c\"`) \
-                     (`docs/19` §7)".into(),
-                )),
+                     (`docs/19` §7)"
+                            .into(),
+                    ),
+                ),
             }
         }
     }
@@ -488,40 +549,58 @@ impl<'a> Checker<'a> {
     pub(crate) fn validate_variadic(&mut self) {
         for id in 0..self.prog.defs.len() {
             let def = DefId(id as u32);
-            let Some(attr) =
-                self.prog.def(def).attrs.iter().find(|a| a.name.name == "Variadic").cloned()
+            let Some(attr) = self
+                .prog
+                .def(def)
+                .attrs
+                .iter()
+                .find(|a| a.name.name == "Variadic")
+                .cloned()
             else {
                 continue;
             };
             // `@Variadic` takes no arguments.
             if !attr.args.is_empty() {
-                self.emit(attr.span, SemaErrorKind::Message(
-                    "`@Variadic` takes no arguments (`docs/19` §13)".into(),
-                ));
+                self.emit(
+                    attr.span,
+                    SemaErrorKind::Message("`@Variadic` takes no arguments (`docs/19` §13)".into()),
+                );
             }
             // Placement: only an `extern function`.
             if self.prog.def(def).kind != DefKind::ExternFunction {
-                self.emit(attr.span, SemaErrorKind::Message(
-                    "`@Variadic` is only valid on an `extern function` import \
-                     (`docs/19` §13)".into(),
-                ));
+                self.emit(
+                    attr.span,
+                    SemaErrorKind::Message(
+                        "`@Variadic` is only valid on an `extern function` import \
+                     (`docs/19` §13)"
+                            .into(),
+                    ),
+                );
                 continue;
             }
             // It must be an *import* (no body) with a non-empty fixed prefix.
             if let Some(ItemKind::Extern(ExternItem::Function(f))) = &self.prog.def(def).item {
                 if f.body.is_some() {
-                    self.emit(attr.span, SemaErrorKind::Message(
-                        "`@Variadic` applies to an `extern function` import, not a \
+                    self.emit(
+                        attr.span,
+                        SemaErrorKind::Message(
+                            "`@Variadic` applies to an `extern function` import, not a \
                          definition with a body — a variadic C function cannot be \
-                         *defined* here, only called (`docs/19` §13)".into(),
-                    ));
+                         *defined* here, only called (`docs/19` §13)"
+                                .into(),
+                        ),
+                    );
                 }
                 if f.params.is_empty() {
-                    self.emit(attr.span, SemaErrorKind::Message(
-                        "a `@Variadic` `extern function` needs at least one fixed \
+                    self.emit(
+                        attr.span,
+                        SemaErrorKind::Message(
+                            "a `@Variadic` `extern function` needs at least one fixed \
                          parameter before the variadic arguments (e.g. the format \
-                         string of `printf(fmt: *u8, ...)`) (`docs/19` §13)".into(),
-                    ));
+                         string of `printf(fmt: *u8, ...)`) (`docs/19` §13)"
+                                .into(),
+                        ),
+                    );
                 }
             }
         }
@@ -534,7 +613,9 @@ impl<'a> Checker<'a> {
         let module = self.current_module();
         let extends = self.prog.visible_extends(module);
         for ext in extends {
-            let Some(ItemKind::Extend(e)) = self.prog.def(ext).item.clone() else { continue };
+            let Some(ItemKind::Extend(e)) = self.prog.def(ext).item.clone() else {
+                continue;
+            };
             let mut env = TypeEnv::new(self.prog.def(ext).module);
             for g in self.prog.def(ext).generics.clone() {
                 let nm = self.prog.def(g).name.clone();
@@ -542,7 +623,9 @@ impl<'a> Checker<'a> {
                 env.generics.insert(nm, pty);
             }
             let target = self.lower_ty(&e.target, &env);
-            let TyKind::Named { def: tdef, .. } = self.tcx.kind(target).clone() else { continue };
+            let TyKind::Named { def: tdef, .. } = self.tcx.kind(target).clone() else {
+                continue;
+            };
             // The interface name in an `extend Target: Iface` clause is resolved
             // in the module where the `extend` is *written*, not the module
             // currently being checked. This matters for cross-module and prelude
@@ -550,7 +633,9 @@ impl<'a> Checker<'a> {
             // `Drop` impl whether or not the user module imported `Drop`.
             let ext_module = self.prog.def(ext).module;
             for itf in &e.interfaces {
-                let TypeKind::Named { name, .. } = &itf.kind else { continue };
+                let TypeKind::Named { name, .. } = &itf.kind else {
+                    continue;
+                };
                 if let Some(idef) = self.prog.resolve_type_in(ext_module, &name.name) {
                     if self.prog.def(idef).kind == DefKind::Interface {
                         self.hir.iface_impls.insert((tdef, idef), ext);
@@ -565,10 +650,15 @@ impl<'a> Checker<'a> {
         use crate::sema::results::StructFields as SF;
         for id in 0..self.prog.defs.len() {
             let def = DefId(id as u32);
-            if !matches!(self.prog.def(def).kind, DefKind::Struct | DefKind::ExternStruct) {
+            if !matches!(
+                self.prog.def(def).kind,
+                DefKind::Struct | DefKind::ExternStruct
+            ) {
                 continue;
             }
-            let Some(ItemKind::Struct(s)) = self.prog.def(def).item.clone() else { continue };
+            let Some(ItemKind::Struct(s)) = self.prog.def(def).item.clone() else {
+                continue;
+            };
             let env = self.def_env(def, None);
             let fields = match &s.kind {
                 StructKind::Unit => SF::Unit,
@@ -584,9 +674,7 @@ impl<'a> Checker<'a> {
             self.hir.structs.insert(def, fields);
         }
     }
-
 }
-
 
 /// A loop on the checker's enclosing-loop stack.
 struct LoopFrame {
@@ -620,15 +708,14 @@ fn binop_str(op: BinaryOp) -> &'static str {
     }
 }
 
-
-mod functions;
-mod stmt;
-mod expr;
-mod structs;
-mod control;
 mod builtins;
-mod methods;
+mod control;
+mod expr;
+mod functions;
 mod helpers;
+mod methods;
+mod stmt;
+mod structs;
 
 #[cfg(test)]
 mod tests;
@@ -694,25 +781,31 @@ fn record_pattern_locals(
         }
         P::Literal(e) => record_node_locals(e, local_types, err, out),
         P::TupleStruct { fields, rest, .. } => {
-            fields.iter().for_each(|f| record_pattern_locals(f, local_types, err, out));
+            fields
+                .iter()
+                .for_each(|f| record_pattern_locals(f, local_types, err, out));
             if let Some(r) = rest {
                 if let Some(id) = r.bind {
                     record_local(id, local_types, err, out);
                 }
             }
         }
-        P::RecordStruct { fields, .. } => {
-            fields.iter().for_each(|f| record_pattern_locals(&f.pattern, local_types, err, out))
-        }
+        P::RecordStruct { fields, .. } => fields
+            .iter()
+            .for_each(|f| record_pattern_locals(&f.pattern, local_types, err, out)),
         P::Tuple { elems, rest } | P::List { elems, rest } => {
-            elems.iter().for_each(|e| record_pattern_locals(e, local_types, err, out));
+            elems
+                .iter()
+                .for_each(|e| record_pattern_locals(e, local_types, err, out));
             if let Some((_, r)) = rest {
                 if let Some(id) = r.bind {
                     record_local(id, local_types, err, out);
                 }
             }
         }
-        P::Or(ps) => ps.iter().for_each(|p| record_pattern_locals(p, local_types, err, out)),
+        P::Or(ps) => ps
+            .iter()
+            .for_each(|p| record_pattern_locals(p, local_types, err, out)),
         P::Wildcard | P::UnitPath { .. } => {}
     }
 }
@@ -778,7 +871,11 @@ fn record_node_locals(
             }
             MapEntry::Spread(e) => rec(e, out),
         }),
-        K::If { cond, then_block, else_branch } => {
+        K::If {
+            cond,
+            then_block,
+            else_branch,
+        } => {
             rec(cond, out);
             record_block_locals(then_block, local_types, err, out);
             if let Some(e) = else_branch {
@@ -800,24 +897,46 @@ fn record_node_locals(
             rec(cond, out);
             record_block_locals(body, local_types, err, out);
         }
-        K::For { pattern, iter, body, .. } => {
+        K::For {
+            pattern,
+            iter,
+            body,
+            ..
+        } => {
             record_pattern_locals(pattern, local_types, err, out);
             rec(iter, out);
             record_block_locals(body, local_types, err, out);
         }
-        K::Closure { params, captures, body, .. } => {
+        K::Closure {
+            params,
+            captures,
+            body,
+            ..
+        } => {
             for (id, _) in params.iter().chain(captures) {
                 record_local(*id, local_types, err, out);
             }
             rec(body, out);
         }
-        K::AsyncBlock { params, captures, body, .. } => {
+        K::AsyncBlock {
+            params,
+            captures,
+            body,
+            ..
+        } => {
             for (id, _) in params.iter().chain(captures) {
                 record_local(*id, local_types, err, out);
             }
             record_block_locals(body, local_types, err, out);
         }
-        K::Int(_) | K::Float(_) | K::Bool(_) | K::Null | K::Char(_) | K::Name(_)
-        | K::Discard | K::Continue | K::Error => {}
+        K::Int(_)
+        | K::Float(_)
+        | K::Bool(_)
+        | K::Null
+        | K::Char(_)
+        | K::Name(_)
+        | K::Discard
+        | K::Continue
+        | K::Error => {}
     }
 }

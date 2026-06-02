@@ -1,0 +1,30 @@
+//@ kind: run
+//@ serial
+//@ description: the spawn keyword schedules one thousand async tasks on the M:N executor and awaits every Future handle
+//@ stdout:
+//~ total=499500
+import { println } from "std:io";
+import { Future } from "core:prelude";
+import { List } from "core:collections";
+import { yield_now } from "std:async";
+
+function work(n: i64): Future<i64> async {
+  var _ = await yield_now();
+  n
+}
+
+function main(): Future<null> async {
+  var handles: List<Future<i64>> = [];
+  var i: i64 = 0;
+  while i < 1000 {
+    handles.push(spawn work(i));
+    i = i + 1;
+  }
+  var total: i64 = 0;
+  var j: i64 = 0;
+  while j < handles.size() {
+    total = total + await handles[j];
+    j = j + 1;
+  }
+  println("total=${total}");
+}

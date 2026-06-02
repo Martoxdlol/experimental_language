@@ -54,6 +54,10 @@ impl<'a> Checker<'a> {
                 let r = targs.first().copied().unwrap_or(self.tcx.error);
                 return self.check_join_handle_method(r, name, args, span);
             }
+            if def == self.prog.task_join_handle_def && self.prog.task_join_handle_def != DefId(0) {
+                let r = targs.first().copied().unwrap_or(self.tcx.error);
+                return self.check_task_join_handle_method(r, name, args, span);
+            }
             // Builtin `Sender<T>` / `Receiver<T>` methods (`docs/20` §2).
             if (def == self.prog.sender_def || def == self.prog.receiver_def)
                 && self.prog.sender_def != DefId(0)
@@ -66,14 +70,21 @@ impl<'a> Checker<'a> {
                 let elem = targs.first().copied().unwrap_or(self.tcx.error);
                 return self.check_shared_method(elem, name, args, span);
             }
-            // `Future<T>.cancel()` (`docs/21` §8): for the compute-only futures
-            // we build there is no I/O registration to release, so cancel is a
-            // safe no-op. Callable repeatedly.
-            if def == self.prog.future_def && self.prog.future_def != DefId(0)
+            // `Future<T>.cancel()` (`docs/21` §8): runtime futures that carry
+            // cancellation metadata (currently `spawn EXPR`) stop scheduling
+            // their task; other future shapes remain safe repeatable no-ops.
+            if def == self.prog.future_def
+                && self.prog.future_def != DefId(0)
                 && name.name == "cancel"
             {
                 if !args.is_empty() {
-                    self.emit(span, SemaErrorKind::ArgCount { expected: 0, found: args.len() });
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 0,
+                            found: args.len(),
+                        },
+                    );
                 }
                 return self.tcx.null;
             }
@@ -93,10 +104,13 @@ impl<'a> Checker<'a> {
             for a in args {
                 self.check_expr(a, None);
             }
-            self.emit(name.span, SemaErrorKind::NoMethod {
-                ty: self.display(rty),
-                name: name.name.clone(),
-            });
+            self.emit(
+                name.span,
+                SemaErrorKind::NoMethod {
+                    ty: self.display(rty),
+                    name: name.name.clone(),
+                },
+            );
             return self.tcx.error;
         };
         self.record_res(callee.span, ValueRes::Method(method_def), self.tcx.error);
@@ -129,8 +143,7 @@ impl<'a> Checker<'a> {
             })
             .collect();
         // Infer any still-unsolved method generic from the matching argument.
-        let need_inference =
-            !method_gens.is_empty() && explicit_method_generics.is_empty();
+        let need_inference = !method_gens.is_empty() && explicit_method_generics.is_empty();
         if need_inference {
             for (i, a) in args.iter().enumerate() {
                 let aty = self.check_expr(a, None);
@@ -141,10 +154,13 @@ impl<'a> Checker<'a> {
             for g in &method_gens {
                 if subst.get(g).is_none() {
                     let gname = self.prog.def(*g).name.clone();
-                    self.emit(span, SemaErrorKind::Message(format!(
-                        "cannot infer generic argument `{}` for method `{}`; annotate it",
-                        gname, name.name
-                    )));
+                    self.emit(
+                        span,
+                        SemaErrorKind::Message(format!(
+                            "cannot infer generic argument `{}` for method `{}`; annotate it",
+                            gname, name.name
+                        )),
+                    );
                     subst.insert(*g, self.tcx.error);
                 }
             }
@@ -180,7 +196,9 @@ impl<'a> Checker<'a> {
         // Record the extend's then the method's generic arguments in declaration
         // order so codegen monomorphizes the call to this concrete instantiation.
         let parent = self.prog.def(method_def).parent;
-        let ext_gens = parent.map(|p| self.prog.def(p).generics.clone()).unwrap_or_default();
+        let ext_gens = parent
+            .map(|p| self.prog.def(p).generics.clone())
+            .unwrap_or_default();
         let mut call_targs: Vec<Ty> = Vec::new();
         if !ext_gens.is_empty() || !method_gens.is_empty() {
             call_targs = ext_gens
@@ -196,10 +214,13 @@ impl<'a> Checker<'a> {
             self.check_bounds(&all_gens, &call_targs, span);
         }
         if args.len() != param_tys.len() {
-            self.emit(span, SemaErrorKind::ArgCount {
-                expected: param_tys.len(),
-                found: args.len(),
-            });
+            self.emit(
+                span,
+                SemaErrorKind::ArgCount {
+                    expected: param_tys.len(),
+                    found: args.len(),
+                },
+            );
         }
         for (i, a) in args.iter().enumerate() {
             if let Some(pt) = param_tys.get(i) {
@@ -244,7 +265,9 @@ impl<'a> Checker<'a> {
             };
             let method = (0..self.prog.defs.len() as u32).map(DefId).find(|&d| {
                 let def = self.prog.def(d);
-                def.kind == DefKind::InterfaceMethod && def.parent == Some(iface) && def.name == "next"
+                def.kind == DefKind::InterfaceMethod
+                    && def.parent == Some(iface)
+                    && def.name == "next"
             })?;
             let (_, ret) = self.iface_method_sig(method, iface, &args, ity);
             (method, ret, Vec::new())
@@ -252,7 +275,11 @@ impl<'a> Checker<'a> {
             let (next, ext_subst) = self.resolve_method(ity, "next")?;
             // The enclosing extend's generic arguments, to monomorphize `next`.
             let next_targs: Vec<Ty> = match self.prog.def(next).parent {
-                Some(p) => self.prog.def(p).generics.clone()
+                Some(p) => self
+                    .prog
+                    .def(p)
+                    .generics
+                    .clone()
                     .iter()
                     .map(|g| ext_subst.get(g).copied().unwrap_or(self.tcx.error))
                     .collect(),
@@ -297,7 +324,10 @@ impl<'a> Checker<'a> {
     /// Resolve the `AsyncIterator<T>` protocol on `ity` (`docs/21` §10): a
     /// `next_async(self): Future<Item<T> | Done>` method. Returns the loop's
     /// resolution, or `None` if `ity` is not an async stream.
-    pub(crate) fn async_iterator_elem(&mut self, ity: Ty) -> Option<crate::sema::results::ForAsyncIter> {
+    pub(crate) fn async_iterator_elem(
+        &mut self,
+        ity: Ty,
+    ) -> Option<crate::sema::results::ForAsyncIter> {
         if self.tcx.is_error(ity) {
             return None;
         }
@@ -305,7 +335,8 @@ impl<'a> Checker<'a> {
         // drives the stream through its `next_async` interface method (resolved
         // to the concrete impl, or vtable-dispatched, in codegen). Otherwise a
         // concrete `extend … : AsyncIterator` is resolved directly.
-        let (next_async, fut_ret, next_targs) = if let TyKind::Param(p) = self.tcx.kind(ity).clone() {
+        let (next_async, fut_ret, next_targs) = if let TyKind::Param(p) = self.tcx.kind(ity).clone()
+        {
             let (method, iface, iargs) = self.resolve_bound_method(p, "next_async")?;
             let (_, ret) = self.iface_method_sig(method, iface, &iargs, ity);
             (method, ret, Vec::new())
@@ -315,14 +346,20 @@ impl<'a> Checker<'a> {
             };
             let method = (0..self.prog.defs.len() as u32).map(DefId).find(|&d| {
                 let def = self.prog.def(d);
-                def.kind == DefKind::InterfaceMethod && def.parent == Some(iface) && def.name == "next_async"
+                def.kind == DefKind::InterfaceMethod
+                    && def.parent == Some(iface)
+                    && def.name == "next_async"
             })?;
             let (_, ret) = self.iface_method_sig(method, iface, &args, ity);
             (method, ret, Vec::new())
         } else {
             let (next_async, ext_subst) = self.resolve_method(ity, "next_async")?;
             let next_targs: Vec<Ty> = match self.prog.def(next_async).parent {
-                Some(p) => self.prog.def(p).generics.clone()
+                Some(p) => self
+                    .prog
+                    .def(p)
+                    .generics
+                    .clone()
                     .iter()
                     .map(|g| ext_subst.get(g).copied().unwrap_or(self.tcx.error))
                     .collect(),
@@ -357,7 +394,13 @@ impl<'a> Checker<'a> {
         }
         let ((elem, item_ty), done_ty) = (item?, done?);
         Some(crate::sema::results::ForAsyncIter {
-            elem, next_async, next_targs, iter_ty: ity, item_ty, done_ty, union_ty,
+            elem,
+            next_async,
+            next_targs,
+            iter_ty: ity,
+            item_ty,
+            done_ty,
+            union_ty,
         })
     }
 
@@ -376,7 +419,9 @@ impl<'a> Checker<'a> {
         let module = owner.map_or(ModId::ROOT, |o| self.prog.def(o).module);
         let mut out = Vec::new();
         for b in &bounds {
-            let TypeKind::Named { name, generics } = &b.kind else { continue };
+            let TypeKind::Named { name, generics } = &b.kind else {
+                continue;
+            };
             let Some(idef) = self.prog.resolve_type_in(module, &name.name) else {
                 continue;
             };
@@ -395,7 +440,8 @@ impl<'a> Checker<'a> {
         match (self.tcx.kind(pat).clone(), self.tcx.kind(val).clone()) {
             (TyKind::Param(_), _) => true,
             (TyKind::Named { def: d1, args: a1 }, TyKind::Named { def: d2, args: a2 }) => {
-                d1 == d2 && a1.len() == a2.len()
+                d1 == d2
+                    && a1.len() == a2.len()
                     && a1.iter().zip(&a2).all(|(p, v)| self.ty_matches(*p, *v))
             }
             (TyKind::Tuple(p), TyKind::Tuple(v)) => {
@@ -461,7 +507,9 @@ impl<'a> Checker<'a> {
         let module = self.current_module();
         let extends = self.prog.visible_extends(module);
         for ext in extends {
-            let Some(ItemKind::Extend(e)) = self.prog.def(ext).item.clone() else { continue };
+            let Some(ItemKind::Extend(e)) = self.prog.def(ext).item.clone() else {
+                continue;
+            };
             let mut env = TypeEnv::new(self.prog.def(ext).module);
             for g in self.prog.def(ext).generics.clone() {
                 let nm = self.prog.def(g).name.clone();
@@ -493,9 +541,12 @@ impl<'a> Checker<'a> {
                 if !self.type_implements(arg, iface) {
                     let an = self.display(arg);
                     let inm = self.prog.def(iface).name.clone();
-                    self.emit(span, SemaErrorKind::Message(format!(
-                        "type `{an}` does not implement `{inm}`, required by this bound"
-                    )));
+                    self.emit(
+                        span,
+                        SemaErrorKind::Message(format!(
+                            "type `{an}` does not implement `{inm}`, required by this bound"
+                        )),
+                    );
                 }
             }
         }
@@ -503,7 +554,11 @@ impl<'a> Checker<'a> {
 
     /// Find an interface method `name` reachable through a type parameter's
     /// bounds. Returns the interface-method def and the bound's type arguments.
-    pub(crate) fn resolve_bound_method(&mut self, param: DefId, name: &str) -> Option<(DefId, DefId, Vec<Ty>)> {
+    pub(crate) fn resolve_bound_method(
+        &mut self,
+        param: DefId,
+        name: &str,
+    ) -> Option<(DefId, DefId, Vec<Ty>)> {
         for (iface, iargs) in self.bound_ifaces(param) {
             for id in 0..self.prog.defs.len() {
                 let d = DefId(id as u32);
@@ -572,11 +627,14 @@ impl<'a> Checker<'a> {
             for a in args {
                 self.check_expr(a, None);
             }
-            self.emit(name.span, SemaErrorKind::Message(format!(
-                "no method `{}` is available on type parameter `{}` through its bounds",
-                name.name,
-                self.display(rty)
-            )));
+            self.emit(
+                name.span,
+                SemaErrorKind::Message(format!(
+                    "no method `{}` is available on type parameter `{}` through its bounds",
+                    name.name,
+                    self.display(rty)
+                )),
+            );
             return self.tcx.error;
         };
         // Record the interface method; codegen monomorphizes it to the concrete
@@ -584,10 +642,13 @@ impl<'a> Checker<'a> {
         self.record_res(callee.span, ValueRes::Method(method), self.tcx.error);
         let (params, ret) = self.iface_method_sig(method, iface, &iargs, rty);
         if args.len() != params.len() {
-            self.emit(span, SemaErrorKind::ArgCount {
-                expected: params.len(),
-                found: args.len(),
-            });
+            self.emit(
+                span,
+                SemaErrorKind::ArgCount {
+                    expected: params.len(),
+                    found: args.len(),
+                },
+            );
         }
         for (a, pt) in args.iter().zip(&params) {
             let at = self.check_expr(a, Some(*pt));
@@ -613,26 +674,34 @@ impl<'a> Checker<'a> {
         };
         let method = (0..self.prog.defs.len() as u32).map(DefId).find(|&d| {
             let def = self.prog.def(d);
-            def.kind == DefKind::InterfaceMethod && def.parent == Some(iface) && def.name == name.name
+            def.kind == DefKind::InterfaceMethod
+                && def.parent == Some(iface)
+                && def.name == name.name
         });
         let Some(method) = method else {
             for a in args {
                 self.check_expr(a, None);
             }
-            self.emit(name.span, SemaErrorKind::Message(format!(
-                "interface `{}` has no method `{}`",
-                self.display(rty),
-                name.name
-            )));
+            self.emit(
+                name.span,
+                SemaErrorKind::Message(format!(
+                    "interface `{}` has no method `{}`",
+                    self.display(rty),
+                    name.name
+                )),
+            );
             return self.tcx.error;
         };
         self.record_res(callee.span, ValueRes::Method(method), self.tcx.error);
         let (params, ret) = self.iface_method_sig(method, iface, &iargs, rty);
         if args.len() != params.len() {
-            self.emit(span, SemaErrorKind::ArgCount {
-                expected: params.len(),
-                found: args.len(),
-            });
+            self.emit(
+                span,
+                SemaErrorKind::ArgCount {
+                    expected: params.len(),
+                    found: args.len(),
+                },
+            );
         }
         for (a, pt) in args.iter().zip(&params) {
             let at = self.check_expr(a, Some(*pt));
@@ -662,7 +731,10 @@ impl<'a> Checker<'a> {
         let Some(ItemKind::Function(f)) = self.prog.def(mdef).item.clone() else {
             return None;
         };
-        let takes_only_self = f.params.iter().all(|p| matches!(p.kind, ParamKind::SelfParam));
+        let takes_only_self = f
+            .params
+            .iter()
+            .all(|p| matches!(p.kind, ParamKind::SelfParam));
         let ret = match &f.return_type {
             Some(t) => {
                 let lowered = self.lower_ty(t, &env);
@@ -692,12 +764,14 @@ impl<'a> Checker<'a> {
         Some((mdef, targs))
     }
 
-    pub(crate) fn resolve_method(&mut self, recv_ty: Ty, name: &str) -> Option<(DefId, HashMap<DefId, Ty>)> {
+    pub(crate) fn resolve_method(
+        &mut self,
+        recv_ty: Ty,
+        name: &str,
+    ) -> Option<(DefId, HashMap<DefId, Ty>)> {
         for id in 0..self.prog.defs.len() {
             let d = DefId(id as u32);
-            if self.prog.def(d).kind != DefKind::ExtendMethod
-                || self.prog.def(d).name != name
-            {
+            if self.prog.def(d).kind != DefKind::ExtendMethod || self.prog.def(d).name != name {
                 continue;
             }
             let parent = self.prog.def(d).parent?;
@@ -771,15 +845,20 @@ impl<'a> Checker<'a> {
         }
 
         if args.len() != param_tys.len() {
-            self.emit(span, SemaErrorKind::ArgCount {
-                expected: param_tys.len(),
-                found: args.len(),
-            });
+            self.emit(
+                span,
+                SemaErrorKind::ArgCount {
+                    expected: param_tys.len(),
+                    found: args.len(),
+                },
+            );
         }
 
         // Record the instantiation arguments in declaration order.
-        let type_args: Vec<Ty> =
-            gens.iter().map(|g| map.get(g).copied().unwrap_or(self.tcx.error)).collect();
+        let type_args: Vec<Ty> = gens
+            .iter()
+            .map(|g| map.get(g).copied().unwrap_or(self.tcx.error))
+            .collect();
         // Enforce each parameter's interface bounds against its argument.
         self.check_bounds(&gens, &type_args, span);
 
@@ -840,7 +919,12 @@ impl<'a> Checker<'a> {
     /// Whether `def` is an `extern struct` carrying the `@Union` decorator.
     pub(crate) fn is_union_extern_struct(&self, def: DefId) -> bool {
         self.prog.def(def).kind == DefKind::ExternStruct
-            && self.prog.def(def).attrs.iter().any(|a| a.name.name == "Union")
+            && self
+                .prog
+                .def(def)
+                .attrs
+                .iter()
+                .any(|a| a.name.name == "Union")
     }
 
     /// Whether `ty` is an `extern struct` nominal type (`docs/19` §3).
@@ -873,11 +957,14 @@ impl<'a> Checker<'a> {
             false
         };
         if !extern_place && !array_elem {
-            self.emit(amp_span, SemaErrorKind::Message(
-                "`&` (address-of) is currently supported only for an `extern struct` \
+            self.emit(
+                amp_span,
+                SemaErrorKind::Message(
+                    "`&` (address-of) is currently supported only for an `extern struct` \
                  place (`&out`) or a fixed-array element (`&arr[i]`) (`docs/19`)"
-                    .into(),
-            ));
+                        .into(),
+                ),
+            );
             return self.tcx.error;
         }
         self.tcx.mk_ptr(ty)
@@ -888,8 +975,12 @@ impl<'a> Checker<'a> {
     pub(crate) fn is_npo_union(&self, ty: Ty) -> bool {
         if let TyKind::Union(members) = self.tcx.kind(ty) {
             if members.len() == 2 {
-                let has_null = members.iter().any(|m| matches!(self.tcx.kind(*m), TyKind::Null));
-                let has_ptr = members.iter().any(|m| matches!(self.tcx.kind(*m), TyKind::Ptr(_)));
+                let has_null = members
+                    .iter()
+                    .any(|m| matches!(self.tcx.kind(*m), TyKind::Null));
+                let has_ptr = members
+                    .iter()
+                    .any(|m| matches!(self.tcx.kind(*m), TyKind::Ptr(_)));
                 return has_null && has_ptr;
             }
         }
@@ -919,20 +1010,26 @@ impl<'a> Checker<'a> {
                 // layout, so it can only be passed around as `*T`, never
                 // dereferenced to a value (`docs/19` §4).
                 if self.is_opaque_extern(inner) {
-                    self.emit(star_span, SemaErrorKind::Message(format!(
-                        "cannot dereference a pointer to the opaque extern type `{}`; \
+                    self.emit(
+                        star_span,
+                        SemaErrorKind::Message(format!(
+                            "cannot dereference a pointer to the opaque extern type `{}`; \
                          an opaque type has no value representation (`docs/19` §4)",
-                        self.display(inner)
-                    )));
+                            self.display(inner)
+                        )),
+                    );
                     return self.tcx.error;
                 }
                 inner
             }
             _ => {
-                self.emit(star_span, SemaErrorKind::Message(format!(
-                    "cannot dereference a value of type `{}`; `*` expects a raw pointer `*T`",
-                    self.display(ty)
-                )));
+                self.emit(
+                    star_span,
+                    SemaErrorKind::Message(format!(
+                        "cannot dereference a value of type `{}`; `*` expects a raw pointer `*T`",
+                        self.display(ty)
+                    )),
+                );
                 self.tcx.error
             }
         }
@@ -1041,11 +1138,14 @@ impl<'a> Checker<'a> {
             And | Or => return None,
         };
         let Some((mdef, op_subst)) = self.resolve_method(l, name) else {
-            self.emit(op_span, SemaErrorKind::Message(format!(
-                "operator `{}` is not implemented for `{}`",
-                binop_str(op),
-                self.display(l)
-            )));
+            self.emit(
+                op_span,
+                SemaErrorKind::Message(format!(
+                    "operator `{}` is not implemented for `{}`",
+                    binop_str(op),
+                    self.display(l)
+                )),
+            );
             return Some(self.tcx.error);
         };
         // If the operator method lives in a *generic* `extend` (e.g. a derived
@@ -1065,8 +1165,10 @@ impl<'a> Checker<'a> {
         // Hand the resolved overload to the HIR node being built for this
         // operator expression (consumed by `build_hir_node` in the enclosing
         // `check_expr`, right after this returns) — no persistent side table.
-        self.pending_overload
-            .set(Some(crate::hir::OpOverload { method: mdef, type_args }));
+        self.pending_overload.set(Some(crate::hir::OpOverload {
+            method: mdef,
+            type_args,
+        }));
 
         let (env, _) = self.fn_env(mdef);
         let Some(ItemKind::Function(f)) = self.prog.def(mdef).item.clone() else {
@@ -1138,10 +1240,18 @@ impl<'a> Checker<'a> {
     /// Extract a narrowing fact `(local, then_type, else_type)` from a
     /// condition of the form `ident is T`.
     pub(crate) fn narrow_facts(&mut self, cond: &Expr) -> Option<(LocalId, Ty, Ty)> {
-        let ExprKind::Cast { op: CastOp::Is, expr: inner, ty, .. } = &cond.kind else {
+        let ExprKind::Cast {
+            op: CastOp::Is,
+            expr: inner,
+            ty,
+            ..
+        } = &cond.kind
+        else {
             return None;
         };
-        let ExprKind::Ident(name) = &inner.kind else { return None };
+        let ExprKind::Ident(name) = &inner.kind else {
+            return None;
+        };
         let (lty, id) = self.lookup(&name.name)?;
         let env = self.local_env();
         let t = self.lower_ty(ty, &env);
@@ -1155,7 +1265,11 @@ impl<'a> Checker<'a> {
             .into_iter()
             .filter(|v| !self.tcx.variants(t).contains(v))
             .collect();
-        let else_t = if remaining.is_empty() { base } else { self.tcx.mk_union(remaining) };
+        let else_t = if remaining.is_empty() {
+            base
+        } else {
+            self.tcx.mk_union(remaining)
+        };
         Some((id, then_t, else_t))
     }
 
@@ -1171,5 +1285,4 @@ impl<'a> Checker<'a> {
             }
         }
     }
-
 }

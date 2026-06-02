@@ -140,7 +140,11 @@ struct Heap {
 /// `const`; initialized empty on first allocation.
 fn heap() -> &'static Mutex<Heap> {
     static H: OnceLock<Mutex<Heap>> = OnceLock::new();
-    H.get_or_init(|| Mutex::new(Heap { objects: HashMap::new() }))
+    H.get_or_init(|| {
+        Mutex::new(Heap {
+            objects: HashMap::new(),
+        })
+    })
 }
 
 /// Bytes allocated since the last collection — the GC trigger. A lock-free
@@ -165,23 +169,53 @@ pub struct StaticDesc {
 }
 
 /// Shared descriptor for `str` objects (variable size; bytes inline, leaf).
-pub static STR_DESC: StaticDesc = StaticDesc { size: 0, kind: KIND_STR, type_id: 0, n_ptrs: 0, rc_trailer: 0 };
+pub static STR_DESC: StaticDesc = StaticDesc {
+    size: 0,
+    kind: KIND_STR,
+    type_id: 0,
+    n_ptrs: 0,
+    rc_trailer: 0,
+};
 /// Shared descriptor for a `List` handle: `[len][cap][buf][elem_is_ptr]`.
 /// The collector special-cases `kind == LIST` to trace the buffer's elements.
-pub static LIST_HANDLE_DESC: StaticDesc = StaticDesc { size: 32, kind: KIND_LIST, type_id: 0, n_ptrs: 0, rc_trailer: 0 };
+pub static LIST_HANDLE_DESC: StaticDesc = StaticDesc {
+    size: 32,
+    kind: KIND_LIST,
+    type_id: 0,
+    n_ptrs: 0,
+    rc_trailer: 0,
+};
 /// Shared descriptor for a `List` element buffer (variable size, leaf — it is
 /// traced via its owning `List` handle, which knows the length/elem-kind).
-pub static LIST_BUF_DESC: StaticDesc = StaticDesc { size: 0, kind: KIND_PLAIN, type_id: 0, n_ptrs: 0, rc_trailer: 0 };
+pub static LIST_BUF_DESC: StaticDesc = StaticDesc {
+    size: 0,
+    kind: KIND_PLAIN,
+    type_id: 0,
+    n_ptrs: 0,
+    rc_trailer: 0,
+};
 /// Shared descriptor for a `Map` handle:
 /// `[len][cap][buf][key_is_ptr][val_is_ptr][hash_fn][eq_fn]` (56 B). The
 /// `hash_fn`/`eq_fn` slots are nullable function pointers; when non-null, the
 /// runtime calls through them (used for user-typed keys implementing
 /// `Eq + Hash`, `docs/15` §7). The collector special-cases `kind == MAP` to
 /// trace each occupied slot's key/value as needed.
-pub static MAP_HANDLE_DESC: StaticDesc = StaticDesc { size: 56, kind: KIND_MAP, type_id: 0, n_ptrs: 0, rc_trailer: 0 };
+pub static MAP_HANDLE_DESC: StaticDesc = StaticDesc {
+    size: 56,
+    kind: KIND_MAP,
+    type_id: 0,
+    n_ptrs: 0,
+    rc_trailer: 0,
+};
 /// Shared descriptor for a `Map` slot buffer (variable size, leaf — traced via
 /// its owning handle, which knows the capacity and key/value pointer-ness).
-pub static MAP_BUF_DESC: StaticDesc = StaticDesc { size: 0, kind: KIND_PLAIN, type_id: 0, n_ptrs: 0, rc_trailer: 0 };
+pub static MAP_BUF_DESC: StaticDesc = StaticDesc {
+    size: 0,
+    kind: KIND_PLAIN,
+    type_id: 0,
+    n_ptrs: 0,
+    rc_trailer: 0,
+};
 
 #[inline]
 pub fn str_desc() -> *const u8 {
@@ -285,7 +319,14 @@ pub unsafe fn collect(roots: &[usize]) -> usize {
     // objects still pending finalization.
     let is_obj = |fb: usize| fb != 0 && fb >= HEADER && bases.contains(&(fb - HEADER));
     let mut work: Vec<usize> = roots.iter().copied().filter(|&p| is_obj(p)).collect();
-    work.extend(EXTRA_ROOTS.lock().unwrap().iter().copied().filter(|&p| is_obj(p)));
+    work.extend(
+        extra_roots()
+            .lock()
+            .unwrap()
+            .keys()
+            .copied()
+            .filter(|&p| is_obj(p)),
+    );
     for &(b, _, _) in &pending {
         work.push(b + HEADER);
     }
@@ -458,7 +499,9 @@ unsafe fn mark_reachable(bases: &HashSet<usize>, mut work: Vec<usize>) {
 fn run_finalizers() {
     loop {
         let item = FINALIZE_PENDING.lock().unwrap().pop();
-        let Some((base, total, tid)) = item else { break };
+        let Some((base, total, tid)) = item else {
+            break;
+        };
         let f = drop_fns().lock().unwrap().get(&tid).copied();
         if let Some(f) = f {
             f((base + HEADER) as *mut u8); // user `drop(self)`
@@ -471,7 +514,13 @@ fn run_finalizers() {
         for off in unsafe { desc_rc_offsets(desc) } {
             let child = unsafe { ((base + HEADER + off) as *const usize).read() };
             if child >= HEADER {
-                let live = { heap().lock().unwrap().objects.contains_key(&(child - HEADER)) };
+                let live = {
+                    heap()
+                        .lock()
+                        .unwrap()
+                        .objects
+                        .contains_key(&(child - HEADER))
+                };
                 if live {
                     unsafe { rc_dec_no_free(child) };
                 }
@@ -487,7 +536,12 @@ fn run_finalizers() {
 /// registry by a collection yet).
 pub fn live_count() -> usize {
     let global = heap().lock().unwrap().objects.len();
-    let logged: usize = MUTATORS.lock().unwrap().iter().map(|m| m.alloc_log.lock().unwrap().len()).sum();
+    let logged: usize = MUTATORS
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|m| m.alloc_log.lock().unwrap().len())
+        .sum();
     global + logged
 }
 
@@ -546,7 +600,8 @@ pub extern "C" fn lang_gc_set_enabled(on: bool) {
 /// Whether collection runs: the runtime toggle, or the `OTTER_FUSION_GC` env override.
 fn gc_enabled() -> bool {
     static E: OnceLock<bool> = OnceLock::new();
-    let env = *E.get_or_init(|| matches!(std::env::var("OTTER_FUSION_GC").as_deref(), Ok(v) if v != "off"));
+    let env = *E
+        .get_or_init(|| matches!(std::env::var("OTTER_FUSION_GC").as_deref(), Ok(v) if v != "off"));
     env || GC_ON.load(Ordering::Relaxed)
 }
 
@@ -623,6 +678,7 @@ const M_NATIVE: u8 = 2; // inside a blocking runtime call; `fp` valid
 
 /// Per-thread mutator record. The collector reads `state`/`fp` of every thread.
 struct Mutator {
+    id: u64,
     state: AtomicU8,
     /// Frame pointer to scan this thread's roots from, valid when not running.
     fp: AtomicUsize,
@@ -662,6 +718,7 @@ fn drain_alloc_logs_into(objects: &mut HashMap<usize, usize>) {
 /// All live mutator threads. Registered on a thread's first GC interaction and
 /// removed when the thread exits (via [`MutatorHandle`]'s drop).
 static MUTATORS: Mutex<Vec<Arc<Mutator>>> = Mutex::new(Vec::new());
+static NEXT_MUTATOR_ID: AtomicU64 = AtomicU64::new(1);
 /// Set while a collection is in progress; mutators that observe it park.
 static STOP: AtomicBool = AtomicBool::new(false);
 
@@ -684,7 +741,10 @@ static WORLD: Mutex<()> = Mutex::new(());
 /// thread's stack. A spawned thread's closure environment and (eventual) result
 /// live here so they survive collection even during the cross-thread handoff
 /// window, when they may not yet be on any scanned stack (`docs/20`).
-static EXTRA_ROOTS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+fn extra_roots() -> &'static Mutex<HashMap<usize, usize>> {
+    static R: OnceLock<Mutex<HashMap<usize, usize>>> = OnceLock::new();
+    R.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 /// Finalizers: `type id → drop function`. A type with an `extend T: Drop` impl
 /// registers its monomorphized `drop(self)` here at startup (`docs/16` §8).
@@ -830,15 +890,25 @@ unsafe fn rc_finalize(obj: usize) {
 
 /// Pin `p` as a global root until [`remove_extra_root`].
 pub fn add_extra_root(p: usize) {
-    EXTRA_ROOTS.lock().unwrap().push(p);
+    let mut roots = extra_roots().lock().unwrap();
+    *roots.entry(p).or_insert(0) += 1;
 }
 
 /// Unpin one occurrence of `p` from the global roots.
 pub fn remove_extra_root(p: usize) {
-    let mut r = EXTRA_ROOTS.lock().unwrap();
-    if let Some(i) = r.iter().position(|&x| x == p) {
-        r.swap_remove(i);
+    let mut roots = extra_roots().lock().unwrap();
+    if let Some(count) = roots.get_mut(&p) {
+        *count -= 1;
+        if *count == 0 {
+            roots.remove(&p);
+        }
     }
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+pub(crate) fn extra_root_count_for(p: usize) -> usize {
+    extra_roots().lock().unwrap().get(&p).copied().unwrap_or(0)
 }
 
 /// C entry point: pin a managed field-block pointer as a global GC root. Used by
@@ -923,6 +993,7 @@ impl Drop for MutatorHandle {
 thread_local! {
     static ME: MutatorHandle = {
         let m = Arc::new(Mutator {
+            id: NEXT_MUTATOR_ID.fetch_add(1, Ordering::Relaxed),
             state: AtomicU8::new(M_RUNNING),
             fp: AtomicUsize::new(0),
             roots: Mutex::new(Vec::new()),
@@ -1022,6 +1093,20 @@ pub extern "C" fn lang_gc_safepoint() {
     park_self(current_fp());
 }
 
+/// Cooperative safepoint for runtime scheduler loops that may run generated
+/// poll functions back-to-back without entering a blocking native wait.
+///
+/// The scheduler pins task inputs as extra roots before polling them, so a
+/// runtime-frame-only stack scan is sufficient here: language state lives in the
+/// pinned task/future graph, while this call simply lets the mutator publish a
+/// non-running state for an in-progress stop-the-world collection.
+pub fn runtime_safepoint() {
+    if !STOP.load(Ordering::Acquire) {
+        return;
+    }
+    park_self(current_fp());
+}
+
 /// Register a freshly-spawned worker as a mutator and gate its start on the
 /// world barrier, so it cannot begin running program code while a collection is
 /// in progress. Call once at the very top of a spawned thread, before any
@@ -1076,6 +1161,18 @@ pub fn enter_native() {
     });
 }
 
+/// Mark the current thread as blocked in runtime-only code with no language
+/// roots on its stack. Executor workers use this while waiting for runnable
+/// tasks: any task/future state they may later poll is pinned in heap/runtime
+/// structures, and while idle they hold no generated frame to scan.
+pub fn enter_runtime_native_no_roots() {
+    ME.with(|h| {
+        h.0.fp.store(0, Ordering::SeqCst);
+        h.0.roots.lock().unwrap().clear();
+        h.0.state.store(M_NATIVE, Ordering::SeqCst);
+    });
+}
+
 /// Leave a blocking runtime call. If a collection is in progress, wait for it
 /// before resuming mutation (our stack was already scanned in native state).
 pub fn leave_native() {
@@ -1108,15 +1205,49 @@ fn stop_the_world() -> Vec<usize> {
     STOP.store(true, Ordering::SeqCst);
     let me_ptr = ME.with(|h| Arc::as_ptr(&h.0));
     // Wait for every other mutator to reach a safepoint or native state.
+    let mut spins = 0usize;
     loop {
         let pending = {
             let muts = MUTATORS.lock().unwrap();
-            muts.iter().any(|m| {
-                Arc::as_ptr(m) != me_ptr && m.state.load(Ordering::SeqCst) == M_RUNNING
-            })
+            muts.iter()
+                .any(|m| Arc::as_ptr(m) != me_ptr && m.state.load(Ordering::SeqCst) == M_RUNNING)
         };
         if !pending {
             break;
+        }
+        if gc_debug() {
+            spins = spins.wrapping_add(1);
+            if spins == 1 || spins % 1_000_000 == 0 {
+                let (states, detail) = {
+                    let muts = MUTATORS.lock().unwrap();
+                    let mut running = 0usize;
+                    let mut parked = 0usize;
+                    let mut native = 0usize;
+                    let mut detail = Vec::new();
+                    for m in muts.iter() {
+                        match m.state.load(Ordering::SeqCst) {
+                            M_RUNNING => {
+                                running += 1;
+                                detail.push(format!("#{}:running", m.id));
+                            }
+                            M_PARKED => {
+                                parked += 1;
+                                detail.push(format!("#{}:parked", m.id));
+                            }
+                            M_NATIVE => {
+                                native += 1;
+                                detail.push(format!("#{}:native", m.id));
+                            }
+                            _ => {}
+                        }
+                    }
+                    ((running, parked, native), detail.join(" "))
+                };
+                eprintln!(
+                    "[gc] waiting for world: running={} parked={} native={} [{}]",
+                    states.0, states.1, states.2, detail
+                );
+            }
         }
         std::thread::yield_now();
     }
@@ -1141,20 +1272,54 @@ fn resume_the_world() {
     RESUME_CV.notify_all();
 }
 
-/// Re-entrant pause count. While non-zero, `maybe_collect` is a no-op. Runtime
-/// helpers that allocate several managed objects while holding unrooted
-/// intermediates (e.g. `Map.keys`) bracket themselves with [`pause`]/[`resume`]
-/// so a stress-mode collection cannot free a half-built result.
-static PAUSE_DEPTH: AtomicUsize = AtomicUsize::new(0);
+thread_local! {
+    /// Re-entrant pause count for this mutator. While non-zero, this thread's
+    /// `maybe_collect` is a no-op. Runtime helpers that allocate several
+    /// managed objects while holding unrooted intermediates (e.g. `Map.keys`)
+    /// bracket themselves with [`pause`]/[`resume`] so a stress-mode collection
+    /// cannot free a half-built result.
+    ///
+    /// This must be thread-local: one executor worker's half-built result must
+    /// never make another worker ignore a pending stop-the-world request.
+    static PAUSE_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 /// Suspend collection until the matching [`resume`].
 pub fn pause() {
-    PAUSE_DEPTH.fetch_add(1, Ordering::SeqCst);
+    PAUSE_DEPTH.with(|depth| depth.set(depth.get() + 1));
 }
 
 /// Resume collection (undo one [`pause`]).
 pub fn resume() {
-    PAUSE_DEPTH.fetch_sub(1, Ordering::SeqCst);
+    let should_park = PAUSE_DEPTH.with(|depth| {
+        let n = depth.get();
+        debug_assert!(n > 0, "gc::resume without matching gc::pause");
+        let next = n.saturating_sub(1);
+        depth.set(next);
+        next == 0 && STOP.load(Ordering::Acquire)
+    });
+    if should_park {
+        park_self(current_fp());
+    }
+}
+
+/// Resume collection while keeping a freshly-built managed return value rooted
+/// across a possible stop-the-world park at the pause boundary.
+///
+/// Runtime helpers commonly build a small graph of result boxes under
+/// [`pause`] and then return the outer box to generated code. If another
+/// mutator requested a collection while the helper was paused, [`resume`] can
+/// park this thread before the generated caller has the return value in a
+/// stack-map-visible slot. Pinning the outer box for just this boundary lets the
+/// collector trace the whole result graph without leaving a long-lived root.
+pub fn resume_with_return_root(p: usize) {
+    if p != 0 {
+        add_extra_root(p);
+    }
+    resume();
+    if p != 0 {
+        remove_extra_root(p);
+    }
 }
 
 /// If collection is enabled and the allocation budget is exhausted, run a
@@ -1171,7 +1336,7 @@ fn maybe_collect() {
     // its `pause` sections are bounded and followed by a generated safepoint,
     // where it parks if a collection is then pending — so a waiting collector
     // makes progress as soon as the pause ends. Until then it allocates freely.
-    if PAUSE_DEPTH.load(Ordering::SeqCst) != 0 {
+    if PAUSE_DEPTH.with(|depth| depth.get() != 0) {
         return;
     }
     // Concurrent reclamation is ENABLED. Two prerequisites are in place:
@@ -1288,7 +1453,10 @@ mod tests {
             lang_rc_retain(p as *mut u8); // count 2
             lang_rc_release(p as *mut u8); // count 1 — still live, no drop
             assert_eq!(live_count(), 1);
-            assert!(dropped().lock().unwrap().is_empty(), "no drop while count > 0");
+            assert!(
+                dropped().lock().unwrap().is_empty(),
+                "no drop while count > 0"
+            );
             lang_rc_release(p as *mut u8); // count 0 — drop runs synchronously, freed
             assert_eq!(dropped().lock().unwrap().as_slice(), &[42]);
             assert_eq!(live_count(), 0, "freed at count zero without a collection");
@@ -1399,7 +1567,7 @@ mod tests {
             for _ in 0..n {
                 lang_rc_retain(p as *mut u8);
             }
-            assert_eq!(unsafe { rc_count(p) }.load(Ordering::Relaxed), 1 + n as u64);
+            assert_eq!(rc_count(p).load(Ordering::Relaxed), 1 + n as u64);
             let addr = p;
             let mut handles = Vec::new();
             for _ in 0..n {
@@ -1416,7 +1584,7 @@ mod tests {
                 h.join().unwrap();
             }
             // The original reference remains.
-            assert_eq!(unsafe { rc_count(p) }.load(Ordering::Relaxed), 1);
+            assert_eq!(rc_count(p).load(Ordering::Relaxed), 1);
             assert!(dropped().lock().unwrap().is_empty());
             lang_rc_release(p as *mut u8);
             assert_eq!(dropped().lock().unwrap().as_slice(), &[7]);
@@ -1462,6 +1630,7 @@ mod tests {
         for _ in 0..3 {
             let go = go.clone();
             handles.push(std::thread::spawn(move || {
+                thread_start();
                 let mut spins = 0u64;
                 while go.load(Ordering::Relaxed) {
                     lang_gc_safepoint();
@@ -1478,6 +1647,92 @@ mod tests {
             let turn = GC_TURN.lock().unwrap();
             let _roots = stop_the_world();
             // While stopped, every other mutator must be parked or native.
+            let me_ptr = ME.with(|h| StdArc::as_ptr(&h.0));
+            {
+                let muts = MUTATORS.lock().unwrap();
+                for m in muts.iter() {
+                    if StdArc::as_ptr(m) == me_ptr {
+                        continue;
+                    }
+                    assert_ne!(m.state.load(Ordering::SeqCst), M_RUNNING);
+                }
+            }
+            resume_the_world();
+            drop(turn);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        go.store(false, Ordering::Relaxed);
+        for h in handles {
+            h.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn stop_the_world_coordinates_runtime_only_safepoints() {
+        // Executor workers can briefly spin or loop in runtime code without a
+        // generated language frame. They still register as mutators and must
+        // publish a non-running state when a collection starts.
+        let _g = TEST_LOCK.lock().unwrap();
+        use std::sync::Arc as StdArc;
+        let go = StdArc::new(AtomicBool::new(true));
+        let mut handles = Vec::new();
+        for _ in 0..3 {
+            let go = go.clone();
+            handles.push(std::thread::spawn(move || {
+                thread_start();
+                while go.load(Ordering::Relaxed) {
+                    runtime_safepoint();
+                    std::thread::yield_now();
+                }
+            }));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        for _ in 0..5 {
+            let turn = GC_TURN.lock().unwrap();
+            let _roots = stop_the_world();
+            let me_ptr = ME.with(|h| StdArc::as_ptr(&h.0));
+            {
+                let muts = MUTATORS.lock().unwrap();
+                for m in muts.iter() {
+                    if StdArc::as_ptr(m) == me_ptr {
+                        continue;
+                    }
+                    assert_ne!(m.state.load(Ordering::SeqCst), M_RUNNING);
+                }
+            }
+            resume_the_world();
+            drop(turn);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        go.store(false, Ordering::Relaxed);
+        for h in handles {
+            h.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn stop_the_world_coordinates_runtime_idle_native_threads() {
+        // Idle executor workers block in runtime code with no language roots.
+        // They must be visible as native, not running, while asleep.
+        let _g = TEST_LOCK.lock().unwrap();
+        use std::sync::Arc as StdArc;
+        let go = StdArc::new(AtomicBool::new(true));
+        let mut handles = Vec::new();
+        for _ in 0..3 {
+            let go = go.clone();
+            handles.push(std::thread::spawn(move || {
+                thread_start();
+                while go.load(Ordering::Relaxed) {
+                    enter_runtime_native_no_roots();
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                    leave_native();
+                }
+            }));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        for _ in 0..5 {
+            let turn = GC_TURN.lock().unwrap();
+            let _roots = stop_the_world();
             let me_ptr = ME.with(|h| StdArc::as_ptr(&h.0));
             {
                 let muts = MUTATORS.lock().unwrap();
@@ -1527,5 +1782,24 @@ mod tests {
             assert_eq!((p as *const u64).read(), 0);
             free_all();
         }
+    }
+
+    #[test]
+    fn extra_roots_are_counted_and_removed_in_constant_time_shape() {
+        let _g = TEST_LOCK.lock().unwrap();
+        let p = 0xE_7120_0001usize;
+
+        add_extra_root(p);
+        add_extra_root(p);
+        assert_eq!(extra_root_count_for(p), 2);
+
+        remove_extra_root(p);
+        assert_eq!(extra_root_count_for(p), 1);
+
+        remove_extra_root(p);
+        assert_eq!(extra_root_count_for(p), 0);
+
+        remove_extra_root(p);
+        assert_eq!(extra_root_count_for(p), 0);
     }
 }

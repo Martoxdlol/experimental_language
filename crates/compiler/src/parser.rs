@@ -279,7 +279,9 @@ impl<'src> Parser<'src> {
         let kind_start = self.peek_kind();
         let kind: ItemKind = match kind_start {
             TokenKind::Kw(Keyword::Var) => ItemKind::Var(self.parse_var_item()?),
-            TokenKind::Kw(Keyword::Function) => ItemKind::Function(self.parse_function_item(false)?),
+            TokenKind::Kw(Keyword::Function) => {
+                ItemKind::Function(self.parse_function_item(false)?)
+            }
             TokenKind::Kw(Keyword::Struct) => ItemKind::Struct(self.parse_struct_item(false)?),
             TokenKind::Kw(Keyword::Interface) => ItemKind::Interface(self.parse_interface_item()?),
             TokenKind::Kw(Keyword::Type) => ItemKind::TypeAlias(self.parse_type_alias_item()?),
@@ -305,8 +307,15 @@ impl<'src> Parser<'src> {
                 self.error(ParseError::new(
                     ParseErrorKind::Expected {
                         expected: vec![
-                            "`var`", "`function`", "`struct`", "`interface`",
-                            "`type`", "`mod`", "`extend`", "`extern`", "`import`",
+                            "`var`",
+                            "`function`",
+                            "`struct`",
+                            "`interface`",
+                            "`type`",
+                            "`mod`",
+                            "`extend`",
+                            "`extern`",
+                            "`import`",
                         ],
                         found: self.peek_kind(),
                     },
@@ -519,7 +528,10 @@ impl<'src> Parser<'src> {
         self.expect(TokenKind::Colon, "`:` after parameter name");
         let ty = self.parse_type();
         Param {
-            kind: ParamKind::Normal { name: name.clone(), ty: ty.clone() },
+            kind: ParamKind::Normal {
+                name: name.clone(),
+                ty: ty.clone(),
+            },
             span: start.join(ty.span),
         }
     }
@@ -541,7 +553,11 @@ impl<'src> Parser<'src> {
                     let (vis, _) = self.parse_visibility();
                     let ty = self.parse_type();
                     let span = start.join(ty.span);
-                    fields.push(TupleField { visibility: vis, ty, span });
+                    fields.push(TupleField {
+                        visibility: vis,
+                        ty,
+                        span,
+                    });
                     if self.eat(TokenKind::Comma).is_none() {
                         break;
                     }
@@ -577,7 +593,12 @@ impl<'src> Parser<'src> {
                 StructKind::Unit
             }
         };
-        Some(StructItem { name, generics, is_extern, kind })
+        Some(StructItem {
+            name,
+            generics,
+            is_extern,
+            kind,
+        })
     }
 
     fn parse_struct_field(&mut self) -> StructField {
@@ -627,7 +648,12 @@ impl<'src> Parser<'src> {
             }
         }
         self.expect(TokenKind::RBrace, "`}`");
-        Some(InterfaceItem { name, generics, supers, members })
+        Some(InterfaceItem {
+            name,
+            generics,
+            supers,
+            members,
+        })
     }
 
     fn parse_interface_member(&mut self) -> Option<InterfaceMember> {
@@ -691,7 +717,11 @@ impl<'src> Parser<'src> {
         self.expect(TokenKind::Eq, "`=`")?;
         let aliased = self.parse_type();
         self.expect(TokenKind::Semi, "`;`");
-        Some(TypeAliasItem { name, generics, aliased })
+        Some(TypeAliasItem {
+            name,
+            generics,
+            aliased,
+        })
     }
 
     fn parse_module_item(&mut self, inside_inline_mod: bool) -> Option<ModuleItem> {
@@ -730,7 +760,10 @@ impl<'src> Parser<'src> {
                 ));
             }
             self.expect(TokenKind::Semi, "`;`");
-            Some(ModuleItem { name, kind: ModuleKind::External })
+            Some(ModuleItem {
+                name,
+                kind: ModuleKind::External,
+            })
         }
     }
 
@@ -757,7 +790,12 @@ impl<'src> Parser<'src> {
             }
         }
         self.expect(TokenKind::RBrace, "`}`");
-        Some(ExtendItem { generics, target, interfaces, members })
+        Some(ExtendItem {
+            generics,
+            target,
+            interfaces,
+            members,
+        })
     }
 
     fn parse_extend_member(&mut self) -> Option<ExtendMember> {
@@ -984,7 +1022,10 @@ impl<'src> Parser<'src> {
             alts.push(self.parse_type_no_union());
         }
         let span = alts.first().unwrap().span.join(alts.last().unwrap().span);
-        Type { kind: TypeKind::Union(alts), span }
+        Type {
+            kind: TypeKind::Union(alts),
+            span,
+        }
     }
 
     fn parse_type_no_union(&mut self) -> Type {
@@ -1009,13 +1050,19 @@ impl<'src> Parser<'src> {
                 let close = self.expect(TokenKind::RBracket, "`]`");
                 let end = close.map(|t| t.span).unwrap_or(len.span);
                 Type {
-                    kind: TypeKind::Array { elem: Box::new(elem), len: Box::new(len) },
+                    kind: TypeKind::Array {
+                        elem: Box::new(elem),
+                        len: Box::new(len),
+                    },
                     span: start.join(end),
                 }
             }
             TokenKind::Kw(Keyword::SelfUpper) => {
                 let tok = self.bump();
-                Type { kind: TypeKind::SelfType, span: tok.span }
+                Type {
+                    kind: TypeKind::SelfType,
+                    span: tok.span,
+                }
             }
             TokenKind::Kw(Keyword::Extern) => {
                 self.bump();
@@ -1254,7 +1301,10 @@ impl<'src> Parser<'src> {
                 let semi = self.expect(TokenKind::Semi, "`;`");
                 let end = semi.map(|t| t.span).unwrap_or(value.span);
                 stmts.push(Stmt {
-                    kind: StmtKind::Assign { target: expr, value },
+                    kind: StmtKind::Assign {
+                        target: expr,
+                        value,
+                    },
                     span: eq_tok.span.join(end),
                 });
                 continue;
@@ -1464,7 +1514,10 @@ impl<'src> Parser<'src> {
                 let operand = self.parse_unary(restrict);
                 let span = start.join(operand.span);
                 Expr {
-                    kind: ExprKind::Ref { expr: Box::new(operand), amp_span: start },
+                    kind: ExprKind::Ref {
+                        expr: Box::new(operand),
+                        amp_span: start,
+                    },
                     span,
                 }
             }
@@ -1473,7 +1526,10 @@ impl<'src> Parser<'src> {
                 let operand = self.parse_unary(restrict);
                 let span = start.join(operand.span);
                 Expr {
-                    kind: ExprKind::Deref { expr: Box::new(operand), star_span: start },
+                    kind: ExprKind::Deref {
+                        expr: Box::new(operand),
+                        star_span: start,
+                    },
                     span,
                 }
             }
@@ -1482,7 +1538,10 @@ impl<'src> Parser<'src> {
                 let operand = self.parse_unary(restrict);
                 let span = start.join(operand.span);
                 Expr {
-                    kind: ExprKind::Await { expr: Box::new(operand), kw_span: start },
+                    kind: ExprKind::Await {
+                        expr: Box::new(operand),
+                        kw_span: start,
+                    },
                     span,
                 }
             }
@@ -1491,7 +1550,10 @@ impl<'src> Parser<'src> {
                 let operand = self.parse_unary(restrict);
                 let span = start.join(operand.span);
                 Expr {
-                    kind: ExprKind::Spawn { expr: Box::new(operand), kw_span: start },
+                    kind: ExprKind::Spawn {
+                        expr: Box::new(operand),
+                        kw_span: start,
+                    },
                     span,
                 }
             }
@@ -1600,7 +1662,10 @@ impl<'src> Parser<'src> {
                             let name = self.ident_from(tok);
                             let span = expr.span.join(name.span);
                             expr = Expr {
-                                kind: ExprKind::Field { receiver: Box::new(expr), name },
+                                kind: ExprKind::Field {
+                                    receiver: Box::new(expr),
+                                    name,
+                                },
                                 span,
                             };
                         }
@@ -1611,16 +1676,20 @@ impl<'src> Parser<'src> {
                             let name = Ident::new("spawn", tok.span);
                             let span = expr.span.join(name.span);
                             expr = Expr {
-                                kind: ExprKind::Field { receiver: Box::new(expr), name },
+                                kind: ExprKind::Field {
+                                    receiver: Box::new(expr),
+                                    name,
+                                },
                                 span,
                             };
                         }
-                        TokenKind::Int { base: IntBase::Dec, has_suffix: false } => {
+                        TokenKind::Int {
+                            base: IntBase::Dec,
+                            has_suffix: false,
+                        } => {
                             let tok = self.bump();
                             let text = self.slice(tok.span);
-                            let index = text
-                                .parse::<u32>()
-                                .ok();
+                            let index = text.parse::<u32>().ok();
                             if index.is_none() || text.starts_with('_') {
                                 self.error(ParseError::new(
                                     ParseErrorKind::InvalidTupleIndex,
@@ -1654,10 +1723,7 @@ impl<'src> Parser<'src> {
                     self.bump();
                     let (args, trailing, rparen_span) =
                         self.parse_call_args_and_optional_trailing(restrict);
-                    let close_span = trailing
-                        .as_ref()
-                        .map(|tc| tc.span)
-                        .unwrap_or(rparen_span);
+                    let close_span = trailing.as_ref().map(|tc| tc.span).unwrap_or(rparen_span);
                     let span = expr.span.join(close_span);
                     expr = Expr {
                         kind: ExprKind::Call {
@@ -1687,7 +1753,10 @@ impl<'src> Parser<'src> {
                     let tok = self.bump();
                     let span = expr.span.join(tok.span);
                     expr = Expr {
-                        kind: ExprKind::Try { expr: Box::new(expr), q_span: tok.span },
+                        kind: ExprKind::Try {
+                            expr: Box::new(expr),
+                            q_span: tok.span,
+                        },
                         span,
                     };
                 }
@@ -1720,10 +1789,7 @@ impl<'src> Parser<'src> {
                     self.bump();
                     let (args, trailing, rparen_span) =
                         self.parse_call_args_and_optional_trailing(restrict);
-                    let close_span = trailing
-                        .as_ref()
-                        .map(|tc| tc.span)
-                        .unwrap_or(rparen_span);
+                    let close_span = trailing.as_ref().map(|tc| tc.span).unwrap_or(rparen_span);
                     let span = expr.span.join(close_span);
                     expr = Expr {
                         kind: ExprKind::Call {
@@ -1735,7 +1801,9 @@ impl<'src> Parser<'src> {
                         span,
                     };
                 }
-                TokenKind::LBrace if !restrict.no_struct_lit && self.is_trailing_closure_head(&expr) => {
+                TokenKind::LBrace
+                    if !restrict.no_struct_lit && self.is_trailing_closure_head(&expr) =>
+                {
                     // Trailing closure on a previously-built call/method-ref.
                     let closure = self.parse_trailing_closure();
                     let span = expr.span.join(closure.span);
@@ -1761,9 +1829,7 @@ impl<'src> Parser<'src> {
     fn is_trailing_closure_head(&self, e: &Expr) -> bool {
         matches!(
             &e.kind,
-            ExprKind::Field { .. }
-                | ExprKind::Call { .. }
-                | ExprKind::Index { .. }
+            ExprKind::Field { .. } | ExprKind::Call { .. } | ExprKind::Index { .. }
         )
     }
 
@@ -1817,7 +1883,9 @@ impl<'src> Parser<'src> {
                 } else {
                     None
                 };
-                let span = name.span.join(ty.as_ref().map(|t| t.span).unwrap_or(name.span));
+                let span = name
+                    .span
+                    .join(ty.as_ref().map(|t| t.span).unwrap_or(name.span));
                 params.push(ClosureParam { name, ty, span });
                 if self.eat(TokenKind::Comma).is_some() {
                     continue;
@@ -1870,11 +1938,7 @@ impl<'src> Parser<'src> {
         }
     }
 
-    fn parse_block_stmt_into(
-        &mut self,
-        stmts: &mut Vec<Stmt>,
-        trailing: &mut Option<Box<Expr>>,
-    ) {
+    fn parse_block_stmt_into(&mut self, stmts: &mut Vec<Stmt>, trailing: &mut Option<Box<Expr>>) {
         if self.peek_is_item_start() {
             if let Some(it) = self.parse_item(false) {
                 let span = it.span;
@@ -1912,19 +1976,28 @@ impl<'src> Parser<'src> {
             let semi = self.expect(TokenKind::Semi, "`;`");
             let end = semi.map(|t| t.span).unwrap_or(value.span);
             stmts.push(Stmt {
-                kind: StmtKind::Assign { target: expr, value },
+                kind: StmtKind::Assign {
+                    target: expr,
+                    value,
+                },
                 span: eq_tok.span.join(end),
             });
             return;
         }
         if self.eat(TokenKind::Semi).is_some() {
             let span = expr.span;
-            stmts.push(Stmt { kind: StmtKind::Expr(expr), span });
+            stmts.push(Stmt {
+                kind: StmtKind::Expr(expr),
+                span,
+            });
         } else if self.at(TokenKind::RBrace) {
             *trailing = Some(Box::new(expr));
         } else if is_block_form {
             let span = expr.span;
-            stmts.push(Stmt { kind: StmtKind::Expr(expr), span });
+            stmts.push(Stmt {
+                kind: StmtKind::Expr(expr),
+                span,
+            });
         } else {
             let span = self.peek_span();
             self.error(ParseError::new(
@@ -1935,7 +2008,10 @@ impl<'src> Parser<'src> {
                 span,
             ));
             let stmt_span = expr.span;
-            stmts.push(Stmt { kind: StmtKind::Expr(expr), span: stmt_span });
+            stmts.push(Stmt {
+                kind: StmtKind::Expr(expr),
+                span: stmt_span,
+            });
             if !self.at(TokenKind::Eof) && !self.at(TokenKind::RBrace) {
                 self.bump();
             }
@@ -1980,29 +2056,47 @@ impl<'src> Parser<'src> {
             TokenKind::StrStart => self.parse_string_expr(),
             TokenKind::Kw(Keyword::True) => {
                 let tok = self.bump();
-                Expr { kind: ExprKind::Bool(true), span: tok.span }
+                Expr {
+                    kind: ExprKind::Bool(true),
+                    span: tok.span,
+                }
             }
             TokenKind::Kw(Keyword::False) => {
                 let tok = self.bump();
-                Expr { kind: ExprKind::Bool(false), span: tok.span }
+                Expr {
+                    kind: ExprKind::Bool(false),
+                    span: tok.span,
+                }
             }
             TokenKind::Kw(Keyword::Null) => {
                 let tok = self.bump();
-                Expr { kind: ExprKind::Null, span: tok.span }
+                Expr {
+                    kind: ExprKind::Null,
+                    span: tok.span,
+                }
             }
             TokenKind::Kw(Keyword::SelfLower) => {
                 let tok = self.bump();
-                Expr { kind: ExprKind::SelfExpr, span: tok.span }
+                Expr {
+                    kind: ExprKind::SelfExpr,
+                    span: tok.span,
+                }
             }
             TokenKind::Underscore => {
                 let tok = self.bump();
-                Expr { kind: ExprKind::Underscore, span: tok.span }
+                Expr {
+                    kind: ExprKind::Underscore,
+                    span: tok.span,
+                }
             }
             TokenKind::Kw(Keyword::Return) => self.parse_return(),
             TokenKind::Kw(Keyword::Break) => self.parse_break(),
             TokenKind::Kw(Keyword::Continue) => {
                 let tok = self.bump();
-                Expr { kind: ExprKind::Continue, span: tok.span }
+                Expr {
+                    kind: ExprKind::Continue,
+                    span: tok.span,
+                }
             }
             TokenKind::Kw(Keyword::If) => self.parse_if(),
             TokenKind::Kw(Keyword::Match) => self.parse_match(),
@@ -2010,15 +2104,23 @@ impl<'src> Parser<'src> {
                 let kw = self.bump();
                 let body = self.parse_block();
                 let span = kw.span.join(body.span);
-                Expr { kind: ExprKind::Loop(body), span }
+                Expr {
+                    kind: ExprKind::Loop(body),
+                    span,
+                }
             }
             TokenKind::Kw(Keyword::While) => {
                 let kw = self.bump();
-                let cond = self.parse_expr(Restrict { no_struct_lit: true });
+                let cond = self.parse_expr(Restrict {
+                    no_struct_lit: true,
+                });
                 let body = self.parse_block();
                 let span = kw.span.join(body.span);
                 Expr {
-                    kind: ExprKind::While { cond: Box::new(cond), body },
+                    kind: ExprKind::While {
+                        cond: Box::new(cond),
+                        body,
+                    },
                     span,
                 }
             }
@@ -2027,7 +2129,10 @@ impl<'src> Parser<'src> {
                 let kw = self.bump();
                 let body = self.parse_block();
                 let span = kw.span.join(body.span);
-                Expr { kind: ExprKind::AsyncBlock(body), span }
+                Expr {
+                    kind: ExprKind::AsyncBlock(body),
+                    span,
+                }
             }
             TokenKind::Kw(Keyword::Function) => self.parse_anon_function(),
             TokenKind::LBrace => {
@@ -2036,7 +2141,10 @@ impl<'src> Parser<'src> {
                 } else {
                     let block = self.parse_block();
                     let span = block.span;
-                    Expr { kind: ExprKind::Block(block), span }
+                    Expr {
+                        kind: ExprKind::Block(block),
+                        span,
+                    }
                 }
             }
             TokenKind::LBracket => self.parse_list_literal(),
@@ -2056,7 +2164,10 @@ impl<'src> Parser<'src> {
                 if !self.at(TokenKind::Eof) {
                     self.bump();
                 }
-                Expr { kind: ExprKind::Null, span: tok_span }
+                Expr {
+                    kind: ExprKind::Null,
+                    span: tok_span,
+                }
             }
         }
     }
@@ -2077,7 +2188,10 @@ impl<'src> Parser<'src> {
                     },
                     span,
                 ));
-                Ident { name: String::new(), span }
+                Ident {
+                    name: String::new(),
+                    span,
+                }
             }
         };
         let mut args = Vec::new();
@@ -2102,7 +2216,12 @@ impl<'src> Parser<'src> {
             .map(|t| t.span)
             .unwrap_or(at_tok.span);
         Expr {
-            kind: ExprKind::MacroCall { name, at_span: at_tok.span, args, block },
+            kind: ExprKind::MacroCall {
+                name,
+                at_span: at_tok.span,
+                args,
+                block,
+            },
             span: at_tok.span.join(end),
         }
     }
@@ -2118,7 +2237,10 @@ impl<'src> Parser<'src> {
             Some(v) => kw.span.join(v.span),
             None => kw.span,
         };
-        Expr { kind: ExprKind::Return(value), span }
+        Expr {
+            kind: ExprKind::Return(value),
+            span,
+        }
     }
 
     fn parse_break(&mut self) -> Expr {
@@ -2132,12 +2254,17 @@ impl<'src> Parser<'src> {
             Some(v) => kw.span.join(v.span),
             None => kw.span,
         };
-        Expr { kind: ExprKind::Break(value), span }
+        Expr {
+            kind: ExprKind::Break(value),
+            span,
+        }
     }
 
     fn parse_if(&mut self) -> Expr {
         let kw = self.bump(); // `if`
-        let cond = self.parse_expr(Restrict { no_struct_lit: true });
+        let cond = self.parse_expr(Restrict {
+            no_struct_lit: true,
+        });
         let then_block = self.parse_block();
         let else_branch = if self.eat_kw(Keyword::Else).is_some() {
             if self.at_kw(Keyword::If) {
@@ -2165,7 +2292,9 @@ impl<'src> Parser<'src> {
 
     fn parse_match(&mut self) -> Expr {
         let kw = self.bump(); // `match`
-        let scrutinee = self.parse_expr(Restrict { no_struct_lit: true });
+        let scrutinee = self.parse_expr(Restrict {
+            no_struct_lit: true,
+        });
         self.expect(TokenKind::LBrace, "`{`");
         let mut arms = Vec::new();
         while !self.at(TokenKind::RBrace) && !self.at(TokenKind::Eof) {
@@ -2191,20 +2320,24 @@ impl<'src> Parser<'src> {
         let start = self.peek_span();
         let pattern = self.parse_pattern();
         let guard = if self.eat_kw(Keyword::If).is_some() {
-            Some(self.parse_expr(Restrict { no_struct_lit: true }))
+            Some(self.parse_expr(Restrict {
+                no_struct_lit: true,
+            }))
         } else {
             None
         };
         if self.eat(TokenKind::FatArrow).is_none() {
             let span = self.peek_span();
-            self.error(ParseError::new(
-                ParseErrorKind::MissingArrowInMatch,
-                span,
-            ));
+            self.error(ParseError::new(ParseErrorKind::MissingArrowInMatch, span));
         }
         let body = self.parse_expr(Restrict::default());
         let span = start.join(body.span);
-        MatchArm { pattern, guard, body, span }
+        MatchArm {
+            pattern,
+            guard,
+            body,
+            span,
+        }
     }
 
     fn parse_for(&mut self) -> Expr {
@@ -2221,7 +2354,9 @@ impl<'src> Parser<'src> {
                 span,
             ));
         }
-        let iter = self.parse_expr(Restrict { no_struct_lit: true });
+        let iter = self.parse_expr(Restrict {
+            no_struct_lit: true,
+        });
         let body = self.parse_block();
         let span = kw.span.join(body.span);
         Expr {
@@ -2275,7 +2410,10 @@ impl<'src> Parser<'src> {
         }
         let rb = self.expect(TokenKind::RBracket, "`]`");
         let end = rb.map(|t| t.span).unwrap_or_else(|| self.peek_span());
-        Expr { kind: ExprKind::List(elems), span: lb.span.join(end) }
+        Expr {
+            kind: ExprKind::List(elems),
+            span: lb.span.join(end),
+        }
     }
 
     /// `(` already at front. Could be:
@@ -2313,11 +2451,17 @@ impl<'src> Parser<'src> {
             }
             let rp = self.expect(TokenKind::RParen, "`)`");
             let end = rp.map(|t| t.span).unwrap_or(self.peek_span());
-            Expr { kind: ExprKind::Tuple(elems), span: lp.span.join(end) }
+            Expr {
+                kind: ExprKind::Tuple(elems),
+                span: lp.span.join(end),
+            }
         } else {
             let rp = self.expect(TokenKind::RParen, "`)`");
             let end = rp.map(|t| t.span).unwrap_or(self.peek_span());
-            Expr { kind: ExprKind::Paren(Box::new(first)), span: lp.span.join(end) }
+            Expr {
+                kind: ExprKind::Paren(Box::new(first)),
+                span: lp.span.join(end),
+            }
         }
     }
 
@@ -2339,7 +2483,9 @@ impl<'src> Parser<'src> {
             } else {
                 None
             };
-            let span = name.span.join(ty.as_ref().map(|t| t.span).unwrap_or(name.span));
+            let span = name
+                .span
+                .join(ty.as_ref().map(|t| t.span).unwrap_or(name.span));
             params.push(ClosureParam { name, ty, span });
             if self.eat(TokenKind::Comma).is_some() {
                 continue;
@@ -2363,7 +2509,10 @@ impl<'src> Parser<'src> {
         let body = if self.at(TokenKind::LBrace) {
             let block = self.parse_block();
             let span = block.span;
-            Expr { kind: ExprKind::Block(block), span }
+            Expr {
+                kind: ExprKind::Block(block),
+                span,
+            }
         } else {
             self.parse_expr(Restrict::default())
         };
@@ -2390,7 +2539,10 @@ impl<'src> Parser<'src> {
         }
         let tok = self.bump();
         let name = self.ident_from(tok);
-        Expr { kind: ExprKind::Ident(name.clone()), span: name.span }
+        Expr {
+            kind: ExprKind::Ident(name.clone()),
+            span: name.span,
+        }
     }
 
     fn try_struct_literal_head(&mut self) -> bool {
@@ -2438,7 +2590,10 @@ impl<'src> Parser<'src> {
             TokenKind::DotDot => true, // spread
             TokenKind::Ident => {
                 let after = self.peek_kind_at(inside_offset + 1);
-                matches!(after, TokenKind::Colon | TokenKind::Comma | TokenKind::RBrace)
+                matches!(
+                    after,
+                    TokenKind::Colon | TokenKind::Comma | TokenKind::RBrace
+                )
             }
             _ => false,
         }
@@ -2451,10 +2606,12 @@ impl<'src> Parser<'src> {
         let cp = self.checkpoint();
         self.bump(); // `{`
         let verdict = match self.peek_kind() {
-            TokenKind::RBrace => false,      // `{}` is the empty block
-            TokenKind::DotDot => true,       // `{ ..base }` is a map spread
+            TokenKind::RBrace => false, // `{}` is the empty block
+            TokenKind::DotDot => true,  // `{ ..base }` is a map spread
             _ => {
-                let _ = self.parse_expr(Restrict { no_struct_lit: true });
+                let _ = self.parse_expr(Restrict {
+                    no_struct_lit: true,
+                });
                 self.at(TokenKind::Colon)
             }
         };
@@ -2471,7 +2628,9 @@ impl<'src> Parser<'src> {
                 let base = self.parse_expr(Restrict::default());
                 items.push(MapItem::Spread(Box::new(base)));
             } else {
-                let key = self.parse_expr(Restrict { no_struct_lit: true });
+                let key = self.parse_expr(Restrict {
+                    no_struct_lit: true,
+                });
                 self.expect(TokenKind::Colon, "`:`");
                 let value = self.parse_expr(Restrict::default());
                 let span = key.span.join(value.span);
@@ -2487,7 +2646,10 @@ impl<'src> Parser<'src> {
         }
         let rbrace = self.expect(TokenKind::RBrace, "`}`");
         let end = rbrace.map(|t| t.span).unwrap_or_else(|| self.peek_span());
-        Expr { kind: ExprKind::MapLit(items), span: lbrace.span.join(end) }
+        Expr {
+            kind: ExprKind::MapLit(items),
+            span: lbrace.span.join(end),
+        }
     }
 
     fn parse_struct_literal(&mut self) -> Expr {
@@ -2568,7 +2730,11 @@ impl<'src> Parser<'src> {
                 None
             };
             let end = value.as_ref().map(|v| v.span).unwrap_or(f_name.span);
-            fields.push(FieldInit { name: f_name, value, span: f_start.join(end) });
+            fields.push(FieldInit {
+                name: f_name,
+                value,
+                span: f_start.join(end),
+            });
             if self.eat(TokenKind::Comma).is_none() {
                 break;
             }
@@ -2577,7 +2743,11 @@ impl<'src> Parser<'src> {
         let end = rbrace.map(|t| t.span).unwrap_or_else(|| self.peek_span());
         let span = path.span.join(end);
         Expr {
-            kind: ExprKind::StructLit { path, fields, spread },
+            kind: ExprKind::StructLit {
+                path,
+                fields,
+                spread,
+            },
             span,
         }
     }
@@ -2608,7 +2778,12 @@ impl<'src> Parser<'src> {
             ));
         }
         let body = self.parse_block();
-        Some(TestItem { name, name_span, is_bench, body })
+        Some(TestItem {
+            name,
+            name_span,
+            is_bench,
+            body,
+        })
     }
 
     // ---- string literal parsing -------------------------------------------
@@ -2616,7 +2791,10 @@ impl<'src> Parser<'src> {
     fn parse_string_expr(&mut self) -> Expr {
         let lit = self.parse_string_literal();
         let span = lit.span;
-        Expr { kind: ExprKind::Str(lit), span }
+        Expr {
+            kind: ExprKind::Str(lit),
+            span,
+        }
     }
 
     fn parse_string_literal(&mut self) -> StringLit {
@@ -2631,7 +2809,10 @@ impl<'src> Parser<'src> {
                     },
                     span,
                 ));
-                return StringLit { parts: Vec::new(), span };
+                return StringLit {
+                    parts: Vec::new(),
+                    span,
+                };
             }
         };
         let mut parts = Vec::new();
@@ -2649,12 +2830,12 @@ impl<'src> Parser<'src> {
                     // The slice is `$name`; we strip the `$` for the ident.
                     let full = self.slice(tok.span);
                     let name_str = &full[1..];
-                    let name_span = Span::new(
-                        tok.span.file,
-                        BytePos(tok.span.lo.0 + 1),
-                        tok.span.hi,
-                    );
-                    parts.push(StringPart::Ident(Ident::new(name_str.to_string(), name_span)));
+                    let name_span =
+                        Span::new(tok.span.file, BytePos(tok.span.lo.0 + 1), tok.span.hi);
+                    parts.push(StringPart::Ident(Ident::new(
+                        name_str.to_string(),
+                        name_span,
+                    )));
                 }
                 TokenKind::DollarLBrace => {
                     self.bump();
@@ -2734,7 +2915,10 @@ impl<'src> Parser<'src> {
             alts.push(self.parse_single_pattern());
         }
         let span = alts.first().unwrap().span.join(alts.last().unwrap().span);
-        Pattern { kind: PatternKind::Or(alts), span }
+        Pattern {
+            kind: PatternKind::Or(alts),
+            span,
+        }
     }
 
     fn parse_single_pattern(&mut self) -> Pattern {
@@ -2742,7 +2926,10 @@ impl<'src> Parser<'src> {
         match self.peek_kind() {
             TokenKind::Underscore => {
                 let tok = self.bump();
-                Pattern { kind: PatternKind::Wildcard, span: tok.span }
+                Pattern {
+                    kind: PatternKind::Wildcard,
+                    span: tok.span,
+                }
             }
             TokenKind::Minus
             | TokenKind::Int { .. }
@@ -2754,7 +2941,10 @@ impl<'src> Parser<'src> {
             | TokenKind::Kw(Keyword::Null) => {
                 let expr = self.parse_unary(Restrict::default());
                 let span = expr.span;
-                Pattern { kind: PatternKind::Literal(Box::new(expr)), span }
+                Pattern {
+                    kind: PatternKind::Literal(Box::new(expr)),
+                    span,
+                }
             }
             TokenKind::LParen => self.parse_tuple_pattern(),
             TokenKind::LBracket => self.parse_list_pattern(),
@@ -2767,7 +2957,10 @@ impl<'src> Parser<'src> {
                     generics: Vec::new(),
                     span: tok.span,
                 };
-                Pattern { kind: PatternKind::UnitPath(path), span: tok.span }
+                Pattern {
+                    kind: PatternKind::UnitPath(path),
+                    span: tok.span,
+                }
             }
             _ => {
                 let span = self.peek_span();
@@ -2781,7 +2974,10 @@ impl<'src> Parser<'src> {
                 if !self.at(TokenKind::Eof) {
                     self.bump();
                 }
-                Pattern { kind: PatternKind::Wildcard, span: start }
+                Pattern {
+                    kind: PatternKind::Wildcard,
+                    span: start,
+                }
             }
         }
     }
@@ -2852,10 +3048,7 @@ impl<'src> Parser<'src> {
                             .map(|b| dd.span.join(b.span))
                             .unwrap_or(dd.span);
                         if rest.is_some() {
-                            self.error(ParseError::new(
-                                ParseErrorKind::DuplicateRestBinding,
-                                span,
-                            ));
+                            self.error(ParseError::new(ParseErrorKind::DuplicateRestBinding, span));
                         }
                         rest = Some(RestPattern { name: bind, span });
                     } else {
@@ -2868,7 +3061,11 @@ impl<'src> Parser<'src> {
                 let rp = self.expect(TokenKind::RParen, "`)`");
                 let end = rp.map(|t| t.span).unwrap_or_else(|| self.peek_span());
                 Pattern {
-                    kind: PatternKind::TupleStruct { path, fields: elems, rest },
+                    kind: PatternKind::TupleStruct {
+                        path,
+                        fields: elems,
+                        rest,
+                    },
                     span: start.join(end),
                 }
             }
@@ -2916,7 +3113,11 @@ impl<'src> Parser<'src> {
                 let rb = self.expect(TokenKind::RBrace, "`}`");
                 let end = rb.map(|t| t.span).unwrap_or_else(|| self.peek_span());
                 Pattern {
-                    kind: PatternKind::RecordStruct { path, fields, has_rest },
+                    kind: PatternKind::RecordStruct {
+                        path,
+                        fields,
+                        has_rest,
+                    },
                     span: start.join(end),
                 }
             }
@@ -2995,12 +3196,12 @@ impl<'src> Parser<'src> {
                 } else {
                     None
                 };
-                let span = bind.as_ref().map(|b| dd.span.join(b.span)).unwrap_or(dd.span);
+                let span = bind
+                    .as_ref()
+                    .map(|b| dd.span.join(b.span))
+                    .unwrap_or(dd.span);
                 if rest.is_some() {
-                    self.error(ParseError::new(
-                        ParseErrorKind::DuplicateRestBinding,
-                        span,
-                    ));
+                    self.error(ParseError::new(ParseErrorKind::DuplicateRestBinding, span));
                 } else {
                     rest = Some((idx, RestPattern { name: bind, span }));
                 }
@@ -3034,12 +3235,12 @@ impl<'src> Parser<'src> {
                 } else {
                     None
                 };
-                let span = bind.as_ref().map(|b| dd.span.join(b.span)).unwrap_or(dd.span);
+                let span = bind
+                    .as_ref()
+                    .map(|b| dd.span.join(b.span))
+                    .unwrap_or(dd.span);
                 if rest.is_some() {
-                    self.error(ParseError::new(
-                        ParseErrorKind::DuplicateRestBinding,
-                        span,
-                    ));
+                    self.error(ParseError::new(ParseErrorKind::DuplicateRestBinding, span));
                 } else {
                     rest = Some((idx, RestPattern { name: bind, span }));
                 }
@@ -3110,7 +3311,12 @@ impl<'src> Parser<'src> {
 
     /// Split an integer literal token's text into `(raw_digits, suffix?)`.
     /// The `base` controls what counts as a digit; the rest goes to the suffix.
-    fn split_numeric(&self, span: Span, base: IntBase, has_suffix: bool) -> (String, Option<String>) {
+    fn split_numeric(
+        &self,
+        span: Span,
+        base: IntBase,
+        has_suffix: bool,
+    ) -> (String, Option<String>) {
         let text = self.slice(span);
         // Skip base prefix if any.
         let body = match base {

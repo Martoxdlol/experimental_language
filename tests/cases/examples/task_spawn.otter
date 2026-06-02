@@ -1,0 +1,50 @@
+//@ kind: run
+//@ serial
+//@ description: example program — Task.spawn on the shared executor
+//@ stdout:
+//~ sync task = 42
+//~ async task = 1
+//~ cancelled task = -2
+// Task.spawn (docs/20 §1): thread-like JoinHandle ergonomics on the shared
+// work-stealing executor. Use Thread.spawn for blocking/dedicated OS-thread
+// work; use Task.spawn when you want many lightweight async or CPU-small tasks.
+import { println } from "std:io";
+import { Future } from "core:prelude";
+import { Task, JoinHandle, Joined, Panicked, Cancelled } from "std:task";
+import { Shared } from "std:sync";
+import { sleep, yield_now } from "std:async";
+
+struct Counter { value: i64 }
+
+function value_of(r: Joined<i64> | Panicked | Cancelled): i64 {
+  match r {
+    Joined<i64> j => j.value,
+    Panicked p => -1,
+    Cancelled c => -2,
+  }
+}
+
+function main(): Future<null> async {
+  var sync_worker: JoinHandle<i64> = Task.spawn(() => 21 + 21);
+
+  var counter: Shared<Counter> = Shared.new(Counter { value: 0 });
+  var c: Shared<Counter> = counter.clone();
+  var async_worker: JoinHandle<i64> = Task.spawn(() async => {
+    var _ = await yield_now();
+    await c.lock((state) => {
+      state.value = state.value + 1;
+      state.value
+    })
+  });
+
+  var cancelled_worker: JoinHandle<i64> = Task.spawn(() async => {
+    var _ = await sleep(1000);
+    99
+  });
+  var _started = await sleep(5);
+  cancelled_worker.cancel();
+
+  println("sync task = ${value_of(await sync_worker.join())}");
+  println("async task = ${value_of(await async_worker.join())}");
+  println("cancelled task = ${value_of(await cancelled_worker.join())}");
+}

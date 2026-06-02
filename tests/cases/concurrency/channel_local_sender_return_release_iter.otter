@@ -1,0 +1,23 @@
+//@ kind: run
+//@ serial
+//@ description: returning a Receiver releases a local Sender endpoint and a blocking iterator terminates
+//@ stdout:
+//~ done
+
+import { println } from "std:io";
+import { Receiver, channel } from "std:sync";
+
+function make_receiver(): Receiver<i64> {
+  var ends = channel<i64>();
+  var tx = ends.0;
+  var rx = ends.1;
+  rx
+}
+
+function main() {
+  var rx = make_receiver();
+  for n in rx {
+    println("value ${n}");
+  }
+  println("done");
+}

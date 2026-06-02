@@ -549,8 +549,9 @@ numeric primitives or implement a project-local stringification interface.</p>
   <thead><tr><th>Module</th><th>Provides</th><th>Documented in</th></tr></thead>
   <tbody>
     <tr><td><code>std:thread</code></td><td><code>Thread.spawn</code>, <code>JoinHandle</code>, <code>Joined&lt;R&gt;</code>, <code>Panicked</code></td><td><a href="20-concurrency.html">20-concurrency</a></td></tr>
+    <tr><td><code>std:task</code></td><td><code>Task.spawn</code>, <code>JoinHandle</code>, <code>Joined&lt;R&gt;</code>, <code>Panicked</code>, <code>Cancelled</code></td><td><a href="20-concurrency.html">20-concurrency</a></td></tr>
     <tr><td><code>std:sync</code></td><td><code>Shared&lt;T&gt;</code>, <code>LockBusy</code>, channels, senders, receivers</td><td><a href="20-concurrency.html">20-concurrency</a></td></tr>
-    <tr><td><code>std:async</code></td><td><code>spawn</code>, <code>block_on</code>, <code>timeout</code>, default executor, <code>AsyncIterator</code> adapters</td><td><a href="21-async.html">21-async</a></td></tr>
+    <tr><td><code>std:async</code></td><td><code>yield_now</code>, <code>sleep</code>, <code>timeout</code>, default executor, <code>AsyncIterator</code> adapters</td><td><a href="21-async.html">21-async</a></td></tr>
     <tr><td><code>std:time</code></td><td>wall-clock and monotonic time</td><td>(future)</td></tr>
     <tr><td><code>std:fs</code></td><td>filesystem</td><td>(future)</td></tr>
     <tr><td><code>std:net</code></td><td>sockets, TCP, UDP</td><td>(future)</td></tr>

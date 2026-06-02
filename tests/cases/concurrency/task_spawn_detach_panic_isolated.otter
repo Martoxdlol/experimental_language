@@ -1,0 +1,35 @@
+//@ kind: run
+//@ serial
+//@ env: OTTER_FUSION_TASK_WORKERS=4
+//@ description: a detached panicking Task.spawn worker is isolated and does not abort the process or stop sibling executor work
+//@ stdout:
+//~ sibling=42
+
+import { println } from "std:io";
+import { Future, panic } from "core:prelude";
+import { Task } from "std:task";
+import { ChannelClosed, channel } from "std:sync";
+import { yield_now } from "std:async";
+
+function main(): Future<null> async {
+  var ends = channel<i64>();
+  var tx = ends.0;
+  var rx = ends.1;
+
+  Task.spawn(() async => {
+    var _ = await yield_now();
+    panic("detached boom");
+    0
+  }).detach();
+
+  Task.spawn(() async => {
+    var _ = await yield_now();
+    tx.send(42);
+    0
+  }).detach();
+
+  match await rx.recv() {
+    i64 n => println("sibling=${n}"),
+    ChannelClosed c => println("sibling=closed"),
+  }
+}

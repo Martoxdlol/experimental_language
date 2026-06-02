@@ -9,7 +9,7 @@
 use super::arena::{self, DiagLevel, MacroDiag, Node, ParseOutcome};
 use compiler::ast::{Expr, ExprKind, Ident};
 use compiler::span::{BytePos, Span};
-use runtime::strings::{str_bytes, LangStr};
+use runtime::strings::{LangStr, str_bytes};
 
 /// Read a language `str` argument into an owned Rust `String`.
 ///
@@ -50,18 +50,28 @@ pub extern "C" fn ast_field_count(h: i64) -> i64 {
 }
 
 pub extern "C" fn ast_field_name(h: i64, i: i64) -> *const LangStr {
-    let n = arena::with(|s| s.node(h).map(|n| arena::node_field_name(n, i)).unwrap_or_default());
+    let n = arena::with(|s| {
+        s.node(h)
+            .map(|n| arena::node_field_name(n, i))
+            .unwrap_or_default()
+    });
     make_str(&n)
 }
 
 pub extern "C" fn ast_is_record(h: i64) -> i64 {
-    i64::from(arena::with(|s| s.node(h).map(arena::node_is_record).unwrap_or(false)))
+    i64::from(arena::with(|s| {
+        s.node(h).map(arena::node_is_record).unwrap_or(false)
+    }))
 }
 pub extern "C" fn ast_is_tuple(h: i64) -> i64 {
-    i64::from(arena::with(|s| s.node(h).map(arena::node_is_tuple).unwrap_or(false)))
+    i64::from(arena::with(|s| {
+        s.node(h).map(arena::node_is_tuple).unwrap_or(false)
+    }))
 }
 pub extern "C" fn ast_is_unit(h: i64) -> i64 {
-    i64::from(arena::with(|s| s.node(h).map(arena::node_is_unit).unwrap_or(false)))
+    i64::from(arena::with(|s| {
+        s.node(h).map(arena::node_is_unit).unwrap_or(false)
+    }))
 }
 
 pub extern "C" fn ast_span(h: i64) -> i64 {
@@ -87,13 +97,21 @@ fn ctx_idx(c: i64) -> Option<usize> {
 
 pub extern "C" fn mctx_invocation_span(c: i64) -> i64 {
     arena::with(|s| {
-        let sp = ctx_idx(c).and_then(|i| s.contexts.get(i)).map(|x| x.invocation_span).unwrap_or_else(Span::dummy);
+        let sp = ctx_idx(c)
+            .and_then(|i| s.contexts.get(i))
+            .map(|x| x.invocation_span)
+            .unwrap_or_else(Span::dummy);
         s.push_span(sp)
     })
 }
 
 pub extern "C" fn mctx_arg_count(c: i64) -> i64 {
-    arena::with(|s| ctx_idx(c).and_then(|i| s.contexts.get(i)).map(|x| x.args.len() as i64).unwrap_or(0))
+    arena::with(|s| {
+        ctx_idx(c)
+            .and_then(|i| s.contexts.get(i))
+            .map(|x| x.args.len() as i64)
+            .unwrap_or(0)
+    })
 }
 
 pub extern "C" fn mctx_arg(c: i64, i: i64) -> i64 {
@@ -123,7 +141,12 @@ pub extern "C" fn mctx_kwarg(c: i64, name: *const LangStr) -> i64 {
     arena::with(|s| {
         ctx_idx(c)
             .and_then(|ci| s.contexts.get(ci))
-            .and_then(|x| x.kwargs.iter().find(|(k, _)| *k == name).map(|(_, h)| *h as i64))
+            .and_then(|x| {
+                x.kwargs
+                    .iter()
+                    .find(|(k, _)| *k == name)
+                    .map(|(_, h)| *h as i64)
+            })
             .unwrap_or(-1)
     })
 }
@@ -133,7 +156,11 @@ fn emit(c: i64, span: i64, msg: *const LangStr, level: DiagLevel) {
     arena::with(|s| {
         let sp = s.span(span);
         if let Some(ctx) = ctx_idx(c).and_then(|i| s.contexts.get_mut(i)) {
-            ctx.diags.push(MacroDiag { level, span: sp, message });
+            ctx.diags.push(MacroDiag {
+                level,
+                span: sp,
+                message,
+            });
         }
     });
 }
@@ -182,7 +209,11 @@ fn parse_into(c: i64, src: *const LangStr, parse: impl FnOnce(&str) -> ParseOutc
         ParseOutcome::Ok(node) => arena::with(|s| s.push_node(node)),
         ParseOutcome::Err(message, span) => arena::with(|s| {
             if let Some(ctx) = ctx_idx(c).and_then(|i| s.contexts.get_mut(i)) {
-                ctx.diags.push(MacroDiag { level: DiagLevel::Error, span, message });
+                ctx.diags.push(MacroDiag {
+                    level: DiagLevel::Error,
+                    span,
+                    message,
+                });
             }
             s.push_node(Node::ErrorMarker)
         }),

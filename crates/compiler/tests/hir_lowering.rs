@@ -14,7 +14,7 @@
 use compiler::hir::{Block, CallKind, Expr, ExprKind, Hir, MapEntry, StmtKind, StrPart};
 use compiler::lexer::lex;
 use compiler::parser::parse;
-use compiler::sema::{analyze, Analysis};
+use compiler::sema::{Analysis, analyze};
 use compiler::span::{FileId, Span};
 use std::path::PathBuf;
 
@@ -103,7 +103,11 @@ fn walk_expr(e: &Expr, f: &mut dyn FnMut(&Expr)) {
         | ExprKind::Try { expr, .. }
         | ExprKind::Await { expr, .. }
         | ExprKind::Spawn { expr, .. } => walk_expr(expr, f),
-        ExprKind::If { cond, then_block, else_branch } => {
+        ExprKind::If {
+            cond,
+            then_block,
+            else_branch,
+        } => {
             walk_expr(cond, f);
             walk_block(then_block, f);
             if let Some(e) = else_branch {
@@ -156,7 +160,10 @@ struct Stats {
 /// file; their lowering fidelity is tracked separately (see [`Stats`]).
 fn check_hir(name: &str, a: &Analysis, hir: &Hir) -> Stats {
     let dummy = Span::dummy();
-    let mut st = Stats { user_nodes: 0, synth_errors: 0 };
+    let mut st = Stats {
+        user_nodes: 0,
+        synth_errors: 0,
+    };
     for body in hir.bodies.values() {
         walk_block(&body.block, &mut |e| {
             if e.span.file != FileId(0) {
@@ -236,5 +243,8 @@ fn lowers_every_clean_example_losslessly() {
     );
     // The corpus has many clean single-file programs; require a healthy floor so
     // a regression that makes everything skip is caught.
-    assert!(lowered >= 10, "expected to lower ≥10 examples, only did {lowered}");
+    assert!(
+        lowered >= 10,
+        "expected to lower ≥10 examples, only did {lowered}"
+    );
 }

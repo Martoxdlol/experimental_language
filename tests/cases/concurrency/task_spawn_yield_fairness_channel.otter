@@ -1,0 +1,62 @@
+//@ kind: run
+//@ serial
+//@ description: unevenly-yielding Task.spawn workers all make progress on the M:N executor, send through cloned channels, and join after channel fan-in
+//@ stdout:
+//~ received=4560 joined=9120
+import { println } from "std:io";
+import { Future } from "core:prelude";
+import { List } from "core:collections";
+import { Task, JoinHandle, Joined, Panicked, Cancelled } from "std:task";
+import { Sender, Receiver, ChannelClosed, channel } from "std:sync";
+import { yield_now } from "std:async";
+
+function joined_value(r: Joined<i64> | Panicked | Cancelled): i64 {
+  match r {
+    Joined<i64> j => j.value,
+    Panicked p => -1,
+    Cancelled c => -2,
+  }
+}
+
+function main(): Future<null> async {
+  var ends = channel<i64>();
+  var tx: Sender<i64> = ends.0;
+  var rx: Receiver<i64> = ends.1;
+  var handles: List<JoinHandle<i64>> = [];
+
+  var i: i64 = 0;
+  while i < 96 {
+    var n = i;
+    var tx_n = tx.clone();
+    handles.push(Task.spawn(() async => {
+      var rounds: i64 = (n % 5) + 1;
+      var k: i64 = 0;
+      while k < rounds {
+        var _ = await yield_now();
+        k = k + 1;
+      }
+      tx_n.send(n);
+      n * 2
+    }));
+    i = i + 1;
+  }
+
+  var received: i64 = 0;
+  var count: i64 = 0;
+  while count < 96 {
+    match await rx.recv() {
+      i64 value => { received = received + value; },
+      ChannelClosed c => { received = -9999; },
+    }
+    count = count + 1;
+  }
+
+  var joined: i64 = 0;
+  var j: i64 = 0;
+  while j < handles.size() {
+    joined = joined + joined_value(await handles[j].join());
+    j = j + 1;
+  }
+
+  println("received=${received} joined=${joined}");
+}

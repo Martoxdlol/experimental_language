@@ -24,8 +24,10 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         let resolved = resolve_shallow(self.cx.analysis, elem, &self.subst);
         let is_ptr = i64::from(is_managed_ptr(self.cx.analysis, resolved));
         let flag = self.b.ins().iconst(types::I64, is_ptr);
-        self.call_intrinsic("lang_list_new", &[types::I64], Some(PTR), &[flag])
-            .expect("list_new returns a pointer")
+        let list = self
+            .call_intrinsic("lang_list_new", &[types::I64], Some(PTR), &[flag])
+            .expect("list_new returns a pointer");
+        self.mark_root(list)
     }
 
     /// Widen an element to the list's 8-byte slot (`i64`). This is the central
@@ -37,7 +39,12 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     /// when the container becomes unreachable — i.e. a refcounted value placed
     /// in a collection forfeits *deterministic* drop for GC-timed drop, but is
     /// never freed while the container still references it (`docs/16` §8.1).
-    pub(crate) fn elem_to_i64(&mut self, v: Option<Value>, elem: Ty, span: Span) -> CgResult<Value> {
+    pub(crate) fn elem_to_i64(
+        &mut self,
+        v: Option<Value>,
+        elem: Ty,
+        span: Span,
+    ) -> CgResult<Value> {
         let v = v.ok_or_else(|| CodegenError::new(span, "list element has no value"))?;
         if self.is_rc_ty(elem) {
             self.emit_rc_retain(v);
@@ -45,17 +52,28 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         match self.cx_clty(elem) {
             Some(c) if c == types::I64 => Ok(v),
             Some(c) if c.is_int() => Ok(self.b.ins().uextend(types::I64, v)),
-            _ => Err(CodegenError::new(span, "this element type is not yet storable in a List")),
+            _ => Err(CodegenError::new(
+                span,
+                "this element type is not yet storable in a List",
+            )),
         }
     }
 
     /// Narrow an 8-byte slot back to the element type.
-    pub(crate) fn i64_to_elem(&mut self, v: Value, elem: Ty, span: Span) -> CgResult<Option<Value>> {
+    pub(crate) fn i64_to_elem(
+        &mut self,
+        v: Value,
+        elem: Ty,
+        span: Span,
+    ) -> CgResult<Option<Value>> {
         match self.cx_clty(elem) {
             Some(c) if c == types::I64 => Ok(Some(v)),
             Some(c) if c.is_int() => Ok(Some(self.b.ins().ireduce(c, v))),
             None => Ok(None),
-            _ => Err(CodegenError::new(span, "this element type is not yet readable from a List")),
+            _ => Err(CodegenError::new(
+                span,
+                "this element type is not yet readable from a List",
+            )),
         }
     }
 
@@ -90,15 +108,22 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             }
             "size" => Ok(self.call_intrinsic("lang_list_size", &[PTR], Some(types::I64), &[list])),
             "is_empty" => {
-                let n = self.call_intrinsic("lang_list_size", &[PTR], Some(types::I64), &[list])
+                let n = self
+                    .call_intrinsic("lang_list_size", &[PTR], Some(types::I64), &[list])
                     .expect("size");
                 let zero = self.b.ins().iconst(types::I64, 0);
                 Ok(Some(self.b.ins().icmp(IntCC::Equal, n, zero)))
             }
             "set" => {
-                let idx = arg(0).ok_or_else(|| CodegenError::new(recv_span, "index has no value"))?;
+                let idx =
+                    arg(0).ok_or_else(|| CodegenError::new(recv_span, "index has no value"))?;
                 let raw = self.elem_to_i64(arg(1), elem, recv_span)?;
-                self.call_intrinsic("lang_list_set", &[PTR, types::I64, types::I64], None, &[list, idx, raw]);
+                self.call_intrinsic(
+                    "lang_list_set",
+                    &[PTR, types::I64, types::I64],
+                    None,
+                    &[list, idx, raw],
+                );
                 Ok(None)
             }
             "clear" => {
@@ -107,7 +132,8 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             }
             // `pop(): E | null` — remove + return the last element (boxed union).
             "pop" => {
-                let size = self.call_intrinsic("lang_list_size", &[PTR], Some(types::I64), &[list])
+                let size = self
+                    .call_intrinsic("lang_list_size", &[PTR], Some(types::I64), &[list])
                     .expect("size");
                 let zero = self.b.ins().iconst(types::I64, 0);
                 let nonempty = self.b.ins().icmp(IntCC::SignedGreaterThan, size, zero);
@@ -120,7 +146,8 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 self.term = true;
 
                 self.switch(then_bb);
-                let raw = self.call_intrinsic("lang_list_pop", &[PTR], Some(types::I64), &[list])
+                let raw = self
+                    .call_intrinsic("lang_list_pop", &[PTR], Some(types::I64), &[list])
                     .expect("pop");
                 let ev = self.i64_to_elem(raw, elem, recv_span)?;
                 let boxed = self.box_value(ev, elem);
@@ -136,18 +163,29 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 Ok(Some(self.b.block_params(merge)[0]))
             }
             "insert" => {
-                let idx = arg(0).ok_or_else(|| CodegenError::new(recv_span, "index has no value"))?;
+                let idx =
+                    arg(0).ok_or_else(|| CodegenError::new(recv_span, "index has no value"))?;
                 let raw = self.elem_to_i64(arg(1), elem, recv_span)?;
-                self.call_intrinsic("lang_list_insert", &[PTR, types::I64, types::I64], None, &[list, idx, raw]);
+                self.call_intrinsic(
+                    "lang_list_insert",
+                    &[PTR, types::I64, types::I64],
+                    None,
+                    &[list, idx, raw],
+                );
                 Ok(None)
             }
             // `remove(i): E | null` — bounds-checked; result is a boxed union.
             "remove" => {
-                let idx = arg(0).ok_or_else(|| CodegenError::new(recv_span, "index has no value"))?;
-                let size = self.call_intrinsic("lang_list_size", &[PTR], Some(types::I64), &[list])
+                let idx =
+                    arg(0).ok_or_else(|| CodegenError::new(recv_span, "index has no value"))?;
+                let size = self
+                    .call_intrinsic("lang_list_size", &[PTR], Some(types::I64), &[list])
                     .expect("size");
                 let zero = self.b.ins().iconst(types::I64, 0);
-                let ge0 = self.b.ins().icmp(IntCC::SignedGreaterThanOrEqual, idx, zero);
+                let ge0 = self
+                    .b
+                    .ins()
+                    .icmp(IntCC::SignedGreaterThanOrEqual, idx, zero);
                 let lt = self.b.ins().icmp(IntCC::SignedLessThan, idx, size);
                 let in_range = self.b.ins().band(ge0, lt);
 
@@ -159,7 +197,13 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 self.term = true;
 
                 self.switch(then_bb);
-                let raw = self.call_intrinsic("lang_list_remove", &[PTR, types::I64], Some(types::I64), &[list, idx])
+                let raw = self
+                    .call_intrinsic(
+                        "lang_list_remove",
+                        &[PTR, types::I64],
+                        Some(types::I64),
+                        &[list, idx],
+                    )
                     .expect("remove");
                 let ev = self.i64_to_elem(raw, elem, recv_span)?;
                 let boxed = self.box_value(ev, elem);
@@ -176,11 +220,16 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             }
             // `get(i): E | null` — bounds-checked; result is a boxed union.
             "get" => {
-                let idx = arg(0).ok_or_else(|| CodegenError::new(recv_span, "index has no value"))?;
-                let size = self.call_intrinsic("lang_list_size", &[PTR], Some(types::I64), &[list])
+                let idx =
+                    arg(0).ok_or_else(|| CodegenError::new(recv_span, "index has no value"))?;
+                let size = self
+                    .call_intrinsic("lang_list_size", &[PTR], Some(types::I64), &[list])
                     .expect("size");
                 let zero = self.b.ins().iconst(types::I64, 0);
-                let ge0 = self.b.ins().icmp(IntCC::SignedGreaterThanOrEqual, idx, zero);
+                let ge0 = self
+                    .b
+                    .ins()
+                    .icmp(IntCC::SignedGreaterThanOrEqual, idx, zero);
                 let lt = self.b.ins().icmp(IntCC::SignedLessThan, idx, size);
                 let in_range = self.b.ins().band(ge0, lt);
 
@@ -192,7 +241,13 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 self.term = true;
 
                 self.switch(then_bb);
-                let raw = self.call_intrinsic("lang_list_get", &[PTR, types::I64], Some(types::I64), &[list, idx])
+                let raw = self
+                    .call_intrinsic(
+                        "lang_list_get",
+                        &[PTR, types::I64],
+                        Some(types::I64),
+                        &[list, idx],
+                    )
                     .expect("get");
                 let ev = self.i64_to_elem(raw, elem, recv_span)?;
                 let boxed = self.box_value(ev, elem);
@@ -217,11 +272,16 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             "iter" => {
                 self.mark_root(list);
                 let def = self.cx.analysis.program.list_iter_def;
-                Ok(Some(self.build_iter_struct(def, &[elem], &[("list", list)])))
+                Ok(Some(self.build_iter_struct(
+                    def,
+                    &[elem],
+                    &[("list", list)],
+                )))
             }
             // `contains(v): bool` — true iff some element equals `v`.
             "contains" => {
-                let target = arg(0).ok_or_else(|| CodegenError::new(recv_span, "argument has no value"))?;
+                let target =
+                    arg(0).ok_or_else(|| CodegenError::new(recv_span, "argument has no value"))?;
                 let idx = self.emit_list_find(list, elem, target, recv_span)?;
                 let neg1 = self.b.ins().iconst(types::I64, -1);
                 Ok(Some(self.b.ins().icmp(IntCC::NotEqual, idx, neg1)))
@@ -229,10 +289,14 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             // `index_of(v): i64 | null` — index of the first equal element, or
             // the `null` variant if absent.
             "index_of" => {
-                let target = arg(0).ok_or_else(|| CodegenError::new(recv_span, "argument has no value"))?;
+                let target =
+                    arg(0).ok_or_else(|| CodegenError::new(recv_span, "argument has no value"))?;
                 let idx = self.emit_list_find(list, elem, target, recv_span)?;
                 let zero = self.b.ins().iconst(types::I64, 0);
-                let found = self.b.ins().icmp(IntCC::SignedGreaterThanOrEqual, idx, zero);
+                let found = self
+                    .b
+                    .ins()
+                    .icmp(IntCC::SignedGreaterThanOrEqual, idx, zero);
 
                 let then_bb = self.b.create_block();
                 let else_bb = self.b.create_block();
@@ -256,21 +320,25 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 Ok(Some(self.b.block_params(merge)[0]))
             }
             "map" => {
-                let f = arg(0).ok_or_else(|| CodegenError::new(recv_span, "closure has no value"))?;
+                let f =
+                    arg(0).ok_or_else(|| CodegenError::new(recv_span, "closure has no value"))?;
                 let u = self.func_ret(arg_tys.first().copied().unwrap_or(elem));
                 self.emit_list_map(list, elem, f, u, recv_span)
             }
             "filter" => {
-                let f = arg(0).ok_or_else(|| CodegenError::new(recv_span, "closure has no value"))?;
+                let f =
+                    arg(0).ok_or_else(|| CodegenError::new(recv_span, "closure has no value"))?;
                 self.emit_list_filter(list, elem, f, recv_span)
             }
             "each" => {
-                let f = arg(0).ok_or_else(|| CodegenError::new(recv_span, "closure has no value"))?;
+                let f =
+                    arg(0).ok_or_else(|| CodegenError::new(recv_span, "closure has no value"))?;
                 self.emit_list_each(list, elem, f, recv_span)
             }
             "fold" => {
                 let init = arg(0);
-                let f = arg(1).ok_or_else(|| CodegenError::new(recv_span, "closure has no value"))?;
+                let f =
+                    arg(1).ok_or_else(|| CodegenError::new(recv_span, "closure has no value"))?;
                 let acc = self.func_ret(arg_tys.get(1).copied().unwrap_or(elem));
                 self.emit_list_fold(list, elem, init, f, acc, recv_span)
             }
@@ -285,9 +353,14 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     /// `xs.map(f)` — a new list of `f` applied to each element. `f` is the
     /// already-evaluated closure value; `u` is its return type; `span` is for
     /// diagnostics. Shared by the AST and HIR walks.
-    pub(crate) fn emit_list_map(&mut self, list: Value, elem: Ty, f: Value, u: Ty, span: Span)
-        -> CgResult<Option<Value>>
-    {
+    pub(crate) fn emit_list_map(
+        &mut self,
+        list: Value,
+        elem: Ty,
+        f: Value,
+        u: Ty,
+        span: Span,
+    ) -> CgResult<Option<Value>> {
         self.mark_root(list);
         self.mark_root(f);
         let result = self.gen_list_new(u);
@@ -303,15 +376,20 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     }
 
     /// `xs.filter(pred)` — a new list of the elements for which `pred` is true.
-    pub(crate) fn emit_list_filter(&mut self, list: Value, elem: Ty, f: Value, span: Span)
-        -> CgResult<Option<Value>>
-    {
+    pub(crate) fn emit_list_filter(
+        &mut self,
+        list: Value,
+        elem: Ty,
+        f: Value,
+        span: Span,
+    ) -> CgResult<Option<Value>> {
         self.mark_root(list);
         self.mark_root(f);
         let result = self.gen_list_new(elem);
         self.mark_root(result);
         self.list_for_each(list, elem, span, |this, ev| {
-            let keep = this.emit_closure_call(f, &[ev], Some(types::I8))
+            let keep = this
+                .emit_closure_call(f, &[ev], Some(types::I8))
                 .expect("predicate returns bool");
             let then_bb = this.b.create_block();
             let cont = this.b.create_block();
@@ -329,9 +407,13 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     }
 
     /// `xs.each(f)` — call `f` on each element for its side effects.
-    pub(crate) fn emit_list_each(&mut self, list: Value, elem: Ty, f: Value, span: Span)
-        -> CgResult<Option<Value>>
-    {
+    pub(crate) fn emit_list_each(
+        &mut self,
+        list: Value,
+        elem: Ty,
+        f: Value,
+        span: Span,
+    ) -> CgResult<Option<Value>> {
         self.mark_root(list);
         self.mark_root(f);
         self.list_for_each(list, elem, span, |this, ev| {
@@ -357,7 +439,10 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         let acc_clty = self.cx_clty(acc_ty);
         self.mark_root(f);
         let acc_var = self.b.declare_var(acc_clty.unwrap_or(types::I64));
-        if is_managed_ptr(self.cx.analysis, resolve_shallow(self.cx.analysis, acc_ty, &self.subst)) {
+        if is_managed_ptr(
+            self.cx.analysis,
+            resolve_shallow(self.cx.analysis, acc_ty, &self.subst),
+        ) {
             self.b.declare_var_needs_stack_map(acc_var);
         }
         if let Some(v) = init_v {
@@ -365,7 +450,8 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         }
         self.list_for_each(list, elem, span, |this, ev| {
             let acc = this.b.use_var(acc_var);
-            let out = this.emit_closure_call(f, &[acc, ev], acc_clty)
+            let out = this
+                .emit_closure_call(f, &[acc, ev], acc_clty)
                 .ok_or_else(|| CodegenError::new(span, "fold closure has no result"))?;
             this.b.def_var(acc_var, out);
             Ok(())
@@ -384,7 +470,13 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
 
     /// Run `body` for each element of `list` (narrowed to `elem`), as an index
     /// loop. Used by the higher-order `List` methods. `span` is for diagnostics.
-    pub(crate) fn list_for_each<F>(&mut self, list: Value, elem: Ty, span: Span, mut body: F) -> CgResult<()>
+    pub(crate) fn list_for_each<F>(
+        &mut self,
+        list: Value,
+        elem: Ty,
+        span: Span,
+        mut body: F,
+    ) -> CgResult<()>
     where
         F: FnMut(&mut Self, Value) -> CgResult<()>,
     {
@@ -400,7 +492,8 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         self.switch(header);
         self.emit_safepoint();
         let i = self.b.use_var(iv);
-        let size = self.call_intrinsic("lang_list_size", &[PTR], Some(types::I64), &[list])
+        let size = self
+            .call_intrinsic("lang_list_size", &[PTR], Some(types::I64), &[list])
             .expect("size");
         let cond = self.b.ins().icmp(IntCC::SignedLessThan, i, size);
         self.b.ins().brif(cond, body_bb, &[], exit, &[]);
@@ -408,9 +501,16 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
 
         self.switch(body_bb);
         let i2 = self.b.use_var(iv);
-        let raw = self.call_intrinsic("lang_list_get", &[PTR, types::I64], Some(types::I64), &[list, i2])
+        let raw = self
+            .call_intrinsic(
+                "lang_list_get",
+                &[PTR, types::I64],
+                Some(types::I64),
+                &[list, i2],
+            )
             .expect("get");
-        let ev = self.i64_to_elem(raw, elem, span)?
+        let ev = self
+            .i64_to_elem(raw, elem, span)?
             .ok_or_else(|| CodegenError::new(span, "list element is zero-sized"))?;
         body(self, ev)?;
         let i3 = self.b.use_var(iv);
@@ -455,13 +555,15 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         let kpv = self.b.ins().iconst(types::I64, kp);
         let vpv = self.b.ins().iconst(types::I64, vp);
         let (hash_fn, eq_fn) = self.map_key_ops(kt_r);
-        self.call_intrinsic(
-            "lang_map_new",
-            &[types::I64, types::I64, types::I64, types::I64],
-            Some(PTR),
-            &[kpv, vpv, hash_fn, eq_fn],
-        )
-        .expect("map_new returns a pointer")
+        let map = self
+            .call_intrinsic(
+                "lang_map_new",
+                &[types::I64, types::I64, types::I64, types::I64],
+                Some(PTR),
+                &[kpv, vpv, hash_fn, eq_fn],
+            )
+            .expect("map_new returns a pointer");
+        self.mark_root(map)
     }
 
     /// Compute the `(hash_fn, eq_fn)` function-pointer pair `lang_map_new`
@@ -590,9 +692,13 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     /// Linear search for `target` in `list`; returns the `i64` index of the
     /// first equal element, or `-1` if absent. Shared by `List.contains`
     /// (`!= -1`) and `List.index_of` (boxed `i64 | null`).
-    fn emit_list_find(&mut self, list: Value, elem: Ty, target: Value, span: Span)
-        -> CgResult<Value>
-    {
+    fn emit_list_find(
+        &mut self,
+        list: Value,
+        elem: Ty,
+        target: Value,
+        span: Span,
+    ) -> CgResult<Value> {
         self.mark_root(list);
         let elem_r = resolve_shallow(self.cx.analysis, elem, &self.subst);
         if is_managed_ptr(self.cx.analysis, elem_r) {
@@ -616,7 +722,8 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         self.switch(header);
         self.emit_safepoint();
         let i = self.b.use_var(iv);
-        let size = self.call_intrinsic("lang_list_size", &[PTR], Some(types::I64), &[list])
+        let size = self
+            .call_intrinsic("lang_list_size", &[PTR], Some(types::I64), &[list])
             .expect("size");
         let cond = self.b.ins().icmp(IntCC::SignedLessThan, i, size);
         self.b.ins().brif(cond, body_bb, &[], exit, &[]);
@@ -624,9 +731,16 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
 
         self.switch(body_bb);
         let i2 = self.b.use_var(iv);
-        let raw = self.call_intrinsic("lang_list_get", &[PTR, types::I64], Some(types::I64), &[list, i2])
+        let raw = self
+            .call_intrinsic(
+                "lang_list_get",
+                &[PTR, types::I64],
+                Some(types::I64),
+                &[list, i2],
+            )
             .expect("get");
-        let ev = self.i64_to_elem(raw, elem, span)?
+        let ev = self
+            .i64_to_elem(raw, elem, span)?
             .ok_or_else(|| CodegenError::new(span, "list element is zero-sized"))?;
         let eq = self.gen_elem_eq(target, ev, elem, span)?;
         self.b.ins().brif(eq, found_bb, &[], cont_bb, &[]);
@@ -667,12 +781,18 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             "set" => {
                 let key = self.elem_to_i64(arg(0), kt, recv_span)?;
                 let val = self.elem_to_i64(arg(1), vt, recv_span)?;
-                self.call_intrinsic("lang_map_set", &[PTR, types::I64, types::I64], None, &[map, key, val]);
+                self.call_intrinsic(
+                    "lang_map_set",
+                    &[PTR, types::I64, types::I64],
+                    None,
+                    &[map, key, val],
+                );
                 Ok(None)
             }
             "size" => Ok(self.call_intrinsic("lang_map_size", &[PTR], Some(types::I64), &[map])),
             "is_empty" => {
-                let n = self.call_intrinsic("lang_map_size", &[PTR], Some(types::I64), &[map])
+                let n = self
+                    .call_intrinsic("lang_map_size", &[PTR], Some(types::I64), &[map])
                     .expect("size");
                 let zero = self.b.ins().iconst(types::I64, 0);
                 Ok(Some(self.b.ins().icmp(IntCC::Equal, n, zero)))
@@ -683,7 +803,13 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             }
             "contains" => {
                 let key = self.elem_to_i64(arg(0), kt, recv_span)?;
-                let c = self.call_intrinsic("lang_map_contains", &[PTR, types::I64], Some(types::I64), &[map, key])
+                let c = self
+                    .call_intrinsic(
+                        "lang_map_contains",
+                        &[PTR, types::I64],
+                        Some(types::I64),
+                        &[map, key],
+                    )
                     .expect("contains");
                 let zero = self.b.ins().iconst(types::I64, 0);
                 Ok(Some(self.b.ins().icmp(IntCC::NotEqual, c, zero)))
@@ -692,7 +818,13 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             "get" | "remove" => {
                 let removing = name == "remove";
                 let key = self.elem_to_i64(arg(0), kt, recv_span)?;
-                let present = self.call_intrinsic("lang_map_contains", &[PTR, types::I64], Some(types::I64), &[map, key])
+                let present = self
+                    .call_intrinsic(
+                        "lang_map_contains",
+                        &[PTR, types::I64],
+                        Some(types::I64),
+                        &[map, key],
+                    )
                     .expect("contains");
                 let zero = self.b.ins().iconst(types::I64, 0);
                 let found = self.b.ins().icmp(IntCC::NotEqual, present, zero);
@@ -705,7 +837,13 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 self.term = true;
 
                 self.switch(then_bb);
-                let raw = self.call_intrinsic("lang_map_get", &[PTR, types::I64], Some(types::I64), &[map, key])
+                let raw = self
+                    .call_intrinsic(
+                        "lang_map_get",
+                        &[PTR, types::I64],
+                        Some(types::I64),
+                        &[map, key],
+                    )
                     .expect("get");
                 let ev = self.i64_to_elem(raw, vt, recv_span)?;
                 let boxed = self.box_value(ev, vt);
@@ -740,7 +878,12 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     fn gen_map_keys_iter(&mut self, map: Value, kt: Ty) -> Value {
         let one = self.b.ins().iconst(types::I64, 1);
         let snapshot = self
-            .call_intrinsic("lang_map_entries", &[PTR, types::I64], Some(PTR), &[map, one])
+            .call_intrinsic(
+                "lang_map_entries",
+                &[PTR, types::I64],
+                Some(PTR),
+                &[map, one],
+            )
             .expect("map_entries returns a list");
         // The snapshot is unrooted between the `lang_map_entries` call and the
         // `alloc_struct` inside `build_iter_struct` — a stress collect there
@@ -755,7 +898,12 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     fn gen_map_values_iter(&mut self, map: Value, vt: Ty) -> Value {
         let zero = self.b.ins().iconst(types::I64, 0);
         let snapshot = self
-            .call_intrinsic("lang_map_entries", &[PTR, types::I64], Some(PTR), &[map, zero])
+            .call_intrinsic(
+                "lang_map_entries",
+                &[PTR, types::I64],
+                Some(PTR),
+                &[map, zero],
+            )
             .expect("map_entries returns a list");
         self.mark_root(snapshot);
         let def = self.cx.analysis.program.map_values_def;
@@ -769,7 +917,12 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     fn gen_map_entries_iter(&mut self, map: Value, kt: Ty, vt: Ty) -> Value {
         let one = self.b.ins().iconst(types::I64, 1);
         let keys = self
-            .call_intrinsic("lang_map_entries", &[PTR, types::I64], Some(PTR), &[map, one])
+            .call_intrinsic(
+                "lang_map_entries",
+                &[PTR, types::I64],
+                Some(PTR),
+                &[map, one],
+            )
             .expect("map_entries returns a list");
         self.mark_root(keys);
         let def = self.cx.analysis.program.map_entries_def;
@@ -828,7 +981,8 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 Ok(self.call_intrinsic("lang_str_byte_size", &[PTR], Some(types::I64), &[s]))
             }
             "is_empty" => {
-                let n = self.call_intrinsic("lang_str_byte_size", &[PTR], Some(types::I64), &[s])
+                let n = self
+                    .call_intrinsic("lang_str_byte_size", &[PTR], Some(types::I64), &[s])
                     .expect("byte_size");
                 let zero = self.b.ins().iconst(types::I64, 0);
                 Ok(Some(self.b.ins().icmp(IntCC::Equal, n, zero)))
@@ -868,17 +1022,29 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 let from = arg_str(self, 0)?;
                 let to = arg_str(self, 1)?;
                 Ok(self.call_intrinsic(
-                    "lang_str_replace", &[PTR, PTR, PTR], Some(PTR), &[s, from, to],
+                    "lang_str_replace",
+                    &[PTR, PTR, PTR],
+                    Some(PTR),
+                    &[s, from, to],
                 ))
             }
             // `index_of(needle): i64 | null` — runtime returns the byte index or
             // `-1`; box the index or the `null` variant accordingly.
             "index_of" => {
                 let needle = arg_str(self, 0)?;
-                let raw = self.call_intrinsic("lang_str_index_of", &[PTR, PTR], Some(types::I64), &[s, needle])
+                let raw = self
+                    .call_intrinsic(
+                        "lang_str_index_of",
+                        &[PTR, PTR],
+                        Some(types::I64),
+                        &[s, needle],
+                    )
                     .expect("index_of");
                 let zero = self.b.ins().iconst(types::I64, 0);
-                let found = self.b.ins().icmp(IntCC::SignedGreaterThanOrEqual, raw, zero);
+                let found = self
+                    .b
+                    .ins()
+                    .icmp(IntCC::SignedGreaterThanOrEqual, raw, zero);
 
                 let then_bb = self.b.create_block();
                 let else_bb = self.b.create_block();
@@ -922,10 +1088,19 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             // out of range; box the `char` or the `null` variant accordingly.
             "get" => {
                 let idx = arg_str(self, 0)?;
-                let raw = self.call_intrinsic("lang_str_char_at", &[PTR, types::I64], Some(types::I64), &[s, idx])
+                let raw = self
+                    .call_intrinsic(
+                        "lang_str_char_at",
+                        &[PTR, types::I64],
+                        Some(types::I64),
+                        &[s, idx],
+                    )
                     .expect("char_at");
                 let zero = self.b.ins().iconst(types::I64, 0);
-                let found = self.b.ins().icmp(IntCC::SignedGreaterThanOrEqual, raw, zero);
+                let found = self
+                    .b
+                    .ins()
+                    .icmp(IntCC::SignedGreaterThanOrEqual, raw, zero);
 
                 let then_bb = self.b.create_block();
                 let else_bb = self.b.create_block();
@@ -955,5 +1130,4 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             )),
         }
     }
-
 }

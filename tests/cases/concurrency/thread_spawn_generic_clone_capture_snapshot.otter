@@ -1,0 +1,60 @@
+//@ kind: run
+//@ serial
+//@ description: Thread.spawn snapshots captured generic T: Clone values at the spawn boundary, matching Task.spawn's cross-worker capture isolation
+//@ stdout:
+//~ captured=1 parent=9
+//~ list_size=1 parent_size=2
+
+import { println } from "std:io";
+import { Clone, Future } from "core:prelude";
+import { List } from "core:collections";
+import { sleep } from "std:async";
+import { Thread, JoinHandle, Joined, Panicked } from "std:thread";
+
+struct Boxed { value: i64 }
+
+extend Boxed: Clone {
+  function clone(self): Boxed { Boxed { value: self.value } }
+}
+
+function joined_value(r: Joined<Boxed> | Panicked): Boxed {
+  match r {
+    Joined<Boxed> j => j.value,
+    Panicked p => Boxed { value: -1 },
+  }
+}
+
+function spawn_snapshot<T: Clone>(value: T): JoinHandle<T> {
+  Thread.spawn(() async => {
+    var _ = await sleep(10);
+    value
+  })
+}
+
+function joined_i64(r: Joined<i64> | Panicked): i64 {
+  match r {
+    Joined<i64> j => j.value,
+    Panicked p => -1,
+  }
+}
+
+function spawn_list_size<T: Clone>(values: List<T>): JoinHandle<i64> {
+  Thread.spawn(() async => {
+    var _ = await sleep(10);
+    values.size()
+  })
+}
+
+function main(): Future<null> async {
+  var b: Boxed = Boxed { value: 1 };
+  var h: JoinHandle<Boxed> = spawn_snapshot<Boxed>(b);
+  b.value = 9;
+  var captured = joined_value(await h.join());
+  println("captured=${captured.value} parent=${b.value}");
+
+  var values: List<Boxed> = [Boxed { value: 1 }];
+  var list_h: JoinHandle<i64> = spawn_list_size<Boxed>(values);
+  values.push(Boxed { value: 2 });
+  var list_size = joined_i64(await list_h.join());
+  println("list_size=${list_size} parent_size=${values.size()}");
+}

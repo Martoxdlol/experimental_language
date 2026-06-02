@@ -9,8 +9,8 @@
 //! (no barging), so the lock is starvation-free. The cell holds a logical
 //! `locked` flag plus a queue of executor wakers `(waker_data, wake_fn)`; a
 //! contended [`acquire`](lang_shared_acquire) returns `Pending` after recording
-//! the caller's waker, and [`release`](lang_shared_release) wakes the head waiter
-//! so it re-polls and takes the lock.
+//! the caller's waker, and [`release`](lang_shared_release) wakes the live FIFO
+//! head so it re-polls and takes the lock.
 //!
 //! The protected value is a machine word — for a managed (struct) `T` it is a
 //! pointer the body mutates in place; it is GC-pinned for the cell's lifetime so
@@ -19,16 +19,16 @@
 //! Release on cancel/panic: a per-thread *held-lock set* records every lock this
 //! thread currently holds; the worker panic boundary and `Future.cancel` drain it
 //! via [`lang_shared_release_all`], so a body that unwinds or is cancelled never
-//! leaks the lock (the async equivalent of RAII guard-drop). The current executor
-//! drives one task per OS thread, so "task-held" ≡ "thread-held"; the set is the
-//! task's, keyed through the thread that drives it.
+//! leaks the lock (the async equivalent of RAII guard-drop). Executor tasks carry
+//! their own held-lock set across worker threads; legacy dedicated thread paths
+//! use a thread-local fallback.
 
 use crate::async_rt::Context;
 use crate::gc;
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, TryLockError};
 
 /// A queued waiter: the executor waker to invoke when it is this waiter's turn,
 /// plus its FIFO ticket. The raw `data` pointer is opaque (it points into the
@@ -60,18 +60,63 @@ fn registry() -> &'static Mutex<HashMap<u64, std::sync::Arc<Cell>>> {
     R.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+fn runtime_lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    match mutex.try_lock() {
+        Ok(guard) => return guard,
+        Err(TryLockError::Poisoned(err)) => return err.into_inner(),
+        Err(TryLockError::WouldBlock) => {}
+    }
+    gc::enter_runtime_native_no_roots();
+    let guard = mutex.lock().unwrap_or_else(|err| err.into_inner());
+    gc::leave_native();
+    guard
+}
+
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 thread_local! {
-    /// Locks held by the task driven on this thread, in acquisition order. The
-    /// panic boundary / cancellation drains this to release everything still held.
+    /// Fallback locks held by a thread running the legacy one-task-per-thread
+    /// paths. Executor tasks install `TASK_HELD` while polling, so held locks
+    /// move with the task instead of with whichever worker thread last polled it.
     static HELD: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
+    static TASK_HELD: RefCell<Option<Arc<Mutex<Vec<u64>>>>> = const { RefCell::new(None) };
+}
+
+pub fn enter_task_held(held: Arc<Mutex<Vec<u64>>>) {
+    TASK_HELD.with(|h| *h.borrow_mut() = Some(held));
+}
+
+pub fn exit_task_held() {
+    TASK_HELD.with(|h| *h.borrow_mut() = None);
 }
 
 fn held_push(id: u64) {
+    if TASK_HELD.with(|h| {
+        if let Some(task) = h.borrow().as_ref() {
+            runtime_lock(task).push(id);
+            true
+        } else {
+            false
+        }
+    }) {
+        return;
+    }
     HELD.with(|h| h.borrow_mut().push(id));
 }
 fn held_pop(id: u64) {
+    if TASK_HELD.with(|h| {
+        if let Some(task) = h.borrow().as_ref() {
+            let mut v = runtime_lock(task);
+            if let Some(pos) = v.iter().rposition(|&x| x == id) {
+                v.remove(pos);
+            }
+            true
+        } else {
+            false
+        }
+    }) {
+        return;
+    }
     HELD.with(|h| {
         let mut v = h.borrow_mut();
         if let Some(pos) = v.iter().rposition(|&x| x == id) {
@@ -81,7 +126,10 @@ fn held_pop(id: u64) {
 }
 
 fn cell(id: u64) -> std::sync::Arc<Cell> {
-    registry().lock().unwrap().get(&id).cloned().expect("invalid Shared id")
+    runtime_lock(registry())
+        .get(&id)
+        .cloned()
+        .expect("invalid Shared id")
 }
 
 // -- descriptor + result-box helpers (mirror `async_rt`) ---------------------
@@ -144,7 +192,11 @@ fn lock_vtable() -> *const u8 {
 /// `ready_tid`. `r_is_ptr` selects the traced/untraced value-slot descriptor so
 /// the collector traces a managed `R`. Caller holds a GC pause.
 unsafe fn ready_value_box(ready_tid: i64, value: i64, r_is_ptr: bool) -> *mut u8 {
-    let vdesc = if r_is_ptr { value_ptr_desc() } else { value_plain_desc() };
+    let vdesc = if r_is_ptr {
+        value_ptr_desc()
+    } else {
+        value_plain_desc()
+    };
     let payload = unsafe { gc::alloc(vdesc) };
     unsafe { (payload as *mut i64).write(value) };
     let bx = unsafe { gc::alloc(union_managed_desc()) };
@@ -180,7 +232,7 @@ pub unsafe extern "C" fn lang_shared_new(value: i64) -> u64 {
             next_ticket: 1,
         }),
     });
-    registry().lock().unwrap().insert(id, cell);
+    runtime_lock(registry()).insert(id, cell);
     id
 }
 
@@ -202,6 +254,7 @@ fn advance(
     wdata: *mut u8,
     wfn: extern "C" fn(*mut u8),
 ) -> (bool, i64, u64) {
+    prune_dead_front(s);
     if st == ST_ACQUIRED {
         return (true, ST_ACQUIRED, ticket); // idempotent re-poll
     }
@@ -210,16 +263,43 @@ fn advance(
             s.locked = true;
             return (true, ST_ACQUIRED, ticket);
         }
+        remove_duplicate_task_waiters(s, wdata, wfn, None);
+        if !s.locked && s.queue.is_empty() {
+            s.locked = true;
+            return (true, ST_ACQUIRED, ticket);
+        }
         let t = s.next_ticket;
         s.next_ticket += 1;
-        s.queue.push_back(Waker { data: wdata, wake: wfn, ticket: t });
+        s.queue.push_back(Waker {
+            data: wdata,
+            wake: wfn,
+            ticket: t,
+        });
         return (false, ST_QUEUED, t);
     }
     // ST_QUEUED: refresh our (possibly changed) waker, then take the lock iff it
-    // is free and we are at the head of the FIFO queue.
+    // is free and we are at the head of the FIFO queue. A stale duplicate wake
+    // can re-poll a future after its previous queue entry was already consumed;
+    // in that case, never park on an unwakeable missing ticket. Re-enter the
+    // FIFO protocol with a fresh ticket (or take the lock if it is truly free
+    // and uncontended).
     if let Some(w) = s.queue.iter_mut().find(|w| w.ticket == ticket) {
         w.data = wdata;
         w.wake = wfn;
+    } else {
+        if !s.locked {
+            s.locked = true;
+            return (true, ST_ACQUIRED, ticket);
+        }
+        remove_duplicate_task_waiters(s, wdata, wfn, None);
+        let t = s.next_ticket;
+        s.next_ticket += 1;
+        s.queue.push_back(Waker {
+            data: wdata,
+            wake: wfn,
+            ticket: t,
+        });
+        return (false, ST_QUEUED, t);
     }
     if !s.locked && s.queue.front().map(|w| w.ticket) == Some(ticket) {
         s.queue.pop_front();
@@ -227,6 +307,34 @@ fn advance(
         return (true, ST_ACQUIRED, ticket);
     }
     (false, ST_QUEUED, ticket)
+}
+
+fn remove_duplicate_task_waiters(
+    s: &mut State,
+    data: *mut u8,
+    wake: extern "C" fn(*mut u8),
+    keep_ticket: Option<u64>,
+) {
+    let Some((true, task_id)) = crate::threads::executor_waker_task(data, wake) else {
+        return;
+    };
+    s.queue.retain(|w| {
+        if keep_ticket == Some(w.ticket) {
+            return true;
+        }
+        crate::threads::executor_waker_task_id(w.data, w.wake) != Some(task_id)
+    });
+}
+
+fn prune_dead_front(s: &mut State) {
+    while let Some(w) = s.queue.front().copied() {
+        match crate::threads::executor_waker_is_live(w.data, w.wake) {
+            Some(false) => {
+                s.queue.pop_front();
+            }
+            _ => break,
+        }
+    }
 }
 
 // Lock-future state layout (`lock_poll`):
@@ -252,7 +360,11 @@ const LST_RUNNING: i64 = 2;
 /// selects the traced descriptor so a managed payload survives collection.
 /// Caller holds a GC pause.
 unsafe fn union_box(tid: i64, payload: i64, payload_is_ptr: bool) -> *mut u8 {
-    let desc = if payload_is_ptr { union_managed_desc() } else { union_plain_desc() };
+    let desc = if payload_is_ptr {
+        union_managed_desc()
+    } else {
+        union_plain_desc()
+    };
     let bx = unsafe { gc::alloc(desc) };
     unsafe {
         (bx as *mut i64).write(tid);
@@ -297,7 +409,7 @@ unsafe fn finish_locked(data: *mut u8, id: u64, result_bits: i64, ready_tid: i64
     } else {
         unsafe { ready_value_box(ready_tid, result, r_is_ptr) }
     };
-    gc::resume();
+    gc::resume_with_return_root(bx as usize);
     if r_is_ptr {
         gc::remove_extra_root(result as usize);
     }
@@ -311,7 +423,7 @@ unsafe fn finish_busy(data: *mut u8, ready_tid: i64) -> *mut u8 {
     gc::pause();
     let u = unsafe { union_box(busy_tid, 0, false) };
     let bx = unsafe { ready_value_box(ready_tid, u as i64, true) };
-    gc::resume();
+    gc::resume_with_return_root(bx as usize);
     bx
 }
 
@@ -319,7 +431,7 @@ unsafe fn finish_busy(data: *mut u8, ready_tid: i64) -> *mut u8 {
 /// async body's future to completion first. Shared by the `lock` and `try_lock`
 /// acquisition paths.
 unsafe fn run_body(data: *mut u8, id: u64, cell: &Cell, ready_tid: i64) -> *mut u8 {
-    let value_bits = cell.state.lock().unwrap().value;
+    let value_bits = runtime_lock(&cell.state).value;
     let env = unsafe { ((data as usize + 16) as *const usize).read() } as *mut u8;
     let fn_ptr = unsafe { (env as *const usize).read() };
     let body: extern "C" fn(*mut u8, i64) -> i64 = unsafe { std::mem::transmute(fn_ptr) };
@@ -355,7 +467,7 @@ extern "C" fn lock_poll(data: *mut u8, ctx: *mut Context) -> *mut u8 {
         if is_try {
             // Single non-suspending attempt; never queue (no barging).
             let acquired = {
-                let mut s = cell.state.lock().unwrap();
+                let mut s = runtime_lock(&cell.state);
                 if !s.locked && s.queue.is_empty() {
                     s.locked = true;
                     true
@@ -374,19 +486,27 @@ extern "C" fn lock_poll(data: *mut u8, ctx: *mut Context) -> *mut u8 {
             // else: fell through to running phase below
         } else {
             let ticket = unsafe { ((data as usize + 72) as *const i64).read() } as u64;
-            let acq_st = if state == LST_ACQ_INIT { ST_INIT } else { ST_QUEUED };
+            let acq_st = if state == LST_ACQ_INIT {
+                ST_INIT
+            } else {
+                ST_QUEUED
+            };
             let c = unsafe { &*ctx };
             let (acquired, new_acq_st, new_ticket) = {
-                let mut s = cell.state.lock().unwrap();
+                let mut s = runtime_lock(&cell.state);
                 advance(&mut s, acq_st, ticket, c.waker_data(), c.wake_fn())
             };
             unsafe { ((data as usize + 72) as *mut i64).write(new_ticket as i64) };
             if !acquired {
-                let st = if new_acq_st == ST_QUEUED { LST_ACQ_QUEUED } else { LST_ACQ_INIT };
+                let st = if new_acq_st == ST_QUEUED {
+                    LST_ACQ_QUEUED
+                } else {
+                    LST_ACQ_INIT
+                };
                 unsafe { ((data as usize + 0) as *mut i64).write(st) };
                 gc::pause();
                 let p = unsafe { pending_box(pending_tid) };
-                gc::resume();
+                gc::resume_with_return_root(p as usize);
                 return p;
             }
             held_push(id);
@@ -463,7 +583,7 @@ pub unsafe extern "C" fn lang_shared_lock_future(
         ((bx as usize + 8) as *mut usize).write(data as usize);
         ((bx as usize + 16) as *mut i64).write(0);
     }
-    gc::resume();
+    gc::resume_with_return_root(bx as usize);
     gc::remove_extra_root(env as usize);
     bx
 }
@@ -477,7 +597,7 @@ pub unsafe extern "C" fn lang_shared_lock_future(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lang_shared_try_acquire(id: u64) -> i64 {
     let cell = cell(id);
-    let mut s = cell.state.lock().unwrap();
+    let mut s = runtime_lock(&cell.state);
     if !s.locked && s.queue.is_empty() {
         s.locked = true;
         drop(s);
@@ -494,16 +614,17 @@ pub unsafe extern "C" fn lang_shared_try_acquire(id: u64) -> i64 {
 /// `id` must be a live `Shared` id whose lock is held by the caller.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lang_shared_read(id: u64) -> i64 {
-    cell(id).state.lock().unwrap().value
+    runtime_lock(&cell(id).state).value
 }
 
-/// Internal: clear the locked flag and wake the head waiter (so it re-polls and
-/// takes the lock). Does not touch the held-set.
+/// Internal: clear the locked flag and wake the FIFO head waiter. Does not touch
+/// the held-set.
 fn release_inner(id: u64) {
     let cell = cell(id);
     let head = {
-        let mut s = cell.state.lock().unwrap();
+        let mut s = runtime_lock(&cell.state);
         s.locked = false;
+        prune_dead_front(&mut s);
         s.queue.front().copied()
     };
     if let Some(w) = head {
@@ -512,7 +633,7 @@ fn release_inner(id: u64) {
 }
 
 /// Release a lock held by the calling task. Clears the flag, removes it from the
-/// held-set, and wakes the FIFO head waiter.
+/// held-set, and wakes queued waiters so acquisition can resume on re-poll.
 ///
 /// # Safety
 /// `id` must be a live `Shared` id currently held by this task.
@@ -529,7 +650,24 @@ pub unsafe extern "C" fn lang_shared_release(id: u64) {
 /// Callable only from the runtime's worker panic boundary or a future's cancel.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lang_shared_release_all() {
-    let held: Vec<u64> = HELD.with(|h| std::mem::take(&mut *h.borrow_mut()));
+    let held: Vec<u64> = TASK_HELD
+        .with(|h| {
+            h.borrow()
+                .as_ref()
+                .map(|task| std::mem::take(&mut *runtime_lock(task)))
+        })
+        .unwrap_or_else(|| HELD.with(|h| std::mem::take(&mut *h.borrow_mut())));
+    for id in held.into_iter().rev() {
+        release_inner(id);
+    }
+}
+
+/// Release every lock held by an executor task that is being cancelled while it
+/// is suspended. This is the task-local equivalent of
+/// [`lang_shared_release_all`], used by the M:N executor when there is no
+/// current polling thread to host `TASK_HELD`.
+pub fn release_task_held(held: &Arc<Mutex<Vec<u64>>>) {
+    let held = std::mem::take(&mut *runtime_lock(held));
     for id in held.into_iter().rev() {
         release_inner(id);
     }
@@ -542,18 +680,56 @@ mod tests {
     extern "C" fn wake_noop(_: *mut u8) {}
 
     fn fresh_state() -> State {
-        State { locked: false, value: 0, queue: VecDeque::new(), next_ticket: 1 }
+        State {
+            locked: false,
+            value: 0,
+            queue: VecDeque::new(),
+            next_ticket: 1,
+        }
     }
 
     /// Register a cell directly (no GC) so the registry-backed entry points are
     /// testable without initialising the collector.
     fn register_cell() -> u64 {
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-        registry()
-            .lock()
-            .unwrap()
-            .insert(id, std::sync::Arc::new(Cell { state: Mutex::new(fresh_state()) }));
+        runtime_lock(registry()).insert(
+            id,
+            std::sync::Arc::new(Cell {
+                state: Mutex::new(fresh_state()),
+            }),
+        );
         id
+    }
+
+    #[test]
+    fn registry_lock_recovers_after_poison() {
+        let h = std::thread::spawn(|| {
+            let _guard = registry().lock().unwrap();
+            panic!("poison shared registry");
+        });
+        assert!(h.join().is_err());
+
+        let id = register_cell();
+        assert_eq!(unsafe { lang_shared_try_acquire(id) }, 1);
+        assert_eq!(unsafe { lang_shared_read(id) }, 0);
+        unsafe { lang_shared_release(id) };
+    }
+
+    #[test]
+    fn cell_state_lock_recovers_after_poison() {
+        let id = register_cell();
+        let cell = cell(id);
+        let h = std::thread::spawn(move || {
+            let _guard = cell.state.lock().unwrap();
+            panic!("poison shared cell state");
+        });
+        assert!(h.join().is_err());
+
+        assert_eq!(unsafe { lang_shared_try_acquire(id) }, 1);
+        assert_eq!(unsafe { lang_shared_read(id) }, 0);
+        unsafe { lang_shared_release(id) };
+        assert_eq!(unsafe { lang_shared_try_acquire(id) }, 1);
+        unsafe { lang_shared_release(id) };
     }
 
     #[test]
@@ -590,12 +766,62 @@ mod tests {
     }
 
     #[test]
+    fn queued_poll_with_missing_ticket_reenters_fifo() {
+        let mut s = fresh_state();
+        s.locked = true;
+        s.next_ticket = 7;
+
+        let (acquired, st, ticket) =
+            advance(&mut s, ST_QUEUED, 42, std::ptr::null_mut(), wake_noop);
+        assert!(!acquired);
+        assert_eq!(st, ST_QUEUED);
+        assert_eq!(ticket, 7);
+        assert_eq!(s.queue.front().map(|w| w.ticket), Some(7));
+
+        s.locked = false;
+        s.queue.clear();
+        let (acquired, st, _) = advance(&mut s, ST_QUEUED, 99, std::ptr::null_mut(), wake_noop);
+        assert!(acquired);
+        assert_eq!(st, ST_ACQUIRED);
+    }
+
+    #[test]
+    fn init_poll_acquires_after_removing_own_stale_waiter() {
+        let mut s = fresh_state();
+        let (data, wake) = crate::threads::test_executor_waker();
+        s.queue.push_back(Waker {
+            data,
+            wake,
+            ticket: 1,
+        });
+        s.next_ticket = 2;
+
+        let (acquired, st, _) = advance(&mut s, ST_INIT, 0, data, wake);
+
+        assert!(
+            acquired,
+            "free lock should not park behind its own stale waiter"
+        );
+        assert_eq!(st, ST_ACQUIRED);
+        assert!(s.queue.is_empty());
+        assert!(s.locked);
+    }
+
+    #[test]
     fn try_acquire_release_roundtrip() {
         let id = register_cell();
         assert_eq!(unsafe { lang_shared_try_acquire(id) }, 1, "free → acquired");
-        assert_eq!(unsafe { lang_shared_try_acquire(id) }, 0, "held → busy (non-reentrant)");
+        assert_eq!(
+            unsafe { lang_shared_try_acquire(id) },
+            0,
+            "held → busy (non-reentrant)"
+        );
         unsafe { lang_shared_release(id) };
-        assert_eq!(unsafe { lang_shared_try_acquire(id) }, 1, "released → re-acquirable");
+        assert_eq!(
+            unsafe { lang_shared_try_acquire(id) },
+            1,
+            "released → re-acquirable"
+        );
         unsafe { lang_shared_release(id) };
     }
 
@@ -609,28 +835,48 @@ mod tests {
         unsafe { lang_shared_release_all() };
         assert_eq!(unsafe { lang_shared_try_acquire(a) }, 1, "a was released");
         assert_eq!(unsafe { lang_shared_try_acquire(b) }, 1, "b was released");
-        assert!(HELD.with(|h| h.borrow().len() == 2), "held-set tracks the re-acquires");
+        assert!(
+            HELD.with(|h| h.borrow().len() == 2),
+            "held-set tracks the re-acquires"
+        );
         unsafe { lang_shared_release_all() };
     }
 
-    /// A waiter woken by `release_inner` is the FIFO head, and releasing invokes
-    /// its waker exactly once.
+    /// Releasing wakes the live FIFO head and leaves the queue intact; the head
+    /// entry is consumed by `advance` when that task re-polls.
     #[test]
-    fn release_wakes_head_waiter() {
+    fn release_wakes_live_head_without_consuming_ticket() {
         use std::sync::atomic::AtomicU32;
         static WOKEN: AtomicU32 = AtomicU32::new(0);
         extern "C" fn count_wake(_: *mut u8) {
             WOKEN.fetch_add(1, Ordering::SeqCst);
         }
+        WOKEN.store(0, Ordering::SeqCst);
         let id = register_cell();
         {
             let cell = cell(id);
             let mut s = cell.state.lock().unwrap();
             s.locked = true;
-            s.queue.push_back(Waker { data: std::ptr::null_mut(), wake: count_wake, ticket: 1 });
-            s.queue.push_back(Waker { data: std::ptr::null_mut(), wake: wake_noop, ticket: 2 });
+            s.queue.push_back(Waker {
+                data: std::ptr::null_mut(),
+                wake: count_wake,
+                ticket: 1,
+            });
+            s.queue.push_back(Waker {
+                data: std::ptr::null_mut(),
+                wake: count_wake,
+                ticket: 2,
+            });
         }
         unsafe { lang_shared_release(id) };
-        assert_eq!(WOKEN.load(Ordering::SeqCst), 1, "only the head waiter is woken");
+        assert_eq!(
+            WOKEN.load(Ordering::SeqCst),
+            1,
+            "only the FIFO head is woken, avoiding a thundering herd under contention"
+        );
+        assert!(
+            cell(id).state.lock().unwrap().queue.len() == 2,
+            "release preserves tickets until re-poll"
+        );
     }
 }

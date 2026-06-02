@@ -198,13 +198,25 @@ pub unsafe extern "C" fn lang_variadic_call(
     // `atypes`/`rtype` are valid `ffi_type` pointers; counts come from the
     // caller (the checker enforces `0 < n_fixed <= n_total`).
     let status = unsafe {
-        ffi_prep_cif_var(cif_ptr, FFI_DEFAULT_ABI, n_fixed, n_total, rtype, atypes.as_mut_ptr())
+        ffi_prep_cif_var(
+            cif_ptr,
+            FFI_DEFAULT_ABI,
+            n_fixed,
+            n_total,
+            rtype,
+            atypes.as_mut_ptr(),
+        )
     };
     assert_eq!(status, FFI_OK, "ffi_prep_cif_var failed (status {status})");
     // SAFETY: the cif is prepared; `fn_ptr` matches it; `ret_slot` has >= 8
     // bytes; `avalues` point into the live `values` buffer.
     unsafe {
-        ffi_call(cif_ptr, fn_ptr, ret_slot.cast::<c_void>(), avalues.as_mut_ptr());
+        ffi_call(
+            cif_ptr,
+            fn_ptr,
+            ret_slot.cast::<c_void>(),
+            avalues.as_mut_ptr(),
+        );
     }
 }
 
@@ -229,11 +241,11 @@ mod tests {
         // One 8-byte slot per argument; integers/pointers in the low bytes, the
         // double as its bit pattern.
         let values: [u64; 5] = [
-            out.as_mut_ptr() as u64,        // buf      (pointer)
-            out.len() as u64,               // size     (u64)
-            fmt.as_ptr() as u64,            // fmt      (pointer)
-            42u64,                          // 42       (variadic int)
-            3.5f64.to_bits(),               // 3.5      (variadic double)
+            out.as_mut_ptr() as u64, // buf      (pointer)
+            out.len() as u64,        // size     (u64)
+            fmt.as_ptr() as u64,     // fmt      (pointer)
+            42u64,                   // 42       (variadic int)
+            3.5f64.to_bits(),        // 3.5      (variadic double)
         ];
         let tags = [VTAG_PTR, VTAG_U64, VTAG_PTR, VTAG_I32, VTAG_F64];
         let mut ret = [0u8; VARIADIC_SLOT_BYTES];

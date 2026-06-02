@@ -10,7 +10,7 @@ use compiler::ids::{DefId, LocalId};
 use compiler::sema::{Analysis, DefKind, StructFields};
 use compiler::span::Span;
 use compiler::ty::{FloatTy, IntTy, Ty, TyKind};
-use cranelift_codegen::ir::{types, AbiParam, Type as ClType};
+use cranelift_codegen::ir::{AbiParam, Type as ClType, types};
 use cranelift_codegen::isa::CallConv;
 use cranelift_module::{FuncId, Linkage, Module};
 use std::collections::{HashMap, HashSet};
@@ -56,7 +56,12 @@ pub(crate) fn extern_call_conv(analysis: &Analysis, def: DefId, default: CallCon
 /// fixed-arity Cranelift call (see [`crate::gen_hir`]'s `h_variadic_call`).
 pub(crate) fn is_variadic_extern(analysis: &Analysis, def: DefId) -> bool {
     analysis.program.def(def).kind == DefKind::ExternFunction
-        && analysis.program.def(def).attrs.iter().any(|a| a.name.name == "Variadic")
+        && analysis
+            .program
+            .def(def)
+            .attrs
+            .iter()
+            .any(|a| a.name.name == "Variadic")
 }
 
 /// The `libffi` type tag (`runtime::variadic::VTAG_*`) for a C-ABI scalar or
@@ -75,10 +80,34 @@ pub(crate) fn variadic_tag(analysis: &Analysis, ty: Ty, promote: bool) -> Option
     }
     Some(match analysis.tcx.kind(ty) {
         TyKind::Int(it) => match it {
-            IntTy::I8 => if promote { v::VTAG_I32 } else { v::VTAG_I8 },
-            IntTy::U8 => if promote { v::VTAG_I32 } else { v::VTAG_U8 },
-            IntTy::I16 => if promote { v::VTAG_I32 } else { v::VTAG_I16 },
-            IntTy::U16 => if promote { v::VTAG_I32 } else { v::VTAG_U16 },
+            IntTy::I8 => {
+                if promote {
+                    v::VTAG_I32
+                } else {
+                    v::VTAG_I8
+                }
+            }
+            IntTy::U8 => {
+                if promote {
+                    v::VTAG_I32
+                } else {
+                    v::VTAG_U8
+                }
+            }
+            IntTy::I16 => {
+                if promote {
+                    v::VTAG_I32
+                } else {
+                    v::VTAG_I16
+                }
+            }
+            IntTy::U16 => {
+                if promote {
+                    v::VTAG_I32
+                } else {
+                    v::VTAG_U16
+                }
+            }
             IntTy::I32 => v::VTAG_I32,
             IntTy::U32 => v::VTAG_U32,
             IntTy::I64 | IntTy::Isize => v::VTAG_I64,
@@ -86,15 +115,29 @@ pub(crate) fn variadic_tag(analysis: &Analysis, ty: Ty, promote: bool) -> Option
         },
         // `bool` is a 1-byte `_Bool` when named; it promotes to `int` as a
         // variadic. `char` is a 32-bit Unicode scalar (C `int`-width).
-        TyKind::Bool => if promote { v::VTAG_I32 } else { v::VTAG_U8 },
+        TyKind::Bool => {
+            if promote {
+                v::VTAG_I32
+            } else {
+                v::VTAG_U8
+            }
+        }
         TyKind::Char => v::VTAG_I32,
-        TyKind::Float(FloatTy::F32) => if promote { v::VTAG_F64 } else { v::VTAG_F32 },
+        TyKind::Float(FloatTy::F32) => {
+            if promote {
+                v::VTAG_F64
+            } else {
+                v::VTAG_F32
+            }
+        }
         TyKind::Float(FloatTy::F64) => v::VTAG_F64,
         // Raw FFI pointers and extern function pointers are machine pointers.
         // (`str` is deliberately excluded — it is a managed `LangStr`, not a C
         // `char*`; the checker rejects it as a variadic argument.)
         TyKind::Ptr(_) => v::VTAG_PTR,
-        TyKind::Func { is_extern: true, .. } => v::VTAG_PTR,
+        TyKind::Func {
+            is_extern: true, ..
+        } => v::VTAG_PTR,
         _ => return None,
     })
 }
@@ -147,6 +190,7 @@ pub(crate) fn async_state_layout(
     entry: &[LocalId],
     body: BodyView,
     captured_locals: &HashSet<LocalId>,
+    value_capture_locals: &HashSet<LocalId>,
 ) -> AsyncLayout {
     let mut all_locals = entry.to_vec();
     let mut seen: HashSet<LocalId> = all_locals.iter().copied().collect();
@@ -161,7 +205,7 @@ pub(crate) fn async_state_layout(
         // variable holds a managed cell pointer, regardless of the local's
         // declared (content) type. The async state saves/restores that
         // pointer, so the slot is `PTR` and the descriptor traces it.
-        if captured_locals.contains(l) {
+        if captured_locals.contains(l) && !value_capture_locals.contains(l) {
             live.push((*l, off, PTR));
             ptr_offsets.push(off as u32);
             continue;
@@ -195,7 +239,13 @@ pub(crate) fn async_state_layout(
         next_off += 24;
     }
     let state_size = next_off as u32;
-    AsyncLayout { slot_off, live, ptr_offsets, state_size, for_slots }
+    AsyncLayout {
+        slot_off,
+        live,
+        ptr_offsets,
+        state_size,
+        for_slots,
+    }
 }
 
 /// The generic-parameter → argument substitution for an instance.
@@ -234,7 +284,11 @@ pub(crate) fn resolve_shallow(analysis: &Analysis, ty: Ty, subst: &HashMap<DefId
     }
 }
 
-pub(crate) fn clty_subst(analysis: &Analysis, ty: Ty, subst: &HashMap<DefId, Ty>) -> Option<ClType> {
+pub(crate) fn clty_subst(
+    analysis: &Analysis,
+    ty: Ty,
+    subst: &HashMap<DefId, Ty>,
+) -> Option<ClType> {
     clty_of(analysis, resolve_shallow(analysis, ty, subst))
 }
 
@@ -442,8 +496,27 @@ pub(crate) fn align_up(x: u32, align: u32) -> u32 {
 pub(crate) fn is_immutable_value_codegen(analysis: &Analysis, ty: Ty) -> bool {
     matches!(
         analysis.tcx.kind(ty),
-        TyKind::Int(_) | TyKind::Float(_) | TyKind::Bool | TyKind::Char | TyKind::Str | TyKind::Null
+        TyKind::Int(_)
+            | TyKind::Float(_)
+            | TyKind::Bool
+            | TyKind::Char
+            | TyKind::Str
+            | TyKind::Null
     )
+}
+
+/// Whether a by-value spawn capture can be copied/shared without invoking
+/// `Clone`: immutable values are observationally snapshots, and `Shared<T>`
+/// is an explicitly shared synchronized handle. Channel endpoints are handled
+/// separately because their by-value spawn capture transfers endpoint
+/// ownership to the worker environment.
+pub(crate) fn is_spawn_shareable_capture_codegen(analysis: &Analysis, ty: Ty) -> bool {
+    if is_immutable_value_codegen(analysis, ty) {
+        return true;
+    }
+    matches!(analysis.tcx.kind(ty),
+        TyKind::Named { def, .. }
+            if *def == analysis.program.shared_def && analysis.program.shared_def != DefId(0))
 }
 
 /// Whether nominal type `def` is a `@RefCounted` struct (`docs/16` §8.1): an
@@ -476,13 +549,20 @@ pub(crate) fn is_managed_ptr(analysis: &Analysis, ty: Ty) -> bool {
         // Every other union is a managed box.
         TyKind::Union(_) => npo_union(analysis, ty).is_none(),
         // A closure value is a pointer to a managed environment.
-        TyKind::Func { is_extern: false, .. } => true,
+        TyKind::Func {
+            is_extern: false, ..
+        } => true,
         // A `@Transparent` newtype is managed iff its inner field is.
         TyKind::Named { .. } if transparent_inner(analysis, ty).is_some() => {
             is_managed_ptr(analysis, transparent_inner(analysis, ty).unwrap())
         }
+        TyKind::Named { def, .. } if *def == analysis.program.list_def => true,
+        TyKind::Named { def, .. } if *def == analysis.program.map_def => true,
         TyKind::Named { def, .. } => {
-            matches!(analysis.program.def(*def).kind, DefKind::Struct | DefKind::Interface)
+            matches!(
+                analysis.program.def(*def).kind,
+                DefKind::Struct | DefKind::Interface
+            )
         }
         _ => false,
     }
@@ -495,8 +575,12 @@ pub(crate) fn is_managed_ptr(analysis: &Analysis, ty: Ty) -> bool {
 pub(crate) fn npo_union(analysis: &Analysis, ty: Ty) -> Option<Ty> {
     if let TyKind::Union(members) = analysis.tcx.kind(ty) {
         if members.len() == 2 {
-            let has_null = members.iter().any(|m| matches!(analysis.tcx.kind(*m), TyKind::Null));
-            let ptr = members.iter().find(|m| matches!(analysis.tcx.kind(**m), TyKind::Ptr(_)));
+            let has_null = members
+                .iter()
+                .any(|m| matches!(analysis.tcx.kind(*m), TyKind::Null));
+            let ptr = members
+                .iter()
+                .find(|m| matches!(analysis.tcx.kind(**m), TyKind::Ptr(_)));
             if has_null {
                 return ptr.copied();
             }
@@ -554,7 +638,9 @@ pub(crate) fn layout_of_fields(analysis: &Analysis, fields: &[(String, Ty)]) -> 
 /// inner field type (with the struct's generic args substituted). A transparent
 /// struct has the same runtime representation and ABI as its one field.
 pub(crate) fn transparent_inner(analysis: &Analysis, ty: Ty) -> Option<Ty> {
-    let TyKind::Named { def, args } = analysis.tcx.kind(ty) else { return None };
+    let TyKind::Named { def, args } = analysis.tcx.kind(ty) else {
+        return None;
+    };
     let d = analysis.program.def(*def);
     if !matches!(d.kind, DefKind::Struct | DefKind::ExternStruct) {
         return None;
@@ -568,8 +654,12 @@ pub(crate) fn transparent_inner(analysis: &Analysis, ty: Ty) -> Option<Ty> {
         _ => return None,
     };
     // Substitute the struct's generic params (usually none for a newtype).
-    let ssubst: HashMap<DefId, Ty> =
-        d.generics.iter().copied().zip(args.iter().copied()).collect();
+    let ssubst: HashMap<DefId, Ty> = d
+        .generics
+        .iter()
+        .copied()
+        .zip(args.iter().copied())
+        .collect();
     Some(resolve_shallow(analysis, inner, &ssubst))
 }
 
@@ -635,9 +725,7 @@ pub(crate) fn field_size_align(analysis: &Analysis, ty: Ty) -> (u32, u32) {
         }
         // A nested `extern struct` is embedded *inline*, occupying its own C
         // layout's bytes (not a pointer) — `docs/19` §3.
-        TyKind::Named { def, args }
-            if analysis.program.def(*def).kind == DefKind::ExternStruct =>
-        {
+        TyKind::Named { def, args } if analysis.program.def(*def).kind == DefKind::ExternStruct => {
             let l = compute_layout(analysis, *def, args);
             (l.size, l.align)
         }
@@ -680,7 +768,11 @@ pub(crate) fn extern_layout_of_fields(
         if let Some(p) = repr.packed {
             align = align.min(p.max(1));
         }
-        let off = if repr.is_union { 0 } else { align_up(offset, align) };
+        let off = if repr.is_union {
+            0
+        } else {
+            align_up(offset, align)
+        };
         offsets.push(off);
         cltys.push(ct);
         names.push(name.clone());
@@ -712,15 +804,23 @@ pub(crate) fn extern_layout_of_fields(
 pub(crate) fn compute_layout(analysis: &Analysis, def: DefId, args: &[Ty]) -> Layout {
     let fields: Vec<(String, Ty)> = match analysis.hir.structs.get(&def) {
         Some(StructFields::Record(fs)) => fs.clone(),
-        Some(StructFields::Tuple(ts)) => {
-            ts.iter().enumerate().map(|(i, t)| (i.to_string(), *t)).collect()
-        }
+        Some(StructFields::Tuple(ts)) => ts
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (i.to_string(), *t))
+            .collect(),
         _ => Vec::new(),
     };
     // For a generic struct, the field types reference the struct's own
     // parameters; substitute the instantiation's arguments.
-    let ssubst: HashMap<DefId, Ty> =
-        analysis.program.def(def).generics.iter().copied().zip(args.iter().copied()).collect();
+    let ssubst: HashMap<DefId, Ty> = analysis
+        .program
+        .def(def)
+        .generics
+        .iter()
+        .copied()
+        .zip(args.iter().copied())
+        .collect();
     let resolved: Vec<(String, Ty)> = fields
         .into_iter()
         .map(|(n, t)| (n, resolve_shallow(analysis, t, &ssubst)))
@@ -756,8 +856,11 @@ pub(crate) fn compute_layout(analysis: &Analysis, def: DefId, args: &[Ty]) -> La
 
 /// The layout of an anonymous tuple, positions named "0", "1", ….
 pub(crate) fn tuple_layout(analysis: &Analysis, elems: &[Ty]) -> Layout {
-    let fields: Vec<(String, Ty)> =
-        elems.iter().enumerate().map(|(i, t)| (i.to_string(), *t)).collect();
+    let fields: Vec<(String, Ty)> = elems
+        .iter()
+        .enumerate()
+        .map(|(i, t)| (i.to_string(), *t))
+        .collect();
     layout_of_fields(analysis, &fields)
 }
 
@@ -785,7 +888,10 @@ pub(crate) fn unescape_into(text: &str, out: &mut Vec<u8>) {
                     chars.next();
                     let mut hex = String::new();
                     while let Some(&h) = chars.peek() {
-                        if h == '}' { chars.next(); break; }
+                        if h == '}' {
+                            chars.next();
+                            break;
+                        }
                         hex.push(h);
                         chars.next();
                     }
@@ -803,4 +909,3 @@ pub(crate) fn unescape_into(text: &str, out: &mut Vec<u8>) {
         }
     }
 }
-

@@ -92,7 +92,10 @@ fn hoist_item(item: &mut Item) {
                 }
             }
         }
-        ItemKind::Module(ModuleItem { kind: ModuleKind::Inline { items, .. }, .. }) => {
+        ItemKind::Module(ModuleItem {
+            kind: ModuleKind::Inline { items, .. },
+            ..
+        }) => {
             for it in items {
                 hoist_item(it);
             }
@@ -130,7 +133,10 @@ fn process_block(block: &mut Block) {
             }
         };
         out.append(&mut pre);
-        out.push(Stmt { kind, span: stmt.span });
+        out.push(Stmt {
+            kind,
+            span: stmt.span,
+        });
     }
     if let Some(t) = block.trailing.take() {
         let mut pre = Vec::new();
@@ -515,7 +521,12 @@ fn rewrite(e: Expr, pre: &mut Vec<Stmt>) -> Expr {
 fn rewrite_arm(arm: MatchArm) -> MatchArm {
     let mut pre = Vec::new();
     let body = rewrite(arm.body, &mut pre);
-    MatchArm { pattern: arm.pattern, guard: arm.guard, body: wrap_with_pre(body, pre), span: arm.span }
+    MatchArm {
+        pattern: arm.pattern,
+        guard: arm.guard,
+        body: wrap_with_pre(body, pre),
+        span: arm.span,
+    }
 }
 
 /// Rewrite a closure/`=>` body as its own scope. The body is a tail expression;
@@ -534,7 +545,11 @@ fn wrap_with_pre(value: Expr, pre: Vec<Stmt>) -> Expr {
     }
     let span = value.span;
     Expr {
-        kind: ExprKind::Block(Block { stmts: pre, trailing: Some(Box::new(value)), span: nsp() }),
+        kind: ExprKind::Block(Block {
+            stmts: pre,
+            trailing: Some(Box::new(value)),
+            span: nsp(),
+        }),
         span,
     }
 }
@@ -576,15 +591,27 @@ fn atomize_seq(items: Vec<Expr>, pre: &mut Vec<Stmt>) -> Vec<Expr> {
 /// identifier expression that reads it.
 fn hoist(value: Expr, pre: &mut Vec<Stmt>) -> Expr {
     let name = fresh_name();
-    let bind_ident = Ident { name: name.clone(), span: nsp() };
+    let bind_ident = Ident {
+        name: name.clone(),
+        span: nsp(),
+    };
     let use_ident = Ident { name, span: nsp() };
     let var = LocalVar {
-        pattern: Pattern { kind: PatternKind::Binding(bind_ident), span: nsp() },
+        pattern: Pattern {
+            kind: PatternKind::Binding(bind_ident),
+            span: nsp(),
+        },
         ty: None,
         init: value,
     };
-    pre.push(Stmt { kind: StmtKind::Var(var), span: nsp() });
-    Expr { kind: ExprKind::Ident(use_ident), span: nsp() }
+    pre.push(Stmt {
+        kind: StmtKind::Var(var),
+        span: nsp(),
+    });
+    Expr {
+        kind: ExprKind::Ident(use_ident),
+        span: nsp(),
+    }
 }
 
 /// Whether `e` is a simple variable place (`x` or `self`) — already safe to
@@ -720,7 +747,7 @@ fn else_contains_await(e: &ElseBranch) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{lex, parse, FileId};
+    use crate::{FileId, lex, parse};
 
     /// Parse `src`, run `hoist_awaits`, and return the printed AST.
     fn hoisted(src: &str) -> String {
@@ -737,12 +764,13 @@ mod tests {
     /// neither hoisted out (which would make it unconditional) nor wrapped.
     #[test]
     fn and_rhs_direct_await_is_preserved() {
-        let out = hoisted(
-            "function f(): Future<bool> async { var r = cond() && await g(); r }",
-        );
+        let out = hoisted("function f(): Future<bool> async { var r = cond() && await g(); r }");
         assert!(out.contains("cond() && (await g())"), "got:\n{out}");
         // No hoist temporary was introduced.
-        assert!(!out.contains("__await_"), "should not hoist a direct rhs await:\n{out}");
+        assert!(
+            !out.contains("__await_"),
+            "should not hoist a direct rhs await:\n{out}"
+        );
     }
 
     /// An `await` *nested inside* the right operand is hoisted into a block that
@@ -750,37 +778,45 @@ mod tests {
     /// short-circuit, never lifted before the `&&`.
     #[test]
     fn and_rhs_nested_await_is_wrapped_in_a_block() {
-        let out = hoisted(
-            "function f(): Future<bool> async { var r = cond() && ((await g()) == 5); r }",
-        );
+        let out =
+            hoisted("function f(): Future<bool> async { var r = cond() && ((await g()) == 5); r }");
         // The hoist binding lives *after* the `&&`, inside a block on the rhs.
         let and_pos = out.find("&&").expect("has &&");
         let hoist_pos = out.find("= (await g())").expect("hoisted await");
-        assert!(hoist_pos > and_pos, "await must be hoisted *inside* the rhs, not before it:\n{out}");
+        assert!(
+            hoist_pos > and_pos,
+            "await must be hoisted *inside* the rhs, not before it:\n{out}"
+        );
         assert!(out.contains("&& {"), "rhs should be a block:\n{out}");
-        assert!(out.contains("__await_"), "a temporary was introduced:\n{out}");
+        assert!(
+            out.contains("__await_"),
+            "a temporary was introduced:\n{out}"
+        );
     }
 
     /// The left operand of `&&` is unconditional, so its `await` IS hoisted out
     /// to a preceding statement (it always runs when the `&&` is evaluated).
     #[test]
     fn and_left_await_is_hoisted_out() {
-        let out = hoisted(
-            "function f(): Future<bool> async { var r = (await a()) && b(); r }",
-        );
+        let out = hoisted("function f(): Future<bool> async { var r = (await a()) && b(); r }");
         let hoist_pos = out.find("= (await a())").expect("hoisted await");
         let r_pos = out.find("var r =").expect("var r");
-        assert!(hoist_pos < r_pos, "left await must be hoisted before `var r`:\n{out}");
+        assert!(
+            hoist_pos < r_pos,
+            "left await must be hoisted before `var r`:\n{out}"
+        );
         // The left operand is replaced by a reference to the temporary.
-        assert!(out.contains("__await_") && out.contains("&& b()"), "left becomes the temporary:\n{out}");
+        assert!(
+            out.contains("__await_") && out.contains("&& b()"),
+            "left becomes the temporary:\n{out}"
+        );
     }
 
     /// `||` behaves symmetrically: the right operand is scoped.
     #[test]
     fn or_rhs_nested_await_is_wrapped_in_a_block() {
-        let out = hoisted(
-            "function f(): Future<bool> async { var r = cond() || ((await g()) == 5); r }",
-        );
+        let out =
+            hoisted("function f(): Future<bool> async { var r = cond() || ((await g()) == 5); r }");
         assert!(out.contains("|| {"), "rhs should be a block:\n{out}");
         assert!(out.contains("= (await g())"), "got:\n{out}");
     }
@@ -788,25 +824,30 @@ mod tests {
     /// A bare `await` as a whole `while` condition is preserved verbatim.
     #[test]
     fn while_cond_direct_await_is_preserved() {
-        let out = hoisted(
-            "function f(): Future<null> async { while await c() { work(); } }",
-        );
+        let out = hoisted("function f(): Future<null> async { while await c() { work(); } }");
         assert!(out.contains("while await c()"), "got:\n{out}");
-        assert!(!out.contains("__await_"), "should not hoist a direct cond await:\n{out}");
+        assert!(
+            !out.contains("__await_"),
+            "should not hoist a direct cond await:\n{out}"
+        );
     }
 
     /// An `await` nested inside a `while` condition is hoisted into a block that
     /// is re-evaluated each iteration — never lifted out of the loop.
     #[test]
     fn while_cond_nested_await_is_wrapped_in_a_block() {
-        let out = hoisted(
-            "function f(): Future<null> async { while (await c()) < 3 { work(); } }",
+        let out = hoisted("function f(): Future<null> async { while (await c()) < 3 { work(); } }");
+        assert!(
+            out.contains("while {"),
+            "cond should become a block:\n{out}"
         );
-        assert!(out.contains("while {"), "cond should become a block:\n{out}");
         // The hoisted binding is *inside* the loop's condition scope.
         let while_pos = out.find("while {").expect("while block");
         let hoist_pos = out.find("= (await c())").expect("hoisted await");
-        assert!(hoist_pos > while_pos, "await must stay inside the cond block:\n{out}");
+        assert!(
+            hoist_pos > while_pos,
+            "await must stay inside the cond block:\n{out}"
+        );
     }
 
     /// `contains_await` sees through control-flow bodies, so an `await` hidden in
@@ -818,9 +859,15 @@ mod tests {
             "function f(): Future<null> async { use(g(), if cond() { await a() } else { 0 }); }",
         );
         // The whole `if` is hoisted into a temporary before the call.
-        assert!(out.contains("__await_"), "if-branch await operand should be hoisted:\n{out}");
+        assert!(
+            out.contains("__await_"),
+            "if-branch await operand should be hoisted:\n{out}"
+        );
         let hoist_pos = out.find("__await_").expect("hoist");
         let call_pos = out.find("use(").expect("call");
-        assert!(hoist_pos < call_pos, "the if operand must be hoisted before the call:\n{out}");
+        assert!(
+            hoist_pos < call_pos,
+            "the if operand must be hoisted before the call:\n{out}"
+        );
     }
 }

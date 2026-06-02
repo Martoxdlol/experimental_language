@@ -11,9 +11,10 @@ impl<'a> Checker<'a> {
             match IntTy::from_name(suffix) {
                 Some(it) => self.tcx.int(it),
                 None => {
-                    self.emit(span, SemaErrorKind::Message(format!(
-                        "`{suffix}` is not a valid integer suffix"
-                    )));
+                    self.emit(
+                        span,
+                        SemaErrorKind::Message(format!("`{suffix}` is not a valid integer suffix")),
+                    );
                     self.tcx.error
                 }
             }
@@ -46,7 +47,9 @@ impl<'a> Checker<'a> {
             IntBase::Oct => 8,
             IntBase::Bin => 2,
         };
-        let Ok(v) = u128::from_str_radix(&digits, radix) else { return };
+        let Ok(v) = u128::from_str_radix(&digits, radix) else {
+            return;
+        };
         let max: u128 = if it.is_signed() {
             (1u128 << (bits - 1)) - 1
         } else {
@@ -55,11 +58,14 @@ impl<'a> Checker<'a> {
         // Unary minus is applied separately; the literal itself is unsigned, so
         // the signed positive max is the bound here.
         if v > max {
-            self.emit(span, SemaErrorKind::Message(format!(
-                "literal `{}` does not fit in `{}`",
-                digits,
-                it.name()
-            )));
+            self.emit(
+                span,
+                SemaErrorKind::Message(format!(
+                    "literal `{}` does not fit in `{}`",
+                    digits,
+                    it.name()
+                )),
+            );
         }
     }
 
@@ -111,11 +117,15 @@ impl<'a> Checker<'a> {
     /// Whether `expected` is an interface type that `found` (a nominal type)
     /// implements via a visible `extend` block.
     pub(crate) fn implements_dyn(&self, found: Ty, expected: Ty) -> bool {
-        let TyKind::Named { def: idef, .. } = self.tcx.kind(expected) else { return false };
+        let TyKind::Named { def: idef, .. } = self.tcx.kind(expected) else {
+            return false;
+        };
         if self.prog.def(*idef).kind != DefKind::Interface {
             return false;
         }
-        let TyKind::Named { def: cdef, .. } = self.tcx.kind(found) else { return false };
+        let TyKind::Named { def: cdef, .. } = self.tcx.kind(found) else {
+            return false;
+        };
         self.hir.iface_impls.contains_key(&(*cdef, *idef))
     }
 
@@ -123,7 +133,13 @@ impl<'a> Checker<'a> {
         if !self.assignable(found, expected) {
             let e = self.display(expected);
             let f = self.display(found);
-            self.emit(span, SemaErrorKind::TypeMismatch { expected: e, found: f });
+            self.emit(
+                span,
+                SemaErrorKind::TypeMismatch {
+                    expected: e,
+                    found: f,
+                },
+            );
             return;
         }
         // Record an implicit widening so codegen can box the value. Widening
@@ -153,8 +169,12 @@ impl<'a> Checker<'a> {
     pub(crate) fn is_stringifiable(&self, ty: Ty) -> bool {
         matches!(
             self.tcx.kind(ty),
-            TyKind::Int(_) | TyKind::Float(_) | TyKind::Bool | TyKind::Char
-                | TyKind::Str | TyKind::Null
+            TyKind::Int(_)
+                | TyKind::Float(_)
+                | TyKind::Bool
+                | TyKind::Char
+                | TyKind::Str
+                | TyKind::Null
         )
     }
     pub(crate) fn is_integer(&self, ty: Ty) -> bool {
@@ -231,17 +251,23 @@ impl<'a> Checker<'a> {
                         return;
                     }
                     // Arity mismatch between the tuple pattern and the value.
-                    self.emit(pattern.span, SemaErrorKind::Message(format!(
-                        "tuple pattern has {} element{} but the value is a {}-tuple",
-                        elems.len(),
-                        if elems.len() == 1 { "" } else { "s" },
-                        ts.len(),
-                    )));
+                    self.emit(
+                        pattern.span,
+                        SemaErrorKind::Message(format!(
+                            "tuple pattern has {} element{} but the value is a {}-tuple",
+                            elems.len(),
+                            if elems.len() == 1 { "" } else { "s" },
+                            ts.len(),
+                        )),
+                    );
                 } else if !matches!(self.tcx.kind(ty), TyKind::Error) {
-                    self.emit(pattern.span, SemaErrorKind::Message(format!(
-                        "tuple pattern cannot match a value of type `{}`",
-                        self.display(ty),
-                    )));
+                    self.emit(
+                        pattern.span,
+                        SemaErrorKind::Message(format!(
+                            "tuple pattern cannot match a value of type `{}`",
+                            self.display(ty),
+                        )),
+                    );
                 }
                 // Bind names to error to keep going after the diagnostic.
                 for p in elems {
@@ -269,7 +295,12 @@ impl<'a> Checker<'a> {
                 let rfs = match self.tcx.kind(ty).clone() {
                     TyKind::Named { def, args } => {
                         let r = self.record_fields(def, &args);
-                        if r.is_none() && matches!(self.prog.def(def).kind, DefKind::Struct | DefKind::ExternStruct) {
+                        if r.is_none()
+                            && matches!(
+                                self.prog.def(def).kind,
+                                DefKind::Struct | DefKind::ExternStruct
+                            )
+                        {
                             self.emit(pattern.span, SemaErrorKind::Message(format!(
                                 "`{}` is not a record struct; use a tuple-struct pattern like `{}(..)`",
                                 self.prog.def(def).name, self.prog.def(def).name
@@ -295,9 +326,10 @@ impl<'a> Checker<'a> {
             }
             _ => {
                 // Remaining irrefutable patterns (list destructuring, etc.).
-                self.emit(pattern.span, SemaErrorKind::Message(
-                    "this binding pattern is not yet supported".into(),
-                ));
+                self.emit(
+                    pattern.span,
+                    SemaErrorKind::Message("this binding pattern is not yet supported".into()),
+                );
             }
         }
     }

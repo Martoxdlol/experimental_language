@@ -144,5 +144,10 @@ pub fn analyze_multi_ctx(
         ck.check_program();
         ck.finish()
     };
-    Analysis { program, tcx, hir, errors }
+    Analysis {
+        program,
+        tcx,
+        hir,
+        errors,
+    }
 }

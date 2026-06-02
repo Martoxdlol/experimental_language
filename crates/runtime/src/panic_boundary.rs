@@ -91,7 +91,10 @@ struct Ctx<'a> {
 /// It then materialises the captured message as a managed `str` and pins it for
 /// the cross-thread handoff to the joiner.
 pub fn run_under_boundary(mut body: impl FnMut() -> i64) -> Result<i64, usize> {
-    let mut cx = Ctx { body: &mut body, result: 0 };
+    let mut cx = Ctx {
+        body: &mut body,
+        result: 0,
+    };
     let panicked = unsafe { otter_pb_run(trampoline, &mut cx as *mut Ctx as *mut u8) };
     if panicked == 0 {
         return Ok(cx.result);
@@ -114,7 +117,7 @@ fn build_panic_message() -> usize {
     // be swept before it is pinned, matching the runtime's alloc-then-pin idiom.
     gc::pause();
     let s = unsafe { lang_str_from_utf8(bytes.as_ptr(), bytes.len()) } as usize;
-    gc::resume();
+    gc::resume_with_return_root(s);
     gc::add_extra_root(s);
     s
 }
@@ -127,6 +130,7 @@ mod tests {
 
     #[test]
     fn normal_body_returns_ok_and_no_boundary_outside() {
+        let _g = gc::TEST_LOCK.lock().unwrap();
         assert!(!boundary_active(), "no boundary before any run");
         let out = run_under_boundary(|| 42);
         assert_eq!(out, Ok(42));
@@ -135,6 +139,7 @@ mod tests {
 
     #[test]
     fn boundary_is_active_inside_body() {
+        let _g = gc::TEST_LOCK.lock().unwrap();
         static INSIDE: AtomicU32 = AtomicU32::new(0);
         let _ = run_under_boundary(|| {
             INSIDE.store(boundary_active() as u32, Ordering::SeqCst);

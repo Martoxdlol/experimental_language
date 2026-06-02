@@ -26,8 +26,16 @@ use std::collections::HashSet;
 /// their dedicated handlers (`@Derive` is the built-in derive desugaring;
 /// `@ProcMacro` marks a definition; the rest are layout/ABI decorators).
 const RESERVED_ATTRS: &[&str] = &[
-    "Derive", "derive", "ProcMacro", "Transparent", "Packed", "Align", "Union", "RefCounted",
-    "CallConv", "Link",
+    "Derive",
+    "derive",
+    "ProcMacro",
+    "Transparent",
+    "Packed",
+    "Align",
+    "Union",
+    "RefCounted",
+    "CallConv",
+    "Link",
 ];
 
 /// Default macro-expansion recursion limit (`docs/22` §10). Overridable via
@@ -78,7 +86,13 @@ pub fn expand_user_macros(
     //    runaway macro is rejected with its invocation chain. Decorator items
     //    are expanded first, then value (expression/block) macros in all bodies.
     let limit = recursion_limit(ctx);
-    let mut exp = Expander { names: &macro_names, jit: &jit, limit, errors: Vec::new(), chain: Vec::new() };
+    let mut exp = Expander {
+        names: &macro_names,
+        jit: &jit,
+        limit,
+        errors: Vec::new(),
+        chain: Vec::new(),
+    };
     exp.expand_items(&mut root.items);
     for m in externals.values_mut() {
         exp.expand_items(&mut m.items);
@@ -118,10 +132,16 @@ fn strip_macro_definitions(module: &mut Module) {
         true
     });
     for it in &mut module.items {
-        if let ItemKind::Module(ModuleItem { kind: ModuleKind::Inline { items, .. }, .. }) =
-            &mut it.kind
+        if let ItemKind::Module(ModuleItem {
+            kind: ModuleKind::Inline { items, .. },
+            ..
+        }) = &mut it.kind
         {
-            let mut sub = Module { inner_docs: Vec::new(), items: std::mem::take(items), span: it.span };
+            let mut sub = Module {
+                inner_docs: Vec::new(),
+                items: std::mem::take(items),
+                span: it.span,
+            };
             strip_macro_definitions(&mut sub);
             *items = sub.items;
         }
@@ -190,7 +210,9 @@ fn sandbox_violations(root: &Module, externals: &sema::symbols::Externals) -> Ve
             if !is_proc_macro(it) {
                 continue;
             }
-            let ItemKind::Function(f) = &it.kind else { continue };
+            let ItemKind::Function(f) = &it.kind else {
+                continue;
+            };
             let refs = referenced_names(it);
             for (name, span) in &std_names {
                 if refs.contains(name) {
@@ -230,9 +252,16 @@ fn collect_macro_names(module: &Module, out: &mut HashSet<String>) {
                 out.insert(f.name.name.clone());
             }
         }
-        if let ItemKind::Module(ModuleItem { kind: ModuleKind::Inline { items, .. }, .. }) = &it.kind
+        if let ItemKind::Module(ModuleItem {
+            kind: ModuleKind::Inline { items, .. },
+            ..
+        }) = &it.kind
         {
-            let sub = Module { inner_docs: Vec::new(), items: items.clone(), span: it.span };
+            let sub = Module {
+                inner_docs: Vec::new(),
+                items: items.clone(),
+                span: it.span,
+            };
             collect_macro_names(&sub, out);
         }
     }
@@ -300,7 +329,11 @@ fn build_macro_jit(
         return Err(entry_errors);
     }
 
-    let synthetic = Module { inner_docs: Vec::new(), items, span: Span::dummy() };
+    let synthetic = Module {
+        inner_docs: Vec::new(),
+        items,
+        span: Span::dummy(),
+    };
     let analysis = sema::analyze_multi_ctx(&synthetic, &sema::symbols::Externals::new(), ctx);
     if !analysis.errors.is_empty() {
         return Err(analysis
@@ -320,7 +353,10 @@ fn build_macro_jit(
     let syms = host::symbols();
     let syms_ref: Vec<(&str, *const u8)> = syms.iter().map(|(n, a)| (*n, *a)).collect();
     backend::compile_with_symbols(&analysis, &syms_ref).map_err(|e| {
-        vec![SemaError::message(e.span, format!("macro code generation failed: {}", e.message))]
+        vec![SemaError::message(
+            e.span,
+            format!("macro code generation failed: {}", e.message),
+        )]
     })
 }
 
@@ -378,9 +414,10 @@ fn dependency_closure(pool: &[Item], seeds: &HashSet<String>) -> Vec<Item> {
                 || extend_target_name(it).is_some_and(|n| needed.contains(&n));
             if include {
                 for r in referenced_names(it) {
-                    if pool.iter().any(|p| {
-                        item_decl_name(p).as_deref() == Some(r.as_str())
-                    }) && needed.insert(r)
+                    if pool
+                        .iter()
+                        .any(|p| item_decl_name(p).as_deref() == Some(r.as_str()))
+                        && needed.insert(r)
                     {
                         grew = true;
                     }
@@ -409,11 +446,17 @@ fn shim_item(name: &str) -> Result<Item, SemaError> {
     let file = arena::with(|s| s.new_gen_file(src.clone()));
     let (tokens, lex_errs) = compiler::lex(&src, file);
     if let Some(e) = lex_errs.first() {
-        return Err(SemaError::message(e.span, format!("macro shim lex error: {e:?}")));
+        return Err(SemaError::message(
+            e.span,
+            format!("macro shim lex error: {e:?}"),
+        ));
     }
     let (module, parse_errs) = compiler::parse(&src, &tokens);
     if let Some(e) = parse_errs.first() {
-        return Err(SemaError::message(e.span, format!("macro shim parse error: {}", e.kind)));
+        return Err(SemaError::message(
+            e.span,
+            format!("macro shim parse error: {}", e.kind),
+        ));
     }
     module
         .items
@@ -455,11 +498,23 @@ impl Expander<'_> {
         // Truncate a long (typically self-recursive) chain so the message stays
         // readable: first few → … → last few.
         let path = if total > 10 {
-            let head = chain[..5].iter().map(|n| format!("@{n}")).collect::<Vec<_>>().join(" → ");
-            let tail = chain[total - 3..].iter().map(|n| format!("@{n}")).collect::<Vec<_>>().join(" → ");
+            let head = chain[..5]
+                .iter()
+                .map(|n| format!("@{n}"))
+                .collect::<Vec<_>>()
+                .join(" → ");
+            let tail = chain[total - 3..]
+                .iter()
+                .map(|n| format!("@{n}"))
+                .collect::<Vec<_>>()
+                .join(" → ");
             format!("{head} → … ({} more) → {tail}", total - 8)
         } else {
-            chain.iter().map(|n| format!("@{n}")).collect::<Vec<_>>().join(" → ")
+            chain
+                .iter()
+                .map(|n| format!("@{n}"))
+                .collect::<Vec<_>>()
+                .join(" → ")
         };
         self.errors.push(SemaError::message(
             at,
@@ -477,8 +532,10 @@ impl Expander<'_> {
     fn expand_items(&mut self, items: &mut Vec<Item>) {
         let mut i = 0;
         while i < items.len() {
-            if let ItemKind::Module(ModuleItem { kind: ModuleKind::Inline { items: sub, .. }, .. }) =
-                &mut items[i].kind
+            if let ItemKind::Module(ModuleItem {
+                kind: ModuleKind::Inline { items: sub, .. },
+                ..
+            }) = &mut items[i].kind
             {
                 let mut taken = std::mem::take(sub);
                 self.expand_items(&mut taken);
@@ -548,7 +605,10 @@ fn invoke_macro(
     invocation_span: Span,
     errors: &mut Vec<SemaError>,
 ) -> MacroOutcome {
-    let mut mctx = MacroCtx { invocation_span, ..Default::default() };
+    let mut mctx = MacroCtx {
+        invocation_span,
+        ..Default::default()
+    };
     for a in args {
         match a {
             AttrArg::Positional(e) => mctx.args.push(host::intern_arg_expr(e.clone())),
@@ -570,7 +630,10 @@ fn invoke_macro(
             invocation_span,
             format!("internal error: macro entry `{entry}` was not compiled"),
         ));
-        return MacroOutcome { node: None, had_error: true };
+        return MacroOutcome {
+            node: None,
+            had_error: true,
+        };
     };
     // SAFETY: the shim has signature `(i64, i64) -> i64` by construction.
     let f: extern "C" fn(i64, i64) -> i64 = unsafe { std::mem::transmute(ptr) };
@@ -613,7 +676,14 @@ fn run_decorator(
     input_item: Item,
     errors: &mut Vec<SemaError>,
 ) -> Option<Vec<Item>> {
-    let outcome = invoke_macro(jit, macro_name, &attr.args, Node::Item(input_item), attr.span, errors);
+    let outcome = invoke_macro(
+        jit,
+        macro_name,
+        &attr.args,
+        Node::Item(input_item),
+        attr.span,
+        errors,
+    );
     if outcome.had_error {
         return None;
     }
@@ -665,7 +735,10 @@ impl Expander<'_> {
                 }
             }
             ItemKind::Test(t) => self.walk_block(&mut t.body),
-            ItemKind::Module(ModuleItem { kind: ModuleKind::Inline { items, .. }, .. }) => {
+            ItemKind::Module(ModuleItem {
+                kind: ModuleKind::Inline { items, .. },
+                ..
+            }) => {
                 for sub in items {
                     self.walk_item(sub);
                 }
@@ -701,9 +774,16 @@ impl Expander<'_> {
     /// recursive macros expand, bounded by the depth limit).
     fn walk_expr(&mut self, e: &mut Expr) {
         match &mut e.kind {
-            ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Null
-            | ExprKind::Char(_) | ExprKind::Str(_) | ExprKind::SelfExpr | ExprKind::Underscore
-            | ExprKind::Ident(_) | ExprKind::Continue => {}
+            ExprKind::Int(_)
+            | ExprKind::Float(_)
+            | ExprKind::Bool(_)
+            | ExprKind::Null
+            | ExprKind::Char(_)
+            | ExprKind::Str(_)
+            | ExprKind::SelfExpr
+            | ExprKind::Underscore
+            | ExprKind::Ident(_)
+            | ExprKind::Continue => {}
             ExprKind::Tuple(es) | ExprKind::List(es) => {
                 for x in es {
                     self.walk_expr(x);
@@ -739,7 +819,12 @@ impl Expander<'_> {
             ExprKind::Cast { expr, .. } => self.walk_expr(expr),
             ExprKind::Field { receiver, .. } => self.walk_expr(receiver),
             ExprKind::TupleIndex { receiver, .. } => self.walk_expr(receiver),
-            ExprKind::Call { callee, args, trailing_closure, .. } => {
+            ExprKind::Call {
+                callee,
+                args,
+                trailing_closure,
+                ..
+            } => {
                 self.walk_expr(callee);
                 for a in args {
                     self.walk_expr(a);
@@ -752,9 +837,16 @@ impl Expander<'_> {
                 self.walk_expr(receiver);
                 self.walk_expr(index);
             }
-            ExprKind::Try { expr, .. } | ExprKind::Ref { expr, .. } | ExprKind::Deref { expr, .. }
-            | ExprKind::Await { expr, .. } | ExprKind::Spawn { expr, .. } => self.walk_expr(expr),
-            ExprKind::If { cond, then_block, else_branch } => {
+            ExprKind::Try { expr, .. }
+            | ExprKind::Ref { expr, .. }
+            | ExprKind::Deref { expr, .. }
+            | ExprKind::Await { expr, .. }
+            | ExprKind::Spawn { expr, .. } => self.walk_expr(expr),
+            ExprKind::If {
+                cond,
+                then_block,
+                else_branch,
+            } => {
                 self.walk_expr(cond);
                 self.walk_block(then_block);
                 if let Some(eb) = else_branch {
@@ -797,7 +889,15 @@ impl Expander<'_> {
             ExprKind::MacroCall { .. } => { /* expanded below */ }
         }
 
-        let ExprKind::MacroCall { name, args, block, at_span } = &mut e.kind else { return };
+        let ExprKind::MacroCall {
+            name,
+            args,
+            block,
+            at_span,
+        } = &mut e.kind
+        else {
+            return;
+        };
         if !self.is_user_macro(&name.name) {
             return; // unknown macro — left for the checker to report.
         }
@@ -823,7 +923,14 @@ impl Expander<'_> {
             Some(b) => Node::Block(*b),
             None => Node::Args(positional_exprs(&args_owned)),
         };
-        let outcome = invoke_macro(self.jit, &macro_name, &args_owned, input, span, &mut self.errors);
+        let outcome = invoke_macro(
+            self.jit,
+            &macro_name,
+            &args_owned,
+            input,
+            span,
+            &mut self.errors,
+        );
         match (outcome.had_error, outcome.node) {
             (false, Some(Node::Expr(out))) => *e = out,
             (false, Some(Node::Block(b))) => e.kind = ExprKind::Block(b),
@@ -865,4 +972,3 @@ fn positional_exprs(args: &[AttrArg]) -> Vec<Expr> {
         })
         .collect()
 }
-
