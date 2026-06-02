@@ -1760,7 +1760,7 @@ fn complex_program_parses_clean() {
     let src = "\
 //! crate root
 
-import { Println } from \"core:io\";
+import { println } from \"std:io\";
 
 pub struct Point { pub x: f64, pub y: f64 }
 

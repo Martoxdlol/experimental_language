@@ -1,0 +1,7 @@
+//@ kind: compile-error
+//@ description: Bytes is ordinary managed stdlib API, not compiler substrate; the old core:bytes path is rejected
+//@ stderr: no built-in module `core:bytes`
+
+import { Bytes } from "core:bytes";
+
+function main() {}

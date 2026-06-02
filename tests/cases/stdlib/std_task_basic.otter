@@ -1,0 +1,44 @@
+//@ kind: run
+//@ serial
+//@ description: std:task exposes executor Task.spawn handles, cancellation, detach, and Cancelled value semantics
+//@ stdout:
+//~ joins=42/7
+//~ cancel=-2
+//~ cancelled=true true cancelled Cancelled
+import { println } from "std:io";
+import { Future } from "core:async";
+import { Debug } from "std:fmt";
+import { Task, JoinHandle, Joined, Panicked, Cancelled } from "std:task";
+import { sleep } from "std:async";
+
+function joined_value(r: Joined<i64> | Panicked | Cancelled): i64 {
+  match r {
+    Joined<i64> j => j.value,
+    Panicked p => -1,
+    Cancelled c => -2,
+  }
+}
+
+function render_debug(value: Debug): str {
+  value.debug()
+}
+
+function main(): Future<null> async {
+  var sync_h: JoinHandle<i64> = Task.spawn(() => 42);
+  var async_h: JoinHandle<i64> = Task.spawn(() async => 7);
+  println("joins=${joined_value(await sync_h.join())}/${joined_value(await async_h.join())}");
+
+  var cancel_h: JoinHandle<i64> = Task.spawn(() async => {
+    var _ = await sleep(1000);
+    99
+  });
+  var _started = await sleep(20);
+  cancel_h.cancel();
+  println("cancel=${joined_value(await cancel_h.join())}");
+
+  Task.spawn(() async => 1).detach();
+
+  var cancelled = Cancelled {};
+  var cancelled_copy = cancelled.clone();
+  println("${cancelled == cancelled_copy} ${cancelled.hash() == cancelled_copy.hash()} ${cancelled.to_str()} ${render_debug(cancelled)}");
+}

@@ -1,0 +1,15 @@
+//@ kind: run
+//@ description: core:async owns Future, Ready, Pending, and Context protocol shapes
+//@ stdout:
+//~ ready=7 pending=true
+import { println } from "std:io";
+import { Future, Ready, Pending, Context } from "core:async";
+
+function accepts_future(f: Future<i64>): str { "future" }
+function accepts_context(ctx: *Context): str { "context" }
+
+function main() {
+  var ready = Ready { value: 7 };
+  var pending = Pending {};
+  println("ready=${ready.value} pending=${pending is Pending}");
+}

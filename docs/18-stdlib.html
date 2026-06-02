@@ -58,8 +58,9 @@
 
 <h1>18. Standard Library</h1>
 <p class="lead">
-  Two tiers — <code>core:*</code> (needs only an allocator) and
-  <code>std:*</code> (needs an OS). Nothing is auto-imported: built-in <em>syntax</em>
+  Two tiers — <code>core:*</code> (compiler/runtime substrate) and
+  <code>std:*</code> (official toolchain library, portable or target-backed).
+  Nothing is auto-imported: built-in <em>syntax</em>
   works without an import, but every <em>name</em> — including <code>List</code> — is imported
   (see <a href="17-modules.html#the-prelude-rule">the prelude rule</a>).
 </p>
@@ -68,16 +69,20 @@
   <strong>Contents</strong>
   <ol>
     <li><a href="#tiers">The two tiers</a></li>
+    <li><a href="#implementation-model">Implementation model</a></li>
     <li><a href="#failure">Failure semantics</a></li>
     <li><a href="#error">The <code>Error</code> interface</a></li>
     <li><a href="#str"><code>str</code></a></li>
     <li><a href="#list"><code>List&lt;T&gt;</code></a></li>
     <li><a href="#map"><code>Map&lt;K, V&gt;</code></a></li>
+    <li><a href="#set"><code>Set&lt;T&gt;</code></a></li>
     <li><a href="#item"><code>Item&lt;T&gt;</code> &amp; <code>Done</code></a></li>
     <li><a href="#iter"><code>Iterator&lt;T&gt;</code></a></li>
     <li><a href="#buffer"><code>Buffer</code></a></li>
     <li><a href="#numeric">Numeric helper namespaces</a></li>
+    <li><a href="#bytes"><code>std:bytes</code></a></li>
     <li><a href="#io"><code>std:io</code></a></li>
+    <li><a href="#fmt"><code>std:fmt</code></a></li>
     <li><a href="#stdmodules">Other <code>std:*</code> modules</a></li>
     <li><a href="#notin">What's not in stdlib</a></li>
   </ol>
@@ -97,7 +102,7 @@
 
       <!-- core:prelude -->
       <rect x="40" y="120" width="800" height="100" rx="6" fill="#f3eefa" stroke="#6b4ba8" stroke-width="2"/>
-      <text x="60" y="146" font-weight="700" fill="#6b4ba8">core: tier · no import for syntax · OS not required</text>
+      <text x="60" y="146" font-weight="700" fill="#6b4ba8">core:* · compiler/runtime substrate · language-privileged</text>
 
       <g transform="translate(60, 158)" font-size="10.5">
         <rect width="120" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="60" y="16" text-anchor="middle">str</text>
@@ -106,34 +111,76 @@
         <rect x="340" width="110" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="395" y="16" text-anchor="middle">Iterator&lt;T&gt;</text>
         <rect x="460" width="110" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="515" y="16" text-anchor="middle">Item&lt;T&gt; · Done</text>
         <rect x="580" width="80" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="620" y="16" text-anchor="middle">Buffer</text>
-        <rect x="670" width="130" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="735" y="16" text-anchor="middle">Error · Annotated</text>
+        <rect x="670" width="130" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="735" y="16" text-anchor="middle">Foreign · macros</text>
       </g>
 
-      <text x="60" y="206" font-size="11" class="small">+ operator/lifecycle interfaces (15-operators) · numeric helper namespaces · Future/Ready/Pending shapes</text>
+      <text x="60" y="206" font-size="11" class="small">+ lifecycle/value interfaces · numeric primitives · operator protocols · Future/Ready/Pending shapes</text>
 
       <!-- OS line -->
       <rect x="40" y="84" width="800" height="28" rx="4" fill="#fff" stroke="#d6d3cd" stroke-dasharray="3 3"/>
-      <text x="440" y="103" text-anchor="middle" font-style="italic" fill="#5a5a60">OS — required for std: targets</text>
+      <text x="440" y="103" text-anchor="middle" font-style="italic" fill="#5a5a60">target/provider boundary — std may be portable or host-backed</text>
 
       <!-- std:* -->
       <rect x="40" y="24" width="800" height="50" rx="6" fill="#eaf0f8" stroke="#1a4a8a" stroke-width="2"/>
-      <text x="60" y="44" font-weight="700" fill="#1a4a8a">std:* · explicit import, OS required</text>
+      <text x="60" y="44" font-weight="700" fill="#1a4a8a">std:* · official library · explicit import</text>
       <g transform="translate(60, 50)" font-size="10.5">
         <rect width="80" height="20" rx="3" fill="#fff" stroke="#1a4a8a"/><text x="40" y="14" text-anchor="middle">std:io</text>
         <rect x="90" width="100" height="20" rx="3" fill="#fff" stroke="#1a4a8a"/><text x="140" y="14" text-anchor="middle">std:thread</text>
         <rect x="200" width="90" height="20" rx="3" fill="#fff" stroke="#1a4a8a"/><text x="245" y="14" text-anchor="middle">std:sync</text>
         <rect x="300" width="100" height="20" rx="3" fill="#fff" stroke="#1a4a8a"/><text x="350" y="14" text-anchor="middle">std:async</text>
-        <rect x="410" width="80" height="20" rx="3" fill="#fff" stroke="#1a4a8a"/><text x="450" y="14" text-anchor="middle">std:time</text>
-        <rect x="500" width="70" height="20" rx="3" fill="#fff" stroke="#1a4a8a"/><text x="535" y="14" text-anchor="middle">std:fs</text>
-        <rect x="580" width="80" height="20" rx="3" fill="#fff" stroke="#1a4a8a"/><text x="620" y="14" text-anchor="middle">std:net</text>
+        <rect x="410" width="80" height="20" rx="3" fill="#fff" stroke="#1a4a8a"/><text x="450" y="14" text-anchor="middle">std:task</text>
+        <rect x="500" width="80" height="20" rx="3" fill="#fff" stroke="#1a4a8a"/><text x="540" y="14" text-anchor="middle">std:time</text>
+        <rect x="590" width="70" height="20" rx="3" fill="#fff" stroke="#1a4a8a"/><text x="625" y="14" text-anchor="middle">std:fs</text>
+        <rect x="670" width="80" height="20" rx="3" fill="#fff" stroke="#1a4a8a"/><text x="710" y="14" text-anchor="middle">std:net</text>
       </g>
     </g>
   </svg>
-  <div class="diagram-caption">This chapter documents the data-oriented parts of the <code>core:</code> tier. <code>List</code>/<code>Map</code>/<code>Set</code> live in <code>core:collections</code> (imported by name) and use a deterministic default hasher. Interfaces are in 15-operators; concurrency in 20/21.</div>
+  <div class="diagram-caption"><code>core:</code> is small because it carries compiler/runtime contracts. Portable but ordinary library APIs belong in <code>std:</code>, even when they do not need an OS.</div>
 </div>
 
 <!-- =========================================================== -->
-<h2 id="failure">2. Failure semantics across stdlib</h2>
+<h2 id="implementation-model">2. Implementation model</h2>
+
+<p>The standard library is a <strong>toolchain package</strong> with a curated module
+catalog. Its public import paths stay stable (<code>std:error</code>,
+<code>std:io</code>, <code>std:fs</code>, ...), but each module can be implemented in one of
+three ways:</p>
+
+<table>
+  <thead><tr><th>Kind</th><th>Meaning</th><th>Examples</th></tr></thead>
+  <tbody>
+    <tr><td><code>Otter</code></td><td>API and behavior are authored in Otter Fusion source.</td><td><code>std:error</code>, <code>std:bytes</code>, <code>std:fmt</code>, <code>std:time.Duration</code>, <code>std:fs.Path</code>, <code>std:hash</code>, <code>std:http</code>, <code>std:rand.SeededRng</code></td></tr>
+    <tr><td><code>RustBacked</code></td><td>The importable surface is a marker or wrapper; behavior is supplied by Rust runtime/compiler intrinsics.</td><td><code>std:io.print</code>, <code>std:io.eprintln</code>, <code>core:prelude.panic</code>, <code>std:process.exit</code>/<code>abort</code>, future target-only hooks</td></tr>
+    <tr><td><code>Mixed</code></td><td>Otter Fusion definitions layer a safe API over Rust-backed runtime hooks.</td><td><code>std:io</code>, <code>std:time.Instant</code>/<code>SystemTime</code>, <code>std:fs.File</code> handles and file helpers, <code>std:process</code> host environment/execution helpers, <code>std:rand.OsRng</code>/<code>ThreadRng</code>, <code>core:ffi.CString</code>, channels, <code>Shared</code></td></tr>
+  </tbody>
+</table>
+
+<p>This split is intentional. Compiler-privileged substrate stays in
+<code>core:*</code>; ordinary library shapes and policy live in <code>std:*</code> even
+when they are fully portable. Low-level host integration, allocation primitives,
+OS calls, atomics, and scheduler hooks may still be implemented in Rust. The compiler's
+stdlib catalog records the module path, tier, implementation kind, and exported
+names; import resolution consumes that catalog instead of hardcoding each module
+inline. Otter-authored toolchain definitions are kept in
+<code>crates/compiler/src/sema/stdlib_src/core</code> and
+<code>crates/compiler/src/sema/stdlib_src/std</code>, then collected into hidden
+module-local owners under the private <code>__builtins__</code> root before the catalog
+builds public views. The contributor
+workflow for adding or replacing modules is specified in
+<a href="./29-extending-stdlib.html">29-extending-stdlib</a>.</p>
+
+<div class="callout">
+  <strong>Target providers</strong>
+  The active toolchain currently ships one built-in provider, but the design is
+  provider-based. A future target can supply its own <code>std:*</code> provider
+  (for example POSIX, WASI, embedded, browser, or game-console targets) while
+  preserving the same <code>core:*</code> compiler substrate. Provider selection changes which
+  modules are available and which Rust/Otter implementations back them; it does
+  not change the import syntax.
+</div>
+
+<!-- =========================================================== -->
+<h2 id="failure">3. Failure semantics across stdlib</h2>
 
 <p>Three distinct failure shapes, picked by what the caller actually needs to know:</p>
 
@@ -185,22 +232,27 @@
 </div>
 
 <!-- =========================================================== -->
-<h2 id="error">3. The <code>Error</code> interface</h2>
+<h2 id="error">4. The <code>Error</code> interface</h2>
 
 <p>Errors are still ordinary values living in unions (chapter 13). This interface is the
 <em>shape contract</em> that lets generic code — loggers, context-wrappers, panic-on-error
 helpers — consume any error type without knowing its concrete kind.</p>
 
-<pre><code>pub interface Error: ToStr {
+<p>The error surface is imported from <code>std:error</code>:</p>
+
+<pre><code>import { Error, Annotated, with_context } from "std:error"
+
+pub interface Error: ToStr {
   function message(self): str
   function cause(self): Error | null
 }</code></pre>
 
 <p>Composition: <code>Error: ToStr</code> means every <code>Error</code>-implementing type
-also implements <code>ToStr</code>. <code>ToStr</code> (chapter 15) is the language's single
-stringification path — no separate <code>Display</code> / <code>Debug</code> split.
-<code>to_str(self)</code> renders the value; <code>message(self)</code> is just this error's
-own short text (without walking the chain).</p>
+also implements <code>ToStr</code>. <code>ToStr</code> (chapter 15) is the language's
+interpolation and cast-to-string path. Library APIs that need user-facing or
+developer-facing rendering can additionally use <code>std:fmt.Display</code> and
+<code>std:fmt.Debug</code>. <code>to_str(self)</code> renders the value; <code>message(self)</code>
+is just this error's own short text (without walking the chain).</p>
 
 <h3>Canonical shapes</h3>
 
@@ -217,9 +269,9 @@ own short text (without walking the chain).</p>
 
 pub union IoErrorKind =
     NotFound | PermissionDenied
-  | ConnectionRefused | TimedOut
+  | ConnectionRefused | IoTimedOut
   | UnexpectedEof | Interrupted
-  | Other</code></pre>
+  | OtherIo</code></pre>
   </div>
   <div>
     <strong>Flat</strong> — when there is one failure mode plus optional context.
@@ -253,6 +305,10 @@ extend Annotated: Error {
   function to_str(self):  str          { self.note + ": " + self.source.to_str() }
 }
 
+extend Annotated: Debug {
+  function debug(self):   str          { "Annotated { note: \"" + self.note + "\", source: " + self.source.to_str() + " }" }
+}
+
 // Free helper: lift a fallible result, attaching context only on failure.
 pub function with_context&lt;T, E: Error&gt;(
   value: T | E,
@@ -277,6 +333,12 @@ pub function with_context&lt;T, E: Error&gt;(
   full chain.
 </div>
 
+<p><code>Annotated</code> also implements <code>std:fmt.Debug</code> so diagnostics can
+show the wrapper and its source in one line. It intentionally does not provide
+generic clone, equality, or hashing: the wrapped <code>source</code> is only known as
+an <code>Error</code> interface object, and <code>Error</code> does not require those value
+semantics.</p>
+
 <div class="callout">
   <strong>No automatic source-location capture</strong>
   Errors do <strong>not</strong> attach a file/line when constructed — this is by design,
@@ -287,7 +349,7 @@ pub function with_context&lt;T, E: Error&gt;(
 </div>
 
 <!-- =========================================================== -->
-<h2 id="str">4. <code>str</code></h2>
+<h2 id="str">5. <code>str</code></h2>
 
 <p>Heap-allocated, immutable, UTF-8. Every "mutating" operation returns a new <code>str</code>.</p>
 
@@ -318,9 +380,11 @@ pub function with_context&lt;T, E: Error&gt;(
 <code>for ch in s.chars()</code>.</p>
 
 <!-- =========================================================== -->
-<h2 id="list">5. <code>List&lt;T&gt;</code></h2>
+<h2 id="list">6. <code>List&lt;T&gt;</code></h2>
 
-<p>Lives in <code>core:collections</code> (allocator-only, freestanding-safe): <code>import { List } from "core:collections"</code>. The <code>[…]</code> literal needs no import; naming <code>List</code> does.</p>
+<p>Lives in <code>core:collections</code> because list literals, indexing, and iteration
+use runtime-recognized collection layout: <code>import { List } from "core:collections"</code>.
+The <code>[…]</code> literal needs no import; naming <code>List</code> does.</p>
 
 <pre><code>var a: List&lt;i64&gt; = [1, 2, 3]
 var b = List.new&lt;i64&gt;()
@@ -385,14 +449,18 @@ var c = List&lt;i64&gt;()          // shorthand — same as List.new&lt;i64&gt;(
   </tbody>
 </table>
 
-<p>Implements <code>Index&lt;i64, T&gt;</code> and <code>IndexMut&lt;i64, T&gt;</code> — <code>list[i]</code>
+<p>Supports compiler-recognized <code>list[i]</code> indexing and assignment; indexing
 panics on out-of-range. Implements <code>Clone</code> if <code>T: Clone</code>; <code>Eq</code>
 if <code>T: Eq</code>; <code>Hash</code> if <code>T: Hash</code>.</p>
 
 <!-- =========================================================== -->
-<h2 id="map">6. <code>Map&lt;K, V&gt;</code></h2>
+<h2 id="map">7. <code>Map&lt;K, V&gt;</code></h2>
 
-<p>Lives in <code>core:collections</code>: <code>import { Map } from "core:collections"</code>. It uses a deterministic default hasher (<code>core:hash</code>) — fast and freestanding-safe, but not HashDoS-resistant; supply a keyed hasher for untrusted keys.</p>
+<p>Lives in <code>core:collections</code> because map literals, indexing, and iteration
+use runtime-recognized collection layout: <code>import { Map } from "core:collections"</code>.
+It uses a deterministic toolchain hasher — fast and portable, but not
+HashDoS-resistant. Explicit keyed hasher values live in <code>std:hash</code>;
+keyed map/set construction remains planned.</p>
 
 <pre><code>var a: Map&lt;str, i64&gt; = { "x": 1, "y": 2 }
 var b = Map.new&lt;str, i64&gt;()
@@ -431,14 +499,51 @@ var with_extras = { ..defaults, "tls": true, ..override }
   </tbody>
 </table>
 
-<p>Implements <code>Index&lt;K, V&gt;</code> and <code>IndexMut&lt;K, V&gt;</code> — <code>map[k]</code>
+<p>Supports compiler-recognized <code>map[k]</code> indexing and assignment; indexing
 panics on missing. <code>for entry in map</code> yields <code>Entry&lt;K, V&gt;</code> with
 <code>pub key: K, pub value: V</code>. Implements <code>Clone</code> if both <code>K</code> and
 <code>V</code> are <code>Clone</code>. Does <strong>not</strong> implement <code>Eq</code> or
 <code>Hash</code>.</p>
 
 <!-- =========================================================== -->
-<h2 id="item">7. <code>Item&lt;T&gt;</code> &amp; <code>Done</code></h2>
+<h2 id="set">8. <code>Set&lt;T&gt;</code></h2>
+
+<p>Lives in <code>core:collections</code> because the compiler tracks the
+runtime-recognized collection shape for construction, tracing, and future set
+literal support: <code>import { Set } from "core:collections"</code>. Set literal syntax
+is not implemented yet; use <code>Set&lt;T&gt;()</code> and <code>insert</code>.</p>
+
+<pre><code>var s = Set&lt;str&gt;()
+s.insert("debug")
+s.insert("trace")
+var items = s.to_list()</code></pre>
+
+<table>
+  <thead><tr><th>Method</th><th>Returns</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td><code>new()</code> static</td><td><code>Set&lt;T&gt;</code></td><td>Empty</td></tr>
+    <tr><td><code>size()</code> · <code>is_empty()</code></td><td><code>i64</code> · <code>bool</code></td><td></td></tr>
+    <tr><td><code>contains(v)</code></td><td><code>bool</code></td><td>Requires <code>T: Eq</code></td></tr>
+    <tr><td><code>insert(v)</code> · <code>remove(v)</code></td><td><code>bool</code></td><td>Reports whether membership changed</td></tr>
+    <tr><td><code>insert_all(o)</code></td><td><code>null</code></td><td>Mutates by inserting every member from another set</td></tr>
+    <tr><td><code>is_subset(o)</code> · <code>is_superset(o)</code> · <code>is_disjoint(o)</code></td><td><code>bool</code></td><td>Membership predicates</td></tr>
+    <tr><td><code>clear()</code></td><td><code>null</code></td><td></td></tr>
+    <tr><td><code>union(o)</code> · <code>intersect(o)</code> · <code>difference(o)</code></td><td><code>Set&lt;T&gt;</code></td><td>New set</td></tr>
+    <tr><td><code>to_list()</code></td><td><code>List&lt;T&gt;</code></td><td>Snapshot in current iteration order</td></tr>
+    <tr><td><code>iter()</code></td><td><code>Iterator&lt;T&gt;</code></td><td></td></tr>
+  </tbody>
+</table>
+
+<p>Implements <code>Eq</code> when <code>T: Eq</code>, <code>Clone</code> when
+<code>T: Eq + Clone</code>, <code>Hash</code> when <code>T: Eq + Hash</code>, and compact
+<code>ToStr</code> rendering when <code>T: Eq + ToStr</code>. Set equality and
+hashing are value-based and order-insensitive; <code>to_str()</code> renders members
+in the current iteration order. The current storage is an
+Otter-authored unique list; hash-backed storage and keyed hasher customization
+remain planned.</p>
+
+<!-- =========================================================== -->
+<h2 id="item">9. <code>Item&lt;T&gt;</code> &amp; <code>Done</code></h2>
 
 <pre><code>pub struct Item&lt;T&gt; {
   pub value: T,
@@ -451,7 +556,7 @@ pub struct Done;</code></pre>
 ambiguity that would arise if <code>T</code> itself could be <code>null</code>.</p>
 
 <!-- =========================================================== -->
-<h2 id="iter">8. <code>Iterator&lt;T&gt;</code></h2>
+<h2 id="iter">10. <code>Iterator&lt;T&gt;</code></h2>
 
 <pre><code>pub interface Iterator&lt;T&gt; {
   function next(self): Item&lt;T&gt; | Done
@@ -482,7 +587,7 @@ for n in (Range { current: 0, end: 5 }) {
 }</code></pre>
 
 <!-- =========================================================== -->
-<h2 id="buffer">9. <code>Buffer</code> — extern struct</h2>
+<h2 id="buffer">11. <code>Buffer</code> — extern struct</h2>
 
 <pre><code>extern struct Buffer {
   data: *u8,
@@ -519,7 +624,7 @@ if maybe is null {
 }</code></pre>
 
 <!-- =========================================================== -->
-<h2 id="numeric">10. Numeric helper namespaces</h2>
+<h2 id="numeric">12. Numeric helper namespaces</h2>
 
 <pre><code>i32.MIN          i32.MAX
 i32.wrapping_add(a, b)       i32.checked_add(a, b)
@@ -532,28 +637,131 @@ f64.is_nan(x)    f64.is_infinite(x)   f64.is_finite(x)</code></pre>
 <p>Conversions between numeric types use <code>as</code> — see <a href="12-type-logic.html">12-type-logic</a>.</p>
 
 <!-- =========================================================== -->
-<h2 id="io">11. <code>std:io</code> — printing &amp; IO</h2>
+<h2 id="bytes">13. <code>std:bytes</code> — managed byte buffers</h2>
 
-<pre><code>import { print, println } from "std:io"
+<pre><code>import { Bytes } from "std:bytes"
+
+var b = Bytes.new()
+b.push(0x41u8)
+b.size()              // 1
+b.get(0)              // u8 | null
+b.set(0, 0x42u8)     // bool
+b.pop()               // u8 | null
+b.remove_at(0)        // u8 | null
+b.truncate(1)         // shrink in place
+b.clear()             // empty the buffer
+b.iter()              // Iterator&lt;u8&gt;
+b.cursor()            // BytesCursor snapshot</code></pre>
+
+<p><code>Bytes</code> is an ordinary managed-heap library container, so it lives in
+<code>std:</code>, not <code>core:</code>. It currently provides <code>new</code>,
+<code>with_capacity</code>, <code>from_str</code> UTF-8 encoding, <code>size</code>,
+<code>is_empty</code>, <code>get</code>, <code>set</code>, <code>push</code>, <code>pop</code>,
+<code>remove_at</code>,
+<code>append</code>, <code>truncate</code>, <code>clear</code>, <code>append_iter</code>,
+<code>slice</code>, <code>decode_utf8</code>, <code>iter</code>, and <code>cursor</code>.
+<code>Bytes</code> also implements <code>std:io.Writer</code> as an in-memory sink:
+<code>write</code> and <code>write_all</code> append bytes, and <code>flush</code> is a no-op.
+<code>BytesCursor</code> snapshots a <code>Bytes</code> value and implements
+<code>std:io.Reader</code> and <code>std:io.Seeker</code> for in-memory reads; cursor
+snapshots implement equality, clone, hash, stringification, and debug rendering.
+<code>decode_utf8</code> validates strict UTF-8 and returns <code>str | Utf8Error</code>.
+Raw-buffer views remain planned.</p>
+
+<!-- =========================================================== -->
+<h2 id="io">14. <code>std:io</code> — printing &amp; IO contracts</h2>
+
+<pre><code>import { Bytes } from "std:bytes"
+import { print, println, eprint, eprintln, stdin, stdout, stderr } from "std:io"
 
 print("hello")        // no trailing newline
-println("hello")      // appends '\n'</code></pre>
+println("hello")      // appends '\n'
+eprint("warning")     // stderr, no trailing newline
+eprintln("warning")   // stderr, appends '\n'
+
+stdout().write(Bytes.from_str("raw bytes"))
+stdin().read_to_end(Bytes.new())
+stderr().flush()</code></pre>
 
 <p>Both take <code>str</code>. To print non-strings, convert first via <code>as str</code> for
 numeric primitives or implement a project-local stringification interface.</p>
 
+<pre><code>import { Reader, Writer, Seeker, IoError, SeekFrom } from "std:io"
+
+interface Reader {
+  function read(self, buf: Bytes): i64 | IoError
+  function read_to_end(self, buf: Bytes): i64 | IoError
+}
+
+interface Writer {
+  function write(self, buf: Bytes): i64 | IoError
+  function write_all(self, buf: Bytes): null | IoError
+  function flush(self): null | IoError
+}
+
+interface Seeker {
+  function seek(self, pos: SeekFrom): i64 | IoError
+}</code></pre>
+
+<p><code>std:io</code> is a mixed module: the shared contracts and
+<code>IoError</code> shape are authored in Otter Fusion, while <code>print</code>,
+<code>println</code>, <code>eprint</code>, and <code>eprintln</code> lower to runtime
+intrinsics. <code>stdin()</code>, <code>stdout()</code>, and <code>stderr()</code>
+return target-backed stream handles for byte-oriented reads, writes, and
+flushes. <code>SeekFrom</code> and
+<code>IoErrorKind</code> provide direct <code>equals</code> / <code>eq</code>, overloaded
+<code>==</code>, clone, hash, stringification, and debug helpers; <code>IoError</code> implements
+<code>Error</code>, equality, clone, hash, and debug rendering. <code>BufReader</code> and
+<code>BufWriter</code> provide interface-object buffered adapters over any
+<code>Reader</code> or <code>Writer</code>.</p>
+
 <!-- =========================================================== -->
-<h2 id="stdmodules">12. Other <code>std:*</code> modules</h2>
+<h2 id="fmt">15. <code>std:fmt</code> — formatting contracts</h2>
+
+<pre><code>import { Display, Debug, FmtSink, FmtError } from "std:fmt"</code></pre>
+
+<p><code>std:fmt</code> is an Otter-authored contract module. It exports
+<code>Display: ToStr</code> for user-facing rendering, <code>Debug</code> for
+developer-facing rendering, <code>FmtSink</code> for incremental string writes, and
+<code>FmtError</code> for sink failures. <code>FmtError</code> is itself an
+<code>std:error.Error</code> value and implements equality, clone, hash, and
+diagnostic debug rendering. <code>std:bytes.Bytes</code> implements
+<code>FmtSink</code> as the standard in-memory UTF-8 formatting sink.
+This is library surface only: interpolation
+and <code>value as str</code> still use <code>ToStr</code>, and there is no
+<code>format!</code> macro. Pure stdlib value types such as <code>Bytes</code>,
+<code>Duration</code>, time values, <code>Path</code>, <code>Json</code>, network identifier values, HTTP values,
+and std runtime marker/result values implement
+<code>Debug</code>. Generic collections implement diagnostic rendering when their
+contents can be rendered: <code>List&lt;T: Debug&gt;</code>,
+<code>Set&lt;T: Eq + Debug&gt;</code>, and
+<code>Map&lt;K: Eq + Hash + ToStr, V: Debug&gt;</code>. Primitive <code>Debug</code>
+remains planned because it requires intrinsic interface-object support.</p>
+
+<!-- =========================================================== -->
+<h2 id="stdmodules">16. Other <code>std:*</code> modules</h2>
 
 <table>
   <thead><tr><th>Module</th><th>Provides</th><th>Documented in</th></tr></thead>
   <tbody>
-    <tr><td><code>std:thread</code></td><td><code>Thread.spawn</code>, <code>JoinHandle</code>, <code>Joined&lt;R&gt;</code>, <code>Panicked</code></td><td><a href="20-concurrency.html">20-concurrency</a></td></tr>
-    <tr><td><code>std:task</code></td><td><code>Task.spawn</code>, <code>JoinHandle</code>, <code>Joined&lt;R&gt;</code>, <code>Panicked</code>, <code>Cancelled</code></td><td><a href="20-concurrency.html">20-concurrency</a></td></tr>
-    <tr><td><code>std:sync</code></td><td><code>Shared&lt;T&gt;</code>, <code>LockBusy</code>, channels, senders, receivers</td><td><a href="20-concurrency.html">20-concurrency</a></td></tr>
-    <tr><td><code>std:async</code></td><td><code>yield_now</code>, <code>sleep</code>, <code>timeout</code>, default executor, <code>AsyncIterator</code> adapters</td><td><a href="21-async.html">21-async</a></td></tr>
-    <tr><td><code>std:time</code></td><td>wall-clock and monotonic time</td><td>(future)</td></tr>
-    <tr><td><code>std:fs</code></td><td>filesystem</td><td>(future)</td></tr>
+    <tr><td><code>std:thread</code></td><td><code>Thread.spawn</code>, <code>JoinHandle</code>, <code>Joined&lt;R&gt;</code>, <code>Panicked</code>; <code>Panicked</code> has value semantics</td><td><a href="20-concurrency.html">20-concurrency</a></td></tr>
+    <tr><td><code>std:task</code></td><td><code>Task.spawn</code>, executor <code>JoinHandle</code>, <code>Joined&lt;R&gt;</code>, <code>Panicked</code>, <code>Cancelled</code>; <code>Cancelled</code> has value semantics and task handles support cooperative <code>cancel()</code>/<code>abort()</code></td><td><a href="20-concurrency.html">20-concurrency</a></td></tr>
+    <tr><td><code>std:sync</code></td><td><code>Shared&lt;T&gt;</code>, <code>LockBusy</code>, channels, senders, receivers; <code>LockBusy</code>/<code>ChannelClosed</code> have value semantics</td><td><a href="20-concurrency.html">20-concurrency</a></td></tr>
+    <tr><td><code>core:sync:atomic</code></td><td><code>Ordering</code> memory-ordering value contract with equality, clone, hash, stringification, and debug rendering; atomic handle types remain planned compiler/runtime substrate</td><td><a href="24-stdlib-extended.html">24-stdlib-extended</a></td></tr>
+    <tr><td><code>std:async</code></td><td><code>yield_now</code>, <code>sleep</code>, <code>timeout</code>, executor/runtime adapters; <code>TimedOut</code> has value semantics</td><td><a href="21-async.html">21-async</a></td></tr>
+    <tr><td><code>std:bytes</code></td><td><code>Bytes</code>, <code>BytesCursor</code>, <code>from_str</code> UTF-8 encoding, <code>decode_utf8</code> strict UTF-8 decoding, bytewise prefix/suffix checks, <code>Utf8Error</code> error/value semantics, byte/cursor clone/equality/hash/stringification/debug, in-memory <code>Writer</code>/<code>FmtSink</code>, and cursor-backed <code>Reader</code>/<code>Seeker</code></td><td><a href="24-stdlib-extended.html">24-stdlib-extended</a></td></tr>
+    <tr><td><code>std:io</code></td><td><code>print</code>, <code>println</code>, <code>eprint</code>, <code>eprintln</code>, <code>Reader</code>, <code>Writer</code>, <code>Seeker</code>, <code>SeekFrom</code>, <code>IoError</code>, stdin <code>Reader</code>, stdout/stderr <code>Writer</code> handles, and <code>BufReader</code>/<code>BufWriter</code> buffered adapters</td><td><a href="24-stdlib-extended.html">24-stdlib-extended</a></td></tr>
+    <tr><td><code>std:collections</code></td><td><code>Deque</code>, <code>deque&lt;T&gt;()</code>, and <code>deque_from_list&lt;T&gt;(List&lt;T&gt;)</code>; ordinary Otter-authored double-ended queue with bulk front/back extension, direct indexed reads/writes/removals, membership testing when <code>T: Eq</code>, equality, clone, hash, stringification, debug rendering, list snapshots, and iterator support</td><td><a href="24-stdlib-extended.html">24-stdlib-extended</a></td></tr>
+    <tr><td><code>std:fmt</code></td><td><code>Display</code>, <code>Debug</code>, <code>FmtSink</code>, <code>FmtError</code>; <code>FmtError</code> value semantics and <code>Debug</code> impls for pure stdlib values</td><td><a href="24-stdlib-extended.html">24-stdlib-extended</a></td></tr>
+    <tr><td><code>std:time</code></td><td><code>Duration</code> with unit conversions and subsecond component helpers, monotonic <code>Instant</code>, wall-clock <code>SystemTime</code>, <code>TimeZone</code>, <code>DateTime</code>, <code>TimeError</code>, value semantics, ISO-like formatting/parsing, timezone replacement, UTC/fixed-offset <code>SystemTime</code> conversion, and <code>sleep(Duration)</code>; local timezone lookup and timezone databases remain planned</td><td><a href="24-stdlib-extended.html">24-stdlib-extended</a></td></tr>
+    <tr><td><code>std:fs</code></td><td><code>Path</code> value operations, lexical normalization, native separator conversion, components/counts, empty/root predicates, prefix/suffix checks, prefix stripping, hidden-file-aware stem/extension helpers, target-backed path existence/type/metadata/canonicalization queries, binary <code>Bytes</code> read/write, snapshot-backed <code>read_dir</code>, and non-recursive remove/rename/directory creation, portable <code>DirEntry</code>/<code>DirEntries</code>/<code>FileKind</code>, <code>Metadata</code>/<code>Permissions</code>, and <code>OpenOptions</code> value semantics and validation, plus target-backed text helpers and descriptor-backed <code>File</code> handles implementing <code>Reader</code>/<code>Writer</code>/<code>Seeker</code> with explicit open options</td><td><a href="24-stdlib-extended.html">24-stdlib-extended</a></td></tr>
+    <tr><td><code>std:hash</code></td><td><code>Hasher</code>, deterministic <code>DefaultHasher</code>, explicit <code>KeyedHasher</code> values, byte-stream writes, interface-level <code>Hash</code> writes, state value semantics, and helpers over <code>core:prelude.Hash</code>; keyed map/set construction is planned</td><td><a href="24-stdlib-extended.html">24-stdlib-extended</a></td></tr>
+    <tr><td><code>std:http</code></td><td>Comparable <code>Method</code>/<code>HttpVersion</code>, standard <code>Status</code> helpers/reason phrases and reason builders, case-insensitive normalized <code>Headers</code> with name/value counts, clearing, and order-insensitive header-name hashing, <code>HeaderEntry</code>, <code>HttpRequest</code>, <code>HttpResponse</code>, value equality/clone/hash, flattened header entries, snapshot constructors/accessors/builders, diagnostic debug rendering, and request/response header builders; clients/servers/parsing are planned or package-tier</td><td><a href="24-stdlib-extended.html">24-stdlib-extended</a></td></tr>
+    <tr><td><code>std:json</code></td><td><code>Json</code> value tree, scalar/container shape predicates, array/object length, object key/value snapshots, typed extractors with deep snapshots around mutable containers, immutable array/object builders, deep clone/equality/structural hash with order-insensitive object entries, escaped compact and pretty rendering, debug formatting; parsing is package-tier</td><td><a href="24-stdlib-extended.html">24-stdlib-extended</a></td></tr>
+    <tr><td><code>std:net:types</code></td><td><code>IpAddr</code>, <code>SocketAddr</code>, <code>Uri</code>, <code>Url</code>, <code>ParseError</code>, constructors, IPv4 / IPv6 including dotted IPv4 tails and scoped zone IDs / socket / URI / URL parsers including bracketed IPv6 URL hosts, URI/URL accessors, immutable URL builders and query-entry updates with query-map snapshots, UTF-8 percent component helpers, lowercase hex IPv6 rendering, equality, order-insensitive URL query hashing, cloning, debug formatting; stricter URL canonicalization is planned</td><td><a href="24-stdlib-extended.html">24-stdlib-extended</a></td></tr>
+    <tr><td><code>std:process</code></td><td><code>Command</code>, <code>ExitStatus</code>, and captured <code>Output</code> value shapes with snapshotting builders/accessors plus direct arg/env inspection, validation, and structural equality/hash contracts for args/env/cwd value semantics; host <code>args</code>/<code>env</code>/<code>env_all</code>/<code>set_env</code>; process <code>exit</code>/<code>abort</code>; run-to-completion <code>Command.status()</code>/<code>output()</code>; live <code>Child</code> handles are planned</td><td><a href="24-stdlib-extended.html">24-stdlib-extended</a></td></tr>
+    <tr><td><code>std:rand</code></td><td><code>Rng</code>, deterministic <code>SeededRng</code> with state value semantics, OS-backed <code>OsRng</code>, per-value <code>ThreadRng</code>, <code>RandomError</code>, signed/unsigned/f64 range helpers, exact byte-buffer helpers, ratio booleans, uniform index helpers, and choose/shuffle helpers; cryptographic-strength guarantees and richer statistical distributions are planned</td><td><a href="24-stdlib-extended.html">24-stdlib-extended</a></td></tr>
+    <tr><td><code>std:log</code></td><td><code>Level</code>, <code>Record</code>, <code>LoggerAlreadySet</code>, level constructors and severity filtering helpers, record accessors/builders including direct field lookup/count plus field add/remove/clear, field-map snapshots, field-order-independent equality/hash, default and structured line logging helpers, and value semantics; replaceable global loggers are planned</td><td><a href="24-stdlib-extended.html">24-stdlib-extended</a></td></tr>
     <tr><td><code>std:net</code></td><td>sockets, TCP, UDP</td><td>(future)</td></tr>
   </tbody>
 </table>
@@ -561,20 +769,30 @@ numeric primitives or implement a project-local stringification interface.</p>
 <p><code>Future&lt;T&gt;</code>, <code>Ready&lt;T&gt;</code>, <code>Pending</code>, the async
 <code>Context</code> waker (an <code>extern struct</code>, distinct from the error
 <code>Annotated</code> wrapper above) and <code>AsyncIterator&lt;T&gt;</code> live in
-<code>core:prelude</code> because they are language-semantic shapes — the <em>runtime</em>
-driving them lives in <code>std:async</code>.</p>
+<code>core:async</code> because the compiler lowers syntax and control flow through
+them. <code>core:prelude</code> also exposes the minimal async shapes used by
+desugaring, but the importable protocol module is <code>core:async</code>. The
+<em>runtime</em> driving async work lives in <code>std:async</code>.</p>
 
 <!-- =========================================================== -->
-<h2 id="notin">13. What is NOT in this version</h2>
+<h2 id="notin">17. What is NOT in this version</h2>
 
 <div class="callout warn">
   <strong>Intentional omissions</strong>
   <ul>
     <li>No regular expressions.</li>
-    <li>No JSON (write a parser; <code>extern</code> is available).</li>
-    <li>No time / date (likely a future <code>std:time</code>).</li>
-    <li>No <code>Display</code> / <code>Debug</code> split — <code>ToStr</code> (chapter 15) is the single stringification path; <code>Error</code> just requires it as a super-interface.</li>
-    <li>No <code>format!</code> macro — string interpolation (chapter 1) is the only formatting sugar.</li>
+    <li>No JSON parser or stricter canonical serializer in stdlib; <code>std:json</code> provides the shared value tree plus compact and pretty escaped rendering.</li>
+    <li>No public keyed map/set hasher integration yet; <code>std:hash</code>
+      provides deterministic hasher and byte-stream helpers over the current <code>Hash</code> contract.</li>
+    <li>No cryptographic-strength RNG API guarantee or richer statistical distributions yet; <code>std:rand</code> provides
+      deterministic seeded RNGs, OS-backed entropy handles, per-value generators, and basic uniform distribution helpers.</li>
+    <li>No HTTP client/server or wire parser yet; <code>std:http</code> provides
+      shared request/response value types only.</li>
+    <li>No network sockets, DNS, IDNA handling, or stricter URL canonicalizer yet; <code>std:net:types</code>
+      provides portable identifier values plus IPv4, IPv6 including scoped zone IDs, socket-address, URI, and URL parsing.</li>
+    <li>No provider-backed timezone database or local-time lookup yet; <code>std:time</code> currently provides
+      <code>Duration</code>, monotonic <code>Instant</code>, wall-clock <code>SystemTime</code>, timezone values, validated/parsed <code>DateTime</code> values, and UTC/fixed-offset system-time conversion.</li>
+    <li>No <code>format!</code> macro or format-string language — <code>std:fmt</code> provides contracts only; interpolation remains the built-in formatting sugar.</li>
     <li>No blessed <code>Result&lt;T, E&gt;</code> alias — write <code>T | E</code> directly. Type aliases for project-local error types stay local.</li>
     <li>No async filesystem / networking adapters.</li>
   </ul>

@@ -1,0 +1,23 @@
+struct Task {}
+struct JoinHandle<R> { id: i64 }
+struct Cancelled {}
+
+extend Cancelled: Eq {
+  function eq(self, other: Cancelled): bool { true }
+}
+
+extend Cancelled: Clone {
+  function clone(self): Cancelled { Cancelled {} }
+}
+
+extend Cancelled: Hash {
+  function hash(self): u64 { self.to_str().hash() }
+}
+
+extend Cancelled: ToStr {
+  function to_str(self): str { "cancelled" }
+}
+
+extend Cancelled: Debug {
+  function debug(self): str { "Cancelled" }
+}

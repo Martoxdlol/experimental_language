@@ -1,0 +1,7 @@
+//@ kind: compile-error
+//@ description: Deque is an ordinary std collection, not a compiler-backed core collection
+//@ stderr: no `Deque` in the imported module
+//@ stderr: no `deque` in the imported module
+import { Deque, deque } from "core:collections";
+
+function main() {}

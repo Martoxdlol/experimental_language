@@ -1,0 +1,477 @@
+struct Bytes {
+  data: List<u8>,
+}
+
+struct BytesCursor {
+  data: Bytes,
+  pos: i64,
+}
+
+struct Utf8Error {
+  message: str,
+}
+
+struct Utf8Decoded {
+  scalar: i64,
+  next: i64,
+}
+
+extend Bytes {
+  function new(): Bytes { Bytes { data: List<u8>() } }
+  function with_capacity(n: i64): Bytes { Bytes { data: List<u8>() } }
+  function from_str(s: str): Bytes {
+    var out = Bytes.new();
+    out.append_iter(s.bytes());
+    out
+  }
+  function size(self): i64 { self.data.size() }
+  function is_empty(self): bool { self.data.size() == 0 }
+  function get(self, i: i64): u8 | null { self.data.get(i) }
+  function set(self, i: i64, b: u8): bool {
+    if i < 0 || i >= self.data.size() {
+      false
+    } else {
+      self.data[i] = b;
+      true
+    }
+  }
+  function push(self, b: u8) { self.data.push(b); }
+  function pop(self): u8 | null {
+    if self.data.is_empty() {
+      null
+    } else {
+      var last = self.data[self.data.size() - 1];
+      self.data.remove(self.data.size() - 1);
+      last
+    }
+  }
+  function remove_at(self, i: i64): u8 | null {
+    if i < 0 || i >= self.data.size() {
+      null
+    } else {
+      var b = self.data[i];
+      self.data.remove(i);
+      b
+    }
+  }
+  function append(self, other: Bytes) {
+    var snapshot = other.clone();
+    for b in snapshot.iter() {
+      self.push(b);
+    }
+  }
+  function truncate(self, len: i64) {
+    if len <= 0 {
+      self.clear();
+    } else {
+      while self.data.size() > len {
+        self.data.remove(self.data.size() - 1);
+      }
+    }
+  }
+  function clear(self) { self.data.clear(); }
+  function append_iter(self, it: Iterator<u8>) {
+    for b in it {
+      self.data.push(b);
+    }
+  }
+  function slice(self, start: i64, end: i64): Bytes {
+    var out = Bytes.new();
+    var i = start;
+    while (i < end && i < self.data.size()) {
+      if i >= 0 {
+        var b = self.data.get(i);
+        if b is u8 {
+          out.push(b as u8);
+        }
+      }
+      i = i + 1;
+    }
+    out
+  }
+  function starts_with(self, prefix: Bytes): bool {
+    if prefix.size() > self.size() {
+      false
+    } else {
+      var same = true;
+      var i = 0;
+      while same && i < prefix.size() {
+        same = self.data[i] == prefix.data[i];
+        i = i + 1;
+      }
+      same
+    }
+  }
+  function ends_with(self, suffix: Bytes): bool {
+    if suffix.size() > self.size() {
+      false
+    } else {
+      var same = true;
+      var start = self.size() - suffix.size();
+      var i = 0;
+      while same && i < suffix.size() {
+        same = self.data[start + i] == suffix.data[i];
+        i = i + 1;
+      }
+      same
+    }
+  }
+  function iter(self): Iterator<u8> { self.data.iter() }
+  function cursor(self): BytesCursor { BytesCursor.new(self) }
+
+  function byte_at_for_utf8(self, i: i64): i64 | Utf8Error {
+    var b = self.get(i);
+    if b is u8 {
+      b as i64
+    } else {
+      Utf8Error { message: "truncated utf8 sequence" }
+    }
+  }
+
+  function continuation_at(self, i: i64): i64 | Utf8Error {
+    match self.byte_at_for_utf8(i) {
+      i64 b => {
+        if b >= 128 && b <= 191 {
+          b % 64
+        } else {
+          Utf8Error { message: "invalid utf8 continuation byte" }
+        }
+      },
+      Utf8Error e => e,
+    }
+  }
+
+  function append_utf8_scalar(text: str, scalar: i64): str {
+    text + ((scalar as char) as str)
+  }
+
+  function decode_scalar_at(self, i: i64): Utf8Decoded | Utf8Error {
+    match self.byte_at_for_utf8(i) {
+      Utf8Error e => e,
+      i64 b0 => {
+        if b0 <= 127 {
+          Utf8Decoded { scalar: b0, next: i + 1 }
+        } else if b0 >= 192 && b0 <= 193 {
+          Utf8Error { message: "overlong utf8 sequence" }
+        } else if b0 >= 194 && b0 <= 223 {
+          match self.continuation_at(i + 1) {
+            Utf8Error e => e,
+            i64 b1 => Utf8Decoded { scalar: (b0 % 32) * 64 + b1, next: i + 2 },
+          }
+        } else if b0 >= 224 && b0 <= 239 {
+          match self.byte_at_for_utf8(i + 1) {
+            Utf8Error e => e,
+            i64 raw1 => {
+              if raw1 < 128 || raw1 > 191 {
+                Utf8Error { message: "invalid utf8 continuation byte" }
+              } else if b0 == 224 && raw1 < 160 {
+                Utf8Error { message: "overlong utf8 sequence" }
+              } else if b0 == 237 && raw1 > 159 {
+                Utf8Error { message: "utf8 surrogate code point" }
+              } else {
+                match self.continuation_at(i + 2) {
+                  Utf8Error e => e,
+                  i64 b2 => Utf8Decoded {
+                    scalar: (b0 % 16) * 4096 + (raw1 % 64) * 64 + b2,
+                    next: i + 3,
+                  },
+                }
+              }
+            },
+          }
+        } else if b0 >= 240 && b0 <= 244 {
+          match self.byte_at_for_utf8(i + 1) {
+            Utf8Error e => e,
+            i64 raw1 => {
+              if raw1 < 128 || raw1 > 191 {
+                Utf8Error { message: "invalid utf8 continuation byte" }
+              } else if b0 == 240 && raw1 < 144 {
+                Utf8Error { message: "overlong utf8 sequence" }
+              } else if b0 == 244 && raw1 > 143 {
+                Utf8Error { message: "utf8 code point out of range" }
+              } else {
+                match self.continuation_at(i + 2) {
+                  Utf8Error e => e,
+                  i64 b2 => match self.continuation_at(i + 3) {
+                    Utf8Error e => e,
+                    i64 b3 => Utf8Decoded {
+                      scalar: (b0 % 8) * 262144 + (raw1 % 64) * 4096 + b2 * 64 + b3,
+                      next: i + 4,
+                    },
+                  },
+                }
+              }
+            },
+          }
+        } else {
+          Utf8Error { message: "invalid utf8 leading byte" }
+        }
+      },
+    }
+  }
+
+  function decode_utf8(self): str | Utf8Error {
+    var out = "";
+    var i = 0;
+    var err: Utf8Error | null = null;
+    while i < self.data.size() && err is null {
+      match self.decode_scalar_at(i) {
+        Utf8Error e => { err = e; },
+        Utf8Decoded step => {
+          out = Bytes.append_utf8_scalar(out, step.scalar);
+          i = step.next;
+        },
+      }
+    }
+    if err is Utf8Error {
+      err as Utf8Error
+    } else {
+      out
+    }
+  }
+}
+
+extend BytesCursor {
+  function new(data: Bytes): BytesCursor {
+    BytesCursor { data: data.clone(), pos: 0 }
+  }
+
+  function position(self): i64 { self.pos }
+
+  function len(self): i64 { self.data.size() }
+
+  function is_empty(self): bool { self.data.is_empty() }
+
+  function remaining(self): i64 {
+    if self.pos >= self.data.size() {
+      0
+    } else {
+      self.data.size() - self.pos
+    }
+  }
+
+  function rewind(self) {
+    self.pos = 0;
+  }
+
+  function read_byte(self): u8 | null {
+    if self.pos < 0 || self.pos >= self.data.size() {
+      null
+    } else {
+      var b = self.data.get(self.pos);
+      if b is u8 {
+        self.pos = self.pos + 1;
+        b as u8
+      } else {
+        null
+      }
+    }
+  }
+
+  function read_bytes(self, n: i64): Bytes {
+    var out = Bytes.new();
+    var remaining = n;
+    while remaining > 0 {
+      var b = self.read_byte();
+      if b is u8 {
+        out.push(b as u8);
+        remaining = remaining - 1;
+      } else {
+        remaining = 0;
+      }
+    }
+    out
+  }
+
+  function invalid_seek(): IoError {
+    IoError { kind: OtherIo {}, message: "invalid seek" }
+  }
+
+  function checked_seek(self, target: i64): i64 | IoError {
+    if target < 0 {
+      BytesCursor.invalid_seek()
+    } else {
+      self.pos = target;
+      self.pos
+    }
+  }
+}
+
+extend Bytes: Eq {
+  function eq(self, other: Bytes): bool {
+    if self.data.size() != other.data.size() {
+      false
+    } else {
+      var same = true;
+      var i = 0;
+      while same && i < self.data.size() {
+        same = self.data[i] == other.data[i];
+        i = i + 1;
+      }
+      same
+    }
+  }
+}
+
+extend Bytes: Clone {
+  function clone(self): Bytes {
+    var out = Bytes.new();
+    for b in self.data.iter() {
+      out.push(b);
+    }
+    out
+  }
+}
+
+extend Bytes: Hash {
+  function hash(self): u64 {
+    var h = 2166136261u64;
+    for b in self.data.iter() {
+      h = ((h % 4294967291u64) * 16777619u64 + b as u64) % 4294967291u64;
+    }
+    h
+  }
+}
+
+extend Bytes: ToStr {
+  function to_str(self): str {
+    var out = "bytes[";
+    var first = true;
+    for b in self.data.iter() {
+      if first {
+        first = false;
+      } else {
+        out = out + ",";
+      }
+      out = out + (b as str);
+    }
+    out + "]"
+  }
+}
+
+extend Bytes: Debug {
+  function debug(self): str { self.to_str() }
+}
+
+extend Bytes: Writer {
+  function write(self, buf: Bytes): i64 | IoError {
+    var snapshot = buf.clone();
+    for b in snapshot.iter() {
+      self.push(b);
+    }
+    snapshot.size()
+  }
+
+  function write_all(self, buf: Bytes): null | IoError {
+    var _written = self.write(buf)?;
+    null
+  }
+
+  function flush(self): null | IoError { null }
+}
+
+extend Bytes: FmtSink {
+  function write_str(self, s: str): null | FmtError {
+    var encoded = Bytes.from_str(s);
+    for b in encoded.iter() {
+      self.push(b);
+    }
+    null
+  }
+}
+
+extend BytesCursor: Reader {
+  function read(self, buf: Bytes): i64 | IoError {
+    var limit = buf.size();
+    var count = 0;
+    while count < limit {
+      var b = self.read_byte();
+      if b is u8 {
+        buf.push(b as u8);
+        count = count + 1;
+      } else {
+        limit = count;
+      }
+    }
+    count
+  }
+
+  function read_to_end(self, buf: Bytes): i64 | IoError {
+    var count = 0;
+    while self.remaining() > 0 {
+      var b = self.read_byte();
+      if b is u8 {
+        buf.push(b as u8);
+        count = count + 1;
+      }
+    }
+    count
+  }
+}
+
+extend BytesCursor: Seeker {
+  function seek(self, pos: SeekFrom): i64 | IoError {
+    if pos is Start {
+      var offset = (pos as Start).offset;
+      if offset > 9223372036854775807u64 {
+        BytesCursor.invalid_seek()
+      } else {
+        self.checked_seek(offset as i64)
+      }
+    } else if pos is Current {
+      self.checked_seek(self.pos + (pos as Current).offset)
+    } else {
+      self.checked_seek(self.data.size() + (pos as End).offset)
+    }
+  }
+}
+
+extend BytesCursor: Clone {
+  function clone(self): BytesCursor {
+    BytesCursor { data: self.data.clone(), pos: self.pos }
+  }
+}
+
+extend BytesCursor: Eq {
+  function eq(self, other: BytesCursor): bool {
+    self.pos == other.pos && self.data == other.data
+  }
+}
+
+extend BytesCursor: Hash {
+  function hash(self): u64 {
+    (self.data.hash() + ((self.pos as u64) % 4294967291u64)) % 4294967291u64
+  }
+}
+
+extend BytesCursor: ToStr {
+  function to_str(self): str {
+    "BytesCursor { position: " + (self.pos as str) + ", len: " + (self.data.size() as str) + " }"
+  }
+}
+
+extend BytesCursor: Debug {
+  function debug(self): str { self.to_str() }
+}
+
+extend Utf8Error: Error {
+  function message(self): str { self.message }
+  function cause(self): Error | null { null }
+  function to_str(self): str { self.message }
+}
+
+extend Utf8Error: Eq {
+  function eq(self, other: Utf8Error): bool { self.message == other.message }
+}
+
+extend Utf8Error: Clone {
+  function clone(self): Utf8Error { Utf8Error { message: self.message } }
+}
+
+extend Utf8Error: Hash {
+  function hash(self): u64 { self.message.hash() }
+}
+
+extend Utf8Error: Debug {
+  function debug(self): str { "Utf8Error { message: \"" + self.message + "\" }" }
+}

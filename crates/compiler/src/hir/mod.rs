@@ -858,6 +858,10 @@ pub enum Intrinsic {
     /// `timeout(fut, ms): Future<T | TimedOut>` — `output` is the success type
     /// `T` (so codegen can pass its type id + pointer-ness to the runtime).
     AsyncTimeout { output: Ty },
+    /// `std:time.Instant.now()` runtime hook: monotonic nanoseconds.
+    TimeMonotonicNanos,
+    /// `std:time.SystemTime.now()` runtime hook: Unix epoch nanoseconds.
+    TimeSystemNanos,
     /// `fut.cancel()` — cancels runtime futures that expose cancellation
     /// metadata (currently `spawn EXPR` futures), otherwise a safe no-op. Was
     /// `future_cancels`.
@@ -1147,7 +1151,7 @@ pub(crate) fn lower_castop(op: crate::ast::CastOp) -> CastOp {
 }
 
 pub mod pretty;
-pub use pretty::print_program;
+pub use pretty::{print_program, print_program_for_files};
 
 // (The former `hir::lower` pass is gone: the type-checker emits the HIR directly
 // and assembles it in `Checker::finish`. The small build utilities above —

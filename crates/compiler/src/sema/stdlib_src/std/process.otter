@@ -1,0 +1,787 @@
+struct Command {
+  program: str,
+  args: List<str>,
+  env: Map<str, str> | null,
+  cwd: Path | null,
+}
+
+struct ExitStatus {
+  code: i32 | null,
+  signal: i32 | null,
+}
+
+struct Output {
+  status: ExitStatus,
+  stdout: Bytes,
+  stderr: Bytes,
+}
+
+struct ProcessField {
+  text: str,
+  next: i64,
+}
+
+extern function lang_process_args(): str;
+extern function lang_process_env(name: str): str;
+extern function lang_process_env_all(): str;
+extern function lang_process_set_env(name: str, value: str): str;
+extern function lang_process_status(payload: str): str;
+extern function lang_process_output(payload: str): str;
+
+function exit(code: i32) {}
+function abort() {}
+
+function command(program: str): Command {
+  Command.new(program)
+}
+
+function exit_status(code: i32 | null, signal: i32 | null): ExitStatus {
+  ExitStatus { code: code, signal: signal }
+}
+
+function output(status: ExitStatus, stdout: Bytes, stderr: Bytes): Output {
+  Output { status: status.clone(), stdout: stdout.clone(), stderr: stderr.clone() }
+}
+
+function __process_digit_value(ch: str): i64 {
+  if ch == "0" { 0 }
+  else if ch == "1" { 1 }
+  else if ch == "2" { 2 }
+  else if ch == "3" { 3 }
+  else if ch == "4" { 4 }
+  else if ch == "5" { 5 }
+  else if ch == "6" { 6 }
+  else if ch == "7" { 7 }
+  else if ch == "8" { 8 }
+  else if ch == "9" { 9 }
+  else { -1 }
+}
+
+function __process_parse_i64(text: str): i64 {
+  if text.size() == 0 {
+    panic("malformed process payload");
+    return -1;
+  }
+  var value = 0;
+  var i = 0;
+  while i < text.size() {
+    var digit = __process_digit_value(text.substring(i, i + 1));
+    if digit < 0 {
+      panic("malformed process payload");
+      return -1;
+    }
+    value = value * 10 + digit;
+    i = i + 1;
+  }
+  value
+}
+
+function __process_payload(result: str): str {
+  if result.size() == 0 {
+    panic("malformed process payload");
+    return "";
+  }
+  var tag = result.substring(0, 1);
+  var payload = result.substring(1, result.size());
+  if tag == "0" {
+    payload
+  } else if tag == "1" {
+    panic(payload);
+    ""
+  } else {
+    panic("malformed process payload");
+    ""
+  }
+}
+
+function __process_io_error(message: str): IoError {
+  IoError { kind: OtherIo {}, message: message }
+}
+
+function __process_valid_env_key(key: str): bool {
+  key != "" && !key.contains("=")
+}
+
+function __process_hash_add(left: u64, right: u64): u64 {
+  var l = left % 4294967291u64;
+  var r = right % 4294967291u64;
+  (l + r) % 4294967291u64
+}
+
+function __process_hash_mix(left: u64, right: u64): u64 {
+  var l = left % 4294967291u64;
+  var r = right % 4294967291u64;
+  ((l * 16777619u64) + r) % 4294967291u64
+}
+
+function __process_result(result: str): str | IoError {
+  if result.size() == 0 {
+    __process_io_error("empty process result")
+  } else {
+    var tag = result.substring(0, 1);
+    var payload = result.substring(1, result.size());
+    if tag == "0" {
+      payload
+    } else if tag == "1" {
+      __process_io_error(payload)
+    } else {
+      __process_io_error("malformed process result")
+    }
+  }
+}
+
+function __process_read_field(payload: str, start: i64): ProcessField {
+  var colon = payload.substring(start, payload.size()).index_of(":");
+  if colon is null {
+    panic("malformed process payload");
+    return ProcessField { text: "", next: payload.size() };
+  }
+  var header_end = start + (colon as i64);
+  var len = __process_parse_i64(payload.substring(start, header_end));
+  var value_start = header_end + 1;
+  var value_end = value_start + len;
+  if value_end > payload.size() {
+    panic("malformed process payload");
+    return ProcessField { text: "", next: payload.size() };
+  }
+  ProcessField { text: payload.substring(value_start, value_end), next: value_end }
+}
+
+function __process_field(text: str): str {
+  (text.size() as str) + ":" + text
+}
+
+function __process_i32_from_field(text: str): i32 | IoError {
+  var value = __process_parse_i64(text);
+  if value > 2147483647 {
+    __process_io_error("process status value overflows i32")
+  } else {
+    value as i32
+  }
+}
+
+function __process_status_from_fields(code_text: str, signal_text: str): ExitStatus | IoError {
+  if code_text != "" {
+    var code = __process_i32_from_field(code_text);
+    if code is IoError {
+      code as IoError
+    } else {
+      ExitStatus.exited(code as i32)
+    }
+  } else if signal_text != "" {
+    var signal = __process_i32_from_field(signal_text);
+    if signal is IoError {
+      signal as IoError
+    } else {
+      ExitStatus.signaled(signal as i32)
+    }
+  } else {
+    ExitStatus.unknown()
+  }
+}
+
+function __process_hex_value(ch: char): u8 | IoError {
+  var cp = ch as i64;
+  if cp >= 48 && cp <= 57 {
+    (cp - 48) as u8
+  } else if cp >= 97 && cp <= 102 {
+    (cp - 87) as u8
+  } else if cp >= 65 && cp <= 70 {
+    (cp - 55) as u8
+  } else {
+    __process_io_error("invalid hexadecimal digit in process byte payload")
+  }
+}
+
+function __process_hex_at(text: str, index: i64): u8 | IoError {
+  var result: u8 | IoError = __process_io_error("missing hexadecimal digit in process byte payload");
+  for ch in text.substring(index, index + 1).chars() {
+    result = __process_hex_value(ch);
+  }
+  result
+}
+
+function __process_hex_to_bytes(text: str): Bytes | IoError {
+  if text.size() % 2 != 0 {
+    __process_io_error("odd-length process byte payload")
+  } else {
+    var out = Bytes.new();
+    var i = 0;
+    while i < text.size() {
+      var hi = __process_hex_at(text, i);
+      if hi is IoError {
+        return hi as IoError;
+      }
+      var lo = __process_hex_at(text, i + 1);
+      if lo is IoError {
+        return lo as IoError;
+      }
+      out.push(((hi as u8) * 16u8 + (lo as u8)) as u8);
+      i = i + 2;
+    }
+    out
+  }
+}
+
+function __process_decode_status_payload(payload: str, start: i64): ProcessStatusParse | IoError {
+  var code_field = __process_read_field(payload, start);
+  var signal_field = __process_read_field(payload, code_field.next);
+  var status = __process_status_from_fields(code_field.text, signal_field.text);
+  if status is IoError {
+    return status as IoError;
+  }
+  ProcessStatusParse {
+    status: status as ExitStatus,
+    next: signal_field.next,
+  }
+}
+
+struct ProcessStatusParse {
+  status: ExitStatus,
+  next: i64,
+}
+
+function args(): List<str> {
+  var payload = __process_payload(lang_process_args());
+  var out = List<str>();
+  var pos = 0;
+  while pos < payload.size() {
+    var field = __process_read_field(payload, pos);
+    out.push(field.text);
+    pos = field.next;
+  }
+  out
+}
+
+function env(name: str): str | null {
+  var payload = __process_payload(lang_process_env(name));
+  if payload.size() == 0 {
+    panic("malformed process payload");
+  }
+  var tag = payload.substring(0, 1);
+  if tag == "0" {
+    null
+  } else if tag == "1" {
+    payload.substring(1, payload.size())
+  } else {
+    panic("malformed process payload");
+  }
+}
+
+function env_all(): Map<str, str> {
+  var payload = __process_payload(lang_process_env_all());
+  var out = Map.new<str, str>();
+  var pos = 0;
+  while pos < payload.size() {
+    var key = __process_read_field(payload, pos);
+    var value = __process_read_field(payload, key.next);
+    out[key.text] = value.text;
+    pos = value.next;
+  }
+  out
+}
+
+function set_env(name: str, value: str): null {
+  __process_payload(lang_process_set_env(name, value));
+  null
+}
+
+extend Command {
+  function new(program: str): Command {
+    Command { program: program, args: List<str>(), env: null, cwd: null }
+  }
+
+  function program(self): str { self.program }
+
+  function args(self): List<str> {
+    var out = List<str>();
+    for value in self.args.iter() {
+      out.push(value);
+    }
+    out
+  }
+
+  function arg_count(self): i64 { self.args.size() }
+
+  function env(self): Map<str, str> | null {
+    if self.env is Map<str, str> {
+      var out = Map.new<str, str>();
+      for entry in (self.env as Map<str, str>).entries() {
+        out[entry.key] = entry.value;
+      }
+      out
+    } else {
+      null
+    }
+  }
+
+  function env_var_value(self, key: str): str | null {
+    if self.env is Map<str, str> {
+      (self.env as Map<str, str>).get(key)
+    } else {
+      null
+    }
+  }
+
+  function has_env_var(self, key: str): bool {
+    self.env_var_value(key) is str
+  }
+
+  function env_count(self): i64 {
+    if self.env is Map<str, str> {
+      (self.env as Map<str, str>).size()
+    } else {
+      0
+    }
+  }
+
+  function cwd(self): Path | null {
+    if self.cwd is Path {
+      (self.cwd as Path).clone()
+    } else {
+      null
+    }
+  }
+
+  function with_program(self, program: str): Command {
+    Command { program: program, args: self.args(), env: self.env(), cwd: self.cwd() }
+  }
+
+  function with_args(self, values: List<str>): Command {
+    var args = List<str>();
+    for value in values.iter() {
+      args.push(value);
+    }
+    Command { program: self.program, args: args, env: self.env(), cwd: self.cwd() }
+  }
+
+  function arg(self, value: str): Command {
+    var args = self.args();
+    args.push(value);
+    Command { program: self.program, args: args, env: self.env(), cwd: self.cwd() }
+  }
+
+  function with_env(self, values: Map<str, str>): Command {
+    var env = Map.new<str, str>();
+    for entry in values.entries() {
+      env[entry.key] = entry.value;
+    }
+    Command { program: self.program, args: self.args(), env: env, cwd: self.cwd() }
+  }
+
+  function env_var(self, key: str, value: str): Command {
+    var env = if self.env is Map<str, str> {
+      self.env() as Map<str, str>
+    } else {
+      Map.new<str, str>()
+    };
+    env[key] = value;
+    Command { program: self.program, args: self.args(), env: env, cwd: self.cwd() }
+  }
+
+  function inherit_env(self): Command {
+    Command { program: self.program, args: self.args(), env: null, cwd: self.cwd() }
+  }
+
+  function clear_env(self): Command {
+    Command { program: self.program, args: self.args(), env: Map.new<str, str>(), cwd: self.cwd() }
+  }
+
+  function with_cwd(self, cwd: Path): Command {
+    Command { program: self.program, args: self.args(), env: self.env(), cwd: cwd.clone() }
+  }
+
+  function clear_cwd(self): Command {
+    Command { program: self.program, args: self.args(), env: self.env(), cwd: null }
+  }
+
+  function validation_error(self): IoError | null {
+    if self.program == "" {
+      __process_io_error("process command program must not be empty")
+    } else if self.env is Map<str, str> {
+      var error: IoError | null = null;
+      for entry in (self.env as Map<str, str>).entries() {
+        if error is null && !__process_valid_env_key(entry.key) {
+          error = __process_io_error("process command environment keys must not be empty or contain '='");
+        }
+      }
+      error
+    } else {
+      null
+    }
+  }
+
+  function validate(self): null | IoError {
+    var error = self.validation_error();
+    if error is IoError {
+      error as IoError
+    } else {
+      null
+    }
+  }
+
+  function is_valid(self): bool {
+    self.validation_error() is null
+  }
+
+  function payload(self): str {
+    var payload = __process_field(self.program);
+    payload = payload + __process_field(self.args.size() as str);
+    for value in self.args.iter() {
+      payload = payload + __process_field(value);
+    }
+
+    if self.env is Map<str, str> {
+      var env = self.env as Map<str, str>;
+      payload = payload + __process_field("replace");
+      payload = payload + __process_field(env.size() as str);
+      for entry in env.entries() {
+        payload = payload + __process_field(entry.key);
+        payload = payload + __process_field(entry.value);
+      }
+    } else {
+      payload = payload + __process_field("inherit");
+    }
+
+    if self.cwd is Path {
+      payload = payload + __process_field("some");
+      payload = payload + __process_field((self.cwd as Path).as_str());
+    } else {
+      payload = payload + __process_field("none");
+    }
+    payload
+  }
+
+  function status(self): ExitStatus | IoError {
+    var validation = self.validate();
+    if validation is IoError {
+      return validation as IoError;
+    }
+    var decoded = __process_result(lang_process_status(self.payload()));
+    if decoded is IoError {
+      decoded as IoError
+    } else {
+      var parsed = __process_decode_status_payload(decoded as str, 0);
+      if parsed is IoError {
+        parsed as IoError
+      } else {
+        (parsed as ProcessStatusParse).status
+      }
+    }
+  }
+
+  function output(self): Output | IoError {
+    var validation = self.validate();
+    if validation is IoError {
+      return validation as IoError;
+    }
+    var decoded = __process_result(lang_process_output(self.payload()));
+    if decoded is IoError {
+      decoded as IoError
+    } else {
+      var payload = decoded as str;
+      var parsed = __process_decode_status_payload(payload, 0);
+      if parsed is IoError {
+        parsed as IoError
+      } else {
+        var status_parse = parsed as ProcessStatusParse;
+        var stdout_field = __process_read_field(payload, status_parse.next);
+        var stdout = __process_hex_to_bytes(stdout_field.text);
+        if stdout is IoError {
+          return stdout as IoError;
+        }
+        var stderr_field = __process_read_field(payload, stdout_field.next);
+        var stderr = __process_hex_to_bytes(stderr_field.text);
+        if stderr is IoError {
+          return stderr as IoError;
+        }
+        Output.new(status_parse.status, stdout as Bytes, stderr as Bytes)
+      }
+    }
+  }
+
+  function args_equal(self, other: Command): bool {
+    if self.args.size() != other.args.size() {
+      false
+    } else {
+      var same = true;
+      var i = 0;
+      while same && i < self.args.size() {
+        same = self.args[i] == other.args[i];
+        i = i + 1;
+      }
+      same
+    }
+  }
+
+  function env_equal(self, other: Command): bool {
+    if self.env is Map<str, str> {
+      if other.env is Map<str, str> {
+        var left = self.env as Map<str, str>;
+        var right = other.env as Map<str, str>;
+        if left.size() != right.size() {
+          false
+        } else {
+          var same = true;
+          for entry in left.entries() {
+            if same {
+              var other_value = right.get(entry.key);
+              if other_value is str {
+                same = (other_value as str) == entry.value;
+              } else {
+                same = false;
+              }
+            }
+          }
+          same
+        }
+      } else {
+        false
+      }
+    } else {
+      other.env is null
+    }
+  }
+
+  function cwd_equal(self, other: Command): bool {
+    if self.cwd is Path {
+      if other.cwd is Path {
+        (self.cwd as Path) == (other.cwd as Path)
+      } else {
+        false
+      }
+    } else {
+      other.cwd is null
+    }
+  }
+
+  function args_hash(self): u64 {
+    var out = "command:args".hash() % 4294967291u64;
+    for value in self.args.iter() {
+      out = __process_hash_mix(out, ("arg:" + value).hash());
+    }
+    out
+  }
+
+  function env_hash(self): u64 {
+    if self.env is Map<str, str> {
+      var out = "command:env:explicit".hash() % 4294967291u64;
+      for entry in (self.env as Map<str, str>).entries() {
+        out = __process_hash_add(out, ("env:" + entry.key + "=" + entry.value).hash());
+      }
+      out
+    } else {
+      "command:env:inherit".hash() % 4294967291u64
+    }
+  }
+
+  function cwd_hash(self): u64 {
+    if self.cwd is Path {
+      __process_hash_mix("command:cwd:path".hash(), (self.cwd as Path).hash())
+    } else {
+      "command:cwd:null".hash() % 4294967291u64
+    }
+  }
+}
+
+extend Command: Eq {
+  function eq(self, other: Command): bool {
+    self.program == other.program &&
+      self.args_equal(other) &&
+      self.env_equal(other) &&
+      self.cwd_equal(other)
+  }
+}
+
+extend Command: Clone {
+  function clone(self): Command {
+    Command { program: self.program, args: self.args(), env: self.env(), cwd: self.cwd() }
+  }
+}
+
+extend Command: Hash {
+  function hash(self): u64 {
+    var out = __process_hash_mix("command:program".hash(), self.program.hash());
+    out = __process_hash_mix(out, self.args_hash());
+    out = __process_hash_mix(out, self.env_hash());
+    __process_hash_mix(out, self.cwd_hash())
+  }
+}
+
+extend Command: ToStr {
+  function to_str(self): str {
+    var out = self.program;
+    for value in self.args.iter() {
+      out = out + " " + value;
+    }
+    out
+  }
+}
+
+extend Command: Debug {
+  function debug(self): str {
+    var args = "[";
+    var first = true;
+    for value in self.args.iter() {
+      if first {
+        first = false;
+      } else {
+        args = args + ", ";
+      }
+      args = args + "\"" + value + "\"";
+    }
+    args = args + "]";
+
+    var env = if self.env is Map<str, str> {
+      var rendered = "{";
+      var first_env = true;
+      for entry in (self.env as Map<str, str>).entries() {
+        if first_env {
+          first_env = false;
+        } else {
+          rendered = rendered + ", ";
+        }
+        rendered = rendered + entry.key + ": \"" + entry.value + "\"";
+      }
+      rendered + "}"
+    } else {
+      "null"
+    };
+    var cwd = if self.cwd is Path {
+      (self.cwd as Path).debug()
+    } else {
+      "null"
+    };
+    "Command { program: \"" + self.program + "\", args: " + args + ", env: " + env + ", cwd: " + cwd + " }"
+  }
+}
+
+extend ExitStatus {
+  function exited(code: i32): ExitStatus { ExitStatus { code: code, signal: null } }
+
+  function signaled(signal: i32): ExitStatus { ExitStatus { code: null, signal: signal } }
+
+  function unknown(): ExitStatus { ExitStatus { code: null, signal: null } }
+
+  function code(self): i32 | null { self.code }
+
+  function signal(self): i32 | null { self.signal }
+
+  function success(self): bool {
+    if self.code is i32 {
+      (self.code as i32) == 0
+    } else {
+      false
+    }
+  }
+
+  function exited_normally(self): bool { self.code is i32 }
+
+  function was_signaled(self): bool { self.signal is i32 }
+
+  function same_code(self, other: ExitStatus): bool {
+    if self.code is i32 {
+      if other.code is i32 {
+        (self.code as i32) == (other.code as i32)
+      } else {
+        false
+      }
+    } else {
+      other.code is null
+    }
+  }
+
+  function same_signal(self, other: ExitStatus): bool {
+    if self.signal is i32 {
+      if other.signal is i32 {
+        (self.signal as i32) == (other.signal as i32)
+      } else {
+        false
+      }
+    } else {
+      other.signal is null
+    }
+  }
+}
+
+extend ExitStatus: Eq {
+  function eq(self, other: ExitStatus): bool {
+    self.same_code(other) && self.same_signal(other)
+  }
+}
+
+extend ExitStatus: Clone {
+  function clone(self): ExitStatus {
+    ExitStatus { code: self.code, signal: self.signal }
+  }
+}
+
+extend ExitStatus: Hash {
+  function hash(self): u64 {
+    var text = "unknown";
+    if self.code is i32 {
+      text = "code:" + ((self.code as i32) as str);
+    } else if self.signal is i32 {
+      text = "signal:" + ((self.signal as i32) as str);
+    }
+    text.hash()
+  }
+}
+
+extend ExitStatus: ToStr {
+  function to_str(self): str {
+    if self.code is i32 {
+      "exit status " + ((self.code as i32) as str)
+    } else if self.signal is i32 {
+      "signal " + ((self.signal as i32) as str)
+    } else {
+      "exit status unknown"
+    }
+  }
+}
+
+extend ExitStatus: Debug {
+  function debug(self): str {
+    var code = if self.code is i32 { (self.code as i32) as str } else { "null" };
+    var signal = if self.signal is i32 { (self.signal as i32) as str } else { "null" };
+    "ExitStatus { code: " + code + ", signal: " + signal + " }"
+  }
+}
+
+extend Output {
+  function new(status: ExitStatus, stdout: Bytes, stderr: Bytes): Output {
+    output(status, stdout, stderr)
+  }
+
+  function status(self): ExitStatus { self.status.clone() }
+
+  function stdout(self): Bytes { self.stdout.clone() }
+
+  function stderr(self): Bytes { self.stderr.clone() }
+}
+
+extend Output: Eq {
+  function eq(self, other: Output): bool {
+    self.status == other.status && self.stdout == other.stdout && self.stderr == other.stderr
+  }
+}
+
+extend Output: Clone {
+  function clone(self): Output {
+    Output { status: self.status.clone(), stdout: self.stdout.clone(), stderr: self.stderr.clone() }
+  }
+}
+
+extend Output: Hash {
+  function hash(self): u64 {
+    var out = __process_hash_mix("output:status".hash(), self.status.hash());
+    out = __process_hash_mix(out, self.stdout.hash());
+    __process_hash_mix(out, self.stderr.hash())
+  }
+}
+
+extend Output: Debug {
+  function debug(self): str {
+    "Output { status: " + self.status.debug() + ", stdout: " + self.stdout.debug() + ", stderr: " + self.stderr.debug() + " }"
+  }
+}

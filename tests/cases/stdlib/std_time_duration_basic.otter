@@ -1,0 +1,44 @@
+//@ kind: run
+//@ description: std:time exposes portable Duration value operations
+//@ stdout:
+//~ total_ms=1501 nanos=1501000002
+//~ parts=1/1501/1501000/1501000002
+//~ subsec=501/501000/501000002 neg=750/750000/750000000 zero=0
+//~ larger=1/25/1501
+//~ cmp=true eq=true neg=true pos=true zero=true abs=750000000ns clone=1501000002ns hash=1501000002
+//~ instant=true true 500000000ns Instant { nanos: 1500000000 }
+//~ system=true true 2500000000ns SystemTime(unix_nanos=2500000000) SystemTime { nanos_since_unix_epoch: 2500000000 }
+import { println } from "std:io";
+import { Debug } from "std:fmt";
+import { Duration, Instant, SystemTime } from "std:time";
+
+function render_debug(value: Debug): str {
+  value.debug()
+}
+
+function main() {
+  var a = Duration.from_secs(1);
+  var b = Duration.from_millis(500);
+  var c = Duration.from_micros(1000);
+  var d = Duration.from_nanos(2);
+  var total = a + b + c + d;
+
+  println("total_ms=${total.as_millis()} nanos=${total.as_nanos()}");
+  println("parts=${total.as_secs()}/${total.as_millis()}/${total.as_micros()}/${total.as_nanos()}");
+  var neg = Duration.from_millis(250) - Duration.from_secs(1);
+  var zero = Duration.from_nanos(0);
+  println("subsec=${total.subsec_millis()}/${total.subsec_micros()}/${total.subsec_nanos()} neg=${neg.subsec_millis()}/${neg.subsec_micros()}/${neg.subsec_nanos()} zero=${zero.subsec_nanos()}");
+  var larger = Duration.from_days(1) + Duration.from_hours(1) + Duration.from_minutes(1);
+  println("larger=${larger.as_days()}/${larger.as_hours()}/${larger.as_minutes()}");
+
+  var same = Duration.from_nanos(total.as_nanos());
+  println("cmp=${a < total} eq=${total == same} neg=${neg.is_negative()} pos=${total.is_positive()} zero=${zero.is_zero()} abs=${neg.abs().to_str()} clone=${total.clone().to_str()} hash=${total.hash()}");
+
+  var start = Instant.from_nanos(1000000000);
+  var later = start.add_duration(Duration.from_millis(500));
+  println("instant=${start < later} ${start.clone() == start} ${later.duration_since(start).to_str()} ${render_debug(later)}");
+
+  var epoch = SystemTime.unix_epoch();
+  var stamp = epoch.add_duration(Duration.from_secs(2)).add_duration(Duration.from_millis(500));
+  println("system=${stamp > epoch} ${stamp.clone() == stamp} ${stamp.duration_since_unix_epoch().to_str()} ${stamp.to_str()} ${render_debug(stamp)}");
+}

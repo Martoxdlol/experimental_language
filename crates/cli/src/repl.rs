@@ -27,7 +27,8 @@ use compiler::span::FileId;
 const REPL_IMPORTS: &str = "\
 import { List, Map, Set, Entry } from \"core:collections\";\n\
 import { print, println } from \"std:io\";\n\
-import { panic, panic_with, exit, abort } from \"core:prelude\";\n";
+import { panic, panic_with } from \"core:prelude\";\n\
+import { exit, abort } from \"std:process\";\n";
 
 /// Run the REPL, reading lines from stdin until `:quit`/EOF.
 pub fn run() -> ExitCode {

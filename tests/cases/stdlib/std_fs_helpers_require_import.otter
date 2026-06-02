@@ -1,0 +1,36 @@
+//@ kind: compile-error
+//@ description: std:fs module-level helpers require explicit named imports
+//@ stderr: cannot find value `read_to_string` in scope
+//@ stderr: cannot find value `write_string` in scope
+//@ stderr: cannot find value `append_string` in scope
+//@ stderr: cannot find value `read` in scope
+//@ stderr: cannot find value `write` in scope
+//@ stderr: cannot find value `canonicalize` in scope
+//@ stderr: cannot find value `native_separator` in scope
+//@ stderr: cannot find value `path_from_native` in scope
+//@ stderr: cannot find value `read_dir` in scope
+//@ stderr: cannot find value `remove` in scope
+//@ stderr: cannot find value `rename` in scope
+//@ stderr: cannot find value `create_dir` in scope
+//@ stderr: cannot find value `create_dir_all` in scope
+
+import { Bytes } from "std:bytes";
+import { Path } from "std:fs";
+
+function main() {
+  var path = Path.new("/tmp/otter-fusion-stdlib-import-check");
+  var other = Path.new("/tmp/otter-fusion-stdlib-import-check-renamed");
+  read_to_string(path);
+  write_string(path, "text");
+  append_string(path, "more");
+  read(path);
+  write(path, Bytes.from_str("bytes"));
+  canonicalize(path);
+  native_separator();
+  path_from_native("/tmp");
+  read_dir(path);
+  remove(path);
+  rename(path, other);
+  create_dir(path);
+  create_dir_all(path);
+}

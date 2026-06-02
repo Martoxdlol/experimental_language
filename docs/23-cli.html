@@ -316,8 +316,8 @@ otter_fusion emit mod-graph --format dot | dot -Tpng &gt; modules.png</code></pr
 <table>
   <thead><tr><th>You want…</th><th>Mechanism</th></tr></thead>
   <tbody>
-    <tr><td>Different <code>core:</code> (freestanding, custom allocator)</td><td><code>[build] sysroot = "&lt;path&gt;"</code> where <code>path/core/manifest.toml</code> declares it provides <code>core</code>.</td></tr>
-    <tr><td>Different <code>std:</code> (embedded shim)</td><td>Same, providing <code>std</code>.</td></tr>
+    <tr><td>Different <code>core:</code> substrate (advanced compiler/runtime contract)</td><td><code>[build] sysroot = "&lt;path&gt;"</code> where <code>path/core/manifest.toml</code> declares it provides <code>core</code>.</td></tr>
+    <tr><td>Different <code>std:</code> provider (portable APIs and target shims)</td><td>Same, providing <code>std</code>.</td></tr>
     <tr><td>Build the sysroot from source</td><td><code>otter_fusion sysroot build --features … --target &lt;triple&gt;</code></td></tr>
     <tr><td>Drop <code>std:</code> entirely</td><td>Manifest <code>[package] no-std = true</code>. <code>std:*</code> import → hard error.</td></tr>
   </tbody>

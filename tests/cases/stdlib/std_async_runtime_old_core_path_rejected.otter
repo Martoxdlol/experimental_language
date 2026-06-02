@@ -1,0 +1,8 @@
+//@ kind: compile-error
+//@ description: async runtime helpers stay in std:async; core:async only owns syntax protocols
+//@ stderr: no `sleep` in the imported module
+//@ stderr: no `yield_now` in the imported module
+//@ stderr: no `TimedOut` in the imported module
+import { sleep, yield_now, TimedOut } from "core:async";
+
+function main() {}

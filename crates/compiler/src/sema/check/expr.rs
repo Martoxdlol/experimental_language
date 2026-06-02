@@ -361,8 +361,15 @@ impl<'a> Checker<'a> {
         let Some(node) = self.node_hir.get(&span) else {
             return;
         };
-        let raw = match &node.kind {
-            crate::hir::ExprKind::Adjust { expr, .. } => (**expr).clone(),
+        let raw = match (&node.kind, adjust) {
+            (
+                crate::hir::ExprKind::Adjust {
+                    adjust: Adjust::Unbox(_),
+                    ..
+                },
+                Adjust::Widen(_) | Adjust::WidenDyn(_),
+            ) => node.clone(),
+            (crate::hir::ExprKind::Adjust { expr, .. }, _) => (**expr).clone(),
             _ => node.clone(),
         };
         let ty = match adjust {
@@ -792,10 +799,24 @@ impl<'a> Checker<'a> {
             let head1 = &all[..1.min(all.len())];
             if let ExprKind::Ident(n) = &callee.kind {
                 match n.name.as_str() {
-                    "channel" => return intrinsic(Intrinsic::ChannelNew, &[]),
-                    "yield_now" => return intrinsic(Intrinsic::YieldNow, &[]),
-                    "sleep" => return intrinsic(Intrinsic::AsyncSleep, head1),
-                    "timeout" => {
+                    "channel" if self.intr_fn_in("channel", &["std", "sync"]) => {
+                        return intrinsic(Intrinsic::ChannelNew, &[]);
+                    }
+                    "yield_now" if self.intr_fn_in("yield_now", &["std", "async"]) => {
+                        return intrinsic(Intrinsic::YieldNow, &[]);
+                    }
+                    "sleep" if self.intr_fn_in("sleep", &["std", "async"]) => {
+                        return intrinsic(Intrinsic::AsyncSleep, head1);
+                    }
+                    "__otter_time_monotonic_nanos"
+                        if self.intr_fn("__otter_time_monotonic_nanos") =>
+                    {
+                        return intrinsic(Intrinsic::TimeMonotonicNanos, &[]);
+                    }
+                    "__otter_time_system_nanos" if self.intr_fn("__otter_time_system_nanos") => {
+                        return intrinsic(Intrinsic::TimeSystemNanos, &[]);
+                    }
+                    "timeout" if self.intr_fn_in("timeout", &["std", "async"]) => {
                         // `output` = the awaited future's `T` (read-only: the
                         // first arg is a `Future<T>`).
                         let out = all
@@ -974,7 +995,8 @@ impl<'a> Checker<'a> {
                 }
             }
         }
-        // Empty builtin collection constructor `List<T>()` / `Map<K,V>()`.
+        // Empty builtin collection constructor `List<T>()` / `Map<K,V>()` /
+        // `Set<T>()`.
         if self.resolution(callee.span).is_none() {
             let type_name = match &callee.kind {
                 ExprKind::Ident(n) => Some(n.name.as_str()),
@@ -986,7 +1008,10 @@ impl<'a> Checker<'a> {
             };
             if let Some(tn) = type_name {
                 if let Some(def) = self.prog.resolve_type_in(self.cur_module, tn) {
-                    if def == self.prog.list_def || def == self.prog.map_def {
+                    if def == self.prog.list_def
+                        || def == self.prog.map_def
+                        || (self.prog.set_def != DefId(0) && def == self.prog.set_def)
+                    {
                         return intrinsic(Intrinsic::CollectionCtor, &[]);
                     }
                 }
@@ -1619,6 +1644,10 @@ impl<'a> Checker<'a> {
         }
         match self.future_output(fty) {
             Some(out) => {
+                let fut_ty = self.tcx.mk_named(self.prog.future_def, vec![out]);
+                if fty != fut_ty && self.implements_dyn(fty, fut_ty) {
+                    self.bake_coercion(inner.span, crate::sema::results::Adjust::WidenDyn(fut_ty));
+                }
                 let _ = kw_span;
                 self.pending_await.set(Some(out));
                 out
@@ -1647,6 +1676,10 @@ impl<'a> Checker<'a> {
         }
         match self.future_output(fty) {
             Some(out) => {
+                let fut_ty = self.tcx.mk_named(self.prog.future_def, vec![out]);
+                if fty != fut_ty && self.implements_dyn(fty, fut_ty) {
+                    self.bake_coercion(inner.span, crate::sema::results::Adjust::WidenDyn(fut_ty));
+                }
                 let _ = kw_span;
                 self.pending_spawn.set(Some(out));
                 self.tcx.mk_named(self.prog.future_def, vec![out])
@@ -1780,7 +1813,7 @@ impl<'a> Checker<'a> {
 
     pub(crate) fn builtin_ty(&mut self, b: Builtin) -> Ty {
         match b {
-            Builtin::Print | Builtin::Println => {
+            Builtin::Print | Builtin::Println | Builtin::Eprint | Builtin::Eprintln => {
                 let str_ty = self.tcx.str;
                 let null = self.tcx.null;
                 self.tcx.mk_func(vec![str_ty], null, false)
@@ -1843,7 +1876,7 @@ impl<'a> Checker<'a> {
     }
 
     /// Is `from as to` a defined conversion?
-    pub(crate) fn cast_ok(&self, from: Ty, to: Ty) -> bool {
+    pub(crate) fn cast_ok(&mut self, from: Ty, to: Ty) -> bool {
         if from == to || self.tcx.is_error(from) || self.tcx.is_error(to) {
             return true;
         }
@@ -1952,7 +1985,8 @@ impl<'a> Checker<'a> {
     }
 
     /// Recognise the empty-collection constructors `Map<K, V>()`,
-    /// `Map.new<K, V>()`, `List<T>()`, `List.new<T>()`. Returns the constructed
+    /// `Map.new<K, V>()`, `List<T>()`, `List.new<T>()`, `Set<T>()`, and
+    /// `Set.new<T>()`. Returns the constructed
     /// collection type and records it in `results.builtin_ctors` for codegen.
     pub(crate) fn try_builtin_ctor(
         &mut self,
@@ -1977,12 +2011,19 @@ impl<'a> Checker<'a> {
         let def = self.prog.resolve_type_in(module, type_name)?;
         let is_map = def == self.prog.map_def;
         let is_list = def == self.prog.list_def;
-        if !is_map && !is_list {
+        let is_set = self.prog.set_def != DefId(0) && def == self.prog.set_def;
+        if !is_map && !is_list && !is_set {
             return None;
         }
         let arity = if is_map { 2 } else { 1 };
         let env = self.local_env();
-        let kind = if is_map { "Map" } else { "List" };
+        let kind = if is_map {
+            "Map"
+        } else if is_set {
+            "Set"
+        } else {
+            "List"
+        };
         let tys: Vec<Ty> = if generics.len() == arity {
             generics.iter().map(|t| self.lower_ty(t, &env)).collect()
         } else {
@@ -2031,6 +2072,23 @@ impl<'a> Checker<'a> {
                 .is_some_and(|d| self.prog.is_builtin_def(d))
     }
 
+    fn intr_fn_in(&self, name: &str, path: &[&str]) -> bool {
+        if self.lookup(name).is_some() {
+            return false;
+        }
+        let Some(def) = self.prog.resolve_value_in(self.current_module(), name) else {
+            return false;
+        };
+        if !self.prog.is_builtin_def(def) {
+            return false;
+        }
+        self.prog.module(self.prog.def(def).module).path
+            == path
+                .iter()
+                .map(|seg| (*seg).to_string())
+                .collect::<Vec<_>>()
+    }
+
     /// As [`Self::intr_fn`], for an imported toolchain *namespace* type
     /// (`Thread`/`Shared`/`Foreign`/`CString`/`CStr`): resolves to a built-in
     /// type def and is not shadowed by a local.
@@ -2075,13 +2133,13 @@ impl<'a> Checker<'a> {
         }
         // `channel<T>()` (`docs/20` §2): construct a message-passing channel.
         if let ExprKind::Ident(name) = &callee.kind {
-            if name.name == "channel" && self.intr_fn("channel") {
+            if name.name == "channel" && self.intr_fn_in("channel", &["std", "sync"]) {
                 return self.check_channel_new(_generics, args, span);
             }
         }
         // `yield_now()` (`docs/21`): a `Future<null>` that suspends once.
         if let ExprKind::Ident(name) = &callee.kind {
-            if name.name == "yield_now" && self.intr_fn("yield_now") {
+            if name.name == "yield_now" && self.intr_fn_in("yield_now", &["std", "async"]) {
                 if !args.is_empty() {
                     self.emit(
                         span,
@@ -2094,7 +2152,7 @@ impl<'a> Checker<'a> {
                 return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.null]);
             }
             // `sleep(ms)` (`docs/21` §9): a `Future<null>` completing after a delay.
-            if name.name == "sleep" && self.intr_fn("sleep") {
+            if name.name == "sleep" && self.intr_fn_in("sleep", &["std", "async"]) {
                 if args.len() != 1 {
                     self.emit(
                         span,
@@ -2110,9 +2168,39 @@ impl<'a> Checker<'a> {
                 }
                 return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.null]);
             }
+            // Private `std:time` runtime hooks. Public callers use
+            // `Instant.now()` / `SystemTime.now()`; these marker functions are
+            // not catalog exports.
+            if name.name == "__otter_time_monotonic_nanos"
+                && self.intr_fn("__otter_time_monotonic_nanos")
+            {
+                if !args.is_empty() {
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 0,
+                            found: args.len(),
+                        },
+                    );
+                }
+                return self.tcx.int(IntTy::I64);
+            }
+            if name.name == "__otter_time_system_nanos" && self.intr_fn("__otter_time_system_nanos")
+            {
+                if !args.is_empty() {
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 0,
+                            found: args.len(),
+                        },
+                    );
+                }
+                return self.tcx.int(IntTy::I64);
+            }
             // `timeout(fut, ms): Future<T | TimedOut>` (`docs/21` §9): race a
             // future against a deadline.
-            if name.name == "timeout" && self.intr_fn("timeout") {
+            if name.name == "timeout" && self.intr_fn_in("timeout", &["std", "async"]) {
                 if args.len() != 2 {
                     self.emit(
                         span,

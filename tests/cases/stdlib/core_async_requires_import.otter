@@ -1,0 +1,25 @@
+//@ kind: compile-error
+//@ description: core:async follows the near-empty prelude rule; async protocol shapes are not visible unless imported
+//@ stderr: cannot find type `Future`
+//@ stderr: cannot find type `Ready`
+//@ stderr: cannot find type `Pending`
+//@ stderr: cannot find type `Context`
+//@ stderr: cannot find type `AsyncIterator`
+
+function needs_future(f: Future<i64>): null {
+  null
+}
+
+function needs_context(ctx: *Context): null {
+  null
+}
+
+function needs_iterator(stream: AsyncIterator<i64>): null {
+  null
+}
+
+function ready(): Ready<i64> | Pending {
+  Ready { value: 1 }
+}
+
+function main() {}

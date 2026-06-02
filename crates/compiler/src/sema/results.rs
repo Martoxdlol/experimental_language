@@ -36,6 +36,10 @@ pub enum Builtin {
     Print,
     /// `println(str): null` — write to stdout with a trailing newline.
     Println,
+    /// `eprint(str): null` — write to stderr, no newline.
+    Eprint,
+    /// `eprintln(str): null` — write to stderr with a trailing newline.
+    Eprintln,
     /// `panic(str): never` — terminate the thread with a message (`docs/14`).
     Panic,
     /// `panic_with(value: dynamic): never` — terminate the thread, attaching a
@@ -52,6 +56,8 @@ impl Builtin {
         match name {
             "print" => Some(Builtin::Print),
             "println" => Some(Builtin::Println),
+            "eprint" => Some(Builtin::Eprint),
+            "eprintln" => Some(Builtin::Eprintln),
             "panic" => Some(Builtin::Panic),
             "panic_with" => Some(Builtin::PanicWith),
             "exit" => Some(Builtin::Exit),

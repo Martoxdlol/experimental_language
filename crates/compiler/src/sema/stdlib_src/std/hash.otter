@@ -1,0 +1,179 @@
+interface Hasher {
+  function write_u8(self, value: u8): null;
+  function write_u64(self, value: u64): null;
+  function write_bytes(self, value: Bytes): null;
+  function finish(self): u64;
+}
+
+struct DefaultHasher {
+  state: u64,
+}
+
+struct KeyedHasher {
+  seed: u64,
+  state: u64,
+}
+
+function hash_value<T: Hash>(value: T): u64 {
+  value.hash()
+}
+
+function write_hash<T: Hash>(hasher: Hasher, value: T): null {
+  hasher.write_u64(value.hash())
+}
+
+function combine_hash(left: u64, right: u64): u64 {
+  var l = left % 4294967291u64;
+  var r = right % 4294967291u64;
+  ((l * 16777619u64) + r) % 4294967291u64
+}
+
+function __hash_seeded_state(seed: u64): u64 {
+  combine_hash(2166136261u64, seed)
+}
+
+function keyed_hasher(seed: u64): KeyedHasher {
+  KeyedHasher.new(seed)
+}
+
+extend DefaultHasher {
+  function new(): DefaultHasher { DefaultHasher { state: 2166136261u64 } }
+
+  function with_seed(seed: u64): DefaultHasher {
+    DefaultHasher { state: __hash_seeded_state(seed) }
+  }
+
+  function write_i64(self, value: i64): null {
+    self.write_u64(value as u64);
+  }
+
+  function write_bool(self, value: bool): null {
+    if value {
+      self.write_u64(1u64);
+    } else {
+      self.write_u64(0u64);
+    }
+  }
+
+  function write_str(self, value: str): null {
+    self.write_u64(value.hash());
+  }
+
+  function write_hash<T: Hash>(self, value: T): null {
+    self.write_u64(value.hash());
+  }
+}
+
+extend DefaultHasher: Hasher {
+  function write_u8(self, value: u8): null {
+    self.state = combine_hash(self.state, value as u64);
+  }
+
+  function write_u64(self, value: u64): null {
+    self.state = combine_hash(self.state, value);
+  }
+
+  function write_bytes(self, value: Bytes): null {
+    for b in value.iter() {
+      self.write_u8(b);
+    }
+  }
+
+  function finish(self): u64 { self.state }
+}
+
+extend DefaultHasher: Eq {
+  function eq(self, other: DefaultHasher): bool { self.state == other.state }
+}
+
+extend DefaultHasher: Clone {
+  function clone(self): DefaultHasher { DefaultHasher { state: self.state } }
+}
+
+extend DefaultHasher: Hash {
+  function hash(self): u64 { self.state.hash() }
+}
+
+extend DefaultHasher: ToStr {
+  function to_str(self): str { "DefaultHasher(state=" + (self.state as str) + ")" }
+}
+
+extend DefaultHasher: Debug {
+  function debug(self): str { "DefaultHasher { state: " + (self.state as str) + " }" }
+}
+
+extend KeyedHasher {
+  function new(seed: u64): KeyedHasher {
+    KeyedHasher { seed: seed, state: __hash_seeded_state(seed) }
+  }
+
+  function seed(self): u64 { self.seed }
+
+  function write_i64(self, value: i64): null {
+    self.write_u64(value as u64);
+  }
+
+  function write_bool(self, value: bool): null {
+    if value {
+      self.write_u64(1u64);
+    } else {
+      self.write_u64(0u64);
+    }
+  }
+
+  function write_str(self, value: str): null {
+    self.write_u64(value.hash());
+  }
+
+  function write_hash<T: Hash>(self, value: T): null {
+    self.write_u64(value.hash());
+  }
+}
+
+extend KeyedHasher: Hasher {
+  function write_u8(self, value: u8): null {
+    self.state = combine_hash(self.state, value as u64);
+  }
+
+  function write_u64(self, value: u64): null {
+    self.state = combine_hash(self.state, value);
+  }
+
+  function write_bytes(self, value: Bytes): null {
+    for b in value.iter() {
+      self.write_u8(b);
+    }
+  }
+
+  function finish(self): u64 { self.state }
+}
+
+extend KeyedHasher: Eq {
+  function eq(self, other: KeyedHasher): bool {
+    self.seed == other.seed && self.state == other.state
+  }
+}
+
+extend KeyedHasher: Clone {
+  function clone(self): KeyedHasher {
+    KeyedHasher { seed: self.seed, state: self.state }
+  }
+}
+
+extend KeyedHasher: Hash {
+  function hash(self): u64 {
+    combine_hash(self.seed.hash(), self.state.hash())
+  }
+}
+
+extend KeyedHasher: ToStr {
+  function to_str(self): str {
+    "KeyedHasher(seed=" + (self.seed as str) + ", state=" + (self.state as str) + ")"
+  }
+}
+
+extend KeyedHasher: Debug {
+  function debug(self): str {
+    "KeyedHasher { seed: " + (self.seed as str) + ", state: " + (self.state as str) + " }"
+  }
+}

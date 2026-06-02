@@ -1,0 +1,343 @@
+struct LogTrace {}
+struct LogDebug {}
+struct Info {}
+struct Warn {}
+struct LogError {}
+type Level = LogTrace | LogDebug | Info | Warn | LogError;
+
+struct Record {
+  level: Level,
+  message: str,
+  module: str,
+  fields: Map<str, str>,
+  time: SystemTime,
+}
+
+struct LoggerAlreadySet {}
+
+function level_trace(): Level { LogTrace {} }
+function level_debug(): Level { LogDebug {} }
+function level_info(): Level { Info {} }
+function level_warn(): Level { Warn {} }
+function level_error(): Level { LogError {} }
+
+function record(level: Level, message: str, module: str, fields: Map<str, str>): Record {
+  Record {
+    level: level.clone(),
+    message: message,
+    module: module,
+    fields: __log_clone_fields(fields),
+    time: SystemTime.now(),
+  }
+}
+
+function empty_fields(): Map<str, str> { Map.new<str, str>() }
+
+function __log_clone_fields(fields: Map<str, str>): Map<str, str> {
+  var out = Map.new<str, str>();
+  for entry in fields.entries() {
+    out[entry.key] = entry.value;
+  }
+  out
+}
+
+function __log_fields_eq(left: Map<str, str>, right: Map<str, str>): bool {
+  if left.size() != right.size() {
+    false
+  } else {
+    var same = true;
+    for entry in left.entries() {
+      if same {
+        var other = right.get(entry.key);
+        if other is str {
+          same = entry.value == (other as str);
+        } else {
+          same = false;
+        }
+      }
+    }
+    same
+  }
+}
+
+function __log_fields_hash(fields: Map<str, str>): u64 {
+  var h = 0u64;
+  for entry in fields.entries() {
+    var item = (entry.key + "=" + entry.value).hash();
+    h = (h + item) % 4294967291u64;
+  }
+  h
+}
+
+function log_record(r: Record) {
+  println(r.to_str());
+}
+
+function trace(message: str) { log_record(record(level_trace(), message, "", empty_fields())); }
+function debug(message: str) { log_record(record(level_debug(), message, "", empty_fields())); }
+function info(message: str) { log_record(record(level_info(), message, "", empty_fields())); }
+function warn(message: str) { log_record(record(level_warn(), message, "", empty_fields())); }
+function error(message: str) { log_record(record(level_error(), message, "", empty_fields())); }
+
+function info_with(message: str, fields: Map<str, str>) {
+  log_record(record(level_info(), message, "", fields));
+}
+
+function trace_with(message: str, fields: Map<str, str>) {
+  log_record(record(level_trace(), message, "", fields));
+}
+
+function debug_with(message: str, fields: Map<str, str>) {
+  log_record(record(level_debug(), message, "", fields));
+}
+
+function warn_with(message: str, fields: Map<str, str>) {
+  log_record(record(level_warn(), message, "", fields));
+}
+
+function error_with(message: str, fields: Map<str, str>) {
+  log_record(record(level_error(), message, "", fields));
+}
+
+extend Level {
+  function as_str(self): str {
+    if self is LogTrace {
+      "TRACE"
+    } else if self is LogDebug {
+      "DEBUG"
+    } else if self is Info {
+      "INFO"
+    } else if self is Warn {
+      "WARN"
+    } else {
+      "ERROR"
+    }
+  }
+
+  function rank(self): i64 {
+    if self is LogTrace {
+      0
+    } else if self is LogDebug {
+      1
+    } else if self is Info {
+      2
+    } else if self is Warn {
+      3
+    } else {
+      4
+    }
+  }
+
+  function is_at_least(self, min: Level): bool {
+    self.rank() >= min.rank()
+  }
+
+  function equals(self, other: Level): bool { self.as_str() == other.as_str() }
+}
+
+extend Level: Eq {
+  function eq(self, other: Level): bool { self.equals(other) }
+}
+
+extend Level: Clone {
+  function clone(self): Level {
+    if self is LogTrace {
+      LogTrace {}
+    } else if self is LogDebug {
+      LogDebug {}
+    } else if self is Info {
+      Info {}
+    } else if self is Warn {
+      Warn {}
+    } else {
+      LogError {}
+    }
+  }
+}
+
+extend Level: Hash {
+  function hash(self): u64 { self.as_str().hash() }
+}
+
+extend Level: ToStr {
+  function to_str(self): str { self.as_str() }
+}
+
+extend Level: Debug {
+  function debug(self): str { self.as_str() }
+}
+
+extend Record {
+  function level(self): Level { self.level.clone() }
+
+  function message(self): str { self.message }
+
+  function module(self): str { self.module }
+
+  function fields(self): Map<str, str> {
+    __log_clone_fields(self.fields)
+  }
+
+  function field(self, key: str): str | null {
+    self.fields.get(key)
+  }
+
+  function has_field(self, key: str): bool {
+    self.fields.get(key) is str
+  }
+
+  function field_count(self): i64 { self.fields.size() }
+
+  function time(self): SystemTime { self.time.clone() }
+
+  function with_level(self, level: Level): Record {
+    Record {
+      level: level.clone(),
+      message: self.message,
+      module: self.module,
+      fields: self.fields(),
+      time: self.time.clone(),
+    }
+  }
+
+  function with_message(self, message: str): Record {
+    Record {
+      level: self.level.clone(),
+      message: message,
+      module: self.module,
+      fields: self.fields(),
+      time: self.time.clone(),
+    }
+  }
+
+  function with_module(self, module: str): Record {
+    Record {
+      level: self.level.clone(),
+      message: self.message,
+      module: module,
+      fields: self.fields(),
+      time: self.time.clone(),
+    }
+  }
+
+  function with_fields(self, fields: Map<str, str>): Record {
+    Record {
+      level: self.level.clone(),
+      message: self.message,
+      module: self.module,
+      fields: __log_clone_fields(fields),
+      time: self.time.clone(),
+    }
+  }
+
+  function with_field(self, key: str, value: str): Record {
+    var next = self.fields();
+    next[key] = value;
+    self.with_fields(next)
+  }
+
+  function without_field(self, key: str): Record {
+    var next = self.fields();
+    next.remove(key);
+    self.with_fields(next)
+  }
+
+  function clear_fields(self): Record {
+    self.with_fields(Map.new<str, str>())
+  }
+
+  function with_time(self, time: SystemTime): Record {
+    Record {
+      level: self.level.clone(),
+      message: self.message,
+      module: self.module,
+      fields: self.fields(),
+      time: time.clone(),
+    }
+  }
+
+  function field_string(self): str {
+    var out = "";
+    var first = true;
+    for entry in self.fields.entries() {
+      if first {
+        first = false;
+      } else {
+        out = out + " ";
+      }
+      out = out + entry.key + "=" + entry.value;
+    }
+    out
+  }
+}
+
+extend Record: Clone {
+  function clone(self): Record {
+    Record {
+      level: self.level.clone(),
+      message: self.message,
+      module: self.module,
+      fields: __log_clone_fields(self.fields),
+      time: self.time.clone(),
+    }
+  }
+}
+
+extend Record: Eq {
+  function eq(self, other: Record): bool {
+    self.level.equals(other.level) &&
+    self.message == other.message &&
+    self.module == other.module &&
+    __log_fields_eq(self.fields, other.fields) &&
+    self.time == other.time
+  }
+}
+
+extend Record: Hash {
+  function hash(self): u64 {
+    var h = (self.level.as_str() + "|" + self.message + "|" + self.module + "|" + self.time.as_unix_nanos() as str).hash();
+    (h + __log_fields_hash(self.fields)) % 4294967291u64
+  }
+}
+
+extend Record: ToStr {
+  function to_str(self): str {
+    var prefix = "[" + self.level.as_str() + "]";
+    if self.module != "" {
+      prefix = prefix + " " + self.module + ":";
+    }
+    var line = prefix + " " + self.message;
+    var fields = self.field_string();
+    if fields == "" {
+      line
+    } else {
+      line + " " + fields
+    }
+  }
+}
+
+extend Record: Debug {
+  function debug(self): str {
+    "Record { level: " + self.level.as_str() + ", message: \"" + self.message + "\", module: \"" + self.module + "\", fields: " + self.field_string() + ", time: " + self.time.debug() + " }"
+  }
+}
+
+extend LoggerAlreadySet: Eq {
+  function eq(self, other: LoggerAlreadySet): bool { true }
+}
+
+extend LoggerAlreadySet: Clone {
+  function clone(self): LoggerAlreadySet { LoggerAlreadySet {} }
+}
+
+extend LoggerAlreadySet: Hash {
+  function hash(self): u64 { self.to_str().hash() }
+}
+
+extend LoggerAlreadySet: ToStr {
+  function to_str(self): str { "logger already set" }
+}
+
+extend LoggerAlreadySet: Debug {
+  function debug(self): str { "LoggerAlreadySet" }
+}

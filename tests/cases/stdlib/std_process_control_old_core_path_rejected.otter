@@ -1,0 +1,11 @@
+//@ kind: compile-error
+//@ description: process control belongs to std:process, not core:prelude
+//@ stderr: no `exit` in the imported module
+//@ stderr: no `abort` in the imported module
+
+import { exit, abort } from "core:prelude";
+
+function main() {
+  exit(0i32);
+  abort();
+}

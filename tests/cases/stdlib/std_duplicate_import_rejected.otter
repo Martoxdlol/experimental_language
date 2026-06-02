@@ -1,0 +1,7 @@
+//@ kind: compile-error
+//@ description: duplicate stdlib named imports must be aliased instead of silently overwriting
+//@ stderr: imported name `sleep` collides with another import
+import { sleep } from "std:async";
+import { sleep } from "std:time";
+
+function main() {}

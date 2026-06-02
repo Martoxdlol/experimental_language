@@ -65,6 +65,18 @@
   <strong>allocation</strong> via <code>Foreign.alloc</code>.
 </p>
 
+<div class="callout">
+  <strong>Implementation status</strong>
+  The current <code>core:ffi</code> catalog exports <code>Foreign</code>, <code>CString</code>,
+  <code>CStr</code>, <code>Buffer</code>, C-width aliases (<code>c_int</code>,
+  <code>c_size_t</code>, etc.), <code>c_void</code>, and <code>c_va_list</code>.
+  Layout decorators, raw pointers, extern functions, extern vars, nullable
+  pointer layout, foreign allocation, C strings, buffers, and variadic imports
+  are implemented. Pinning helpers, callback wrapper types, long-lived handles,
+  foreign-thread attach/detach helpers, and FFI bindgen/cbindgen tooling remain
+  planned work until they are added to the stdlib catalog.
+</div>
+
 <div class="toc">
   <strong>Contents</strong>
   <ol>

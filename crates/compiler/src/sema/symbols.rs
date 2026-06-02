@@ -18,6 +18,7 @@ use crate::ids::{DefId, ModId};
 use crate::imports::Scheme;
 use crate::sema::diag::{SemaError, SemaErrorKind};
 use crate::sema::resolve_ctx::ResolveContext;
+use crate::sema::stdlib::StdProvider;
 use crate::span::Span;
 use std::collections::HashMap;
 
@@ -237,113 +238,125 @@ pub struct Program {
     pub defs: Vec<Def>,
     pub modules: Vec<ModuleInfo>,
     pub errors: Vec<SemaError>,
-    /// The builtin `List<T>` type definition (injected by the prelude).
+    /// The compiler-injected `List<T>` type definition.
     pub list_def: DefId,
-    /// The builtin `Map<K, V>` type definition (injected by the prelude).
+    /// The compiler-injected `Map<K, V>` type definition.
     pub map_def: DefId,
-    /// Prelude `struct Item<T>` — the iterator protocol's element wrapper.
+    /// The builtin `Set<T>` type definition (from `core:collections`).
+    pub set_def: DefId,
+    /// `core:prelude::Item<T>` — the iterator protocol's element wrapper.
     pub item_def: DefId,
-    /// Prelude `struct Done` — the iterator protocol's end marker.
+    /// `core:prelude::Done` — the iterator protocol's end marker.
     pub done_def: DefId,
-    /// Prelude `interface Iterator<T>`.
+    /// `core:prelude::Iterator<T>`.
     pub iterator_def: DefId,
-    /// Prelude `struct Entry<K, V>` — yielded by `for entry in map`.
+    /// `core:collections::Entry<K, V>` — yielded by `for entry in map`.
     pub entry_def: DefId,
-    /// Prelude `interface FromResidual<R>` — error conversion for `?` (`docs/13`).
+    /// `core:prelude::FromResidual<R>` — error conversion for `?` (`docs/13`).
     pub from_residual_def: DefId,
-    /// Prelude `interface Try<Output, Residual>` — lets a non-union wrapper type
-    /// participate in `?` (`docs/13` §3): `branch(self)` splits the wrapper into
-    /// its success and failure variants.
+    /// `core:prelude::Try<Output, Residual>` — lets a non-union wrapper type
+    /// participate in `?` (`docs/13` §3): `branch(self)` splits the wrapper
+    /// into its success and failure variants.
     pub try_def: DefId,
-    /// Prelude `interface Clone` — deep-copy entry point (`docs/10`/`docs/15`).
+    /// `core:prelude::Clone` — deep-copy entry point (`docs/10`/`docs/15`).
     pub clone_def: DefId,
-    /// Prelude `interface Drop` — finalizer run before reclamation (`docs/16` §8).
+    /// `core:prelude::Drop` — finalizer run before reclamation (`docs/16` §8).
     pub drop_def: DefId,
-    /// Prelude `struct JoinHandle<R>` — `Thread.spawn`'s result (`docs/20`).
+    /// `std:thread::JoinHandle<R>` — `Thread.spawn`'s result (`docs/20`).
     pub join_handle_def: DefId,
-    /// Prelude `struct TaskJoinHandle<R>` — `Task.spawn`'s result (`docs/20`,
-    /// `docs/21`). Exposed from `std:task` under the public name
-    /// `JoinHandle` so OS-thread handles do not grow task-only cancellation.
+    /// `std:task::JoinHandle<R>` — `Task.spawn`'s result (`docs/20`, `docs/21`).
     pub task_join_handle_def: DefId,
-    /// Prelude `struct Joined<R>` — a worker's value after `join` (`docs/20`).
+    /// `std:thread::Joined<R>` — a worker's value after `join` (`docs/20`).
     pub joined_def: DefId,
-    /// Prelude `struct Panicked` — a worker that panicked (`docs/20`).
+    /// `std:thread::Panicked` — a worker that panicked (`docs/20`).
     pub panicked_def: DefId,
-    /// Prelude `struct Cancelled` — a cooperatively cancelled executor task.
+    /// `std:task::Cancelled` — a cooperatively cancelled executor task.
     pub cancelled_def: DefId,
-    /// Prelude `struct Sender<T>` — a channel's sending end (`docs/20` §2).
+    /// `std:sync::Sender<T>` — a channel's sending end (`docs/20` §2).
     pub sender_def: DefId,
-    /// Prelude `struct Receiver<T>` — a channel's receiving end (`docs/20` §2).
+    /// `std:sync::Receiver<T>` — a channel's receiving end (`docs/20` §2).
     pub receiver_def: DefId,
-    /// Prelude `struct ChannelClosed` — returned by a closed channel.
+    /// `std:sync::ChannelClosed` — returned by a closed channel.
     pub channel_closed_def: DefId,
-    /// Prelude `struct Shared<T>` — a mutex handle (`docs/20` §4).
+    /// `std:sync::Shared<T>` — a mutex handle (`docs/20` §4).
     pub shared_def: DefId,
-    /// Prelude `struct LockBusy` — `try_lock` failure.
+    /// `std:sync::LockBusy` — `try_lock` failure.
     pub lock_busy_def: DefId,
-    /// Prelude `struct Pending` — a future that is not yet ready (`docs/21` §1).
+    /// `core:async::Pending` — a future that is not yet ready (`docs/21` §1).
     pub pending_def: DefId,
-    /// Prelude `struct Ready<T>` — a completed future's value (`docs/21` §1).
+    /// `core:async::Ready<T>` — a completed future's value (`docs/21` §1).
     pub ready_def: DefId,
-    /// Prelude `interface Future<Output>` — the async state-machine shape.
+    /// `core:async::Future<Output>` — the async state-machine shape.
     pub future_def: DefId,
-    /// Prelude `extern struct Context` — carries the waker (`docs/21` §2).
+    /// `core:async::Context` — carries the waker (`docs/21` §2).
     pub context_def: DefId,
-    /// Prelude `interface AsyncIterator<T>` — async streams (`docs/21` §10).
+    /// `core:async::AsyncIterator<T>` — async streams (`docs/21` §10).
     pub async_iterator_def: DefId,
-    /// Prelude `struct TimedOut` — `timeout` loser marker (`docs/21` §9).
+    /// `std:async::TimedOut` — `timeout` loser marker (`docs/21` §9).
     pub timed_out_def: DefId,
-    /// Prelude `interface Eq` — structural equality (`docs/15`); the `T: Eq`
+    /// `core:prelude::Eq` — structural equality (`docs/15`); the `T: Eq`
     /// bound for `@Derive(Eq)` on generic structs.
     pub eq_def: DefId,
-    /// Prelude `interface Ord` — total ordering (`docs/15`); the `T: Ord` bound
-    /// for `@Derive(Ord)` on generic structs.
+    /// `core:prelude::Ord` — total ordering (`docs/15`); the `T: Ord` bound for
+    /// `@Derive(Ord)` on generic structs.
     pub ord_def: DefId,
-    /// Prelude `interface ToStr` — string rendering (`docs/15`/`docs/01` §8);
-    /// the `T: ToStr` bound for `@Derive(ToStr)` on generic structs.
+    /// `core:prelude::ToStr` — string rendering (`docs/15`/`docs/01` §8); the
+    /// `T: ToStr` bound for `@Derive(ToStr)` on generic structs.
     pub to_str_def: DefId,
-    /// Prelude `interface Hash` — structural hashing (`docs/15` §7); the `T: Hash`
-    /// bound for `@Derive(Hash)` on generic structs and for `Map<K, V>` keys.
+    /// `core:prelude::Hash` — structural hashing (`docs/15` §7); the
+    /// `T: Hash` bound for `@Derive(Hash)` on generic structs and for
+    /// `Map<K, V>` keys.
     pub hash_def: DefId,
-    /// Prelude `struct MapKeys<K>` — the `Iterator<K>` returned by `Map.keys()`
+    /// Toolchain-private `MapKeys<K>` — the `Iterator<K>` returned by `Map.keys()`
     /// (`docs/18` §6). Holds a snapshot `List<K>` of the keys at call time.
     pub map_keys_def: DefId,
-    /// Prelude `struct MapValues<V>` — the `Iterator<V>` returned by
+    /// Toolchain-private `MapValues<V>` — the `Iterator<V>` returned by
     /// `Map.values()`. Holds a snapshot `List<V>` of the values at call time.
     pub map_values_def: DefId,
-    /// Prelude `struct MapEntries<K, V>` — the `Iterator<Entry<K, V>>` returned
-    /// by `Map.entries()`. Holds a reference to the map plus a snapshot of its
-    /// keys; values are looked up lazily as each `next()` runs.
+    /// Toolchain-private `MapEntries<K, V>` — the `Iterator<Entry<K, V>>`
+    /// returned by `Map.entries()`. Holds a reference to the map plus a snapshot
+    /// of its keys; values are looked up lazily as each `next()` runs.
     pub map_entries_def: DefId,
-    /// Prelude `struct ListIter<T>` — the `Iterator<T>` returned by `List.iter()`
-    /// (`docs/18` §5). Holds the live list plus a cursor (reads through to the
-    /// list, so it is a view, not a snapshot).
+    /// Toolchain-private `ListIter<T>` — the `Iterator<T>` returned by
+    /// `List.iter()` (`docs/18` §5). Holds the live list plus a cursor (reads
+    /// through to the list, so it is a view, not a snapshot).
     pub list_iter_def: DefId,
-    /// Prelude `struct StrChars` — the `Iterator<char>` returned by `str.chars()`
-    /// (`docs/18` §4). Holds a snapshot `List<char>` of the string's Unicode
-    /// scalars at call time.
+    /// Toolchain-private `StrChars` — the `Iterator<char>` returned by
+    /// `str.chars()` (`docs/18` §4). Holds a snapshot `List<char>` of the
+    /// string's Unicode scalars at call time.
     pub str_chars_def: DefId,
-    /// Prelude `struct StrBytes` — the `Iterator<u8>` returned by `str.bytes()`.
-    /// Holds a snapshot `List<u8>` of the string's UTF-8 bytes at call time.
+    /// Toolchain-private `StrBytes` — the `Iterator<u8>` returned by
+    /// `str.bytes()`. Holds a snapshot `List<u8>` of the string's UTF-8 bytes at
+    /// call time.
     pub str_bytes_def: DefId,
-    /// Names the language prelude + builtins put in *every* module's scope
-    /// (`List`, `Map`, `Item`, `Done`, `Iterator`, `Entry`, …), so a submodule
-    /// resolves them without an `import`. Snapshotted from the root after the
-    /// prelude is collected. Type and value namespaces.
+    /// Names that are implicitly visible in every module.
+    ///
+    /// This is intentionally empty today. `core:prelude` is a compiler
+    /// desugaring table and an explicit import target, not a bag of names made
+    /// visible by default (`docs/17` §17.8). Keep these maps empty unless the
+    /// language design deliberately adds a real universal prelude.
     pub prelude_types: HashMap<String, DefId>,
     pub prelude_values: HashMap<String, DefId>,
-    /// A synthetic module aggregating the toolchain (`core:`/`std:`) surface,
-    /// against which explicit `core:`/`std:` imports resolve. The partition
-    /// into named submodules (`core:collections`, `std:io`, …) lands with the
-    /// prelude split (`docs/17` §17.8); until then this is the resolution
-    /// target for every toolchain import.
+    /// A synthetic module aggregating the toolchain (`core:`/`std:`) definitions
+    /// before the catalog builds curated public import views over them.
     pub builtin_module: ModId,
     /// The named toolchain modules: `["core","collections"]` → its module, etc.
     /// Each is a curated view over `__builtins__` exposing exactly the names
     /// that module publishes (`docs/17` §17.8). `core:`/`std:` imports resolve
     /// against these.
     pub builtin_modules: HashMap<Vec<String>, ModId>,
-    /// The prelude marker functions (`print`/`println`/`panic`/…) → the builtin
+    /// Hidden modules that own the bundled Otter-authored toolchain source.
+    ///
+    /// The previous bootstrap collected every source file into `__builtins__`.
+    /// That made all `std:*` modules share one namespace, so ordinary names like
+    /// `sleep` could not exist in both `std:async` and `std:time`. Source files
+    /// now live in module-local hidden owners and [`Self::builtin_modules`]
+    /// exposes provider-selected public views over those owners.
+    pub builtin_source_modules: HashMap<Vec<String>, ModId>,
+    /// Name of the provider that built [`Self::builtin_modules`]. Used for
+    /// diagnostics when a known toolchain module is absent from that provider.
+    pub std_provider_name: String,
+    /// Toolchain marker functions (`print`/`println`/`panic`/…) → the builtin
     /// they dispatch to. A call whose callee resolves to one of these `DefId`s
     /// lowers to the builtin intrinsic, so the names are ordinary importable
     /// symbols (`docs/17` §17.8) rather than magic.
@@ -356,268 +369,6 @@ pub struct Program {
     /// A `file:` import resolves into this module's public surface.
     pub file_modules: HashMap<std::path::PathBuf, ModId>,
 }
-
-/// Compiler-provided prelude written in the language itself (`docs/18` §7–8).
-/// Parsed and collected into the root module before user items. Kept minimal;
-/// `List`/`Map` remain special-cased builtins (their storage is intrinsic).
-const PRELUDE_SRC: &str = "\
-struct Item<T> { value: T }
-struct Done {}
-interface Iterator<T> {
-  function next(self): Item<T> | Done;
-}
-struct Entry<K, V> { key: K, value: V }
-interface FromResidual<R> {
-  function from_residual(r: R): Self;
-}
-interface Try<Output, Residual> {
-  function branch(self): Output | Residual;
-}
-interface Clone {
-  function clone(self): Self;
-}
-interface Eq {
-  function eq(self, other: Self): bool;
-}
-interface Ord {
-  function lt(self, other: Self): bool;
-  function le(self, other: Self): bool;
-  function gt(self, other: Self): bool;
-  function ge(self, other: Self): bool;
-}
-interface ToStr {
-  function to_str(self): str;
-}
-interface Hash {
-  function hash(self): u64;
-}
-struct ListIter<T> { list: List<T>, index: i64 }
-extend<T> ListIter<T>: Iterator<T> {
-  function next(self): Item<T> | Done {
-    if self.index >= self.list.size() {
-      Done {}
-    } else {
-      var v = self.list[self.index];
-      self.index = self.index + 1;
-      Item { value: v }
-    }
-  }
-}
-struct MapKeys<K> { snapshot: List<K>, index: i64 }
-struct MapValues<V> { snapshot: List<V>, index: i64 }
-struct MapEntries<K, V> { map: Map<K, V>, keys: List<K>, index: i64 }
-extend<K> MapKeys<K>: Iterator<K> {
-  function next(self): Item<K> | Done {
-    if self.index >= self.snapshot.size() {
-      Done {}
-    } else {
-      var v = self.snapshot[self.index];
-      self.index = self.index + 1;
-      Item { value: v }
-    }
-  }
-}
-extend<V> MapValues<V>: Iterator<V> {
-  function next(self): Item<V> | Done {
-    if self.index >= self.snapshot.size() {
-      Done {}
-    } else {
-      var v = self.snapshot[self.index];
-      self.index = self.index + 1;
-      Item { value: v }
-    }
-  }
-}
-extend<K, V> MapEntries<K, V>: Iterator<Entry<K, V>> {
-  function next(self): Item<Entry<K, V>> | Done {
-    if self.index >= self.keys.size() {
-      Done {}
-    } else {
-      var k = self.keys[self.index];
-      self.index = self.index + 1;
-      var v = self.map[k];
-      Item { value: Entry { key: k, value: v } }
-    }
-  }
-}
-struct StrChars { snapshot: List<char>, index: i64 }
-struct StrBytes { snapshot: List<u8>, index: i64 }
-extend StrChars: Iterator<char> {
-  function next(self): Item<char> | Done {
-    if self.index >= self.snapshot.size() {
-      Done {}
-    } else {
-      var v = self.snapshot[self.index];
-      self.index = self.index + 1;
-      Item { value: v }
-    }
-  }
-}
-extend StrBytes: Iterator<u8> {
-  function next(self): Item<u8> | Done {
-    if self.index >= self.snapshot.size() {
-      Done {}
-    } else {
-      var v = self.snapshot[self.index];
-      self.index = self.index + 1;
-      Item { value: v }
-    }
-  }
-}
-interface Drop {
-  function drop(self);
-}
-struct JoinHandle<R> { id: i64 }
-struct TaskJoinHandle<R> { id: i64 }
-struct Joined<R> { value: R }
-struct Panicked { message: str }
-struct Cancelled {}
-struct Sender<T> { chan: i64 }
-struct Receiver<T> { chan: i64 }
-struct ChannelClosed {}
-struct Shared<T> { id: i64 }
-struct LockBusy {}
-struct Pending {}
-struct Ready<T> { value: T }
-extern struct Context {
-  waker_data: *u8,
-  wake_fn: extern (*u8) => null,
-}
-interface Future<Output> {
-  function poll(self, ctx: *Context): Ready<Output> | Pending;
-}
-interface AsyncIterator<T> {
-  function next_async(self): Future<Item<T> | Done>;
-}
-struct TimedOut {}
-struct Set<T> {}
-struct MpmcSender<T> { chan: i64 }
-struct MpmcReceiver<T> { chan: i64 }
-struct Thread {}
-struct Task {}
-struct Foreign {}
-@RefCounted
-struct CString { ptr: *u8 }
-extern struct CStr { ptr: *u8 }
-extern struct Buffer { data: *u8, size: u64 }
-extern function lang_cstring_from_str(s: str): *u8;
-extern function lang_cstr_to_str(p: *u8): str;
-extern function lang_cstr_len(p: *u8): u64;
-extern function lang_foreign_alloc(size: u64): *u8 | null;
-extern function lang_foreign_free(p: *u8);
-extern function lang_buffer_read(data: *u8, i: u64): u8;
-extern function lang_buffer_write(data: *u8, i: u64, v: u8);
-extend CString {
-  function from_str(s: str): CString { CString { ptr: lang_cstring_from_str(s) } }
-  function as_ptr(self): *u8 { self.ptr }
-  function as_cstr(self): CStr { CStr { ptr: self.ptr } }
-  function byte_len(self): u64 { lang_cstr_len(self.ptr) }
-  function to_str(self): str { lang_cstr_to_str(self.ptr) }
-}
-extend CString: Drop {
-  function drop(self) { lang_foreign_free(self.ptr); }
-}
-extend CStr {
-  function from_ptr(p: *u8): CStr { CStr { ptr: p } }
-  function byte_len(self): u64 { lang_cstr_len(self.ptr) }
-  function to_str(self): str { lang_cstr_to_str(self.ptr) }
-}
-extend Buffer {
-  function alloc(size: u64): Buffer | null {
-    var p = lang_foreign_alloc(size);
-    if p is null { null } else { Buffer { data: p, size: size } }
-  }
-  function get(self, i: u64): u8 | null {
-    if i >= self.size { null } else { lang_buffer_read(self.data, i) }
-  }
-  function set(self, i: u64, v: u8) {
-    if i < self.size { lang_buffer_write(self.data, i, v); }
-  }
-  function free(self) { lang_foreign_free(self.data); }
-}
-function print(s: str) {}
-function println(s: str) {}
-function panic(msg: str) {}
-function panic_with<T>(value: T) {}
-function exit(code: i32) {}
-function abort() {}
-function channel() {}
-function channel_bounded() {}
-function channel_mpmc() {}
-function channel_mpmc_bounded() {}
-function yield_now() {}
-function sleep(ms: i64) {}
-function timeout() {}
-struct Span { raw: i64 }
-struct ASTNode { handle: i64 }
-struct MacroContext { ctx: i64 }
-extern function __ast_kind(h: i64): str;
-extern function __ast_text(h: i64): str;
-extern function __ast_name(h: i64): str;
-extern function __ast_field_count(h: i64): i64;
-extern function __ast_field_name(h: i64, i: i64): str;
-extern function __ast_span(h: i64): i64;
-extern function __ast_is_record(h: i64): i64;
-extern function __ast_is_tuple(h: i64): i64;
-extern function __ast_is_unit(h: i64): i64;
-extern function __ast_error_marker(): i64;
-extern function __mctx_invocation_span(c: i64): i64;
-extern function __mctx_arg_count(c: i64): i64;
-extern function __mctx_arg(c: i64, i: i64): i64;
-extern function __mctx_kwarg(c: i64, name: str): i64;
-extern function __mctx_kwarg_has(c: i64, name: str): i64;
-extern function __mctx_error(c: i64, span: i64, msg: str);
-extern function __mctx_warn(c: i64, span: i64, msg: str);
-extern function __mctx_note(c: i64, span: i64, msg: str);
-extern function __mctx_fresh_ident(c: i64, hint: str): i64;
-extern function __mctx_unhygienic(c: i64, name: str): i64;
-extern function __mctx_parse_item(c: i64, src: str): i64;
-extern function __mctx_parse_items(c: i64, src: str): i64;
-extern function __mctx_parse_expr(c: i64, src: str): i64;
-extern function __mctx_parse_block(c: i64, src: str): i64;
-extern function __mctx_node_text(h: i64): str;
-extend Span {
-  function eq(self, other: Span): bool { self.raw == other.raw }
-}
-extend ASTNode {
-  function kind(self): str { __ast_kind(self.handle) }
-  function text(self): str { __ast_text(self.handle) }
-  function name(self): str { __ast_name(self.handle) }
-  function field_count(self): i64 { __ast_field_count(self.handle) }
-  function field_name(self, i: i64): str { __ast_field_name(self.handle, i) }
-  function is_record(self): bool { __ast_is_record(self.handle) != 0 }
-  function is_tuple(self): bool { __ast_is_tuple(self.handle) != 0 }
-  function is_unit(self): bool { __ast_is_unit(self.handle) != 0 }
-  function span(self): Span { Span { raw: __ast_span(self.handle) } }
-  function error_marker(): ASTNode { ASTNode { handle: __ast_error_marker() } }
-}
-extend MacroContext {
-  function invocation_span(self): Span { Span { raw: __mctx_invocation_span(self.ctx) } }
-  function arg_count(self): i64 { __mctx_arg_count(self.ctx) }
-  function arg(self, i: i64): ASTNode { ASTNode { handle: __mctx_arg(self.ctx, i) } }
-  function args(self): List<ASTNode> {
-    var out = List<ASTNode>();
-    var n = __mctx_arg_count(self.ctx);
-    var i = 0;
-    while (i < n) {
-      out.push(ASTNode { handle: __mctx_arg(self.ctx, i) });
-      i = i + 1;
-    }
-    out
-  }
-  function has_kwarg(self, name: str): bool { __mctx_kwarg_has(self.ctx, name) != 0 }
-  function kwarg(self, name: str): ASTNode { ASTNode { handle: __mctx_kwarg(self.ctx, name) } }
-  function error(self, span: Span, msg: str) { __mctx_error(self.ctx, span.raw, msg); }
-  function warn(self, span: Span, msg: str) { __mctx_warn(self.ctx, span.raw, msg); }
-  function note(self, span: Span, msg: str) { __mctx_note(self.ctx, span.raw, msg); }
-  function fresh_ident(self, hint: str): ASTNode { ASTNode { handle: __mctx_fresh_ident(self.ctx, hint) } }
-  function unhygienic(self, name: str): ASTNode { ASTNode { handle: __mctx_unhygienic(self.ctx, name) } }
-  function parse_item(self, src: str): ASTNode { ASTNode { handle: __mctx_parse_item(self.ctx, src) } }
-  function parse_items(self, src: str): ASTNode { ASTNode { handle: __mctx_parse_items(self.ctx, src) } }
-  function parse_expr(self, src: str): ASTNode { ASTNode { handle: __mctx_parse_expr(self.ctx, src) } }
-  function parse_block(self, src: str): ASTNode { ASTNode { handle: __mctx_parse_block(self.ctx, src) } }
-}
-";
 
 impl Default for Program {
     fn default() -> Self {
@@ -634,6 +385,7 @@ impl Program {
             errors: Vec::new(),
             list_def: DefId(0),
             map_def: DefId(0),
+            set_def: DefId(0),
             item_def: DefId(0),
             done_def: DefId(0),
             iterator_def: DefId(0),
@@ -672,6 +424,8 @@ impl Program {
             prelude_values: HashMap::new(),
             builtin_module: ModId::ROOT,
             builtin_modules: HashMap::new(),
+            builtin_source_modules: HashMap::new(),
+            std_provider_name: "builtin".into(),
             builtin_fns: HashMap::new(),
             package_roots: HashMap::new(),
             file_modules: HashMap::new(),
@@ -702,19 +456,37 @@ impl Program {
         externals: &Externals,
         ctx: &ResolveContext,
     ) -> Program {
+        let provider = crate::sema::stdlib::active_provider();
+        Self::collect_multi_ctx_with_provider(root, externals, ctx, &provider)
+    }
+
+    /// As [`Self::collect_multi_ctx`], but with an explicit stdlib provider.
+    ///
+    /// The CLI still selects the built-in provider today, but keeping semantic
+    /// collection parameterized here lets future target/sysroot configuration
+    /// replace, omit, or extend `std:*` views without changing import syntax or
+    /// the rest of module resolution.
+    pub fn collect_multi_ctx_with_provider(
+        root: &Module,
+        externals: &Externals,
+        ctx: &ResolveContext,
+        provider: &dyn StdProvider,
+    ) -> Program {
         let mut p = Program::new();
-        // The prelude lives in its own `__builtins__` module — *not* `ROOT` — so
-        // its names do not pollute user scope (`docs/17` §17.8: every named
+        p.std_provider_name = provider.name().to_string();
+        // Toolchain definitions live in `__builtins__` — *not* `ROOT` — so
+        // their names do not pollute user scope (`docs/17` §17.8: every named
         // symbol requires an import). Built-in *syntax* still resolves via the
-        // stored prelude `DefId`s, and the prelude's own `extend` blocks are
-        // scanned program-wide by method resolution.
+        // stored core `DefId`s, and toolchain `extend` blocks are scanned
+        // program-wide by method resolution.
         let builtins = p.new_module("__builtins__".into(), ModId::ROOT, true);
         p.builtin_module = builtins;
         p.inject_builtins(builtins);
-        p.collect_prelude(builtins);
-        p.build_builtin_views();
+        p.collect_toolchain_source(builtins);
+        p.build_toolchain_internal_imports();
+        p.build_builtin_views(provider);
         // Near-empty prelude (`docs/17` §17.8): built-in *syntax* resolves via
-        // the stored prelude `DefId`s, but no built-in *name* is universally
+        // the stored toolchain `DefId`s, but no built-in *name* is universally
         // visible — every named symbol (`List`, `Map`, `print`, `panic`, …) must
         // be imported. The universal-visibility maps stay empty.
         p.collect_items(ModId::ROOT, &root.items, externals, &[]);
@@ -745,70 +517,203 @@ impl Program {
         p
     }
 
-    /// Lex, parse, and collect [`PRELUDE_SRC`] into the root module. The prelude
-    /// uses a dedicated `FileId` so its spans never collide with user source.
-    fn collect_prelude(&mut self, target: ModId) {
-        let file = crate::span::FileId(u32::MAX);
-        let (tokens, lex_errs) = crate::lexer::lex(PRELUDE_SRC, file);
-        debug_assert!(lex_errs.is_empty(), "prelude lex errors: {lex_errs:?}");
-        let (module, parse_errs) = crate::parser::parse(PRELUDE_SRC, &tokens);
-        debug_assert!(
-            parse_errs.is_empty(),
-            "prelude parse errors: {parse_errs:?}"
-        );
-        // The prelude has no file-backed submodules.
-        self.collect_items(target, &module.items, &Externals::new(), &[]);
-        let types = &self.modules[target.index()].types;
-        self.item_def = types.get("Item").copied().unwrap_or(DefId(0));
-        self.done_def = types.get("Done").copied().unwrap_or(DefId(0));
-        self.iterator_def = types.get("Iterator").copied().unwrap_or(DefId(0));
-        self.entry_def = types.get("Entry").copied().unwrap_or(DefId(0));
-        self.from_residual_def = types.get("FromResidual").copied().unwrap_or(DefId(0));
-        self.try_def = types.get("Try").copied().unwrap_or(DefId(0));
-        self.clone_def = types.get("Clone").copied().unwrap_or(DefId(0));
-        self.drop_def = types.get("Drop").copied().unwrap_or(DefId(0));
-        self.join_handle_def = types.get("JoinHandle").copied().unwrap_or(DefId(0));
-        self.task_join_handle_def = types.get("TaskJoinHandle").copied().unwrap_or(DefId(0));
-        self.joined_def = types.get("Joined").copied().unwrap_or(DefId(0));
-        self.panicked_def = types.get("Panicked").copied().unwrap_or(DefId(0));
-        self.cancelled_def = types.get("Cancelled").copied().unwrap_or(DefId(0));
-        self.sender_def = types.get("Sender").copied().unwrap_or(DefId(0));
-        self.receiver_def = types.get("Receiver").copied().unwrap_or(DefId(0));
-        self.channel_closed_def = types.get("ChannelClosed").copied().unwrap_or(DefId(0));
-        self.shared_def = types.get("Shared").copied().unwrap_or(DefId(0));
-        self.lock_busy_def = types.get("LockBusy").copied().unwrap_or(DefId(0));
-        self.pending_def = types.get("Pending").copied().unwrap_or(DefId(0));
-        self.ready_def = types.get("Ready").copied().unwrap_or(DefId(0));
-        self.future_def = types.get("Future").copied().unwrap_or(DefId(0));
-        self.context_def = types.get("Context").copied().unwrap_or(DefId(0));
-        self.async_iterator_def = types.get("AsyncIterator").copied().unwrap_or(DefId(0));
-        self.timed_out_def = types.get("TimedOut").copied().unwrap_or(DefId(0));
-        self.eq_def = types.get("Eq").copied().unwrap_or(DefId(0));
-        self.ord_def = types.get("Ord").copied().unwrap_or(DefId(0));
-        self.to_str_def = types.get("ToStr").copied().unwrap_or(DefId(0));
-        self.hash_def = types.get("Hash").copied().unwrap_or(DefId(0));
-        self.map_keys_def = types.get("MapKeys").copied().unwrap_or(DefId(0));
-        self.map_values_def = types.get("MapValues").copied().unwrap_or(DefId(0));
-        self.map_entries_def = types.get("MapEntries").copied().unwrap_or(DefId(0));
-        self.list_iter_def = types.get("ListIter").copied().unwrap_or(DefId(0));
-        self.str_chars_def = types.get("StrChars").copied().unwrap_or(DefId(0));
-        self.str_bytes_def = types.get("StrBytes").copied().unwrap_or(DefId(0));
+    /// Lex, parse, and collect the bundled toolchain source files into hidden
+    /// module-local owners under `__builtins__`. The toolchain source uses high
+    /// synthetic `FileId`s so its spans never collide with user source or
+    /// macro-generated files.
+    fn collect_toolchain_source(&mut self, target: ModId) {
+        for (index, spec) in crate::sema::stdlib::TOOLCHAIN_SOURCES.iter().enumerate() {
+            let file = crate::span::FileId(u32::MAX - index as u32);
+            let (tokens, lex_errs) = crate::lexer::lex(spec.source, file);
+            debug_assert!(
+                lex_errs.is_empty(),
+                "toolchain stdlib lex errors in {:?}: {lex_errs:?}",
+                spec.path
+            );
+            let (module, parse_errs) = crate::parser::parse(spec.source, &tokens);
+            debug_assert!(
+                parse_errs.is_empty(),
+                "toolchain stdlib parse errors in {:?}: {parse_errs:?}",
+                spec.path
+            );
+            // The bundled toolchain source has no file-backed submodules yet.
+            let source_module =
+                self.new_module(format!("__src_{}", spec.path.join("_")), target, true);
+            let path: Vec<String> = spec.path.iter().map(|s| s.to_string()).collect();
+            self.modules[source_module.index()].path = path.clone();
+            self.collect_items(source_module, &module.items, &Externals::new(), &path);
+            self.builtin_source_modules.insert(path, source_module);
+        }
+        self.item_def = self.toolchain_type("Item").unwrap_or(DefId(0));
+        self.done_def = self.toolchain_type("Done").unwrap_or(DefId(0));
+        self.iterator_def = self.toolchain_type("Iterator").unwrap_or(DefId(0));
+        self.entry_def = self.toolchain_type("Entry").unwrap_or(DefId(0));
+        self.from_residual_def = self.toolchain_type("FromResidual").unwrap_or(DefId(0));
+        self.try_def = self.toolchain_type("Try").unwrap_or(DefId(0));
+        self.clone_def = self.toolchain_type("Clone").unwrap_or(DefId(0));
+        self.drop_def = self.toolchain_type("Drop").unwrap_or(DefId(0));
+        self.join_handle_def = self
+            .toolchain_source_type(&["std", "thread"], "JoinHandle")
+            .unwrap_or(DefId(0));
+        self.task_join_handle_def = self
+            .toolchain_source_type(&["std", "task"], "JoinHandle")
+            .unwrap_or(DefId(0));
+        self.joined_def = self.toolchain_type("Joined").unwrap_or(DefId(0));
+        self.panicked_def = self.toolchain_type("Panicked").unwrap_or(DefId(0));
+        self.cancelled_def = self
+            .toolchain_source_type(&["std", "task"], "Cancelled")
+            .unwrap_or(DefId(0));
+        self.sender_def = self.toolchain_type("Sender").unwrap_or(DefId(0));
+        self.receiver_def = self.toolchain_type("Receiver").unwrap_or(DefId(0));
+        self.channel_closed_def = self.toolchain_type("ChannelClosed").unwrap_or(DefId(0));
+        self.shared_def = self.toolchain_type("Shared").unwrap_or(DefId(0));
+        self.lock_busy_def = self.toolchain_type("LockBusy").unwrap_or(DefId(0));
+        self.pending_def = self.toolchain_type("Pending").unwrap_or(DefId(0));
+        self.ready_def = self.toolchain_type("Ready").unwrap_or(DefId(0));
+        self.future_def = self.toolchain_type("Future").unwrap_or(DefId(0));
+        self.context_def = self.toolchain_type("Context").unwrap_or(DefId(0));
+        self.async_iterator_def = self.toolchain_type("AsyncIterator").unwrap_or(DefId(0));
+        self.timed_out_def = self.toolchain_type("TimedOut").unwrap_or(DefId(0));
+        self.eq_def = self.toolchain_type("Eq").unwrap_or(DefId(0));
+        self.ord_def = self.toolchain_type("Ord").unwrap_or(DefId(0));
+        self.to_str_def = self.toolchain_type("ToStr").unwrap_or(DefId(0));
+        self.hash_def = self.toolchain_type("Hash").unwrap_or(DefId(0));
+        self.set_def = self.toolchain_type("Set").unwrap_or(DefId(0));
+        self.map_keys_def = self.toolchain_type("MapKeys").unwrap_or(DefId(0));
+        self.map_values_def = self.toolchain_type("MapValues").unwrap_or(DefId(0));
+        self.map_entries_def = self.toolchain_type("MapEntries").unwrap_or(DefId(0));
+        self.list_iter_def = self.toolchain_type("ListIter").unwrap_or(DefId(0));
+        self.str_chars_def = self.toolchain_type("StrChars").unwrap_or(DefId(0));
+        self.str_bytes_def = self.toolchain_type("StrBytes").unwrap_or(DefId(0));
         // Map the marker functions to their builtin intrinsics. A call resolving
         // to one of these defs lowers to the builtin (`docs/14`, `docs/24`).
         use crate::sema::results::Builtin;
-        let values = self.modules[target.index()].values.clone();
         for (name, b) in [
             ("print", Builtin::Print),
             ("println", Builtin::Println),
+            ("eprint", Builtin::Eprint),
+            ("eprintln", Builtin::Eprintln),
             ("panic", Builtin::Panic),
             ("panic_with", Builtin::PanicWith),
             ("exit", Builtin::Exit),
             ("abort", Builtin::Abort),
         ] {
-            if let Some(d) = values.get(name).copied() {
+            if let Some(d) = self.toolchain_value(name) {
                 self.builtin_fns.insert(d, b);
             }
         }
+    }
+
+    /// Make bundled stdlib source modules see the unique toolchain symbols they
+    /// depend on (`Eq`, `List`, `IoError`, `Debug`, …) without merging all source
+    /// files into one namespace. Ambiguous duplicate names are deliberately not
+    /// imported; a source file that needs one must use its own local definition
+    /// or grow explicit internal imports later.
+    fn build_toolchain_internal_imports(&mut self) {
+        fn record(table: &mut HashMap<String, Option<DefId>>, name: &str, def: DefId) {
+            match table.get_mut(name) {
+                Some(slot) => {
+                    if slot.is_some_and(|existing| existing != def) {
+                        *slot = None;
+                    }
+                }
+                None => {
+                    table.insert(name.to_string(), Some(def));
+                }
+            }
+        }
+
+        let mut types: HashMap<String, Option<DefId>> = HashMap::new();
+        let mut values: HashMap<String, Option<DefId>> = HashMap::new();
+        for (name, def) in &self.modules[self.builtin_module.index()].types {
+            record(&mut types, name, *def);
+        }
+        for (name, def) in &self.modules[self.builtin_module.index()].values {
+            record(&mut values, name, *def);
+        }
+        let source_modules: Vec<ModId> = self.builtin_source_modules.values().copied().collect();
+        for module in &source_modules {
+            for (name, def) in &self.modules[module.index()].types {
+                record(&mut types, name, *def);
+            }
+            for (name, def) in &self.modules[module.index()].values {
+                record(&mut values, name, *def);
+            }
+        }
+        let unique_types: Vec<(String, DefId)> = types
+            .into_iter()
+            .filter_map(|(name, def)| def.map(|def| (name, def)))
+            .collect();
+        let unique_values: Vec<(String, DefId)> = values
+            .into_iter()
+            .filter_map(|(name, def)| def.map(|def| (name, def)))
+            .collect();
+        for module in source_modules {
+            for (name, def) in &unique_types {
+                if !self.modules[module.index()].types.contains_key(name) {
+                    self.modules[module.index()]
+                        .imported_types
+                        .entry(name.clone())
+                        .or_insert(*def);
+                }
+            }
+            for (name, def) in &unique_values {
+                if !self.modules[module.index()].values.contains_key(name) {
+                    self.modules[module.index()]
+                        .imported_values
+                        .entry(name.clone())
+                        .or_insert(*def);
+                }
+            }
+        }
+    }
+
+    fn toolchain_type(&self, name: &str) -> Option<DefId> {
+        self.modules[self.builtin_module.index()]
+            .types
+            .get(name)
+            .copied()
+            .or_else(|| self.unique_source_type(name))
+    }
+
+    fn toolchain_value(&self, name: &str) -> Option<DefId> {
+        self.modules[self.builtin_module.index()]
+            .values
+            .get(name)
+            .copied()
+            .or_else(|| self.unique_source_value(name))
+    }
+
+    fn toolchain_source_type(&self, path: &[&str], name: &str) -> Option<DefId> {
+        let path: Vec<String> = path.iter().map(|seg| (*seg).to_string()).collect();
+        let module = self.builtin_source_modules.get(&path).copied()?;
+        self.modules[module.index()].types.get(name).copied()
+    }
+
+    fn unique_source_type(&self, name: &str) -> Option<DefId> {
+        let mut found = None;
+        for module in self.builtin_source_modules.values().copied() {
+            if let Some(def) = self.modules[module.index()].types.get(name).copied() {
+                if found.is_some_and(|existing| existing != def) {
+                    return None;
+                }
+                found = Some(def);
+            }
+        }
+        found
+    }
+
+    fn unique_source_value(&self, name: &str) -> Option<DefId> {
+        let mut found = None;
+        for module in self.builtin_source_modules.values().copied() {
+            if let Some(def) = self.modules[module.index()].values.get(name).copied() {
+                if found.is_some_and(|existing| existing != def) {
+                    return None;
+                }
+                found = Some(def);
+            }
+        }
+        found
     }
 
     /// Whether `def` is a method of the `core:compiler` macro-authoring surface
@@ -838,112 +743,175 @@ impl Program {
         self.builtin_fns.get(&def).copied()
     }
 
-    /// Whether `def` is a toolchain (prelude/`core:`/`std:`) definition — it
-    /// lives in `__builtins__`. Used to tell an *imported* builtin name apart
-    /// from a *user* shadow when recognizing built-in intrinsics.
+    /// Whether `def` is a toolchain (`core:`/`std:`) definition — it lives in
+    /// `__builtins__`. Used to tell an *imported* builtin name apart from a
+    /// *user* shadow when recognizing built-in intrinsics.
     pub fn is_builtin_def(&self, def: DefId) -> bool {
-        self.defs[def.index()].module == self.builtin_module
+        self.is_builtin_module(self.defs[def.index()].module)
+    }
+
+    fn is_builtin_module(&self, module: ModId) -> bool {
+        module == self.builtin_module
+            || self
+                .builtin_source_modules
+                .values()
+                .any(|source| *source == module)
+    }
+
+    fn is_builtin_view_module(&self, module: ModId) -> bool {
+        self.builtin_modules.values().any(|view| *view == module)
     }
 
     /// Build the curated `core:`/`std:` module views over `__builtins__`
     /// (`docs/17` §17.8). Each view exposes exactly the names that module
     /// publishes; internal iterator adapters (`ListIter`, `MapKeys`, …) are not
-    /// exposed. `print`/`println`/`panic`/etc. are added by [`Self::add_builtin_fns`].
-    fn build_builtin_views(&mut self) {
-        // (path, names) — each name is copied from `__builtins__` in whichever
-        // namespace(s) it occupies (a unit struct is both a type and a value).
-        const VIEWS: &[(&[&str], &[&str])] = &[
-            (
-                &["core", "prelude"],
-                &[
-                    "Iterator",
-                    "Item",
-                    "Done",
-                    "FromResidual",
-                    "Try",
-                    "Clone",
-                    "Drop",
-                    "Eq",
-                    "Ord",
-                    "ToStr",
-                    "Hash",
-                    "Future",
-                    "Ready",
-                    "Pending",
-                    "Context",
-                    "panic",
-                    "panic_with",
-                    "exit",
-                    "abort",
-                ],
-            ),
-            (&["core", "collections"], &["List", "Map", "Set", "Entry"]),
-            (&["core", "ffi"], &["Foreign", "CString", "CStr", "Buffer"]),
-            (&["std", "io"], &["print", "println"]),
-            (
-                &["std", "thread"],
-                &["Thread", "JoinHandle", "Joined", "Panicked"],
-            ),
-            (
-                &["std", "task"],
-                &["Task", "TaskJoinHandle", "Joined", "Panicked", "Cancelled"],
-            ),
-            (
-                &["std", "sync"],
-                &[
-                    "Sender",
-                    "Receiver",
-                    "ChannelClosed",
-                    "Shared",
-                    "LockBusy",
-                    "MpmcSender",
-                    "MpmcReceiver",
-                    "channel",
-                    "channel_bounded",
-                    "channel_mpmc",
-                    "channel_mpmc_bounded",
-                ],
-            ),
-            (
-                &["std", "async"],
-                &["AsyncIterator", "TimedOut", "yield_now", "sleep", "timeout"],
-            ),
-            // Procedural-macro authoring surface (`docs/22`). Imported by
-            // `@ProcMacro` functions; the methods are backed by host functions
-            // registered into the macro JIT (`crates/macros`).
-            (&["core", "compiler"], &["MacroContext", "ASTNode", "Span"]),
-        ];
-        let b = self.builtin_module.index();
-        for (path, names) in VIEWS {
-            let path_vec: Vec<String> = path.iter().map(|s| s.to_string()).collect();
-            let leaf = path.last().copied().unwrap_or("");
-            let view = self.new_module(format!("__view_{}", path.join("_")), ModId::ROOT, true);
-            for name in *names {
-                let public_name = if *path == ["std", "task"] && *name == "TaskJoinHandle" {
-                    "JoinHandle"
-                } else {
-                    *name
-                };
-                if let Some(d) = self.modules[b].types.get(*name).copied() {
-                    self.modules[view.index()]
-                        .types
-                        .insert(public_name.to_string(), d);
+    /// exposed. Module metadata lives in `sema::stdlib` so future target std
+    /// providers can replace or extend this catalog in one place.
+    fn build_builtin_views(&mut self, provider: &dyn StdProvider) {
+        let span = Span::new(
+            crate::span::FileId(0),
+            crate::span::BytePos(0),
+            crate::span::BytePos(0),
+        );
+        let mut seen_paths = std::collections::HashSet::new();
+        for spec in provider.modules() {
+            let path_vec: Vec<String> = spec.path.iter().map(|s| s.to_string()).collect();
+            let display_path = if spec.path.is_empty() {
+                "<empty>".to_string()
+            } else {
+                spec.path.join(":")
+            };
+            if !seen_paths.insert(path_vec.clone()) {
+                self.errors.push(SemaError::new(
+                    SemaErrorKind::Message(format!(
+                        "stdlib provider `{}` defines duplicate module `{}`",
+                        provider.name(),
+                        display_path
+                    )),
+                    span,
+                ));
+                continue;
+            }
+            if spec.path.len() < 2 {
+                self.errors.push(SemaError::new(
+                    SemaErrorKind::Message(format!(
+                        "stdlib provider `{}` module `{}` must include a scheme and module path",
+                        provider.name(),
+                        display_path
+                    )),
+                    span,
+                ));
+                continue;
+            }
+            if let Some(seg) =
+                spec.path.iter().skip(1).find(|seg| {
+                    seg.is_empty() || **seg == "." || **seg == ".." || seg.contains('/')
+                })
+            {
+                let display_segment = if seg.is_empty() { "<empty>" } else { *seg };
+                self.errors.push(SemaError::new(
+                    SemaErrorKind::Message(format!(
+                        "stdlib provider `{}` module `{}` contains invalid path segment `{}`",
+                        provider.name(),
+                        display_path,
+                        display_segment
+                    )),
+                    span,
+                ));
+                continue;
+            }
+            let expected_root = match spec.tier {
+                crate::sema::stdlib::StdTier::Core => "core",
+                crate::sema::stdlib::StdTier::Std => "std",
+            };
+            if spec.path.first().copied() != Some(expected_root) {
+                self.errors.push(SemaError::new(
+                    SemaErrorKind::Message(format!(
+                        "stdlib provider `{}` module `{}` has tier `{:?}` but path root is not `{}`",
+                        provider.name(),
+                        display_path,
+                        spec.tier,
+                        expected_root
+                    )),
+                    span,
+                ));
+                continue;
+            }
+            let mut seen_exports = std::collections::HashSet::new();
+            let mut resolved_exports = Vec::new();
+            let mut valid_exports = true;
+            let source_module = self.builtin_source_modules.get(&path_vec).copied();
+            for name in spec.exports {
+                if !seen_exports.insert(*name) {
+                    self.errors.push(SemaError::new(
+                        SemaErrorKind::Message(format!(
+                            "stdlib provider `{}` module `{}` defines duplicate export `{}`",
+                            provider.name(),
+                            display_path,
+                            name
+                        )),
+                        span,
+                    ));
+                    valid_exports = false;
+                    continue;
                 }
-                if let Some(d) = self.modules[b].values.get(*name).copied() {
+                let type_def = source_module
+                    .and_then(|module| self.modules[module.index()].types.get(*name).copied())
+                    .or_else(|| {
+                        self.modules[self.builtin_module.index()]
+                            .types
+                            .get(*name)
+                            .copied()
+                    })
+                    .or_else(|| self.unique_source_type(name));
+                let value_def = source_module
+                    .and_then(|module| self.modules[module.index()].values.get(*name).copied())
+                    .or_else(|| {
+                        self.modules[self.builtin_module.index()]
+                            .values
+                            .get(*name)
+                            .copied()
+                    })
+                    .or_else(|| self.unique_source_value(name));
+                if type_def.is_none() && value_def.is_none() {
+                    self.errors.push(SemaError::new(
+                        SemaErrorKind::Message(format!(
+                            "stdlib provider `{}` module `{}` exports `{}`, but the bundled \
+                             toolchain source does not define that symbol",
+                            provider.name(),
+                            display_path,
+                            name
+                        )),
+                        span,
+                    ));
+                    valid_exports = false;
+                }
+                resolved_exports.push((*name, type_def, value_def));
+            }
+            if !valid_exports {
+                continue;
+            }
+            let view =
+                self.new_module(format!("__view_{}", spec.path.join("_")), ModId::ROOT, true);
+            for (name, type_def, value_def) in resolved_exports {
+                if let Some(d) = type_def {
+                    self.modules[view.index()].types.insert(name.to_string(), d);
+                }
+                if let Some(d) = value_def {
                     self.modules[view.index()]
                         .values
-                        .insert(public_name.to_string(), d);
+                        .insert(name.to_string(), d);
                 }
             }
             self.modules[view.index()].path = path_vec.clone();
-            let _ = leaf;
             self.builtin_modules.insert(path_vec, view);
         }
     }
 
-    /// Inject compiler-provided prelude types (currently `List<T>`). These have
-    /// no AST item; their behavior is special-cased in the checker and code
-    /// generator. Injected before user items so they get stable low ids.
+    /// Inject compiler-provided collection types (currently `List<T>` and
+    /// `Map<K, V>`). These have no AST item; their behavior is special-cased in
+    /// the checker and code generator. Injected before user items so they get
+    /// stable low ids.
     fn inject_builtins(&mut self, target: ModId) {
         let span = Span::new(
             crate::span::FileId(0),
@@ -998,9 +966,9 @@ impl Program {
     }
 
     /// Resolve a type-namespace name visible in `module`: the module's own
-    /// definitions, then names it imported, then the universal prelude. Parent
-    /// modules are *not* searched — names cross module boundaries only via
-    /// `import` (`docs/17` §3).
+    /// definitions, then names it imported, then the universal prelude map
+    /// (currently empty by design). Parent modules are *not* searched — names
+    /// cross module boundaries only via `import` (`docs/17` §3).
     pub fn resolve_type_in(&self, module: ModId, name: &str) -> Option<DefId> {
         let m = &self.modules[module.index()];
         m.types
@@ -1024,14 +992,21 @@ impl Program {
     /// access `M.foo`, which only reaches the module's own exported items).
     pub fn resolve_pub_value_in(&self, module: ModId, name: &str) -> Option<DefId> {
         let def = *self.modules[module.index()].values.get(name)?;
-        self.defs[def.index()].public.then_some(def)
+        (self.is_builtin_view_module(module) || self.defs[def.index()].public).then_some(def)
+    }
+
+    /// Resolve a value exported by an importable toolchain view.
+    pub fn toolchain_export_value(&self, path: &[&str], name: &str) -> Option<DefId> {
+        let key: Vec<String> = path.iter().map(|segment| (*segment).to_string()).collect();
+        let module = self.builtin_modules.get(&key).copied()?;
+        self.modules[module.index()].values.get(name).copied()
     }
 
     /// The `extend` blocks visible from `module` for method resolution: the
-    /// module's own plus the prelude's (`__builtins__`), since the prelude's
-    /// `extend` impls — `List`/`Map`/`str` iterators, etc. — are program-wide
-    /// (`docs/17` §17.8, orphan rule). The builtins are not double-counted when
-    /// `module` *is* the builtins module.
+    /// module's own plus all toolchain source modules, since built-in protocol
+    /// impls — `List`/`Map`/`str` iterators, etc. — are program-wide
+    /// (`docs/17` §17.8, orphan rule). The current module is not double-counted
+    /// when it is itself a hidden stdlib source module.
     pub fn visible_extends(&self, module: ModId) -> Vec<DefId> {
         let mut out = self.modules[module.index()].extends.clone();
         if module != self.builtin_module {
@@ -1041,6 +1016,11 @@ impl Program {
                     .iter()
                     .copied(),
             );
+        }
+        for source in self.builtin_source_modules.values().copied() {
+            if source != module {
+                out.extend(self.modules[source.index()].extends.iter().copied());
+            }
         }
         out
     }
@@ -1112,13 +1092,22 @@ impl Program {
                             Some(target) => {
                                 self.bind_import(mid, target, imp, /* toolchain = */ true)
                             }
-                            None => self.errors.push(SemaError::new(
-                                SemaErrorKind::Message(format!(
-                                    "no built-in module `{}`",
-                                    parsed.display_source()
-                                )),
-                                span,
-                            )),
+                            None => {
+                                let message =
+                                    if crate::sema::stdlib::TOOLCHAIN_MODULES.iter().any(|spec| {
+                                        spec.path.iter().copied().eq(key.iter().map(String::as_str))
+                                    }) {
+                                        format!(
+                                            "stdlib provider `{}` does not provide module `{}`",
+                                            self.std_provider_name,
+                                            parsed.display_source()
+                                        )
+                                    } else {
+                                        format!("no built-in module `{}`", parsed.display_source())
+                                    };
+                                self.errors
+                                    .push(SemaError::new(SemaErrorKind::Message(message), span));
+                            }
                         }
                     }
                     Scheme::SelfRoot => match self.resolve_self_root(&parsed.segments) {
@@ -1358,7 +1347,8 @@ impl Program {
 
     /// Bind an import's names/namespace into module `mid` from `target`. When
     /// `toolchain` is set the visibility gate is skipped (toolchain modules
-    /// export their documented surface; the prelude items are not user-`pub`).
+    /// export their documented catalog surface; those definitions are not
+    /// user-authored `pub` items).
     fn bind_import(&mut self, mid: usize, target: ModId, imp: &ImportItem, toolchain: bool) {
         match &imp.kind {
             ImportKind::Named(names) => {
@@ -1369,6 +1359,16 @@ impl Program {
             // `import "path" as M` — bind the alias to the module so `M.foo`
             // resolves against its public definitions.
             ImportKind::Namespace(alias) => {
+                if self.namespace_import_collides(mid, &alias.name) {
+                    self.errors.push(SemaError::new(
+                        SemaErrorKind::Message(format!(
+                            "namespace import `{}` collides with an existing binding; alias it with a different name",
+                            alias.name
+                        )),
+                        alias.span,
+                    ));
+                    return;
+                }
                 self.modules[mid]
                     .namespace_imports
                     .insert(alias.name.clone(), target);
@@ -1408,12 +1408,38 @@ impl Program {
                 }
             }
         }
+        if self.named_import_collides(mid, &bind) {
+            self.errors.push(SemaError::new(
+                SemaErrorKind::Message(format!(
+                    "imported name `{bind}` collides with another import; alias one with `as`"
+                )),
+                n.span,
+            ));
+            return;
+        }
         if let Some(d) = as_type {
             self.modules[mid].imported_types.insert(bind.clone(), d);
         }
         if let Some(d) = as_value {
             self.modules[mid].imported_values.insert(bind, d);
         }
+    }
+
+    fn named_import_collides(&self, mid: usize, bind: &str) -> bool {
+        let module = &self.modules[mid];
+        module.imported_types.contains_key(bind)
+            || module.imported_values.contains_key(bind)
+            || module.namespace_imports.contains_key(bind)
+    }
+
+    fn namespace_import_collides(&self, mid: usize, bind: &str) -> bool {
+        let module = &self.modules[mid];
+        module.types.contains_key(bind)
+            || module.values.contains_key(bind)
+            || module.children.contains_key(bind)
+            || module.imported_types.contains_key(bind)
+            || module.imported_values.contains_key(bind)
+            || module.namespace_imports.contains_key(bind)
     }
 
     fn new_module(&mut self, name: String, parent: ModId, public: bool) -> ModId {
@@ -1911,6 +1937,571 @@ mod tests {
     }
 
     #[test]
+    fn stdlib_catalog_exports_materialize_in_builtin_views() {
+        let p = program("");
+        assert!(p.errors.is_empty(), "{:?}", p.errors);
+        let provider = crate::sema::stdlib::active_provider();
+
+        for spec in provider.modules() {
+            let path: Vec<String> = spec.path.iter().map(|s| s.to_string()).collect();
+            let module = p
+                .builtin_modules
+                .get(&path)
+                .copied()
+                .unwrap_or_else(|| panic!("missing builtin view for {:?}", spec.path));
+            for export in spec.exports {
+                assert!(
+                    p.module(module).types.contains_key(*export)
+                        || p.module(module).values.contains_key(*export),
+                    "{:?} exports `{}` but __builtins__ does not define it",
+                    spec.path,
+                    export
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn stdlib_source_modules_keep_duplicate_export_names_distinct() {
+        let p = program("");
+        assert!(p.errors.is_empty(), "{:?}", p.errors);
+
+        let async_sleep = p
+            .toolchain_export_value(&["std", "async"], "sleep")
+            .expect("std:async exports sleep");
+        let time_sleep = p
+            .toolchain_export_value(&["std", "time"], "sleep")
+            .expect("std:time exports sleep");
+
+        assert_ne!(
+            async_sleep, time_sleep,
+            "duplicate export names in different stdlib modules must not alias"
+        );
+        assert_ne!(p.def(async_sleep).module, p.def(time_sleep).module);
+        assert_eq!(
+            p.module(p.def(async_sleep).module).path,
+            vec!["std".to_string(), "async".to_string()]
+        );
+        assert_eq!(
+            p.module(p.def(time_sleep).module).path,
+            vec!["std".to_string(), "time".to_string()]
+        );
+    }
+
+    #[test]
+    fn implicit_prelude_maps_stay_empty() {
+        let p = program("");
+        assert!(p.errors.is_empty(), "{:?}", p.errors);
+        assert!(
+            p.prelude_types.is_empty(),
+            "core:prelude names must require explicit imports"
+        );
+        assert!(
+            p.prelude_values.is_empty(),
+            "core:prelude values must require explicit imports"
+        );
+    }
+
+    #[test]
+    fn no_std_rejects_std_imports() {
+        let root = parse_module("import { println } from \"std:io\";\nfunction main() {}");
+        let ctx = ResolveContext {
+            project: true,
+            no_std: true,
+            ..Default::default()
+        };
+        let p = Program::collect_multi_ctx(&root, &Externals::new(), &ctx);
+        assert!(
+            p.errors.iter().any(|e| {
+                let msg = e.kind.to_string();
+                msg.contains("no-std") && msg.contains("std:` is unavailable")
+            }),
+            "{:?}",
+            p.errors
+        );
+    }
+
+    #[test]
+    fn no_std_keeps_core_imports_available() {
+        let root = parse_module("import { List } from \"core:collections\";\nfunction main() {}");
+        let ctx = ResolveContext {
+            project: true,
+            no_std: true,
+            ..Default::default()
+        };
+        let p = Program::collect_multi_ctx(&root, &Externals::new(), &ctx);
+        assert!(p.errors.is_empty(), "{:?}", p.errors);
+        assert!(p.module(ModId::ROOT).imported_types.contains_key("List"));
+    }
+
+    #[test]
+    fn duplicate_named_imports_are_rejected() {
+        let root = parse_module(
+            "import { sleep } from \"std:async\";\n\
+             import { sleep } from \"std:time\";\n\
+             function main() {}",
+        );
+        let p = Program::collect(&root);
+        assert!(
+            p.errors.iter().any(|e| {
+                let msg = e.kind.to_string();
+                msg.contains("imported name `sleep` collides with another import")
+            }),
+            "{:?}",
+            p.errors
+        );
+    }
+
+    #[test]
+    fn aliased_named_imports_do_not_collide() {
+        let root = parse_module(
+            "import { sleep as async_sleep } from \"std:async\";\n\
+             import { sleep as time_sleep } from \"std:time\";\n\
+             function main() {}",
+        );
+        let p = Program::collect(&root);
+        assert!(p.errors.is_empty(), "{:?}", p.errors);
+        assert!(
+            p.module(ModId::ROOT)
+                .imported_values
+                .contains_key("async_sleep")
+        );
+        assert!(
+            p.module(ModId::ROOT)
+                .imported_values
+                .contains_key("time_sleep")
+        );
+    }
+
+    #[test]
+    fn local_definition_still_shadows_named_import() {
+        let root = parse_module(
+            "import { sleep } from \"std:async\";\n\
+             function sleep(): i64 { 1 }\n\
+             function main() {}",
+        );
+        let p = Program::collect(&root);
+        assert!(p.errors.is_empty(), "{:?}", p.errors);
+        let local = p.module(ModId::ROOT).values.get("sleep").copied().unwrap();
+        assert_eq!(p.resolve_value_in(ModId::ROOT, "sleep"), Some(local));
+    }
+
+    #[test]
+    fn namespace_import_collides_with_existing_import_binding() {
+        let root = parse_module(
+            "import { Duration as Time } from \"std:time\";\n\
+             import \"std:time\" as Time;\n\
+             function main() {}",
+        );
+        let p = Program::collect(&root);
+        assert!(
+            p.errors.iter().any(|e| {
+                let msg = e.kind.to_string();
+                msg.contains("namespace import `Time` collides with an existing binding")
+            }),
+            "{:?}",
+            p.errors
+        );
+    }
+
+    #[test]
+    fn namespace_import_collides_with_local_definition() {
+        let root = parse_module(
+            "struct Time {}\n\
+             import \"std:time\" as Time;\n\
+             function main() {}",
+        );
+        let p = Program::collect(&root);
+        assert!(
+            p.errors.iter().any(|e| {
+                let msg = e.kind.to_string();
+                msg.contains("namespace import `Time` collides with an existing binding")
+            }),
+            "{:?}",
+            p.errors
+        );
+    }
+
+    struct CoreCollectionsOnlyProvider;
+
+    static CORE_COLLECTIONS_ONLY_MODULES: &[crate::sema::stdlib::StdModuleSpec] =
+        &[crate::sema::stdlib::StdModuleSpec {
+            path: &["core", "collections"],
+            tier: crate::sema::stdlib::StdTier::Core,
+            implementation: crate::sema::stdlib::StdImplementation::Mixed,
+            exports: &["List", "Map", "Set", "Entry"],
+        }];
+
+    static BROKEN_PROVIDER_MODULES: &[crate::sema::stdlib::StdModuleSpec] =
+        &[crate::sema::stdlib::StdModuleSpec {
+            path: &["std", "broken"],
+            tier: crate::sema::stdlib::StdTier::Std,
+            implementation: crate::sema::stdlib::StdImplementation::Otter,
+            exports: &["DefinitelyMissingStdSymbol"],
+        }];
+
+    static DUPLICATE_PROVIDER_MODULES: &[crate::sema::stdlib::StdModuleSpec] = &[
+        crate::sema::stdlib::StdModuleSpec {
+            path: &["core", "collections"],
+            tier: crate::sema::stdlib::StdTier::Core,
+            implementation: crate::sema::stdlib::StdImplementation::Mixed,
+            exports: &["List"],
+        },
+        crate::sema::stdlib::StdModuleSpec {
+            path: &["core", "collections"],
+            tier: crate::sema::stdlib::StdTier::Core,
+            implementation: crate::sema::stdlib::StdImplementation::Mixed,
+            exports: &["Map"],
+        },
+    ];
+
+    static WRONG_TIER_PROVIDER_MODULES: &[crate::sema::stdlib::StdModuleSpec] =
+        &[crate::sema::stdlib::StdModuleSpec {
+            path: &["core", "collections"],
+            tier: crate::sema::stdlib::StdTier::Std,
+            implementation: crate::sema::stdlib::StdImplementation::Mixed,
+            exports: &["List"],
+        }];
+
+    static DUPLICATE_EXPORT_PROVIDER_MODULES: &[crate::sema::stdlib::StdModuleSpec] =
+        &[crate::sema::stdlib::StdModuleSpec {
+            path: &["core", "collections"],
+            tier: crate::sema::stdlib::StdTier::Core,
+            implementation: crate::sema::stdlib::StdImplementation::Mixed,
+            exports: &["List", "List"],
+        }];
+
+    static ROOT_ONLY_PROVIDER_MODULES: &[crate::sema::stdlib::StdModuleSpec] =
+        &[crate::sema::stdlib::StdModuleSpec {
+            path: &["std"],
+            tier: crate::sema::stdlib::StdTier::Std,
+            implementation: crate::sema::stdlib::StdImplementation::Otter,
+            exports: &[],
+        }];
+
+    static INVALID_SEGMENT_PROVIDER_MODULES: &[crate::sema::stdlib::StdModuleSpec] =
+        &[crate::sema::stdlib::StdModuleSpec {
+            path: &["std", ""],
+            tier: crate::sema::stdlib::StdTier::Std,
+            implementation: crate::sema::stdlib::StdImplementation::Otter,
+            exports: &[],
+        }];
+
+    static CUSTOM_STD_PROVIDER_MODULES: &[crate::sema::stdlib::StdModuleSpec] =
+        &[crate::sema::stdlib::StdModuleSpec {
+            path: &["std", "target_error"],
+            tier: crate::sema::stdlib::StdTier::Std,
+            implementation: crate::sema::stdlib::StdImplementation::Otter,
+            exports: &["Error"],
+        }];
+
+    impl crate::sema::stdlib::StdProvider for CoreCollectionsOnlyProvider {
+        fn name(&self) -> &'static str {
+            "core-collections-only"
+        }
+
+        fn modules(&self) -> &'static [crate::sema::stdlib::StdModuleSpec] {
+            CORE_COLLECTIONS_ONLY_MODULES
+        }
+    }
+
+    struct BrokenProvider;
+
+    impl crate::sema::stdlib::StdProvider for BrokenProvider {
+        fn name(&self) -> &'static str {
+            "broken-provider"
+        }
+
+        fn modules(&self) -> &'static [crate::sema::stdlib::StdModuleSpec] {
+            BROKEN_PROVIDER_MODULES
+        }
+    }
+
+    struct DuplicateProvider;
+
+    impl crate::sema::stdlib::StdProvider for DuplicateProvider {
+        fn name(&self) -> &'static str {
+            "duplicate-provider"
+        }
+
+        fn modules(&self) -> &'static [crate::sema::stdlib::StdModuleSpec] {
+            DUPLICATE_PROVIDER_MODULES
+        }
+    }
+
+    struct WrongTierProvider;
+
+    impl crate::sema::stdlib::StdProvider for WrongTierProvider {
+        fn name(&self) -> &'static str {
+            "wrong-tier-provider"
+        }
+
+        fn modules(&self) -> &'static [crate::sema::stdlib::StdModuleSpec] {
+            WRONG_TIER_PROVIDER_MODULES
+        }
+    }
+
+    struct DuplicateExportProvider;
+
+    impl crate::sema::stdlib::StdProvider for DuplicateExportProvider {
+        fn name(&self) -> &'static str {
+            "duplicate-export-provider"
+        }
+
+        fn modules(&self) -> &'static [crate::sema::stdlib::StdModuleSpec] {
+            DUPLICATE_EXPORT_PROVIDER_MODULES
+        }
+    }
+
+    struct RootOnlyProvider;
+
+    impl crate::sema::stdlib::StdProvider for RootOnlyProvider {
+        fn name(&self) -> &'static str {
+            "root-only-provider"
+        }
+
+        fn modules(&self) -> &'static [crate::sema::stdlib::StdModuleSpec] {
+            ROOT_ONLY_PROVIDER_MODULES
+        }
+    }
+
+    struct InvalidSegmentProvider;
+
+    impl crate::sema::stdlib::StdProvider for InvalidSegmentProvider {
+        fn name(&self) -> &'static str {
+            "invalid-segment-provider"
+        }
+
+        fn modules(&self) -> &'static [crate::sema::stdlib::StdModuleSpec] {
+            INVALID_SEGMENT_PROVIDER_MODULES
+        }
+    }
+
+    struct CustomStdProvider;
+
+    impl crate::sema::stdlib::StdProvider for CustomStdProvider {
+        fn name(&self) -> &'static str {
+            "custom-std-provider"
+        }
+
+        fn modules(&self) -> &'static [crate::sema::stdlib::StdModuleSpec] {
+            CUSTOM_STD_PROVIDER_MODULES
+        }
+    }
+
+    #[test]
+    fn explicit_provider_can_omit_std_modules() {
+        let root = parse_module("import { println } from \"std:io\";\nfunction main() {}");
+        let p = Program::collect_multi_ctx_with_provider(
+            &root,
+            &Externals::new(),
+            &ResolveContext::direct(),
+            &CoreCollectionsOnlyProvider,
+        );
+        assert!(
+            p.errors.iter().any(|e| {
+                let msg = e.kind.to_string();
+                msg.contains("stdlib provider `core-collections-only`")
+                    && msg.contains("does not provide module `std:io`")
+            }),
+            "{:?}",
+            p.errors
+        );
+    }
+
+    #[test]
+    fn explicit_provider_keeps_listed_core_modules_available() {
+        let root = parse_module("import { List } from \"core:collections\";\nfunction main() {}");
+        let p = Program::collect_multi_ctx_with_provider(
+            &root,
+            &Externals::new(),
+            &ResolveContext::direct(),
+            &CoreCollectionsOnlyProvider,
+        );
+        assert!(p.errors.is_empty(), "{:?}", p.errors);
+        assert!(p.module(ModId::ROOT).imported_types.contains_key("List"));
+    }
+
+    #[test]
+    fn explicit_provider_rejects_exports_missing_from_toolchain_source() {
+        let root = parse_module("function main() {}");
+        let p = Program::collect_multi_ctx_with_provider(
+            &root,
+            &Externals::new(),
+            &ResolveContext::direct(),
+            &BrokenProvider,
+        );
+        assert!(
+            p.errors.iter().any(|e| {
+                let msg = e.kind.to_string();
+                msg.contains("stdlib provider `broken-provider` module `std:broken`")
+                    && msg.contains("exports `DefinitelyMissingStdSymbol`")
+                    && msg.contains("does not define that symbol")
+            }),
+            "{:?}",
+            p.errors
+        );
+        assert!(
+            !p.builtin_modules
+                .contains_key(&vec!["std".to_string(), "broken".to_string()]),
+            "provider module with missing exports must not materialize a view"
+        );
+    }
+
+    #[test]
+    fn explicit_provider_rejects_duplicate_module_paths() {
+        let root = parse_module("function main() {}");
+        let p = Program::collect_multi_ctx_with_provider(
+            &root,
+            &Externals::new(),
+            &ResolveContext::direct(),
+            &DuplicateProvider,
+        );
+        assert!(
+            p.errors.iter().any(|e| {
+                let msg = e.kind.to_string();
+                msg.contains("stdlib provider `duplicate-provider`")
+                    && msg.contains("duplicate module `core:collections`")
+            }),
+            "{:?}",
+            p.errors
+        );
+    }
+
+    #[test]
+    fn explicit_provider_rejects_tier_path_mismatches() {
+        let root = parse_module("import { List } from \"core:collections\";\nfunction main() {}");
+        let p = Program::collect_multi_ctx_with_provider(
+            &root,
+            &Externals::new(),
+            &ResolveContext::direct(),
+            &WrongTierProvider,
+        );
+        assert!(
+            p.errors.iter().any(|e| {
+                let msg = e.kind.to_string();
+                msg.contains("stdlib provider `wrong-tier-provider`")
+                    && msg.contains("module `core:collections` has tier `Std`")
+                    && msg.contains("path root is not `std`")
+            }),
+            "{:?}",
+            p.errors
+        );
+        assert!(
+            !p.module(ModId::ROOT).imported_types.contains_key("List"),
+            "wrong-tier provider must not expose an invalid module view"
+        );
+    }
+
+    #[test]
+    fn explicit_provider_rejects_duplicate_exports() {
+        let root = parse_module("function main() {}");
+        let p = Program::collect_multi_ctx_with_provider(
+            &root,
+            &Externals::new(),
+            &ResolveContext::direct(),
+            &DuplicateExportProvider,
+        );
+        assert!(
+            p.errors.iter().any(|e| {
+                let msg = e.kind.to_string();
+                msg.contains("stdlib provider `duplicate-export-provider`")
+                    && msg.contains("module `core:collections`")
+                    && msg.contains("duplicate export `List`")
+            }),
+            "{:?}",
+            p.errors
+        );
+        assert!(
+            !p.builtin_modules
+                .contains_key(&vec!["core".to_string(), "collections".to_string()]),
+            "provider module with duplicate exports must not materialize a view"
+        );
+    }
+
+    #[test]
+    fn explicit_provider_rejects_root_only_module_paths() {
+        let root = parse_module("function main() {}");
+        let p = Program::collect_multi_ctx_with_provider(
+            &root,
+            &Externals::new(),
+            &ResolveContext::direct(),
+            &RootOnlyProvider,
+        );
+        assert!(
+            p.errors.iter().any(|e| {
+                let msg = e.kind.to_string();
+                msg.contains("stdlib provider `root-only-provider`")
+                    && msg.contains("module `std`")
+                    && msg.contains("must include a scheme and module path")
+            }),
+            "{:?}",
+            p.errors
+        );
+    }
+
+    #[test]
+    fn explicit_provider_rejects_invalid_module_path_segments() {
+        let root = parse_module("function main() {}");
+        let p = Program::collect_multi_ctx_with_provider(
+            &root,
+            &Externals::new(),
+            &ResolveContext::direct(),
+            &InvalidSegmentProvider,
+        );
+        assert!(
+            p.errors.iter().any(|e| {
+                let msg = e.kind.to_string();
+                msg.contains("stdlib provider `invalid-segment-provider`")
+                    && msg.contains("module `std:`")
+                    && msg.contains("invalid path segment `<empty>`")
+            }),
+            "{:?}",
+            p.errors
+        );
+    }
+
+    #[test]
+    fn explicit_provider_can_add_custom_std_modules() {
+        let root = parse_module("import { Error } from \"std:target_error\";\nfunction main() {}");
+        let p = Program::collect_multi_ctx_with_provider(
+            &root,
+            &Externals::new(),
+            &ResolveContext::direct(),
+            &CustomStdProvider,
+        );
+        assert!(p.errors.is_empty(), "{:?}", p.errors);
+        assert!(p.module(ModId::ROOT).imported_types.contains_key("Error"));
+    }
+
+    #[test]
+    fn no_std_rejects_provider_added_std_modules() {
+        let root = parse_module("import { Error } from \"std:target_error\";\nfunction main() {}");
+        let ctx = ResolveContext {
+            project: true,
+            no_std: true,
+            ..Default::default()
+        };
+        let p = Program::collect_multi_ctx_with_provider(
+            &root,
+            &Externals::new(),
+            &ctx,
+            &CustomStdProvider,
+        );
+        assert!(
+            p.errors.iter().any(|e| {
+                let msg = e.kind.to_string();
+                msg.contains("std:target_error")
+                    && msg.contains("no-std")
+                    && msg.contains("std:` is unavailable")
+            }),
+            "{:?}",
+            p.errors
+        );
+        assert!(!p.module(ModId::ROOT).imported_types.contains_key("Error"));
+    }
+
+    #[test]
     fn interface_and_extend_methods_collected() {
         let p = program(
             "interface Named { function name(self): str; }\n\
@@ -1918,7 +2509,7 @@ mod tests {
              extend P: Named { function name(self): str { \"p\" } }\n",
         );
         assert!(p.errors.is_empty(), "{:?}", p.errors);
-        // The user's `Named.name` interface method is collected (the prelude
+        // The user's `Named.name` interface method is collected (the toolchain
         // also contributes `Iterator.next`, so filter by name).
         let iface_methods = p
             .defs
@@ -1926,7 +2517,7 @@ mod tests {
             .filter(|d| d.kind == DefKind::InterfaceMethod && d.name == "name")
             .count();
         assert_eq!(iface_methods, 1);
-        // The user's `extend P: Named` contributes one method; the prelude
+        // The user's `extend P: Named` contributes one method; the toolchain
         // also contributes `extend MapKeys/MapValues/MapEntries: Iterator<…>`
         // impls plus the `core:compiler` macro surface (`extend ASTNode { name }`),
         // so restrict the count to non-toolchain (user) defs.

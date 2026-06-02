@@ -1,0 +1,22 @@
+//@ kind: run
+//@ description: core:compiler macro-authoring handle types are importable core substrate but not auto-imported
+//@ stdout:
+//~ compiler-surface-imported
+import { println } from "std:io";
+import { ASTNode, MacroContext, Span } from "core:compiler";
+
+function accepts_context(ctx: MacroContext): MacroContext {
+  ctx
+}
+
+function accepts_node(node: ASTNode): ASTNode {
+  node
+}
+
+function accepts_span(span: Span): Span {
+  span
+}
+
+function main() {
+  println("compiler-surface-imported");
+}

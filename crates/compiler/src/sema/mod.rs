@@ -22,6 +22,7 @@ pub mod diag;
 pub mod lower;
 pub mod resolve_ctx;
 pub mod results;
+pub mod stdlib;
 pub mod symbols;
 
 pub use check::Checker;

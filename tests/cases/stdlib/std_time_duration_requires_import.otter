@@ -1,0 +1,12 @@
+//@ kind: compile-error
+//@ description: std:time follows the near-empty prelude rule; Duration and sleep are not visible unless imported
+//@ stderr: cannot find type `Duration`
+//@ stderr: cannot find value `Duration` in scope
+//@ stderr: cannot find value `sleep` in scope
+function make(): Duration {
+  Duration.from_secs(1)
+}
+
+function main() {
+  sleep(Duration.from_secs(1));
+}

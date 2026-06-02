@@ -1,0 +1,104 @@
+//@ kind: run
+//@ description: std:time exposes portable DateTime and TimeZone value contracts
+//@ stdout:
+//~ utc=2024-02-29T23:59:58.123456789Z tz=UTC offset=0 name=UTC leap=true feb=29
+//~ values eq=true hash_eq=true clone=2024-02-29T23:59:58.123456789Z debug=DateTime { year: 2024, month: 2, day: 29, hour: 23, minute: 59, second: 58, nanos: 123456789, tz: Utc }
+//~ fixed=2024-03-01T00:30:00+05:30 tz=+05:30 offset=19800 fixed=true
+//~ named=2024-01-02T03:04:05[Europe/Prague] name=Europe/Prague named=true
+//~ parsed=2024-02-29T23:59:58.123456789Z eq=true short=2024-03-01T00:30:00.120000000+05:30 named=2024-01-02T03:04:05[Europe/Prague]
+//~ builder=2024-02-29T23:59:58.123456789+01:00 original=2024-02-29T23:59:58.123456789Z tz=+01:00
+//~ convert=1970-01-01T00:00:00Z 1970-01-01T01:00:00+01:00 0 1969-12-31T23:59:59Z named timezone conversion requires timezone database
+//~ parse-errors=day out of range|expected ISO-8601 datetime|expected fractional nanoseconds|timezone offset out of range
+//~ err=day out of range true true TimeError { message: "day out of range" }
+import { println } from "std:io";
+import { Error } from "std:error";
+import { Debug } from "std:fmt";
+import { DateTime, SystemTime, TimeError, TimeZone, date_time, fixed_offset, named_timezone, parse_iso8601, time_error, utc } from "std:time";
+
+function render_debug(value: Debug): str {
+  value.debug()
+}
+
+function show_offset(tz: TimeZone): str {
+  var offset = tz.offset_seconds();
+  match offset {
+    i32 seconds => seconds as str,
+    null => "null",
+  }
+}
+
+function show_name(tz: TimeZone): str {
+  var name = tz.name();
+  match name {
+    str text => text,
+    null => "null",
+  }
+}
+
+function error_text(value: DateTime | TimeError): str {
+  match value {
+    DateTime dt => dt.to_str(),
+    TimeError err => err.message(),
+  }
+}
+
+function main() {
+  var utc_dt = DateTime.new(2024i32, 2u8, 29u8, 23u8, 59u8, 58u8, 123456789u32, utc());
+  if utc_dt is DateTime {
+    var dt = utc_dt as DateTime;
+    println("utc=${dt.format_iso8601()} tz=${dt.timezone().to_str()} offset=${show_offset(dt.timezone())} name=${show_name(dt.timezone())} leap=${DateTime.is_leap_year(2024i32)} feb=${DateTime.days_in_month(2024i32, 2u8)}");
+
+    var same = date_time(2024i32, 2u8, 29u8, 23u8, 59u8, 58u8, 123456789u32, utc());
+    if same is DateTime {
+      var copy = dt.clone();
+      println("values eq=${dt == (same as DateTime)} hash_eq=${dt.hash() == (same as DateTime).hash()} clone=${copy.to_str()} debug=${render_debug(dt)}");
+    }
+  }
+
+  var fixed = DateTime.new(2024i32, 3u8, 1u8, 0u8, 30u8, 0u8, 0u32, fixed_offset(19800i32));
+  if fixed is DateTime {
+    var dt = fixed as DateTime;
+    println("fixed=${dt.to_str()} tz=${dt.timezone().to_str()} offset=${show_offset(dt.timezone())} fixed=${dt.timezone().is_fixed_offset()}");
+  }
+
+  var named = DateTime.new(2024i32, 1u8, 2u8, 3u8, 4u8, 5u8, 0u32, named_timezone("Europe/Prague"));
+  if named is DateTime {
+    var dt = named as DateTime;
+    println("named=${dt.to_str()} name=${show_name(dt.timezone())} named=${dt.timezone().is_named()}");
+  }
+
+  var parsed = parse_iso8601("2024-02-29T23:59:58.123456789Z");
+  var parsed_short = DateTime.parse_iso8601("2024-03-01T00:30:00.12+05:30");
+  var parsed_named = parse_iso8601("2024-01-02T03:04:05[Europe/Prague]");
+  if parsed is DateTime && parsed_short is DateTime && parsed_named is DateTime {
+    println("parsed=${(parsed as DateTime).to_str()} eq=${(parsed as DateTime) == (DateTime.parse_iso8601((parsed as DateTime).to_str()) as DateTime)} short=${(parsed_short as DateTime).to_str()} named=${(parsed_named as DateTime).to_str()}");
+  }
+
+  if parsed is DateTime {
+    var original = parsed as DateTime;
+    var rebuilt = original.with_timezone(fixed_offset(3600i32));
+    println("builder=${rebuilt.to_str()} original=${original.to_str()} tz=${rebuilt.timezone().to_str()}");
+  }
+
+  var epoch_utc = SystemTime.unix_epoch().to_datetime(utc());
+  var epoch_fixed = SystemTime.unix_epoch().to_datetime(fixed_offset(3600i32));
+  var fixed_epoch = DateTime.new(1970i32, 1u8, 1u8, 1u8, 0u8, 0u8, 0u32, fixed_offset(3600i32));
+  var before_epoch = SystemTime.from_unix_nanos(-1000000000).to_datetime(utc());
+  var named_conversion = SystemTime.unix_epoch().to_datetime(named_timezone("Europe/Prague"));
+  if epoch_utc is DateTime && epoch_fixed is DateTime && fixed_epoch is DateTime && before_epoch is DateTime && named_conversion is TimeError {
+    println("convert=${(epoch_utc as DateTime).to_str()} ${(epoch_fixed as DateTime).to_str()} ${((fixed_epoch as DateTime).to_system_time() as SystemTime).as_unix_nanos()} ${(before_epoch as DateTime).to_str()} ${(named_conversion as TimeError).message()}");
+  }
+
+  var bad_day = parse_iso8601("2023-02-29T00:00:00Z");
+  var missing_tz = parse_iso8601("2024-01-01T00:00:00");
+  var bad_fraction = parse_iso8601("2024-01-01T00:00:00.Z");
+  var bad_offset = parse_iso8601("2024-01-01T00:00:00+24:00");
+  println("parse-errors=${error_text(bad_day)}|${error_text(missing_tz)}|${error_text(bad_fraction)}|${error_text(bad_offset)}");
+
+  var invalid = DateTime.new(2023i32, 2u8, 29u8, 0u8, 0u8, 0u8, 0u32, utc());
+  if invalid is TimeError {
+    var err = invalid as TimeError;
+    var as_error: Error = err;
+    println("err=${as_error.message()} ${err == time_error("day out of range")} ${err.hash() == time_error("day out of range").hash()} ${render_debug(err)}");
+  }
+}

@@ -1,0 +1,52 @@
+//@ kind: run
+//@ description: std:fmt.Debug is implemented by pure stdlib value types
+//@ stdout:
+//~ Duration { nanos: 1500000000 }
+//~ bytes[65,66]
+//~ Path { raw: "/tmp/app.otter" }
+//~ Json(["ok",true])
+//~ List[bytes[65,66], bytes[88]]
+//~ Map{asset: bytes[65,66]}
+//~ Set{bytes[65,66]}
+import { println } from "std:io";
+import { List, Map, Set } from "core:collections";
+import { Debug } from "std:fmt";
+import { Bytes } from "std:bytes";
+import { Path } from "std:fs";
+import { Duration } from "std:time";
+import { Json, json_array, json_bool, json_string } from "std:json";
+
+function render(value: Debug): str {
+  value.debug()
+}
+
+function main() {
+  var bytes = Bytes.new();
+  bytes.push(65u8);
+  bytes.push(66u8);
+
+  var items = List<Json>();
+  items.push(json_string("ok"));
+  items.push(json_bool(true));
+
+  println(render(Duration.from_secs(1) + Duration.from_millis(500)));
+  println(render(bytes));
+  var path = Path.new("/tmp/app.otter");
+  println(render(path));
+  println(render(json_array(items)));
+
+  var bytes2 = Bytes.new();
+  bytes2.push(88u8);
+  var byte_list = List<Bytes>();
+  byte_list.push(bytes);
+  byte_list.push(bytes2);
+  println(render(byte_list));
+
+  var map = Map<str, Bytes>();
+  map["asset"] = bytes;
+  println(render(map));
+
+  var set = Set<Bytes>();
+  set.insert(bytes);
+  println(render(set));
+}

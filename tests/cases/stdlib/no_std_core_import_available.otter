@@ -1,0 +1,18 @@
+//@ kind: run
+//@ project: no-std
+//@ description: project manifest no-std still leaves core substrate imports available
+import { List } from "core:collections";
+import { panic } from "core:prelude";
+import { ordering_seq_cst } from "core:sync:atomic";
+
+function main() {
+  var xs = List<i64>();
+  xs.push(1);
+  xs.push(2);
+  if xs.size() != 2 {
+    panic("bad core collection");
+  }
+  if ordering_seq_cst().to_str() != "seq_cst" {
+    panic("bad core atomic ordering");
+  }
+}

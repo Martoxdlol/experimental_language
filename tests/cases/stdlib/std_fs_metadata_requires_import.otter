@@ -1,0 +1,66 @@
+//@ kind: compile-error
+//@ description: std:fs value and handle types are not available without explicit imports
+//@ stderr: cannot find type `File`
+//@ stderr: cannot find type `FileKind`
+//@ stderr: cannot find type `RegularFile`
+//@ stderr: cannot find type `Directory`
+//@ stderr: cannot find type `Symlink`
+//@ stderr: cannot find type `OtherKind`
+//@ stderr: cannot find type `DirEntry`
+//@ stderr: cannot find type `DirEntries`
+//@ stderr: cannot find type `Permissions`
+//@ stderr: cannot find type `Metadata`
+//@ stderr: cannot find type `OpenOptions`
+//@ stderr: cannot find value `File` in scope
+//@ stderr: cannot find value `regular_file` in scope
+//@ stderr: cannot find value `directory` in scope
+//@ stderr: cannot find value `symlink` in scope
+//@ stderr: cannot find value `other_kind` in scope
+//@ stderr: cannot find value `dir_entry` in scope
+//@ stderr: cannot find value `permissions` in scope
+//@ stderr: cannot find value `metadata` in scope
+//@ stderr: cannot find value `open_options` in scope
+
+import { List } from "core:collections";
+import { Path } from "std:fs";
+
+function make_file(path: Path): File {
+  File.open(path)
+}
+
+function make_kind(): FileKind {
+  regular_file()
+}
+
+function make_variant_kinds(): FileKind {
+  var file: FileKind = RegularFile {};
+  var dir: FileKind = Directory {};
+  var link: FileKind = Symlink {};
+  var other: FileKind = OtherKind {};
+  directory();
+  symlink();
+  other_kind();
+  file
+}
+
+function make_entry(path: Path): DirEntry {
+  dir_entry(path, regular_file())
+}
+
+function make_entries(): DirEntries {
+  DirEntries { entries: List<DirEntry>(), index: 0 }
+}
+
+function make_permissions(): Permissions {
+  permissions(false, false)
+}
+
+function make_metadata(): Metadata {
+  metadata(regular_file(), 0u64, permissions(false, false))
+}
+
+function make(): OpenOptions {
+  open_options()
+}
+
+function main() {}

@@ -1,0 +1,45 @@
+//@ kind: run
+//@ description: std:error exposes Error, Annotated, and with_context; ? propagates the annotated failure while success stays the original value
+//@ stdout:
+//~ ok=42
+//~ err=load config: parse:bad config
+//~ debug=Annotated { note: "load config", source: parse:bad config }
+import { println } from "std:io";
+import { Debug } from "std:fmt";
+import { Error, Annotated, with_context } from "std:error";
+
+struct Config { ok: i64 }
+struct ParseError { msg: str }
+
+extend ParseError: Error {
+  function message(self): str { self.msg }
+  function cause(self): Error | null { null }
+  function to_str(self): str { "parse:" + self.msg }
+}
+
+function parse(fail: bool): i64 | ParseError {
+  if fail { ParseError { msg: "bad config" } } else { 41 }
+}
+
+function load(fail: bool): Config | Annotated {
+  var n = with_context(parse(fail), "load config")?;
+  Config { ok: n + 1 }
+}
+
+function render_debug(value: Debug): str {
+  value.debug()
+}
+
+function main() {
+  match load(false) {
+    Config c => println("ok=${c.ok}"),
+    Annotated e => println("unexpected=${e.to_str()}"),
+  }
+  match load(true) {
+    Config c => println("unexpected=${c.ok}"),
+    Annotated e => {
+      println("err=${e.to_str()}");
+      println("debug=${render_debug(e)}");
+    },
+  }
+}

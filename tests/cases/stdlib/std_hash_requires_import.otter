@@ -1,0 +1,30 @@
+//@ kind: compile-error
+//@ description: std:hash follows the near-empty prelude rule; hasher values and helpers require imports
+//@ stderr: cannot find type `Hasher`
+//@ stderr: cannot find type `DefaultHasher`
+//@ stderr: cannot find type `KeyedHasher`
+//@ stderr: cannot find value `DefaultHasher` in scope
+//@ stderr: cannot find value `KeyedHasher` in scope
+//@ stderr: cannot find value `hash_value` in scope
+//@ stderr: cannot find value `write_hash` in scope
+//@ stderr: cannot find value `combine_hash` in scope
+//@ stderr: cannot find value `keyed_hasher` in scope
+
+function finish(h: Hasher): u64 {
+  h.finish()
+}
+
+function make(): DefaultHasher {
+  DefaultHasher.new()
+}
+
+function make_keyed(): KeyedHasher {
+  KeyedHasher.new(1u64)
+}
+
+function main() {
+  hash_value(7);
+  write_hash(DefaultHasher.new(), 7);
+  combine_hash(1u64, 2u64);
+  keyed_hasher(1u64);
+}

@@ -5,7 +5,7 @@
 // the OS thread); the lock is fair (FIFO) and not reentrant.
 
 import { println } from "std:io";
-import { Future } from "core:prelude";
+import { Future } from "core:async";
 import { Shared, LockBusy } from "std:sync";
 
 struct Counter { value: i64 }

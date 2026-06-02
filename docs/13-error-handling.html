@@ -278,7 +278,7 @@ propagate but not exactly, <code>FromResidual</code> lets the compiler insert a 
 <h2 id="iface">5. The <code>Error</code> interface &amp; <code>Annotated</code></h2>
 
 <p>Errors are still ordinary values living in unions. What the <code>Error</code> interface
-(defined in <a href="18-stdlib.html#error">18.3</a>, lives in <code>core:prelude</code>) gives
+(defined in <a href="18-stdlib.html#error">chapter 18</a>, imported from <code>std:error</code>) gives
 you is a <strong>shared shape</strong> across libraries — so loggers, panic-helpers, and
 context-wrappers can consume any error without knowing its concrete type.</p>
 
@@ -305,9 +305,9 @@ layer's short text; <code>cause(self)</code> walks the chain.</p>
 
 pub type IoErrorKind =
     NotFound | PermissionDenied
-  | ConnectionRefused | TimedOut
+  | ConnectionRefused | IoTimedOut
   | UnexpectedEof | Interrupted
-  | Other</code></pre>
+  | OtherIo</code></pre>
   </div>
   <div>
     <strong>Flat</strong> — one failure mode plus optional payload.
@@ -320,9 +320,10 @@ pub type IoErrorKind =
 
 <div class="callout">
   <strong>Forward-compatibility rule for kinded errors</strong>
-  Include an <code>Other</code> variant in every public <code>*Kind</code> union, and always
-  handle it with an <code>else =&gt;</code> arm in <code>match</code>. Adding new variants
-  later is then non-breaking for any caller following the rule.
+  Include a catch-all variant in every public <code>*Kind</code> union (for example,
+  <code>OtherIo</code> in <code>std:io.IoErrorKind</code>), and always handle it with an
+  <code>else =&gt;</code> arm in <code>match</code>. Adding new variants later is then
+  non-breaking for any caller following the rule.
 </div>
 
 <h3>Annotating errors — <code>Annotated</code> + <code>with_context</code></h3>
@@ -340,6 +341,10 @@ pub function with_context&lt;T, E: Error&gt;(
   value: T | E,
   note: str,
 ): T | Annotated</code></pre>
+
+<p><code>Annotated</code> implements <code>std:fmt.Debug</code> for diagnostics. It does
+not implement generic clone, equality, or hash because the wrapped
+<code>source</code> is only guaranteed to implement <code>Error</code>.</p>
 
 <div class="diagram">
   <svg viewBox="0 0 920 220" role="img" aria-label="Annotated chain">
@@ -473,9 +478,9 @@ Use them only for programming bugs and truly unrecoverable conditions; use
     <li><strong>Pick the canonical shape.</strong> Use the <em>kinded</em> layout
         (<code>{ kind, message, ... }</code>) when callers may discriminate; <em>flat</em>
         when there is one failure mode plus payload.</li>
-    <li><strong>Always include <code>Other</code></strong> in a public <code>*Kind</code>
-        union and always use <code>else =&gt;</code> in <code>match</code> on it. Adding
-        variants later is then non-breaking.</li>
+    <li><strong>Always include a catch-all variant</strong> in a public
+        <code>*Kind</code> union and always use <code>else =&gt;</code> in <code>match</code> on it.
+        Adding variants later is then non-breaking.</li>
     <li><strong>Annotate at boundaries.</strong> Wrap with <code>Annotated</code> /
         <code>with_context(...)</code> at the layer that has the context to add. Don't wrap
         at every <code>?</code> — only where the breadcrumb is meaningful.</li>
@@ -498,7 +503,7 @@ pub struct IoError {
   pub kind:    IoErrorKind,
   pub message: str,
 }
-pub type IoErrorKind = NotFound | PermissionDenied | Other
+pub type IoErrorKind = NotFound | PermissionDenied | OtherIo
 
 pub struct ParseError {
   pub message:  str,

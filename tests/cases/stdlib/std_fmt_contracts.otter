@@ -1,0 +1,83 @@
+//@ kind: run
+//@ description: std:fmt exposes Display, Debug, FmtSink, and FmtError contracts
+//@ stdout:
+//~ display=Point(3,4)
+//~ debug=Point { x: 3, y: 4 }
+//~ sink=Point(3,4)
+//~ bytes-sink=bytes[72,105,195,169,33] text=Hié!
+//~ fmt-error=bad format
+//~ true true FmtError { message: "bad format" }
+import { println } from "std:io";
+import { Clone, Eq, Hash, ToStr } from "core:prelude";
+import { Bytes } from "std:bytes";
+import { Error } from "std:error";
+import { Display, Debug, FmtSink, FmtError } from "std:fmt";
+
+struct Point {
+  x: i64,
+  y: i64,
+}
+
+extend Point: Display {
+  function display(self): str { "Point(${self.x},${self.y})" }
+  function to_str(self): str { self.display() }
+}
+
+extend Point: Debug {
+  function debug(self): str { "Point { x: ${self.x}, y: ${self.y} }" }
+}
+
+struct Capture {
+  value: str,
+}
+
+extend Capture: FmtSink {
+  function write_str(self, s: str): null | FmtError {
+    self.value = self.value + s;
+    null
+  }
+}
+
+function render_display(value: Display): str {
+  value.display()
+}
+
+function render_debug(value: Debug): str {
+  value.debug()
+}
+
+function render_tostr(value: ToStr): str {
+  value.to_str()
+}
+
+function write_to_sink(sink: FmtSink, text: str): null | FmtError {
+  sink.write_str(text)
+}
+
+function main() {
+  var p = Point { x: 3, y: 4 };
+  var sink = Capture { value: "" };
+  var written = sink.write_str(render_tostr(p));
+
+  println("display=${render_display(p)}");
+  println("debug=${render_debug(p)}");
+  if written is null {
+    println("sink=${sink.value}");
+  }
+
+  var bytes = Bytes.new();
+  var bytes_written = write_to_sink(bytes, "Hié");
+  var more_bytes = bytes.write_str("!");
+  if bytes_written is null && more_bytes is null {
+    match bytes.decode_utf8() {
+      str text => println("bytes-sink=${bytes.to_str()} text=${text}"),
+      _ => println("bytes-sink-decode-error"),
+    }
+  }
+
+  var fmt_error = FmtError { message: "bad format" };
+  var error: Error = fmt_error;
+  println("fmt-error=${error.message()}");
+  var fmt_error_copy = fmt_error.clone();
+  println("${fmt_error == fmt_error_copy} ${fmt_error.hash() == fmt_error_copy.hash()} ${render_debug(fmt_error)}");
+}

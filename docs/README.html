@@ -353,7 +353,7 @@ assumes the ones it points back to.</p>
 
   <a class="chapter-card platform" href="18-stdlib.html"><span class="num">18 · Platform</span><span class="title">Standard library</span><span class="desc">The prelude rule, <code>core:collections</code>, and the <code>std:*</code> module index.</span></a>
   <a class="chapter-card platform" href="19-ffi.html"><span class="num">19 · Platform</span><span class="title">Foreign Function Interface</span><span class="desc"><code>extern</code>, pointers, pinning, handles.</span></a>
-  <a class="chapter-card platform" href="20-concurrency.html"><span class="num">20 · Platform</span><span class="title">Concurrency</span><span class="desc"><code>std:thread</code>, <code>std:sync</code>: threads, channels, <code>Shared</code>.</span></a>
+  <a class="chapter-card platform" href="20-concurrency.html"><span class="num">20 · Platform</span><span class="title">Concurrency</span><span class="desc"><code>std:thread</code>, <code>std:task</code>, <code>std:sync</code>: threads, executor tasks, channels, <code>Shared</code>.</span></a>
   <a class="chapter-card platform" href="21-async.html"><span class="num">21 · Platform</span><span class="title">Async</span><span class="desc"><code>Future</code>, <code>await</code>, <code>spawn</code>, <code>AsyncIterator</code>.</span></a>
   <a class="chapter-card platform" href="22-macros.html"><span class="num">22 · Platform</span><span class="title">Macros</span><span class="desc">Procedural macros: <code>@UpperCamelCase</code>, hygiene, sandbox, <code>@Derive</code>.</span></a>
 
@@ -363,6 +363,7 @@ assumes the ones it points back to.</p>
   <a class="chapter-card platform" href="26-engine.html"><span class="num">26 · Tooling</span><span class="title">Embedding engine</span><span class="desc"><code>std:engine</code>: sandboxed isolates, capability whitelist, host bindings, <code>@Bridge</code> ABI, per-isolate limits. (Design.)</span></a>
   <a class="chapter-card platform" href="27-ui.html"><span class="num">27 · Tooling</span><span class="title">UI framework — engine &amp; Skia</span><span class="desc"><code>std:ui</code>: Flutter-style retained UI. This chapter is the engine half — Skia C shim, embedder, threading/frame pipeline, <code>@RefCounted</code> peers, macro-driven rebuild minimization. (Design.)</span></a>
   <a class="chapter-card platform" href="28-ui-widgets.html"><span class="num">28 · Tooling</span><span class="title">UI framework — widgets &amp; reactivity</span><span class="desc"><code>std:ui</code> user API: <code>Widget</code>/<code>Element</code>/<code>State</code>. Two forms — manual structs (no macros) + optional <code>@Component</code> sugar — sharing one runtime; surgical (scope-granular) recomposition; Flutter catalog, grammar-consistent syntax. (Design.)</span></a>
+  <a class="chapter-card platform" href="29-extending-stdlib.html"><span class="num">29 · Tooling</span><span class="title">Extending stdlib</span><span class="desc">Contributor workflow for adding <code>core:*</code>/<code>std:*</code> modules, Rust-backed hooks, catalog exports, providers, sysroots, and tests.</span></a>
 </div>
 
 <!-- =========================================================== -->

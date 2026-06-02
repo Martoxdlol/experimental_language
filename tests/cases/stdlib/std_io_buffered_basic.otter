@@ -1,0 +1,44 @@
+//@ kind: run
+//@ description: std:io exposes buffered Reader and Writer adapters
+//@ stdout:
+//~ bufread=2 bytes[97,10] true 2 true true
+//~ buffered-writer
+//~ bufwrite=9 9 true
+import { Bytes } from "std:bytes";
+import { println, stdout, buf_reader, buf_writer, BufReader, BufWriter, Reader, Writer } from "std:io";
+
+function main() {
+  var source = Bytes.from_str("a\nbcd\nef\ngh");
+  var reader = buf_reader(source.cursor());
+  var request = Bytes.new();
+  request.push(0u8);
+  request.push(0u8);
+  var read_count = reader.read(request);
+  var payload = request.slice(2, request.size());
+  var line = reader.read_line();
+  var line_ok = false;
+  if line is str {
+    line_ok = (line as str) == "bcd\n";
+  }
+  var line_count = 0;
+  var saw_ef = false;
+  var saw_gh = false;
+  for item in reader.lines() {
+    if item is str {
+      if line_count == 0 {
+        saw_ef = (item as str) == "ef\n";
+      } else if line_count == 1 {
+        saw_gh = (item as str) == "gh";
+      }
+      line_count = line_count + 1;
+    }
+  }
+  println("bufread=${read_count as i64} ${payload.to_str()} ${line_ok} ${line_count} ${saw_ef} ${saw_gh}");
+
+  var writer = buf_writer(stdout());
+  var first = writer.write(Bytes.from_str("buffered-"));
+  var buffered_after_first = writer.buffered_len();
+  var second = writer.write(Bytes.from_str("writer\n"));
+  var flushed = writer.flush();
+  println("bufwrite=${first as i64} ${buffered_after_first} ${flushed is null}");
+}

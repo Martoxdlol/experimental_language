@@ -1,0 +1,19 @@
+//@ kind: compile-error
+//@ description: core:compiler follows the near-empty prelude rule; macro-authoring substrate types require explicit imports
+//@ stderr: cannot find type `MacroContext`
+//@ stderr: cannot find type `ASTNode`
+//@ stderr: cannot find type `Span`
+
+function needs_context(ctx: MacroContext): null {
+  null
+}
+
+function needs_node(node: ASTNode): null {
+  null
+}
+
+function needs_span(span: Span): null {
+  null
+}
+
+function main() {}

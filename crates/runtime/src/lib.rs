@@ -15,15 +15,19 @@
 pub mod async_rt;
 pub mod channels;
 pub mod foreign;
+pub mod fs;
 pub mod gc;
 pub mod gc_alloc;
 pub mod hash;
 pub mod list;
 pub mod map;
 pub mod panic_boundary;
+pub mod process;
+pub mod rand;
 pub mod shared;
 pub mod strings;
 pub mod threads;
+pub mod time;
 pub mod variadic;
 
 // Re-export the `str`/`List`/`Map` intrinsics at the crate root so generated

@@ -1,0 +1,12 @@
+struct Pending {}
+struct Ready<T> { value: T }
+extern struct Context {
+  waker_data: *u8,
+  wake_fn: extern (*u8) => null,
+}
+interface Future<Output> {
+  function poll(self, ctx: *Context): Ready<Output> | Pending;
+}
+interface AsyncIterator<T> {
+  function next_async(self): Future<Item<T> | Done>;
+}

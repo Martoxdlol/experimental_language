@@ -11,6 +11,9 @@ license.workspace = true
 [lib]
 crate-type = ["rlib", "staticlib"]
 
+[dependencies]
+getrandom = "0.2"
+
 # Compiles the worker-panic-isolation setjmp/longjmp shim (src/panic_boundary.c).
 [build-dependencies]
 cc = "1"

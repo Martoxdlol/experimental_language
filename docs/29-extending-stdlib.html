@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>29. Extending the Standard Library</title>
+<style>
+  :root {
+    --fg: #1b1b1d; --muted: #5a5a60; --bg: #fdfdfc;
+    --accent: #1a4a8a; --accent-2: #2a6f4d; --warn: #b54708;
+    --code-bg: #f4f2ee; --code-fg: #1b1b1d; --border: #e4e1dc;
+    --table-stripe: #f8f7f4; --core: #6b4ba8; --std: #1a4a8a;
+  }
+  html { box-sizing: border-box; } *, *::before, *::after { box-sizing: inherit; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color: var(--fg); background: var(--bg); line-height: 1.55;
+    max-width: 980px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem; }
+  h1, h2, h3, h4 { color: var(--fg); line-height: 1.25; margin-top: 2.2rem; margin-bottom: 0.6rem; }
+  h1 { font-size: 2rem; border-bottom: 2px solid var(--border); padding-bottom: 0.4rem; }
+  h2 { font-size: 1.45rem; margin-top: 2.6rem; }
+  h3 { font-size: 1.15rem; color: var(--accent); }
+  h4 { font-size: 1rem; color: var(--muted); }
+  p { margin: 0.7rem 0; } ul, ol { margin: 0.7rem 0; padding-left: 1.6rem; } li { margin: 0.3rem 0; }
+  code { font-family: "SF Mono", Menlo, Consolas, "Courier New", monospace;
+    background: var(--code-bg); color: var(--code-fg); padding: 0.1em 0.35em;
+    border-radius: 3px; font-size: 0.92em; }
+  pre { background: var(--code-bg); color: var(--code-fg); padding: 0.9rem 1rem;
+    border-radius: 6px; overflow-x: auto; font-size: 0.88rem; line-height: 1.5;
+    border: 1px solid var(--border); }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: 0.94rem; }
+  th, td { text-align: left; padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { background: var(--code-bg); font-weight: 600; }
+  tbody tr:nth-child(even) { background: var(--table-stripe); }
+  .lead { font-size: 1.05rem; color: var(--muted); margin-bottom: 1.6rem; }
+  .toc { background: var(--code-bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 1rem 1.2rem; margin: 1.6rem 0 2rem; font-size: 0.94rem;
+    column-count: 2; column-gap: 2rem; }
+  @media (max-width: 720px) { .toc { column-count: 1; } }
+  .toc ol { margin: 0.2rem 0 0; padding-left: 1.3rem; }
+  .toc a { color: var(--accent); text-decoration: none; } .toc a:hover { text-decoration: underline; }
+  .callout { border-left: 4px solid var(--accent); background: #f0f4fa;
+    padding: 0.8rem 1rem; margin: 1.2rem 0; border-radius: 0 6px 6px 0; }
+  .callout.warn { border-color: var(--warn); background: #fbf3ec; }
+  .callout.good { border-color: var(--accent-2); background: #eef6f1; }
+  .callout strong { display: block; margin-bottom: 0.3rem; }
+  .pill { display: inline-block; padding: 0.05em 0.45em; margin: 0 0.15em;
+    font-size: 0.78em; font-weight: 600; border-radius: 999px;
+    vertical-align: middle; font-family: -apple-system, system-ui, sans-serif; }
+  .pill.core { background: #f3eefa; color: var(--core); border: 1px solid #d3c4ec; }
+  .pill.std  { background: #eaf0f8; color: var(--std);  border: 1px solid #c2d2e8; }
+  .pill.req  { background: #eef6f1; color: var(--accent-2); border: 1px solid #c2dccf; }
+  .file-tree { font-family: "SF Mono", Menlo, Consolas, monospace; white-space: pre;
+    background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px;
+    padding: 0.9rem 1rem; overflow-x: auto; font-size: 0.88rem; line-height: 1.45; }
+</style>
+</head>
+<body>
+
+<h1>29. Extending the Standard Library</h1>
+<p class="lead">
+  This chapter is the contributor guide for adding, organizing, or replacing
+  <code>core:*</code> and <code>std:*</code> modules. It complements the public stdlib
+  surface in <a href="./18-stdlib.html">chapter 18</a>, the extended module roadmap in
+  <a href="./24-stdlib-extended.html">chapter 24</a>, and the sysroot/toolchain model in
+  <a href="./23-cli.html#sysroot">chapter 23</a>.
+</p>
+
+<div class="callout">
+  <strong>The standard library is infrastructure, not compiler folklore.</strong>
+  Every importable toolchain module must have an explicit catalog entry, a documented
+  public surface, tests for success and failure paths, and a clear implementation
+  kind. If a behavior is Rust-backed, the Otter-facing contract must still be visible
+  as ordinary <code>core:*</code> or <code>std:*</code> API.
+</div>
+
+<div class="toc">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#principles">Principles</a></li>
+    <li><a href="#module-kinds">Module kinds</a></li>
+    <li><a href="#catalog">The stdlib catalog</a></li>
+    <li><a href="#add-core">Adding a <code>core:*</code> module</a></li>
+    <li><a href="#add-std">Adding a <code>std:*</code> module</a></li>
+    <li><a href="#rust-backed">Adding Rust-backed behavior</a></li>
+    <li><a href="#providers">Custom providers and sysroots</a></li>
+    <li><a href="#visibility">Imports, prelude, and exports</a></li>
+    <li><a href="#tests">Required tests</a></li>
+    <li><a href="#checklist">Review checklist</a></li>
+  </ol>
+</div>
+
+<!-- =========================================================== -->
+<h2 id="principles">1. Principles</h2>
+
+<ul>
+  <li><strong><code>core:*</code> is language substrate.</strong> It is for things the
+  compiler/runtime treats specially: desugar targets, runtime-recognized layouts,
+  privileged handles, syntax protocols, and macro/compiler APIs.</li>
+  <li><strong><code>std:*</code> is the official library.</strong> It contains ordinary
+  toolchain-shipped APIs whether they are fully portable or target-backed:
+  filesystem, networking, clocks, process state, randomness, terminal I/O, but also
+  shared value types such as errors, JSON, HTTP, formatting, and portable I/O
+  interfaces.</li>
+  <li><strong>Authority beats portability.</strong> An API does not belong in
+  <code>core:</code> merely because it can run without an OS. If users could implement
+  the same semantics in a normal package, it belongs in <code>std:</code> or
+  <code>pkg:</code>.</li>
+  <li><strong>The prelude stays near-empty.</strong> Syntax may desugar through hidden
+  compiler knowledge, but every name that a user spells must be imported from a
+  documented module.</li>
+  <li><strong>No accidental globals.</strong> Adding a definition to the hidden toolchain
+  module does not make it public. Public availability comes from a catalog export.</li>
+  <li><strong>No target policy in random compiler code.</strong> Target differences flow
+  through stdlib providers/sysroots, not through scattered special cases in name
+  resolution.</li>
+</ul>
+
+<!-- =========================================================== -->
+<h2 id="module-kinds">2. Module kinds</h2>
+
+<table>
+  <thead><tr><th>Kind</th><th>Use when</th><th>Examples</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><code>Otter</code></td>
+      <td>The surface and behavior can be authored in Otter Fusion source:
+      interfaces, value wrappers, adapters, pure helpers, and portable library logic.</td>
+      <td><code>std:error</code>, <code>std:bytes</code>, <code>std:fmt</code>, <code>std:time.Duration</code>, <code>std:fs.Path</code>, <code>std:fs.DirEntry</code>, <code>core:sync:atomic.Ordering</code>, <code>std:hash</code>, <code>std:http</code>, <code>std:net:types</code></td>
+    </tr>
+    <tr>
+      <td><code>RustBacked</code></td>
+      <td>The behavior is a compiler/runtime intrinsic, and the Otter surface is a
+      small importable marker or function set.</td>
+      <td><code>std:io.print</code>, <code>std:io.eprintln</code>, <code>core:prelude.panic</code>, <code>std:process.exit</code>/<code>abort</code>, future target-only hooks and provider shims</td>
+    </tr>
+    <tr>
+      <td><code>Mixed</code></td>
+      <td>The public API is ordinary Otter Fusion, but some operations call Rust
+      runtime hooks or compiler intrinsics.</td>
+      <td><code>std:io</code>, <code>core:ffi</code>, <code>std:sync</code>, <code>std:fs.File</code> handles and file helpers, <code>std:time.Instant</code>/<code>SystemTime</code>, <code>std:process</code> host environment/execution helpers, <code>std:rand.OsRng</code>/<code>ThreadRng</code></td>
+    </tr>
+  </tbody>
+</table>
+
+<p>The implementation kind is descriptive and architectural. It does not create a
+separate import syntax. Users still write normal imports such as
+<code>import { Error } from "std:error"</code> or
+<code>import { println } from "std:io"</code>.</p>
+
+<!-- =========================================================== -->
+<h2 id="catalog">3. The stdlib catalog</h2>
+
+<p>The compiler-side catalog currently lives in
+<code>crates/compiler/src/sema/stdlib.rs</code>. It records the importable module path,
+tier, implementation kind, and exported names for every built-in
+<code>core:*</code>/<code>std:*</code> view.</p>
+
+<p>Otter-authored toolchain definitions live beside the catalog under
+<code>crates/compiler/src/sema/stdlib_src/</code>, split by public tier:
+<code>stdlib_src/core/*.otter</code> for compiler/runtime substrate and
+<code>stdlib_src/std/*.otter</code> for ordinary standard-library modules. The compiler
+collects the bundled source files through the explicit
+<code>TOOLCHAIN_SOURCES</code> manifest into hidden module-local owners under the
+private <code>__builtins__</code> root, then builds curated import views from the
+catalog. This preserves the near-empty prelude rule while giving stdlib code a
+real module-shaped home and allowing duplicate local names in different
+<code>std:*</code>/<code>core:*</code> modules.</p>
+
+<pre><code>StdModuleSpec {
+  path: &amp;["std", "error"],
+  tier: StdTier::Std,
+  implementation: StdImplementation::Otter,
+  exports: &amp;["Error", "Annotated", "with_context"],
+}</code></pre>
+
+<p>Name resolution builds curated views from the active <code>StdProvider</code>. The
+built-in provider is the only provider today, but the trait boundary is deliberate:
+future target sysroots can expose a different catalog without changing source-level
+import semantics.</p>
+
+<div class="callout warn">
+  <strong>Catalog exports are an API boundary.</strong>
+  Do not export helper structs, iterator adapters, runtime marker internals, or
+  compiler-only glue just because they exist in hidden toolchain source owners.
+</div>
+
+<p>Malformed provider entries are rejected before they become importable views.
+Duplicate module paths, root-only paths, unaddressable path segments, tier/root
+mismatches, duplicate exports, and missing exported symbols all produce provider
+diagnostics instead of silently exposing a partial or wrongly-tiered
+<code>core:*</code>/<code>std:*</code> module.</p>
+
+<!-- =========================================================== -->
+<h2 id="add-core">4. Adding a <code>core:*</code> module</h2>
+
+<p>Add a <code>core:*</code> module only when the compiler/runtime needs privileged
+knowledge of the API. Good candidates are syntax protocols, compiler desugar
+targets, runtime-recognized layouts, FFI substrate, macro/compiler APIs, and
+collection types whose literals/indexing are compiler-lowered.</p>
+
+<ol>
+  <li>Specify the public surface in <a href="./18-stdlib.html">chapter 18</a> or
+  <a href="./24-stdlib-extended.html">chapter 24</a>.</li>
+  <li>Author the Otter Fusion definitions in
+  <code>crates/compiler/src/sema/stdlib_src/core/&lt;module&gt;.otter</code>, or split a
+  larger substrate module into a clearly named file under that directory.</li>
+  <li>Add a <code>StdModuleSpec</code> entry with <code>StdTier::Core</code> and the correct
+  <code>StdImplementation</code>.</li>
+  <li>Export only the names that the module publicly promises.</li>
+  <li>Add import-resolution tests proving the names are available only through the
+  documented explicit import path.</li>
+  <li>Add typechecker/codegen/e2e tests for the behavior, including compile-error
+  tests for missing imports and wrong use.</li>
+  <li>Update examples, docs, LSP expectations, and ROADMAP.</li>
+</ol>
+
+<p>A <code>core:*</code> module must not be added merely for convenience or portability.
+If the API is ordinary library surface, put it in <code>std:*</code>. If it later needs
+host services, the provider can supply a target-backed <code>std:*</code> implementation
+without changing source imports.</p>
+
+<!-- =========================================================== -->
+<h2 id="add-std">5. Adding a <code>std:*</code> module</h2>
+
+<p>Add a <code>std:*</code> module when the API is official toolchain library surface but
+not language substrate. This includes both portable contracts and host-backed
+capabilities: errors, formatting, JSON, HTTP value types, files, networking, clocks,
+process state, randomness, terminal streams, native threads, and target-managed
+resources.</p>
+
+<ol>
+  <li>Identify the corresponding portable <code>std:*</code> contract, or add one first if
+  the shape is universal. For example, <code>std:fs.File</code> should implement
+  <code>std:io.Reader</code>/<code>Writer</code>/<code>Seeker</code> rather than inventing file-only
+  read/write protocols.</li>
+  <li>Author Otter Fusion surface definitions in
+  <code>crates/compiler/src/sema/stdlib_src/std/&lt;module&gt;.otter</code>. Keep pure
+  interface/value-shape code there even when behavior is Rust-backed.</li>
+  <li>Decide whether the module is <code>RustBacked</code> or <code>Mixed</code>. Most real
+  <code>std:*</code> modules will be <code>Mixed</code>: Otter API types over Rust runtime hooks.</li>
+  <li>Add the runtime hooks and backend calls needed by the implementation. JIT and
+  native builds must link and behave the same way.</li>
+  <li>Add the <code>StdModuleSpec</code> entry with <code>StdTier::Std</code>.</li>
+  <li>Add tests for ordinary imports and for <code>no-std</code> rejection. A package marked
+  <code>no-std</code> must get a hard error on <code>std:*</code> imports.</li>
+  <li>Document target assumptions and future provider behavior. If the module cannot
+  exist on some targets, specify the absence as provider behavior rather than a silent
+  partial implementation.</li>
+</ol>
+
+<div class="callout good">
+  <strong>Prefer portable contracts.</strong>
+  The source path <code>std:fs</code> should mean "the filesystem package for this target",
+  not "POSIX filesystem forever". POSIX, WASI, embedded, and sandboxed providers can
+  supply different implementations while preserving the same documented surface.
+</div>
+
+<!-- =========================================================== -->
+<h2 id="rust-backed">6. Adding Rust-backed behavior</h2>
+
+<p>Rust-backed behavior is allowed, but it must remain visible as a language-level
+contract. Do not make a new builtin by only special-casing the checker or backend.</p>
+
+<h3>Runtime hooks</h3>
+<ul>
+  <li>Runtime functions live in the appropriate <code>crates/runtime/src/*.rs</code>
+  module.</li>
+  <li>Externally-called runtime hooks use the existing <code>lang_*</code> ABI naming
+  pattern until that runtime ABI is renamed project-wide.</li>
+  <li>Hooks must define ownership, pinning, allocation, panic, and GC-root behavior
+  explicitly.</li>
+  <li>Anything that can allocate, block, suspend, panic, or hold a resource needs
+  tests for that behavior.</li>
+</ul>
+
+<h3>Backend calls</h3>
+<ul>
+  <li>Backend lowering belongs near the feature using it, not in a catch-all path.</li>
+  <li>Generated calls must be shared by JIT and native builds.</li>
+  <li>Native builds must link required support libraries deterministically.</li>
+  <li>GC and reference-counted resources must be rooted/released across all exit
+  paths, including panic and cancellation when applicable.</li>
+</ul>
+
+<h3>Otter surface</h3>
+<p>Even for <code>RustBacked</code> modules, users import names from a normal module.
+The compiler may recognize those names internally, but the documented API remains the
+source contract.</p>
+
+<!-- =========================================================== -->
+<h2 id="providers">7. Custom providers and sysroots</h2>
+
+<p>A provider is a catalog of toolchain modules for a target. Today the CLI still
+selects the built-in provider, but semantic collection already accepts an
+explicit <code>StdProvider</code>; tests use that hook to prove a target catalog can add
+custom <code>std:*</code> views over collected toolchain source, omit unsupported
+<code>std:*</code> modules, and leave listed <code>core:*</code> substrate available. Future
+compiler configuration will select a provider and its external source/sysroot
+layer from the active target/sysroot:</p>
+
+<div class="file-tree">~/.otter_fusion/toolchains/&lt;channel&gt;/lib/sysroot/&lt;triple&gt;/
+  core/
+  std/
+  manifest.toml
+  abi.json</div>
+
+<p>Provider behavior:</p>
+
+<ul>
+  <li>A provider may replace a <code>std:*</code> module implementation for a target.</li>
+  <li>A provider may omit a <code>std:*</code> module when the target cannot support it.</li>
+  <li>If a known toolchain module is omitted by the selected provider, import
+  resolution reports that provider's name rather than treating the path as an
+  unknown module.</li>
+  <li>A provider may add target-specific <code>std:*</code> modules gated by
+  manifest/sysroot configuration. Today tests exercise this with a provider-added
+  view over bundled source; external sysroot source loading is future work.</li>
+  <li>A provider should keep <code>core:*</code> stable. Replacing <code>core:*</code> is an
+  advanced sysroot operation and must preserve language ABI, compiler expectations,
+  and semantic contracts.</li>
+  <li>Provider identity, ABI version, and exported module set must be lockfile- and
+  diagnostic-visible once external sysroots are implemented.</li>
+</ul>
+
+<p>Ordinary packages must not shadow <code>std:*</code> through <code>pkg:</code>. A custom
+standard library is a toolchain/sysroot choice, not a dependency-resolution trick.</p>
+
+<!-- =========================================================== -->
+<h2 id="visibility">8. Imports, prelude, and exports</h2>
+
+<ul>
+  <li><code>core:</code> and <code>std:</code> paths are absolute. They do not depend on the
+  importing package's module tree.</li>
+  <li>Every spelled name requires an import, including standard library names such as
+  <code>List</code>, <code>Map</code>, <code>Error</code>, <code>println</code>, and <code>Thread</code>.</li>
+  <li>Adding a name to the hidden toolchain module is insufficient. It must be listed
+  in the corresponding catalog entry's <code>exports</code>.</li>
+  <li>Ambient imports activate extension methods, following the normal module rules in
+  <a href="./17-modules.html">chapter 17</a>.</li>
+  <li>Re-exports from stdlib modules must be explicit and documented. Avoid accidental
+  umbrella modules until the public surface has settled.</li>
+  <li>Provider catalog exports are validated against the collected toolchain source;
+  a provider must not advertise a symbol that its source/sysroot layer does not
+  define, and each module's export list must not contain duplicates.</li>
+  <li>Provider module paths must include both a scheme and module path, must use
+  addressable import-path segments (no empty, <code>.</code>, <code>..</code>, or embedded
+  <code>/</code> segments), must be unique, and their tier must match the path root:
+  <code>StdTier::Core</code> for <code>core:*</code>, <code>StdTier::Std</code> for
+  <code>std:*</code>.</li>
+</ul>
+
+<!-- =========================================================== -->
+<h2 id="tests">9. Required tests</h2>
+
+<p>Every stdlib addition needs tests at the level of risk it introduces. For new
+modules, the default expectation is broad coverage, not a single happy-path case.</p>
+
+<table>
+  <thead><tr><th>Area</th><th>Required coverage</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>Catalog</td>
+      <td>Unique paths, tier/path agreement, unique exports, provider lookup,
+      provider-added modules, and implementation kind coverage, including
+      provider-export materialization. Every catalog export must also appear in
+      a focused require-import negative e2e case; the stdlib catalog tests scan
+      those diagnostics and fail if a newly exported name lacks import-gating
+      coverage.</td>
+    </tr>
+    <tr>
+      <td>Imports</td>
+      <td>Explicit import success, missing import failure, unavailable module failure,
+      namespace imports, named imports, and ambient extension activation when relevant.</td>
+    </tr>
+    <tr>
+      <td>Type checking</td>
+      <td>Correct signatures, generic inference, interface bounds, dynamic dispatch,
+      coercions, and negative cases.</td>
+    </tr>
+    <tr>
+      <td>Runtime/codegen</td>
+      <td>JIT/native parity, panic behavior, allocation behavior, resource release,
+      concurrency/async behavior, and GC-stress where relevant.</td>
+    </tr>
+    <tr>
+      <td>Tooling</td>
+      <td>LSP hover/goto/completion expectations when new public names appear, plus docs
+      and examples that compile.</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>For compile-error cases, prefer dedicated files under
+<code>tests/cases/errors</code> or a focused stdlib error directory once that layout exists.
+For runtime behavior, add e2e cases under the closest feature directory and keep
+examples updated.</p>
+
+<!-- =========================================================== -->
+<h2 id="checklist">10. Review checklist</h2>
+
+<ul>
+  <li><span class="pill req">required</span> The module belongs in the chosen tier:
+  <code>core:*</code> for compiler/runtime substrate, <code>std:*</code> for official library
+  APIs and target-backed implementations.</li>
+  <li><span class="pill req">required</span> The public surface is documented in
+  chapter 18 or chapter 24 before implementation details are treated as stable.</li>
+  <li><span class="pill req">required</span> The catalog entry lists the correct
+  <code>StdTier</code>, <code>StdImplementation</code>, path, and exports.</li>
+  <li><span class="pill req">required</span> All public names require explicit imports
+  unless they are syntax-only compiler desugar targets.</li>
+  <li><span class="pill req">required</span> Rust-backed hooks have clear ownership,
+  GC, panic, blocking, and native-linking behavior.</li>
+  <li><span class="pill req">required</span> Tests include success, failure, import,
+  and runtime/codegen cases appropriate to the module.</li>
+  <li><span class="pill req">required</span> ROADMAP, goals, docs index, examples, and
+  LSP expectations are updated when the public surface changes.</li>
+</ul>
+
+<div class="callout warn">
+  <strong>Ask before changing language design.</strong>
+  Adding a module is normal stdlib work. Changing import semantics, prelude rules,
+  orphan rules, ownership semantics, async behavior, ABI, or the meaning of
+  <code>core:</code>/<code>std:</code> is language design work and needs an explicit decision.
+</div>
+
+</body>
+</html>

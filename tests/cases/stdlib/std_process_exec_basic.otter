@@ -1,0 +1,41 @@
+//@ kind: run
+//@ description: std:process runs commands to completion and captures output
+//@ stdout:
+//~ status=true exit status 0
+//~ output=true true true
+//~ missing=true true
+//~ invalid=true true
+
+import { args } from "std:process";
+import { Command, ExitStatus, Output } from "std:process";
+import { println } from "std:io";
+import { IoError } from "std:io";
+
+function main() {
+  var exe = args()[0];
+  var checked = Command.new("true");
+  var version = Command.new(exe).arg("--version");
+
+  var status = checked.status();
+  if status is IoError {
+    println("status=false ${(status as IoError).message()}");
+  } else {
+    println("status=${(status as ExitStatus).success()} ${(status as ExitStatus).to_str()}");
+  }
+
+  var captured = version.output();
+  if captured is IoError {
+    println("output=false false false");
+  } else {
+    var out = captured as Output;
+    println("output=${out.status().success()} ${out.stdout().size() > 0} ${out.stderr().size() == 0}");
+  }
+
+  var missing_status = Command.new("__otter_fusion_missing_process_for_stdlib_test__").status();
+  var missing_output = Command.new("__otter_fusion_missing_process_for_stdlib_test__").output();
+  println("missing=${missing_status is IoError} ${missing_output is IoError}");
+
+  var empty_program_status = Command.new("").status();
+  var invalid_env_output = Command.new(exe).env_var("BAD=KEY", "value").output();
+  println("invalid=${empty_program_status is IoError} ${invalid_env_output is IoError}");
+}

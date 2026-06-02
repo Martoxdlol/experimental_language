@@ -1,0 +1,41 @@
+//@ kind: run
+//@ serial
+//@ description: std:sync exposes Shared and channel endpoints through the official std module
+//@ stdout:
+//~ locked=15
+//~ received=3
+//~ true true channel closed ChannelClosed
+//~ true true lock busy LockBusy
+import { println } from "std:io";
+import { Future } from "core:async";
+import { Clone, Eq, Hash, ToStr } from "core:prelude";
+import { Debug } from "std:fmt";
+import { Shared, Sender, Receiver, ChannelClosed, LockBusy, channel } from "std:sync";
+
+function render_debug(value: Debug): str {
+  value.debug()
+}
+
+function main(): Future<null> async {
+  var shared: Shared<i64> = Shared.new(10);
+  var locked: i64 = await shared.lock((value: i64): i64 => value + 5);
+  println("locked=${locked}");
+
+  var ends = channel<i64>();
+  var tx: Sender<i64> = ends.0;
+  var rx: Receiver<i64> = ends.1;
+  tx.send(3);
+  var received: i64 | ChannelClosed = await rx.recv();
+  match received {
+    i64 value => println("received=${value}"),
+    ChannelClosed => println("received=closed"),
+  }
+
+  var closed = ChannelClosed {};
+  var closed_copy = closed.clone();
+  println("${closed == closed_copy} ${closed.hash() == closed_copy.hash()} ${closed.to_str()} ${render_debug(closed)}");
+
+  var busy = LockBusy {};
+  var busy_copy = busy.clone();
+  println("${busy == busy_copy} ${busy.hash() == busy_copy.hash()} ${busy.to_str()} ${render_debug(busy)}");
+}

@@ -1,0 +1,16 @@
+//@ kind: compile-error
+//@ description: std:thread follows the near-empty prelude rule; thread handle values require explicit imports
+//@ stderr: cannot find type `Thread`
+//@ stderr: cannot find type `JoinHandle`
+//@ stderr: cannot find type `Joined`
+//@ stderr: cannot find type `Panicked`
+
+function needs_thread(t: Thread): null {
+  null
+}
+
+function needs_join(handle: JoinHandle<i64>, result: Joined<i64> | Panicked): null {
+  null
+}
+
+function main() {}

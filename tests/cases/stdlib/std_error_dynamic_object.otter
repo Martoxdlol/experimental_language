@@ -1,0 +1,25 @@
+//@ kind: run
+//@ description: Error is a usable interface object; dynamic dispatch reaches message/cause/to_str through the std:error import
+//@ stdout:
+//~ message=disk missing
+//~ text=io:disk missing
+//~ cause=none
+import { println } from "std:io";
+import { Error } from "std:error";
+
+struct IoError { msg: str }
+
+extend IoError: Error {
+  function message(self): str { self.msg }
+  function cause(self): Error | null { null }
+  function to_str(self): str { "io:" + self.msg }
+}
+
+function main() {
+  var e: Error = IoError { msg: "disk missing" };
+  println("message=${e.message()}");
+  println("text=${e.to_str()}");
+  if e.cause() is null {
+    println("cause=none");
+  }
+}

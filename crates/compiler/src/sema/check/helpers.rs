@@ -87,7 +87,7 @@ impl<'a> Checker<'a> {
     // -- assignability & helpers --------------------------------------------
 
     /// Is a value of type `found` usable where `expected` is required?
-    pub(crate) fn assignable(&self, found: Ty, expected: Ty) -> bool {
+    pub(crate) fn assignable(&mut self, found: Ty, expected: Ty) -> bool {
         if found == expected
             || self.tcx.is_error(found)
             || self.tcx.is_error(expected)
@@ -116,17 +116,21 @@ impl<'a> Checker<'a> {
 
     /// Whether `expected` is an interface type that `found` (a nominal type)
     /// implements via a visible `extend` block.
-    pub(crate) fn implements_dyn(&self, found: Ty, expected: Ty) -> bool {
-        let TyKind::Named { def: idef, .. } = self.tcx.kind(expected) else {
+    pub(crate) fn implements_dyn(&mut self, found: Ty, expected: Ty) -> bool {
+        let TyKind::Named { def: idef, .. } = self.tcx.kind(expected).clone() else {
             return false;
         };
-        if self.prog.def(*idef).kind != DefKind::Interface {
+        if self.prog.def(idef).kind != DefKind::Interface {
             return false;
+        }
+        if let TyKind::Param(p) = self.tcx.kind(found).clone() {
+            let bounds = self.bound_ifaces(p);
+            return bounds.into_iter().any(|(b, _)| self.iface_reaches(b, idef));
         }
         let TyKind::Named { def: cdef, .. } = self.tcx.kind(found) else {
             return false;
         };
-        self.hir.iface_impls.contains_key(&(*cdef, *idef))
+        self.hir.iface_impls.contains_key(&(*cdef, idef))
     }
 
     pub(crate) fn expect(&mut self, found: Ty, expected: Ty, span: Span) {

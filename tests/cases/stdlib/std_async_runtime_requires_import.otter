@@ -1,0 +1,19 @@
+//@ kind: compile-error
+//@ description: std:async follows the near-empty prelude rule; async runtime helpers are not visible unless imported
+//@ stderr: cannot find type `TimedOut`
+//@ stderr: cannot find value `yield_now` in scope
+//@ stderr: cannot find value `sleep` in scope
+//@ stderr: cannot find value `timeout` in scope
+
+function use_timeout(value: i64 | TimedOut): str {
+  match value {
+    i64 n => n as str,
+    TimedOut => "timed out",
+  }
+}
+
+function main() {
+  yield_now();
+  sleep(1);
+  timeout(null, 1);
+}

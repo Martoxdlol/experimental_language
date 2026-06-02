@@ -1,0 +1,233 @@
+struct ListIter<T> { list: List<T>, index: i64 }
+extend<T> ListIter<T>: Iterator<T> {
+  function next(self): Item<T> | Done {
+    if self.index >= self.list.size() {
+      Done {}
+    } else {
+      var v = self.list[self.index];
+      self.index = self.index + 1;
+      Item { value: v }
+    }
+  }
+}
+struct Entry<K, V> { key: K, value: V }
+struct MapKeys<K> { snapshot: List<K>, index: i64 }
+struct MapValues<V> { snapshot: List<V>, index: i64 }
+struct MapEntries<K, V> { map: Map<K, V>, keys: List<K>, index: i64 }
+extend<K> MapKeys<K>: Iterator<K> {
+  function next(self): Item<K> | Done {
+    if self.index >= self.snapshot.size() {
+      Done {}
+    } else {
+      var v = self.snapshot[self.index];
+      self.index = self.index + 1;
+      Item { value: v }
+    }
+  }
+}
+extend<V> MapValues<V>: Iterator<V> {
+  function next(self): Item<V> | Done {
+    if self.index >= self.snapshot.size() {
+      Done {}
+    } else {
+      var v = self.snapshot[self.index];
+      self.index = self.index + 1;
+      Item { value: v }
+    }
+  }
+}
+extend<K, V> MapEntries<K, V>: Iterator<Entry<K, V>> {
+  function next(self): Item<Entry<K, V>> | Done {
+    if self.index >= self.keys.size() {
+      Done {}
+    } else {
+      var k = self.keys[self.index];
+      self.index = self.index + 1;
+      var v = self.map[k];
+      Item { value: Entry { key: k, value: v } }
+    }
+  }
+}
+struct StrChars { snapshot: List<char>, index: i64 }
+struct StrBytes { snapshot: List<u8>, index: i64 }
+extend StrChars: Iterator<char> {
+  function next(self): Item<char> | Done {
+    if self.index >= self.snapshot.size() {
+      Done {}
+    } else {
+      var v = self.snapshot[self.index];
+      self.index = self.index + 1;
+      Item { value: v }
+    }
+  }
+}
+extend StrBytes: Iterator<u8> {
+  function next(self): Item<u8> | Done {
+    if self.index >= self.snapshot.size() {
+      Done {}
+    } else {
+      var v = self.snapshot[self.index];
+      self.index = self.index + 1;
+      Item { value: v }
+    }
+  }
+}
+struct Set<T> {
+  data: List<T>,
+}
+
+extend<T: Eq> Set<T> {
+  function new(): Set<T> { Set { data: List<T>() } }
+
+  function size(self): i64 { self.data.size() }
+
+  function is_empty(self): bool { self.data.is_empty() }
+
+  function contains(self, value: T): bool { self.data.contains(value) }
+
+  function insert(self, value: T): bool {
+    if self.data.contains(value) {
+      false
+    } else {
+      self.data.push(value);
+      true
+    }
+  }
+
+  function remove(self, value: T): bool {
+    var i = 0;
+    while i < self.data.size() {
+      if self.data[i] == value {
+        self.data.remove(i);
+        return true;
+      }
+      i = i + 1;
+    }
+    false
+  }
+
+  function clear(self) { self.data.clear(); }
+
+  function iter(self): Iterator<T> { self.data.iter() }
+
+  function to_list(self): List<T> {
+    var out = List<T>();
+    for value in self.iter() {
+      out.push(value);
+    }
+    out
+  }
+
+  function insert_all(self, other: Set<T>) {
+    for value in other.iter() {
+      self.insert(value);
+    }
+  }
+
+  function is_subset(self, other: Set<T>): bool {
+    var yes = true;
+    for value in self.iter() {
+      if yes && !other.contains(value) {
+        yes = false;
+      }
+    }
+    yes
+  }
+
+  function is_superset(self, other: Set<T>): bool {
+    other.is_subset(self)
+  }
+
+  function is_disjoint(self, other: Set<T>): bool {
+    var yes = true;
+    for value in self.iter() {
+      if yes && other.contains(value) {
+        yes = false;
+      }
+    }
+    yes
+  }
+
+  function union(self, other: Set<T>): Set<T> {
+    var out = Set { data: List<T>() };
+    for value in self.iter() {
+      out.insert(value);
+    }
+    for value in other.iter() {
+      out.insert(value);
+    }
+    out
+  }
+
+  function intersect(self, other: Set<T>): Set<T> {
+    var out = Set { data: List<T>() };
+    for value in self.iter() {
+      if other.contains(value) {
+        out.insert(value);
+      }
+    }
+    out
+  }
+
+  function difference(self, other: Set<T>): Set<T> {
+    var out = Set { data: List<T>() };
+    for value in self.iter() {
+      if !other.contains(value) {
+        out.insert(value);
+      }
+    }
+    out
+  }
+}
+
+extend<T: Eq> Set<T>: Eq {
+  function eq(self, other: Set<T>): bool {
+    if self.size() != other.size() {
+      false
+    } else {
+      var same = true;
+      for value in self.iter() {
+        if same && !other.contains(value) {
+          same = false;
+        }
+      }
+      same
+    }
+  }
+}
+
+extend<T: Eq + Clone> Set<T>: Clone {
+  function clone(self): Set<T> {
+    var out = Set { data: List<T>() };
+    for value in self.iter() {
+      out.insert(value.clone());
+    }
+    out
+  }
+}
+
+extend<T: Eq + Hash> Set<T>: Hash {
+  function hash(self): u64 {
+    var h = 0u64;
+    for value in self.iter() {
+      h = (h + value.hash()) % 4294967291u64;
+    }
+    h
+  }
+}
+
+extend<T: Eq + ToStr> Set<T>: ToStr {
+  function to_str(self): str {
+    var out = "Set{";
+    var first = true;
+    for value in self.iter() {
+      if first {
+        first = false;
+      } else {
+        out = out + ",";
+      }
+      out = out + value.to_str();
+    }
+    out + "}"
+  }
+}

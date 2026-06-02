@@ -4,7 +4,8 @@
 //~ t=1010
 import { println } from "std:io";
 import { Item, Done, Future } from "core:prelude";
-import { AsyncIterator, sleep } from "std:async";
+import { AsyncIterator } from "core:async";
+import { sleep } from "std:async";
 struct Range { current: i64, end: i64 }
 extend Range: AsyncIterator<i64> {
   function next_async(self): Future<Item<i64> | Done> {

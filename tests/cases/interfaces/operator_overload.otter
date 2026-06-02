@@ -1,5 +1,5 @@
 //@ kind: run
-//@ description: operator overloading via Add and Eq
+//@ description: operator overloading via extend methods and Eq
 //@ stdout:
 //~ 4
 //~ 6
@@ -7,7 +7,7 @@
 import { println } from "std:io";
 import { Eq } from "core:prelude";
 struct V2 { x: i64, y: i64 }
-extend V2: Add {
+extend V2 {
   function add(self, other: V2): V2 { V2 { x: self.x + other.x, y: self.y + other.y } }
 }
 extend V2: Eq {

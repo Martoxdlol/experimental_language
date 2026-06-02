@@ -18,6 +18,21 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         }
     }
 
+    /// If `ty` (resolved) is `Set<E>`, return `E` (resolved).
+    pub(crate) fn set_elem_of(&self, ty: Ty) -> Option<Ty> {
+        let ty = resolve_shallow(self.cx.analysis, ty, &self.subst);
+        match self.cx.analysis.tcx.kind(ty) {
+            TyKind::Named { def, args }
+                if *def == self.cx.analysis.program.set_def
+                    && self.cx.analysis.program.set_def != DefId(0)
+                    && args.len() == 1 =>
+            {
+                Some(resolve_shallow(self.cx.analysis, args[0], &self.subst))
+            }
+            _ => None,
+        }
+    }
+
     /// Create an empty list, telling the runtime whether elements are managed
     /// pointers (so the collector traces them) and whether they are channel
     /// endpoints that need GC backstop releases.
@@ -40,6 +55,18 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             )
             .expect("list_new returns a pointer");
         self.mark_root(list)
+    }
+
+    /// Create an empty `Set<E>` wrapper with a fresh backing `List<E>`.
+    pub(crate) fn gen_set_new(&mut self, elem: Ty) -> Value {
+        let list = self.gen_list_new(elem);
+        self.mark_root(list);
+        let def = self.cx.analysis.program.set_def;
+        let layout = self.struct_layout(def, &[elem]);
+        let ptr = self.alloc_struct(&layout);
+        let off = layout.offsets[layout.index_of("data").expect("set data field")] as i32;
+        self.b.ins().store(MemFlags::trusted(), list, ptr, off);
+        ptr
     }
 
     /// Widen an element to the list's 8-byte slot (`i64`). This is the central
@@ -748,7 +775,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 let prog = &self.cx.analysis.program;
                 // Skip the language's builtin generic types (List/Map don't act
                 // as map keys); only user nominal types reach the impl lookup.
-                if *def == prog.list_def || *def == prog.map_def {
+                if *def == prog.list_def || *def == prog.map_def || *def == prog.set_def {
                     return (null, null);
                 }
                 let cdef = *def;

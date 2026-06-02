@@ -1,0 +1,74 @@
+//@ kind: compile-error
+//@ description: std:log follows the near-empty prelude rule; log values and helpers require explicit imports
+//@ stderr: cannot find type `Level`
+//@ stderr: cannot find type `LogTrace`
+//@ stderr: cannot find type `LogDebug`
+//@ stderr: cannot find type `Info`
+//@ stderr: cannot find type `Warn`
+//@ stderr: cannot find type `LogError`
+//@ stderr: cannot find type `Record`
+//@ stderr: cannot find type `LoggerAlreadySet`
+//@ stderr: cannot find value `level_trace` in scope
+//@ stderr: cannot find value `level_debug` in scope
+//@ stderr: cannot find value `level_info` in scope
+//@ stderr: cannot find value `level_warn` in scope
+//@ stderr: cannot find value `level_error` in scope
+//@ stderr: cannot find value `record` in scope
+//@ stderr: cannot find value `empty_fields` in scope
+//@ stderr: cannot find value `log_record` in scope
+//@ stderr: cannot find value `trace` in scope
+//@ stderr: cannot find value `debug` in scope
+//@ stderr: cannot find value `info` in scope
+//@ stderr: cannot find value `warn` in scope
+//@ stderr: cannot find value `error` in scope
+//@ stderr: cannot find value `info_with` in scope
+//@ stderr: cannot find value `trace_with` in scope
+//@ stderr: cannot find value `debug_with` in scope
+//@ stderr: cannot find value `warn_with` in scope
+//@ stderr: cannot find value `error_with` in scope
+import { Map } from "core:collections";
+import { SystemTime } from "std:time";
+
+function make(level: Level): Record {
+  Record {
+    level: level,
+    message: "x",
+    module: "m",
+    fields: Map.new<str, str>(),
+    time: SystemTime.from_unix_nanos(0),
+  }
+}
+
+function make_level_variants(): Level {
+  var trace: Level = LogTrace {};
+  var debug_level: Level = LogDebug {};
+  var info_level: Level = Info {};
+  var warn_level: Level = Warn {};
+  var error_level: Level = LogError {};
+  trace
+}
+
+function make_marker(): LoggerAlreadySet {
+  LoggerAlreadySet {}
+}
+
+function main() {
+  var fields = empty_fields();
+  var rec = record(level_info(), "msg", "module", fields);
+  level_trace();
+  level_debug();
+  level_info();
+  level_warn();
+  level_error();
+  log_record(rec);
+  trace("hello");
+  debug("hello");
+  info("hello");
+  warn("hello");
+  error("hello");
+  info_with("info", fields);
+  trace_with("trace", fields);
+  debug_with("debug", fields);
+  warn_with("warn", fields);
+  error_with("error", fields);
+}

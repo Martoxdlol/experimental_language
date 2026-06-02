@@ -1,0 +1,21 @@
+//@ kind: run
+//@ description: await widens a concrete Future implementation to the core:async Future interface object
+//@ stdout:
+//~ awaited=7
+import { println } from "std:io";
+import { Future, Ready, Pending, Context } from "core:async";
+
+struct Once {
+  value: i64,
+}
+
+extend Once: Future<i64> {
+  function poll(self, ctx: *Context): Ready<i64> | Pending {
+    Ready { value: self.value }
+  }
+}
+
+function main(): Future<null> async {
+  var value = await Once { value: 7 };
+  println("awaited=${value}");
+}

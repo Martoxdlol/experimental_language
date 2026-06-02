@@ -1,0 +1,801 @@
+struct Get {}
+struct Head {}
+struct Post {}
+struct Put {}
+struct Delete {}
+struct Patch {}
+struct Options {}
+struct Trace {}
+struct Connect {}
+struct Custom { name: str }
+type Method = Get | Head | Post | Put | Delete | Patch | Options | Trace | Connect | Custom;
+
+struct Http10 {}
+struct Http11 {}
+struct Http2 {}
+struct Http3 {}
+type HttpVersion = Http10 | Http11 | Http2 | Http3;
+
+struct Status {
+  code: u16,
+  reason: str | null,
+}
+
+struct Headers {
+  values: Map<str, List<str>>,
+}
+
+struct HeaderEntry {
+  name: str,
+  value: str,
+}
+
+struct HttpRequest {
+  method: Method,
+  url: Url,
+  headers: Headers,
+  body: Bytes,
+  version: HttpVersion,
+}
+
+struct HttpResponse {
+  status: Status,
+  headers: Headers,
+  body: Bytes,
+  version: HttpVersion,
+}
+
+function __http_header_key(name: str): str {
+  var out = "";
+  for ch in name.chars() {
+    var cp = ch as i64;
+    if cp >= 65 && cp <= 90 {
+      out = out + ((cp + 32) as char) as str;
+    } else {
+      out = out + ch as str;
+    }
+  }
+  out
+}
+
+function __http_hash_add(left: u64, right: u64): u64 {
+  ((left % 4294967291u64) + (right % 4294967291u64)) % 4294967291u64
+}
+
+function __http_hash_mix(left: u64, right: u64): u64 {
+  ((left % 4294967291u64) * 16777619u64 + (right % 4294967291u64)) % 4294967291u64
+}
+
+function __http_str_option_eq(left: str | null, right: str | null): bool {
+  if left is str {
+    if right is str {
+      (left as str) == (right as str)
+    } else {
+      false
+    }
+  } else {
+    right is null
+  }
+}
+
+function method_get(): Method { Get {} }
+function method_head(): Method { Head {} }
+function method_post(): Method { Post {} }
+function method_put(): Method { Put {} }
+function method_delete(): Method { Delete {} }
+function method_patch(): Method { Patch {} }
+function method_options(): Method { Options {} }
+function method_trace(): Method { Trace {} }
+function method_connect(): Method { Connect {} }
+function method_custom(name: str): Method { Custom { name: name } }
+
+function http_10(): HttpVersion { Http10 {} }
+function http_11(): HttpVersion { Http11 {} }
+function http_2(): HttpVersion { Http2 {} }
+function http_3(): HttpVersion { Http3 {} }
+
+function status(code: u16, reason: str | null): Status {
+  Status { code: code, reason: reason }
+}
+
+function headers(): Headers {
+  Headers { values: Map.new<str, List<str>>() }
+}
+
+function header_entry(name: str, value: str): HeaderEntry {
+  HeaderEntry { name: __http_header_key(name), value: value }
+}
+
+function http_request(
+  method: Method,
+  url: Url,
+  headers: Headers,
+  body: Bytes,
+  version: HttpVersion,
+): HttpRequest {
+  HttpRequest { method: method.clone(), url: url.clone(), headers: headers.clone(), body: body.clone(), version: version.clone() }
+}
+
+function http_response(
+  status: Status,
+  headers: Headers,
+  body: Bytes,
+  version: HttpVersion,
+): HttpResponse {
+  HttpResponse { status: status.clone(), headers: headers.clone(), body: body.clone(), version: version.clone() }
+}
+
+extend Method {
+  function as_str(self): str {
+    if self is Get {
+      "GET"
+    } else if self is Head {
+      "HEAD"
+    } else if self is Post {
+      "POST"
+    } else if self is Put {
+      "PUT"
+    } else if self is Delete {
+      "DELETE"
+    } else if self is Patch {
+      "PATCH"
+    } else if self is Options {
+      "OPTIONS"
+    } else if self is Trace {
+      "TRACE"
+    } else if self is Connect {
+      "CONNECT"
+    } else {
+      (self as Custom).name
+    }
+  }
+}
+
+extend Method: Clone {
+  function clone(self): Method {
+    if self is Get {
+      Get {}
+    } else if self is Head {
+      Head {}
+    } else if self is Post {
+      Post {}
+    } else if self is Put {
+      Put {}
+    } else if self is Delete {
+      Delete {}
+    } else if self is Patch {
+      Patch {}
+    } else if self is Options {
+      Options {}
+    } else if self is Trace {
+      Trace {}
+    } else if self is Connect {
+      Connect {}
+    } else {
+      Custom { name: (self as Custom).name }
+    }
+  }
+}
+
+extend Method: Eq {
+  function eq(self, other: Method): bool {
+    self.as_str() == other.as_str()
+  }
+}
+
+extend Method: Hash {
+  function hash(self): u64 { self.as_str().hash() }
+}
+
+extend Method: ToStr {
+  function to_str(self): str { self.as_str() }
+}
+
+extend Method: Debug {
+  function debug(self): str {
+    if self is Custom {
+      "Custom(\"" + (self as Custom).name + "\")"
+    } else {
+      "Method(\"" + self.as_str() + "\")"
+    }
+  }
+}
+
+extend HttpVersion {
+  function as_str(self): str {
+    if self is Http10 {
+      "HTTP/1.0"
+    } else if self is Http11 {
+      "HTTP/1.1"
+    } else if self is Http2 {
+      "HTTP/2"
+    } else {
+      "HTTP/3"
+    }
+  }
+}
+
+extend HttpVersion: Clone {
+  function clone(self): HttpVersion {
+    if self is Http10 {
+      Http10 {}
+    } else if self is Http11 {
+      Http11 {}
+    } else if self is Http2 {
+      Http2 {}
+    } else {
+      Http3 {}
+    }
+  }
+}
+
+extend HttpVersion: Eq {
+  function eq(self, other: HttpVersion): bool {
+    self.as_str() == other.as_str()
+  }
+}
+
+extend HttpVersion: Hash {
+  function hash(self): u64 { self.as_str().hash() }
+}
+
+extend HttpVersion: ToStr {
+  function to_str(self): str { self.as_str() }
+}
+
+extend HttpVersion: Debug {
+  function debug(self): str { "HttpVersion(\"" + self.as_str() + "\")" }
+}
+
+extend Status {
+  function continue_(): Status { Status { code: 100u16, reason: null } }
+  function switching_protocols(): Status { Status { code: 101u16, reason: null } }
+
+  function ok(): Status { Status { code: 200u16, reason: null } }
+  function created(): Status { Status { code: 201u16, reason: null } }
+  function accepted(): Status { Status { code: 202u16, reason: null } }
+  function no_content(): Status { Status { code: 204u16, reason: null } }
+
+  function moved_permanently(): Status { Status { code: 301u16, reason: null } }
+  function found(): Status { Status { code: 302u16, reason: null } }
+  function see_other(): Status { Status { code: 303u16, reason: null } }
+  function not_modified(): Status { Status { code: 304u16, reason: null } }
+  function temporary_redirect(): Status { Status { code: 307u16, reason: null } }
+  function permanent_redirect(): Status { Status { code: 308u16, reason: null } }
+
+  function bad_request(): Status { Status { code: 400u16, reason: null } }
+  function unauthorized(): Status { Status { code: 401u16, reason: null } }
+  function forbidden(): Status { Status { code: 403u16, reason: null } }
+  function not_found(): Status { Status { code: 404u16, reason: null } }
+  function method_not_allowed(): Status { Status { code: 405u16, reason: null } }
+  function conflict(): Status { Status { code: 409u16, reason: null } }
+  function unprocessable_content(): Status { Status { code: 422u16, reason: null } }
+  function too_many_requests(): Status { Status { code: 429u16, reason: null } }
+
+  function internal_err(): Status { Status { code: 500u16, reason: null } }
+  function not_implemented(): Status { Status { code: 501u16, reason: null } }
+  function bad_gateway(): Status { Status { code: 502u16, reason: null } }
+  function service_unavailable(): Status { Status { code: 503u16, reason: null } }
+  function gateway_timeout(): Status { Status { code: 504u16, reason: null } }
+
+  function code(self): u16 { self.code }
+  function reason(self): str | null { self.reason }
+
+  function with_reason(self, reason: str): Status {
+    Status { code: self.code, reason: reason }
+  }
+
+  function without_reason(self): Status {
+    Status { code: self.code, reason: null }
+  }
+
+  function is_informational(self): bool { self.code >= 100u16 && self.code < 200u16 }
+  function is_success(self): bool { self.code >= 200u16 && self.code < 300u16 }
+  function is_redirection(self): bool { self.code >= 300u16 && self.code < 400u16 }
+  function is_client_error(self): bool { self.code >= 400u16 && self.code < 500u16 }
+  function is_server_error(self): bool { self.code >= 500u16 && self.code < 600u16 }
+
+  function reason_or_default(self): str {
+    if self.reason is str {
+      self.reason as str
+    } else if self.code == 100u16 {
+      "Continue"
+    } else if self.code == 101u16 {
+      "Switching Protocols"
+    } else if self.code == 200u16 {
+      "OK"
+    } else if self.code == 201u16 {
+      "Created"
+    } else if self.code == 202u16 {
+      "Accepted"
+    } else if self.code == 204u16 {
+      "No Content"
+    } else if self.code == 301u16 {
+      "Moved Permanently"
+    } else if self.code == 302u16 {
+      "Found"
+    } else if self.code == 303u16 {
+      "See Other"
+    } else if self.code == 304u16 {
+      "Not Modified"
+    } else if self.code == 307u16 {
+      "Temporary Redirect"
+    } else if self.code == 308u16 {
+      "Permanent Redirect"
+    } else if self.code == 400u16 {
+      "Bad Request"
+    } else if self.code == 401u16 {
+      "Unauthorized"
+    } else if self.code == 403u16 {
+      "Forbidden"
+    } else if self.code == 404u16 {
+      "Not Found"
+    } else if self.code == 405u16 {
+      "Method Not Allowed"
+    } else if self.code == 409u16 {
+      "Conflict"
+    } else if self.code == 418u16 {
+      "I'm a Teapot"
+    } else if self.code == 422u16 {
+      "Unprocessable Content"
+    } else if self.code == 429u16 {
+      "Too Many Requests"
+    } else if self.code == 500u16 {
+      "Internal Server Error"
+    } else if self.code == 501u16 {
+      "Not Implemented"
+    } else if self.code == 502u16 {
+      "Bad Gateway"
+    } else if self.code == 503u16 {
+      "Service Unavailable"
+    } else if self.code == 504u16 {
+      "Gateway Timeout"
+    } else {
+      ""
+    }
+  }
+}
+
+extend Status: Eq {
+  function eq(self, other: Status): bool {
+    self.code == other.code && __http_str_option_eq(self.reason, other.reason)
+  }
+}
+
+extend Status: Clone {
+  function clone(self): Status { Status { code: self.code, reason: self.reason } }
+}
+
+extend Status: Hash {
+  function hash(self): u64 {
+    var out = __http_hash_add("status:code".hash(), self.code as u64);
+    if self.reason is str {
+      __http_hash_add(out, ("status:reason:" + (self.reason as str)).hash())
+    } else {
+      __http_hash_add(out, "status:reason:null".hash())
+    }
+  }
+}
+
+extend Status: ToStr {
+  function to_str(self): str {
+    var reason = self.reason_or_default();
+    if reason == "" {
+      "${self.code}"
+    } else {
+      "${self.code} " + reason
+    }
+  }
+}
+
+extend Status: Debug {
+  function debug(self): str {
+    if self.reason is str {
+      "Status { code: ${self.code}, reason: \"" + (self.reason as str) + "\" }"
+    } else {
+      "Status { code: ${self.code}, reason: null }"
+    }
+  }
+}
+
+extend Headers {
+  function new(): Headers { headers() }
+
+  function get(self, name: str): str | null {
+    var values = self.values.get(__http_header_key(name));
+    if values is List<str> {
+      var list = values as List<str>;
+      if list.is_empty() {
+        null
+      } else {
+        list[list.size() - 1]
+      }
+    } else {
+      null
+    }
+  }
+
+  function get_all(self, name: str): List<str> {
+    var out = List<str>();
+    var values = self.values.get(__http_header_key(name));
+    if values is List<str> {
+      for value in (values as List<str>) {
+        out.push(value);
+      }
+    }
+    out
+  }
+
+  function entries(self): List<HeaderEntry> {
+    var out = List<HeaderEntry>();
+    for entry in self.values {
+      for value in entry.value {
+        out.push(HeaderEntry { name: entry.key, value: value });
+      }
+    }
+    out
+  }
+
+  function names(self): List<str> {
+    var out = List<str>();
+    for entry in self.values {
+      out.push(entry.key);
+    }
+    out
+  }
+
+  function set(self, name: str, value: str): null {
+    var values = List<str>();
+    values.push(value);
+    self.values.set(__http_header_key(name), values);
+  }
+
+  function append(self, name: str, value: str): null {
+    var key = __http_header_key(name);
+    var values = self.values.get(key);
+    if values is List<str> {
+      (values as List<str>).push(value);
+    } else {
+      self.set(key, value);
+    }
+  }
+
+  function remove(self, name: str): null {
+    self.values.remove(__http_header_key(name));
+  }
+
+  function contains(self, name: str): bool { self.values.contains(__http_header_key(name)) }
+
+  function size(self): i64 { self.values.size() }
+
+  function is_empty(self): bool { self.values.is_empty() }
+
+  function value_count(self): i64 {
+    var count = 0;
+    for entry in self.values {
+      count = count + entry.value.size();
+    }
+    count
+  }
+
+  function clear(self): null {
+    self.values = Map.new<str, List<str>>();
+  }
+
+  function equals(self, other: Headers): bool {
+    if self.values.size() != other.values.size() {
+      false
+    } else {
+      var same = true;
+      for entry in self.values {
+        if same {
+          var other_values = other.values.get(entry.key);
+          if other_values is List<str> {
+            var right = other_values as List<str>;
+            if entry.value.size() != right.size() {
+              same = false;
+            } else {
+              var i = 0;
+              while same && i < entry.value.size() {
+                same = entry.value[i] == right[i];
+                i = i + 1;
+              }
+            }
+          } else {
+            same = false;
+          }
+        }
+      }
+      same
+    }
+  }
+
+  function debug_string(self): str {
+    var out = "Headers { ";
+    var first_header = true;
+    for entry in self.values {
+      if first_header {
+        first_header = false;
+      } else {
+        out = out + ", ";
+      }
+      out = out + entry.key + ": [";
+      var first_value = true;
+      for value in entry.value {
+        if first_value {
+          first_value = false;
+        } else {
+          out = out + ", ";
+        }
+        out = out + "\"" + value + "\"";
+      }
+      out = out + "]";
+    }
+    out + " }"
+  }
+
+  function hash_values(self, values: List<str>): u64 {
+    var out = "headers:values".hash() % 4294967291u64;
+    for value in values {
+      out = __http_hash_mix(out, value.hash());
+    }
+    out
+  }
+
+  function stable_hash(self): u64 {
+    var out = "headers".hash() % 4294967291u64;
+    for entry in self.values {
+      var entry_hash = __http_hash_add(("header:" + entry.key).hash(), self.hash_values(entry.value));
+      out = __http_hash_add(out, entry_hash);
+    }
+    out
+  }
+}
+
+extend Headers: Eq {
+  function eq(self, other: Headers): bool { self.equals(other) }
+}
+
+extend Headers: Clone {
+  function clone(self): Headers {
+    var out = Headers.new();
+    for entry in self.values {
+      var values = List<str>();
+      for value in entry.value {
+        values.push(value);
+      }
+      out.values.set(entry.key, values);
+    }
+    out
+  }
+}
+
+extend Headers: Hash {
+  function hash(self): u64 { self.stable_hash() }
+}
+
+extend Headers: Debug {
+  function debug(self): str { self.debug_string() }
+}
+
+extend HeaderEntry {
+  function new(name: str, value: str): HeaderEntry {
+    HeaderEntry { name: __http_header_key(name), value: value }
+  }
+
+  function name(self): str { self.name }
+
+  function value(self): str { self.value }
+}
+
+extend HeaderEntry: Eq {
+  function eq(self, other: HeaderEntry): bool {
+    self.name == other.name && self.value == other.value
+  }
+}
+
+extend HeaderEntry: Clone {
+  function clone(self): HeaderEntry {
+    HeaderEntry { name: self.name, value: self.value }
+  }
+}
+
+extend HeaderEntry: Hash {
+  function hash(self): u64 { (self.name + ":" + self.value).hash() }
+}
+
+extend HeaderEntry: ToStr {
+  function to_str(self): str { self.name + ": " + self.value }
+}
+
+extend HeaderEntry: Debug {
+  function debug(self): str {
+    "HeaderEntry { name: \"" + self.name + "\", value: \"" + self.value + "\" }"
+  }
+}
+
+extend HttpRequest {
+  function method(self): Method { self.method.clone() }
+  function url(self): Url { self.url.clone() }
+  function headers(self): Headers { self.headers.clone() }
+  function body(self): Bytes { self.body.clone() }
+  function version(self): HttpVersion { self.version.clone() }
+
+  function with_method(self, method: Method): HttpRequest {
+    HttpRequest { method: method.clone(), url: self.url.clone(), headers: self.headers.clone(), body: self.body.clone(), version: self.version.clone() }
+  }
+
+  function with_url(self, url: Url): HttpRequest {
+    HttpRequest { method: self.method.clone(), url: url.clone(), headers: self.headers.clone(), body: self.body.clone(), version: self.version.clone() }
+  }
+
+  function with_headers(self, headers: Headers): HttpRequest {
+    HttpRequest { method: self.method.clone(), url: self.url.clone(), headers: headers.clone(), body: self.body.clone(), version: self.version.clone() }
+  }
+
+  function with_body(self, body: Bytes): HttpRequest {
+    HttpRequest { method: self.method.clone(), url: self.url.clone(), headers: self.headers.clone(), body: body.clone(), version: self.version.clone() }
+  }
+
+  function with_version(self, version: HttpVersion): HttpRequest {
+    HttpRequest { method: self.method.clone(), url: self.url.clone(), headers: self.headers.clone(), body: self.body.clone(), version: version.clone() }
+  }
+
+  function with_header(self, name: str, value: str): HttpRequest {
+    var next = self.headers.clone();
+    next.append(name, value);
+    self.with_headers(next)
+  }
+
+  function with_set_header(self, name: str, value: str): HttpRequest {
+    var next = self.headers.clone();
+    next.set(name, value);
+    self.with_headers(next)
+  }
+
+  function without_header(self, name: str): HttpRequest {
+    var next = self.headers.clone();
+    next.remove(name);
+    self.with_headers(next)
+  }
+
+  function clear_headers(self): HttpRequest {
+    self.with_headers(Headers.new())
+  }
+}
+
+extend HttpRequest: Eq {
+  function eq(self, other: HttpRequest): bool {
+    self.method.eq(other.method)
+      && self.url.eq(other.url)
+      && self.headers.eq(other.headers)
+      && self.body.eq(other.body)
+      && self.version.eq(other.version)
+  }
+}
+
+extend HttpRequest: Clone {
+  function clone(self): HttpRequest {
+    HttpRequest {
+      method: self.method.clone(),
+      url: self.url.clone(),
+      headers: self.headers.clone(),
+      body: self.body.clone(),
+      version: self.version.clone(),
+    }
+  }
+}
+
+extend HttpRequest: Hash {
+  function hash(self): u64 {
+    var out = __http_hash_add("request:method".hash(), self.method.hash());
+    out = __http_hash_mix(out, self.url.hash());
+    out = __http_hash_mix(out, self.headers.hash());
+    out = __http_hash_mix(out, self.body.hash());
+    __http_hash_mix(out, self.version.hash())
+  }
+}
+
+extend HttpRequest: Debug {
+  function debug(self): str {
+    "HttpRequest { method: "
+      + self.method.debug()
+      + ", url: "
+      + self.url.debug()
+      + ", headers: "
+      + self.headers.debug()
+      + ", body: "
+      + self.body.debug()
+      + ", version: "
+      + self.version.debug()
+      + " }"
+  }
+}
+
+extend HttpResponse {
+  function status(self): Status { self.status.clone() }
+  function headers(self): Headers { self.headers.clone() }
+  function body(self): Bytes { self.body.clone() }
+  function version(self): HttpVersion { self.version.clone() }
+
+  function with_status(self, status: Status): HttpResponse {
+    HttpResponse { status: status.clone(), headers: self.headers.clone(), body: self.body.clone(), version: self.version.clone() }
+  }
+
+  function with_headers(self, headers: Headers): HttpResponse {
+    HttpResponse { status: self.status.clone(), headers: headers.clone(), body: self.body.clone(), version: self.version.clone() }
+  }
+
+  function with_body(self, body: Bytes): HttpResponse {
+    HttpResponse { status: self.status.clone(), headers: self.headers.clone(), body: body.clone(), version: self.version.clone() }
+  }
+
+  function with_version(self, version: HttpVersion): HttpResponse {
+    HttpResponse { status: self.status.clone(), headers: self.headers.clone(), body: self.body.clone(), version: version.clone() }
+  }
+
+  function with_header(self, name: str, value: str): HttpResponse {
+    var next = self.headers.clone();
+    next.append(name, value);
+    self.with_headers(next)
+  }
+
+  function with_set_header(self, name: str, value: str): HttpResponse {
+    var next = self.headers.clone();
+    next.set(name, value);
+    self.with_headers(next)
+  }
+
+  function without_header(self, name: str): HttpResponse {
+    var next = self.headers.clone();
+    next.remove(name);
+    self.with_headers(next)
+  }
+
+  function clear_headers(self): HttpResponse {
+    self.with_headers(Headers.new())
+  }
+}
+
+extend HttpResponse: Eq {
+  function eq(self, other: HttpResponse): bool {
+    self.status.eq(other.status)
+      && self.headers.eq(other.headers)
+      && self.body.eq(other.body)
+      && self.version.eq(other.version)
+  }
+}
+
+extend HttpResponse: Clone {
+  function clone(self): HttpResponse {
+    HttpResponse {
+      status: self.status.clone(),
+      headers: self.headers.clone(),
+      body: self.body.clone(),
+      version: self.version.clone(),
+    }
+  }
+}
+
+extend HttpResponse: Hash {
+  function hash(self): u64 {
+    var out = __http_hash_add("response:status".hash(), self.status.hash());
+    out = __http_hash_mix(out, self.headers.hash());
+    out = __http_hash_mix(out, self.body.hash());
+    __http_hash_mix(out, self.version.hash())
+  }
+}
+
+extend HttpResponse: Debug {
+  function debug(self): str {
+    "HttpResponse { status: "
+      + self.status.debug()
+      + ", headers: "
+      + self.headers.debug()
+      + ", body: "
+      + self.body.debug()
+      + ", version: "
+      + self.version.debug()
+      + " }"
+  }
+}

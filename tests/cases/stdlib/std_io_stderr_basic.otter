@@ -1,0 +1,21 @@
+//@ kind: run
+//@ description: std:io exposes stderr marker helpers backed by runtime writes
+//@ stdout:
+//~ out-line
+//~ counts=4 true 4 true
+//@ stderr: err-line
+
+import { Bytes } from "std:bytes";
+import { Writer, eprintln, println, stderr, stdout } from "std:io";
+
+function main() {
+  var out = Bytes.from_str("out-");
+  var err = Bytes.from_str("err-");
+  var wrote_out = stdout().write(out);
+  var flushed_out = stdout().flush();
+  var wrote_err = stderr().write(err);
+  var flushed_err = stderr().flush();
+  eprintln("line");
+  println("line");
+  println("counts=${wrote_out as i64} ${flushed_out is null} ${wrote_err as i64} ${flushed_err is null}");
+}

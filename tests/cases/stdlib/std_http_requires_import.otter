@@ -1,0 +1,147 @@
+//@ kind: compile-error
+//@ description: std:http follows the near-empty prelude rule; HTTP value types and helpers are not visible unless imported
+//@ stderr: cannot find type `Method`
+//@ stderr: cannot find type `Get`
+//@ stderr: cannot find type `Head`
+//@ stderr: cannot find type `Post`
+//@ stderr: cannot find type `Put`
+//@ stderr: cannot find type `Delete`
+//@ stderr: cannot find type `Patch`
+//@ stderr: cannot find type `Options`
+//@ stderr: cannot find type `Trace`
+//@ stderr: cannot find type `Connect`
+//@ stderr: cannot find type `Custom`
+//@ stderr: cannot find type `HttpVersion`
+//@ stderr: cannot find type `Http10`
+//@ stderr: cannot find type `Http11`
+//@ stderr: cannot find type `Http2`
+//@ stderr: cannot find type `Http3`
+//@ stderr: cannot find type `Status`
+//@ stderr: cannot find type `Headers`
+//@ stderr: cannot find type `HeaderEntry`
+//@ stderr: cannot find type `HttpRequest`
+//@ stderr: cannot find type `HttpResponse`
+//@ stderr: cannot find value `method_get` in scope
+//@ stderr: cannot find value `method_head` in scope
+//@ stderr: cannot find value `method_post` in scope
+//@ stderr: cannot find value `method_put` in scope
+//@ stderr: cannot find value `method_delete` in scope
+//@ stderr: cannot find value `method_patch` in scope
+//@ stderr: cannot find value `method_options` in scope
+//@ stderr: cannot find value `method_trace` in scope
+//@ stderr: cannot find value `method_connect` in scope
+//@ stderr: cannot find value `method_custom` in scope
+//@ stderr: cannot find value `http_10` in scope
+//@ stderr: cannot find value `http_11` in scope
+//@ stderr: cannot find value `http_2` in scope
+//@ stderr: cannot find value `http_3` in scope
+//@ stderr: cannot find value `Status` in scope
+//@ stderr: cannot find value `headers` in scope
+//@ stderr: cannot find value `header_entry` in scope
+//@ stderr: cannot find value `status` in scope
+//@ stderr: cannot find value `http_request` in scope
+//@ stderr: cannot find value `http_response` in scope
+
+function method(): Method {
+  method_get()
+}
+
+function method_variant(): Get {
+  Get {}
+}
+
+function head_variant(): Head {
+  Head {}
+}
+
+function post_variant(): Post {
+  Post {}
+}
+
+function put_variant(): Put {
+  Put {}
+}
+
+function delete_variant(): Delete {
+  Delete {}
+}
+
+function patch_variant(): Patch {
+  Patch {}
+}
+
+function options_variant(): Options {
+  Options {}
+}
+
+function trace_variant(): Trace {
+  Trace {}
+}
+
+function connect_variant(): Connect {
+  Connect {}
+}
+
+function custom_variant(): Custom {
+  Custom { name: "REPORT" }
+}
+
+function version(): HttpVersion {
+  http_11()
+}
+
+function http10_variant(): Http10 {
+  Http10 {}
+}
+
+function http11_variant(): Http11 {
+  Http11 {}
+}
+
+function http2_variant(): Http2 {
+  Http2 {}
+}
+
+function http3_variant(): Http3 {
+  Http3 {}
+}
+
+function make_status(): Status {
+  Status.ok()
+}
+
+function make_headers(): Headers {
+  headers()
+}
+
+function make_entry(): HeaderEntry {
+  header_entry("x", "1")
+}
+
+function make_request(): HttpRequest {
+  http_request(method_get(), null, headers(), null, http_11())
+}
+
+function make_response(): HttpResponse {
+  http_response(Status.ok(), headers(), null, http_11())
+}
+
+function main() {
+  var h = headers();
+  header_entry("x", "1");
+  status(200u16, null);
+  method_head();
+  method_post();
+  method_put();
+  method_delete();
+  method_patch();
+  method_options();
+  method_trace();
+  method_connect();
+  method_custom("REPORT");
+  http_10();
+  http_2();
+  http_3();
+  http_request(method_get(), null, h, null, http_11());
+  http_response(Status.ok(), h, null, http_11());
+}

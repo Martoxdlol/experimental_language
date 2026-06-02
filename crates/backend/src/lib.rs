@@ -320,6 +320,155 @@ fn register_runtime_symbols(b: &mut JITBuilder) {
     b.symbol("lang_char_to_str", runtime::lang_char_to_str as *const u8);
     b.symbol("lang_print", runtime::lang_print as *const u8);
     b.symbol("lang_println", runtime::lang_println as *const u8);
+    b.symbol("lang_eprint", runtime::lang_eprint as *const u8);
+    b.symbol("lang_eprintln", runtime::lang_eprintln as *const u8);
+    b.symbol(
+        "lang_io_stdin_read",
+        runtime::lang_io_stdin_read as *const u8,
+    );
+    b.symbol(
+        "lang_io_stdin_read_to_end",
+        runtime::lang_io_stdin_read_to_end as *const u8,
+    );
+    b.symbol(
+        "lang_io_stdout_write",
+        runtime::lang_io_stdout_write as *const u8,
+    );
+    b.symbol(
+        "lang_io_stderr_write",
+        runtime::lang_io_stderr_write as *const u8,
+    );
+    b.symbol(
+        "lang_io_stdout_flush",
+        runtime::lang_io_stdout_flush as *const u8,
+    );
+    b.symbol(
+        "lang_io_stderr_flush",
+        runtime::lang_io_stderr_flush as *const u8,
+    );
+    b.symbol(
+        "lang_fs_read_text",
+        runtime::fs::lang_fs_read_text as *const u8,
+    );
+    b.symbol(
+        "lang_fs_write_text",
+        runtime::fs::lang_fs_write_text as *const u8,
+    );
+    b.symbol(
+        "lang_fs_append_text",
+        runtime::fs::lang_fs_append_text as *const u8,
+    );
+    b.symbol(
+        "lang_fs_read_bytes",
+        runtime::fs::lang_fs_read_bytes as *const u8,
+    );
+    b.symbol(
+        "lang_fs_write_bytes",
+        runtime::fs::lang_fs_write_bytes as *const u8,
+    );
+    b.symbol(
+        "lang_fs_file_open",
+        runtime::fs::lang_fs_file_open as *const u8,
+    );
+    b.symbol(
+        "lang_fs_file_close",
+        runtime::fs::lang_fs_file_close as *const u8,
+    );
+    b.symbol(
+        "lang_fs_file_read",
+        runtime::fs::lang_fs_file_read as *const u8,
+    );
+    b.symbol(
+        "lang_fs_file_read_to_end",
+        runtime::fs::lang_fs_file_read_to_end as *const u8,
+    );
+    b.symbol(
+        "lang_fs_file_write",
+        runtime::fs::lang_fs_file_write as *const u8,
+    );
+    b.symbol(
+        "lang_fs_file_flush",
+        runtime::fs::lang_fs_file_flush as *const u8,
+    );
+    b.symbol(
+        "lang_fs_file_seek",
+        runtime::fs::lang_fs_file_seek as *const u8,
+    );
+    b.symbol("lang_fs_exists", runtime::fs::lang_fs_exists as *const u8);
+    b.symbol("lang_fs_is_file", runtime::fs::lang_fs_is_file as *const u8);
+    b.symbol("lang_fs_is_dir", runtime::fs::lang_fs_is_dir as *const u8);
+    b.symbol("lang_fs_kind", runtime::fs::lang_fs_kind as *const u8);
+    b.symbol("lang_fs_len", runtime::fs::lang_fs_len as *const u8);
+    b.symbol(
+        "lang_fs_read_only",
+        runtime::fs::lang_fs_read_only as *const u8,
+    );
+    b.symbol(
+        "lang_fs_executable",
+        runtime::fs::lang_fs_executable as *const u8,
+    );
+    b.symbol("lang_fs_remove", runtime::fs::lang_fs_remove as *const u8);
+    b.symbol("lang_fs_rename", runtime::fs::lang_fs_rename as *const u8);
+    b.symbol(
+        "lang_fs_create_dir",
+        runtime::fs::lang_fs_create_dir as *const u8,
+    );
+    b.symbol(
+        "lang_fs_create_dir_all",
+        runtime::fs::lang_fs_create_dir_all as *const u8,
+    );
+    b.symbol(
+        "lang_fs_canonicalize",
+        runtime::fs::lang_fs_canonicalize as *const u8,
+    );
+    b.symbol(
+        "lang_fs_native_separator",
+        runtime::fs::lang_fs_native_separator as *const u8,
+    );
+    b.symbol(
+        "lang_fs_read_dir",
+        runtime::fs::lang_fs_read_dir as *const u8,
+    );
+    b.symbol(
+        "lang_process_args",
+        runtime::process::lang_process_args as *const u8,
+    );
+    b.symbol(
+        "lang_process_env",
+        runtime::process::lang_process_env as *const u8,
+    );
+    b.symbol(
+        "lang_process_env_all",
+        runtime::process::lang_process_env_all as *const u8,
+    );
+    b.symbol(
+        "lang_process_set_env",
+        runtime::process::lang_process_set_env as *const u8,
+    );
+    b.symbol(
+        "lang_process_status",
+        runtime::process::lang_process_status as *const u8,
+    );
+    b.symbol(
+        "lang_process_output",
+        runtime::process::lang_process_output as *const u8,
+    );
+    b.symbol(
+        "lang_rand_os_u32",
+        runtime::rand::lang_rand_os_u32 as *const u8,
+    );
+    b.symbol(
+        "lang_time_monotonic_nanos",
+        runtime::time::lang_time_monotonic_nanos as *const u8,
+    );
+    b.symbol(
+        "lang_time_system_nanos",
+        runtime::time::lang_time_system_nanos as *const u8,
+    );
+    b.symbol(
+        "lang_time_sleep_nanos",
+        runtime::time::lang_time_sleep_nanos as *const u8,
+    );
     // Variadic `extern function` calls (`docs/19` §13) route through `libffi`.
     b.symbol(
         "lang_variadic_call",
@@ -529,6 +678,23 @@ fn run_codegen<M: Module>(
 /// async `poll`s as the worklist drains). The module is never finalized — only
 /// the IR text is collected, so this is side-effect-free.
 pub fn compile_clif(analysis: &Analysis) -> CgResult<String> {
+    compile_clif_with_filter(analysis, |_| true)
+}
+
+/// Compile only definitions selected as emit roots and return their generated
+/// Cranelift IR plus any callees they pull in. This keeps debug `emit clif`
+/// focused on user source while preserving lazy codegen for imported stdlib
+/// functions that the user code actually calls.
+pub fn compile_clif_for_files(analysis: &Analysis, file_count: usize) -> CgResult<String> {
+    compile_clif_with_filter(analysis, |def| {
+        analysis.program.def(def).span.file.0 < file_count as u32
+    })
+}
+
+fn compile_clif_with_filter(
+    analysis: &Analysis,
+    include_seed: impl Fn(DefId) -> bool,
+) -> CgResult<String> {
     let hir = &analysis.hir;
     let isa = make_isa(target_lexicon::Triple::host(), false);
     let builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
@@ -553,7 +719,7 @@ pub fn compile_clif(analysis: &Analysis) -> CgResult<String> {
         line_info: Vec::new(),
         func_len: HashMap::new(),
     };
-    cg.seed()?;
+    cg.seed_with(&include_seed)?;
     cg.run()?;
     Ok(cg.clif.take().unwrap_or_default().join("\n"))
 }
@@ -1100,11 +1266,18 @@ impl<'a, M: Module> Codegen<'a, M> {
     }
 
     fn seed(&mut self) -> CgResult<()> {
+        self.seed_with(|_| true)
+    }
+
+    fn seed_with(&mut self, include_def: impl Fn(DefId) -> bool) -> CgResult<()> {
         for (i, def) in self.analysis.program.defs.iter().enumerate() {
+            let did = DefId(i as u32);
+            if !include_def(did) {
+                continue;
+            }
             // `test "name" { … }` bodies are zero-arg unit functions compiled like
             // any non-generic function so `otter_fusion test` can call them.
             if def.kind == DefKind::Test {
-                let did = DefId(i as u32);
                 if let Some(fid) = declare_instance(
                     self.module,
                     &mut self.funcs,
@@ -1150,7 +1323,6 @@ impl<'a, M: Module> Codegen<'a, M> {
             if f.body.is_none() {
                 continue;
             }
-            let did = DefId(i as u32);
             if let Some(fid) = declare_instance(
                 self.module,
                 &mut self.funcs,

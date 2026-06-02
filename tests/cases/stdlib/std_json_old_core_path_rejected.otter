@@ -1,0 +1,7 @@
+//@ kind: compile-error
+//@ description: JSON values are ordinary stdlib API, not compiler substrate; core:json is rejected
+//@ stderr: no built-in module `core:json`
+
+import { Json } from "core:json";
+
+function main() {}

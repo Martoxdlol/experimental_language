@@ -1,0 +1,23 @@
+//@ kind: compile-error
+//@ description: std:json follows the near-empty prelude rule; JSON values and constructors require explicit imports
+//@ stderr: cannot find type `Json` in scope
+//@ stderr: cannot find value `json_null` in scope
+//@ stderr: cannot find value `json_bool` in scope
+//@ stderr: cannot find value `json_number` in scope
+//@ stderr: cannot find value `json_string` in scope
+//@ stderr: cannot find value `json_array` in scope
+//@ stderr: cannot find value `json_object` in scope
+
+import { List, Map } from "core:collections";
+
+function main() {
+  var value: Json = null;
+  var items = List<Json>();
+  var entries = Map.new<str, Json>();
+  json_null();
+  json_bool(true);
+  json_number(1.0);
+  json_string("x");
+  json_array(items);
+  json_object(entries);
+}

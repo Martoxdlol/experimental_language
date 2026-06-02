@@ -1,0 +1,41 @@
+//@ kind: run
+//@ description: core:async exposes syntax protocols while std:async keeps runtime helpers
+//@ stdout:
+//~ total=3
+import { println } from "std:io";
+import { Item, Done } from "core:prelude";
+import { AsyncIterator, Future } from "core:async";
+import { yield_now } from "std:async";
+
+struct Counter {
+  value: i64,
+  end: i64,
+}
+
+extend Counter: AsyncIterator<i64> {
+  function next_async(self): Future<Item<i64> | Done> {
+    async {
+      var _ = await yield_now();
+      if self.value >= self.end {
+        Done {}
+      } else {
+        var n = self.value;
+        self.value = self.value + 1;
+        Item { value: n }
+      }
+    }
+  }
+}
+
+function sum(stream: AsyncIterator<i64>): Future<i64> async {
+  var total = 0;
+  for await n in stream {
+    total = total + n;
+  }
+  total
+}
+
+function main(): Future<null> async {
+  var total = await sum(Counter { value: 0, end: 3 });
+  println("total=${total}");
+}

@@ -1,0 +1,94 @@
+//@ kind: compile-error
+//@ description: std:io follows the near-empty prelude rule; contracts, values, streams, and helpers require imports
+//@ stderr: cannot find type `Reader`
+//@ stderr: cannot find type `Writer`
+//@ stderr: cannot find type `Seeker`
+//@ stderr: cannot find type `SeekFrom`
+//@ stderr: cannot find type `Start`
+//@ stderr: cannot find type `Current`
+//@ stderr: cannot find type `End`
+//@ stderr: cannot find type `IoError`
+//@ stderr: cannot find type `IoErrorKind`
+//@ stderr: cannot find type `NotFound`
+//@ stderr: cannot find type `PermissionDenied`
+//@ stderr: cannot find type `ConnectionRefused`
+//@ stderr: cannot find type `IoTimedOut`
+//@ stderr: cannot find type `UnexpectedEof`
+//@ stderr: cannot find type `Interrupted`
+//@ stderr: cannot find type `OtherIo`
+//@ stderr: cannot find type `Stdin`
+//@ stderr: cannot find type `Stdout`
+//@ stderr: cannot find type `Stderr`
+//@ stderr: cannot find type `BufReader`
+//@ stderr: cannot find type `BufWriter`
+//@ stderr: cannot find value `buf_reader` in scope
+//@ stderr: cannot find value `buf_writer` in scope
+//@ stderr: cannot find value `stdin` in scope
+//@ stderr: cannot find value `stdout` in scope
+//@ stderr: cannot find value `stderr` in scope
+//@ stderr: cannot find value `print` in scope
+//@ stderr: cannot find value `println` in scope
+//@ stderr: cannot find value `eprint` in scope
+//@ stderr: cannot find value `eprintln` in scope
+
+import { Bytes } from "std:bytes";
+
+function use_reader(reader: Reader): i64 | IoError {
+  reader.read(Bytes.new())
+}
+
+function use_writer(writer: Writer): null | IoError {
+  writer.flush()
+}
+
+function use_seeker(seeker: Seeker, pos: SeekFrom): i64 | IoError {
+  seeker.seek(pos)
+}
+
+function make_kind(): IoErrorKind {
+  OtherIo {}
+}
+
+function make_all_kinds(): IoErrorKind {
+  var missing: IoErrorKind = NotFound {};
+  var denied: IoErrorKind = PermissionDenied {};
+  var refused: IoErrorKind = ConnectionRefused {};
+  var timed: IoErrorKind = IoTimedOut {};
+  var eof: IoErrorKind = UnexpectedEof {};
+  var interrupted: IoErrorKind = Interrupted {};
+  missing
+}
+
+function make_error(): IoError {
+  IoError { kind: NotFound {}, message: "missing" }
+}
+
+function make_stdin(): Stdin {
+  stdin()
+}
+
+function make_stdout(): Stdout {
+  stdout()
+}
+
+function make_stderr(): Stderr {
+  stderr()
+}
+
+function make_reader(reader: Reader): BufReader {
+  buf_reader(reader)
+}
+
+function make_writer(writer: Writer): BufWriter {
+  buf_writer(writer)
+}
+
+function main() {
+  var start: SeekFrom = Start { offset: 0u64 };
+  var current: SeekFrom = Current { offset: 0 };
+  var end: SeekFrom = End { offset: 0 };
+  print("hi");
+  println("hi");
+  eprint("hi");
+  eprintln("hi");
+}

@@ -1,0 +1,19 @@
+//@ kind: compile-error
+//@ description: std:error follows the near-empty prelude rule; error contracts and helpers are not visible unless imported
+//@ stderr: cannot find type `Error`
+//@ stderr: cannot find type `Annotated`
+//@ stderr: cannot find value `with_context` in scope
+struct MyError {}
+extend MyError: Error {
+  function message(self): str { "nope" }
+  function cause(self): Error | null { null }
+  function to_str(self): str { "nope" }
+}
+
+function wrap(e: Error): Annotated {
+  Annotated { note: "ctx", source: e }
+}
+
+function main() {
+  var result = with_context(1, "ctx");
+}

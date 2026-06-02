@@ -1,0 +1,411 @@
+//@ kind: run
+//@ description: std:net:types exposes portable network identifier value types without opening sockets
+//@ stdout:
+//~ 127.0.0.1
+//~ true
+//~ [0:0:0:0:0:0:0:1]:443
+//~ otter://docs.example/guide?q=stdlib#net
+//~ https://ada@example.com:8443/search?q=otter
+//~ true
+//~ true
+//~ url-snapshot=https://ada@example.com:8443/search?q=otter source=fusion
+//~ https://ada@example.com:8443/search?q=otter
+//~ IpAddr("127.0.0.1")
+//~ SocketAddr("[0:0:0:0:0:0:0:1]:443")
+//~ Uri("otter://docs.example/guide?q=stdlib#net")
+//~ Url("https://ada@example.com:8443/search?q=otter")
+//~ parse=bad uri at 4 true true ParseError { message: "bad uri", position: 4 }
+//~ parsed-ip=192.168.0.1 true
+//~ parsed-ip6=2001:db8:0:0:0:0:0:1 true
+//~ scoped=fe80:0:0:0:0:0:0:1%eth0 eth0
+//~ parsed-ip6-full=0:0:0:0:0:0:0:1
+//~ parsed-ip6-v4tail=0:0:0:0:0:ffff:c000:280
+//~ parsed-ip6-v4tail-full=2001:db8:0:0:0:0:c000:280
+//~ bad-ip6=expected 8 IPv6 groups at 8
+//~ bad-ip6-multi=multiple IPv6 compression markers at 4
+//~ bad-ip6-hex=expected IPv6 hex digit at 3
+//~ bad-ip6-v4tail-order=IPv4 tail must be final IPv6 group at 8
+//~ bad-ip6-v4tail-decimal=decimal value out of range at 9
+//~ bad-ip6-zone=expected IPv6 zone id at 8
+//~ parsed-socket=10.0.0.1:8080 8080
+//~ parsed-socket-general=10.0.0.1:8080
+//~ parsed-socket6=[2001:db8:0:0:0:0:0:1]:443 true 443
+//~ parsed-socket6-zone=[fe80:0:0:0:0:0:0:1%en0]:5353 en0
+//~ bad-socket6-bracket=expected closing IPv6 bracket at 8
+//~ bad-socket6-delim=expected host:port at 5
+//~ bad-socket6-port=expected decimal digits at 6
+//~ bad-socket6-host=expected IPv6 hex digit at 4
+//~ bad-ip=decimal value out of range at 2
+//~ bad-socket=expected decimal digits at 9
+//~ parsed-uri=otter://docs.example/guide?q=stdlib#net true
+//~ uri-access=otter docs.example /guide q=stdlib net
+//~ urn=urn:otter:fusion
+//~ bad-uri=expected URI scheme delimiter at 8
+//~ bad-authority=expected URI authority at 8
+//~ parsed-url=https://ada@example.com:8443/search?q=otter true true
+//~ no-path=https://example.com
+//~ parsed-url6=https://[2001:db8:0:0:0:0:0:1]:8443/search
+//~ parsed-url6-zone=http://[fe80:0:0:0:0:0:0:1%en0]/
+//~ url-access=https ada example.com 8443 /search net otter
+//~ url-query-snapshot=q=otter mutated=changed
+//~ url-builder=https://ada@docs.example:443/docs?q=docs#top q=docs source=later
+//~ url-query-build=https://ada@docs.example:443/docs?q=override&page=1#top get=override/1/none removed=https://ada@docs.example:443/docs?page=1#top cleared=https://ada@docs.example:443/docs#top original=https://ada@docs.example:443/docs?q=docs#top
+//~ url-hash-order=true true
+//~ url-clear=http://docs.example/docs?q=docs none none
+//~ percent=Otter%20Fusion%2Fcaf%C3%A9~ decoded=Otter Fusion/café~
+//~ percent-raw=raw café
+//~ bad-percent=truncated percent escape at 3
+//~ bad-percent-hex=expected percent hex digit at 0
+//~ bad-percent-utf8=invalid UTF-8 percent byte at 0
+//~ bad-percent-trunc=utf-8
+//~ bad-url=expected URL scheme delimiter at 14
+//~ bad-host=expected URL host at 8
+//~ bad-port=expected decimal digit at 20
+//~ bad-query=expected query key/value delimiter at 30
+//~ bad-url6-bracket=expected closing IPv6 bracket at 16
+//~ bad-url6-delim=expected URL host/port delimiter at 13
+//~ bad-url6-host=expected IPv6 hex digit at 12
+
+import { Map } from "core:collections";
+import { Clone, Eq, Hash, ToStr } from "core:prelude";
+import { Error } from "std:error";
+import { Debug } from "std:fmt";
+import { println } from "std:io";
+import { ip_v4, ip_v6, ip_v6_scoped, socket_addr, uri, url, parse_ip_v4, parse_ip_v6, parse_ipv4_socket_addr, parse_socket_addr, parse_uri, parse_url, percent_encode_component, percent_decode_component, IpAddr, SocketAddr, Uri, Url, ParseError } from "std:net:types";
+
+function debug(value: Debug): str {
+  value.debug()
+}
+
+function main() {
+  var loopback = ip_v4(127u8, 0u8, 0u8, 1u8);
+  println(loopback.to_str());
+  println("${loopback.is_v4()}");
+
+  var loop6 = ip_v6(0u16, 0u16, 0u16, 0u16, 0u16, 0u16, 0u16, 1u16);
+  var socket = socket_addr(loop6, 443u16);
+  println(socket.to_str());
+
+  var docs = uri("otter", "docs.example", "/guide", "q=stdlib", "net");
+  println(docs.to_str());
+
+  var query = Map.new<str, str>();
+  query.set("q", "otter");
+  var link = url("https", "ada", "example.com", 8443u16, "/search", query, null);
+  var copy = link.clone();
+  println(link.to_str());
+  println("${copy == link}");
+  query.set("q", "fusion");
+  println("${copy == link}");
+  println("url-snapshot=${link.to_str()} source=${query["q"]}");
+  println(copy.to_str());
+  println(debug(loopback));
+  println(debug(socket));
+  println(debug(docs));
+  println(debug(copy));
+
+  var parse = ParseError { message: "bad uri", position: 4 };
+  var parse_copy = parse.clone();
+  var err: Error = parse;
+  println("parse=${err.to_str()} ${parse == parse_copy} ${parse.hash() == parse_copy.hash()} ${debug(parse)}");
+
+  match parse_ip_v4("192.168.0.1") {
+    IpAddr ip => println("parsed-ip=${ip.to_str()} ${ip.is_v4()}"),
+    ParseError e => println("bad parsed-ip ${e.to_str()}"),
+  }
+
+  match parse_ip_v6("2001:db8::1") {
+    IpAddr ip => println("parsed-ip6=${ip.to_str()} ${ip.is_v6()}"),
+    ParseError e => println("bad parsed-ip6 ${e.to_str()}"),
+  }
+
+  var scoped = ip_v6_scoped(0xfe80u16, 0u16, 0u16, 0u16, 0u16, 0u16, 0u16, 1u16, "eth0");
+  match scoped.zone_id() {
+    str zone => println("scoped=${scoped.to_str()} ${zone}"),
+    null => println("scoped=${scoped.to_str()} none"),
+  }
+
+  match parse_ip_v6("0:0:0:0:0:0:0:1") {
+    IpAddr ip => println("parsed-ip6-full=${ip.to_str()}"),
+    ParseError e => println("bad parsed-ip6-full ${e.to_str()}"),
+  }
+
+  match parse_ip_v6("::ffff:192.0.2.128") {
+    IpAddr ip => println("parsed-ip6-v4tail=${ip.to_str()}"),
+    ParseError e => println("bad parsed-ip6-v4tail ${e.to_str()}"),
+  }
+
+  match parse_ip_v6("2001:db8:0:0:0:0:192.0.2.128") {
+    IpAddr ip => println("parsed-ip6-v4tail-full=${ip.to_str()}"),
+    ParseError e => println("bad parsed-ip6-v4tail-full ${e.to_str()}"),
+  }
+
+  match parse_ip_v6("2001:db8") {
+    IpAddr ip => println("unexpected ${ip.to_str()}"),
+    ParseError e => println("bad-ip6=${e.to_str()}"),
+  }
+
+  match parse_ip_v6("1::2::3") {
+    IpAddr ip => println("unexpected ${ip.to_str()}"),
+    ParseError e => println("bad-ip6-multi=${e.to_str()}"),
+  }
+
+  match parse_ip_v6("200g::1") {
+    IpAddr ip => println("unexpected ${ip.to_str()}"),
+    ParseError e => println("bad-ip6-hex=${e.to_str()}"),
+  }
+
+  match parse_ip_v6("2001:192.0.2.128:1") {
+    IpAddr ip => println("unexpected ${ip.to_str()}"),
+    ParseError e => println("bad-ip6-v4tail-order=${e.to_str()}"),
+  }
+
+  match parse_ip_v6("::ffff:999.0.2.128") {
+    IpAddr ip => println("unexpected ${ip.to_str()}"),
+    ParseError e => println("bad-ip6-v4tail-decimal=${e.to_str()}"),
+  }
+
+  match parse_ip_v6("fe80::1%") {
+    IpAddr ip => println("unexpected ${ip.to_str()}"),
+    ParseError e => println("bad-ip6-zone=${e.to_str()}"),
+  }
+
+  match parse_ipv4_socket_addr("10.0.0.1:8080") {
+    SocketAddr addr => println("parsed-socket=${addr.to_str()} ${addr.port()}"),
+    ParseError e => println("bad parsed-socket ${e.to_str()}"),
+  }
+
+  match parse_socket_addr("10.0.0.1:8080") {
+    SocketAddr addr => println("parsed-socket-general=${addr.to_str()}"),
+    ParseError e => println("bad parsed-socket-general ${e.to_str()}"),
+  }
+
+  match parse_socket_addr("[2001:db8::1]:443") {
+    SocketAddr addr => println("parsed-socket6=${addr.to_str()} ${addr.ip().is_v6()} ${addr.port()}"),
+    ParseError e => println("bad parsed-socket6 ${e.to_str()}"),
+  }
+
+  match parse_socket_addr("[fe80::1%en0]:5353") {
+    SocketAddr addr => {
+      match addr.ip().zone_id() {
+        str zone => println("parsed-socket6-zone=${addr.to_str()} ${zone}"),
+        null => println("parsed-socket6-zone=${addr.to_str()} none"),
+      }
+    },
+    ParseError e => println("bad parsed-socket6-zone ${e.to_str()}"),
+  }
+
+  match parse_socket_addr("[2001::1") {
+    SocketAddr addr => println("unexpected ${addr.to_str()}"),
+    ParseError e => println("bad-socket6-bracket=${e.to_str()}"),
+  }
+
+  match parse_socket_addr("[::1]443") {
+    SocketAddr addr => println("unexpected ${addr.to_str()}"),
+    ParseError e => println("bad-socket6-delim=${e.to_str()}"),
+  }
+
+  match parse_socket_addr("[::1]:") {
+    SocketAddr addr => println("unexpected ${addr.to_str()}"),
+    ParseError e => println("bad-socket6-port=${e.to_str()}"),
+  }
+
+  match parse_socket_addr("[200g::1]:80") {
+    SocketAddr addr => println("unexpected ${addr.to_str()}"),
+    ParseError e => println("bad-socket6-host=${e.to_str()}"),
+  }
+
+  match parse_ip_v4("999.1.1.1") {
+    IpAddr ip => println("unexpected ${ip.to_str()}"),
+    ParseError e => println("bad-ip=${e.to_str()}"),
+  }
+
+  match parse_ipv4_socket_addr("10.0.0.1:") {
+    SocketAddr addr => println("unexpected ${addr.to_str()}"),
+    ParseError e => println("bad-socket=${e.to_str()}"),
+  }
+
+  match parse_uri("otter://docs.example/guide?q=stdlib#net") {
+    Uri u => {
+      println("parsed-uri=${u.to_str()} ${u.to_str() == docs.to_str()}");
+      match u.authority() {
+        str authority => {
+          match u.query() {
+            str q => {
+              match u.fragment() {
+                str f => println("uri-access=${u.scheme()} ${authority} ${u.path()} ${q} ${f}"),
+                null => println("uri-access=${u.scheme()} ${authority} ${u.path()} ${q} none"),
+              }
+            },
+            null => println("uri-access=${u.scheme()} ${authority} ${u.path()} none none"),
+          }
+        },
+        null => println("uri-access=${u.scheme()} none ${u.path()} none none"),
+      }
+    },
+    ParseError e => println("bad parsed-uri ${e.to_str()}"),
+  }
+
+  match parse_uri("urn:otter:fusion") {
+    Uri u => println("urn=${u.to_str()}"),
+    ParseError e => println("bad urn ${e.to_str()}"),
+  }
+
+  match parse_uri("nocolons") {
+    Uri u => println("unexpected ${u.to_str()}"),
+    ParseError e => println("bad-uri=${e.to_str()}"),
+  }
+
+  match parse_uri("otter:///missing-authority") {
+    Uri u => println("unexpected ${u.to_str()}"),
+    ParseError e => println("bad-authority=${e.to_str()}"),
+  }
+
+  match parse_url("https://ada@example.com:8443/search?q=otter") {
+    Url u => println("parsed-url=${u.to_str()} ${u.to_str() == copy.to_str()} ${u.query_string() == "q=otter"}"),
+    ParseError e => println("bad parsed-url ${e.to_str()}"),
+  }
+
+  match parse_url("https://example.com") {
+    Url u => println("no-path=${u.to_str()}"),
+    ParseError e => println("bad no-path ${e.to_str()}"),
+  }
+
+  match parse_url("https://[2001:db8::1]:8443/search") {
+    Url u => println("parsed-url6=${u.to_str()}"),
+    ParseError e => println("bad parsed-url6 ${e.to_str()}"),
+  }
+
+  match parse_url("http://[fe80::1%en0]/") {
+    Url u => println("parsed-url6-zone=${u.to_str()}"),
+    ParseError e => println("bad parsed-url6-zone ${e.to_str()}"),
+  }
+
+  var parsed = parse_url("https://ada@example.com:8443/search?q=otter#net");
+  if parsed is Url {
+    var u = parsed as Url;
+    var port_text = match u.port() {
+      u16 p => p as str,
+      null => "none",
+    };
+    var user_text = match u.user() {
+      str value => value,
+      null => "none",
+    };
+    var fragment_text = match u.fragment() {
+      str value => value,
+      null => "none",
+    };
+    var snap = u.query();
+    println("url-access=${u.scheme()} ${user_text} ${u.host()} ${port_text} ${u.path()} ${fragment_text} ${snap["q"]}");
+    snap.set("q", "changed");
+    println("url-query-snapshot=${u.query_string()} mutated=${snap["q"]}");
+
+    var replacement = Map.new<str, str>();
+    replacement.set("q", "docs");
+    var rebuilt = u.with_host("docs.example").with_port(443u16).with_path("/docs").with_query(replacement).with_fragment("top");
+    replacement.set("q", "later");
+    println("url-builder=${rebuilt.to_str()} q=${rebuilt.query()["q"]} source=${replacement["q"]}");
+    var query_built = rebuilt.with_query_param("page", "1").with_query_param("q", "override");
+    var removed_query = query_built.without_query_param("q").without_query_param("missing");
+    var cleared_query = query_built.clear_query();
+    var query_q = match query_built.query_get("q") {
+      str value => value,
+      null => "none",
+    };
+    var query_page = match query_built.query_get("page") {
+      str value => value,
+      null => "none",
+    };
+    var query_missing = match query_built.query_get("missing") {
+      str value => value,
+      null => "none",
+    };
+    println("url-query-build=${query_built.to_str()} get=${query_q}/${query_page}/${query_missing} removed=${removed_query.to_str()} cleared=${cleared_query.to_str()} original=${rebuilt.to_str()}");
+    var ordered_a = Map.new<str, str>();
+    ordered_a.set("a", "1");
+    ordered_a.set("b", "2");
+    var ordered_b = Map.new<str, str>();
+    ordered_b.set("b", "2");
+    ordered_b.set("a", "1");
+    var url_a = url("https", null, "example.com", null, "/search", ordered_a, null);
+    var url_b = url("https", null, "example.com", null, "/search", ordered_b, null);
+    println("url-hash-order=${url_a.eq(url_b)} ${url_a.hash() == url_b.hash()}");
+    var cleared = rebuilt.with_scheme("http").with_user(null).with_port(null).with_fragment(null);
+    var cleared_user = match cleared.user() {
+      str value => value,
+      null => "none",
+    };
+    var cleared_fragment = match cleared.fragment() {
+      str value => value,
+      null => "none",
+    };
+    println("url-clear=${cleared.to_str()} ${cleared_user} ${cleared_fragment}");
+  }
+
+  var encoded = percent_encode_component("Otter Fusion/café~");
+  match percent_decode_component(encoded) {
+    str decoded => println("percent=${encoded} decoded=${decoded}"),
+    ParseError e => println("bad percent decode ${e.to_str()}"),
+  }
+
+  match percent_decode_component("raw café") {
+    str decoded => println("percent-raw=${decoded}"),
+    ParseError e => println("bad percent raw ${e.to_str()}"),
+  }
+
+  match percent_decode_component("bad%") {
+    str decoded => println("unexpected ${decoded}"),
+    ParseError e => println("bad-percent=${e.to_str()}"),
+  }
+
+  match percent_decode_component("%G0") {
+    str decoded => println("unexpected ${decoded}"),
+    ParseError e => println("bad-percent-hex=${e.to_str()}"),
+  }
+
+  match percent_decode_component("%80") {
+    str decoded => println("unexpected ${decoded}"),
+    ParseError e => println("bad-percent-utf8=${e.to_str()}"),
+  }
+
+  match percent_decode_component("%F0%9F%A6") {
+    str decoded => println("unexpected ${decoded}"),
+    ParseError e => println("bad-percent-trunc=utf-8"),
+  }
+
+  match parse_url("https:/example") {
+    Url u => println("unexpected ${u.to_str()}"),
+    ParseError e => println("bad-url=${e.to_str()}"),
+  }
+
+  match parse_url("https://:443/path") {
+    Url u => println("unexpected ${u.to_str()}"),
+    ParseError e => println("bad-host=${e.to_str()}"),
+  }
+
+  match parse_url("https://example.com:bad/path") {
+    Url u => println("unexpected ${u.to_str()}"),
+    ParseError e => println("bad-port=${e.to_str()}"),
+  }
+
+  match parse_url("https://example.com/search?bad") {
+    Url u => println("unexpected ${u.to_str()}"),
+    ParseError e => println("bad-query=${e.to_str()}"),
+  }
+
+  match parse_url("https://[2001::1") {
+    Url u => println("unexpected ${u.to_str()}"),
+    ParseError e => println("bad-url6-bracket=${e.to_str()}"),
+  }
+
+  match parse_url("https://[::1]bad") {
+    Url u => println("unexpected ${u.to_str()}"),
+    ParseError e => println("bad-url6-delim=${e.to_str()}"),
+  }
+
+  match parse_url("https://[200g::1]/") {
+    Url u => println("unexpected ${u.to_str()}"),
+    ParseError e => println("bad-url6-host=${e.to_str()}"),
+  }
+}

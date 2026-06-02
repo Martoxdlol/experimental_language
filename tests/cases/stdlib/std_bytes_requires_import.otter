@@ -1,0 +1,19 @@
+//@ kind: compile-error
+//@ description: std:bytes follows the near-empty prelude rule; byte buffer values require explicit imports
+//@ stderr: cannot find type `Bytes`
+//@ stderr: cannot find type `BytesCursor`
+//@ stderr: cannot find type `Utf8Error`
+
+function make(): Bytes {
+  Bytes.new()
+}
+
+function needs_cursor(cursor: BytesCursor): null {
+  null
+}
+
+function needs_error(err: Utf8Error): str {
+  err.message
+}
+
+function main() {}

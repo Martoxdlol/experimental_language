@@ -5,7 +5,7 @@
 //~ worker observed: 100
 //~ final total = 1100
 import { println } from "std:io";
-import { Future } from "core:prelude";
+import { Future } from "core:async";
 import { Shared } from "std:sync";
 import { Thread, JoinHandle, Joined, Panicked } from "std:thread";
 import { Sender, Receiver, ChannelClosed, channel } from "std:sync";

@@ -1,0 +1,20 @@
+//@ kind: run
+//@ description: methods from a super-interface are available through a sub-interface generic bound and monomorphize through the concrete impl
+//@ stdout:
+//~ thing#7
+import { println } from "std:io";
+import { ToStr } from "core:prelude";
+
+interface Named: ToStr {}
+struct Thing { id: i64 }
+extend Thing: Named {
+  function to_str(self): str { "thing#${self.id}" }
+}
+
+function render<T: Named>(value: T): str {
+  value.to_str()
+}
+
+function main() {
+  println(render(Thing { id: 7 }));
+}

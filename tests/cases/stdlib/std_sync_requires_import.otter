@@ -1,0 +1,35 @@
+//@ kind: compile-error
+//@ description: std:sync follows the near-empty prelude rule; synchronization handles and helpers require explicit imports
+//@ stderr: cannot find type `Sender`
+//@ stderr: cannot find type `Receiver`
+//@ stderr: cannot find type `ChannelClosed`
+//@ stderr: cannot find type `Shared`
+//@ stderr: cannot find type `LockBusy`
+//@ stderr: cannot find type `MpmcSender`
+//@ stderr: cannot find type `MpmcReceiver`
+//@ stderr: cannot find value `channel`
+//@ stderr: cannot find value `channel_bounded`
+//@ stderr: cannot find value `channel_mpmc`
+//@ stderr: cannot find value `channel_mpmc_bounded`
+
+function needs_shared(value: Shared<i64>): null {
+  null
+}
+
+function needs_channel(
+  tx: Sender<i64>,
+  rx: Receiver<i64>,
+  closed: ChannelClosed,
+  busy: LockBusy,
+  mtx: MpmcSender<i64>,
+  mrx: MpmcReceiver<i64>,
+): null {
+  null
+}
+
+function main() {
+  var plain = channel<i64>();
+  var bounded = channel_bounded<i64>(4);
+  var mpmc = channel_mpmc<i64>();
+  var mpmc_bounded = channel_mpmc_bounded<i64>(4);
+}

@@ -1,0 +1,9 @@
+//@ kind: compile-error
+//@ description: atomic ordering is compiler/runtime substrate, so the old std:sync:atomic path is rejected
+//@ stderr: no built-in module `std:sync:atomic`
+
+import { Ordering } from "std:sync:atomic";
+
+function main() {
+  var ord: Ordering = SeqCst {};
+}

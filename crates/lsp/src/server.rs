@@ -1378,6 +1378,8 @@ fn builtin_signature_info(b: compiler::sema::Builtin) -> SignatureInformation {
     let (label, parts): (&str, &[(&str, &str)]) = match b {
         Builtin::Print => ("print(value: str)", &[("value", "str")]),
         Builtin::Println => ("println(value: str)", &[("value", "str")]),
+        Builtin::Eprint => ("eprint(value: str)", &[("value", "str")]),
+        Builtin::Eprintln => ("eprintln(value: str)", &[("value", "str")]),
         Builtin::Panic => ("panic(message: str): never", &[("message", "str")]),
         Builtin::PanicWith => ("panic_with(value: dynamic): never", &[("value", "dynamic")]),
         Builtin::Exit => ("exit(code: i32): never", &[("code", "i32")]),

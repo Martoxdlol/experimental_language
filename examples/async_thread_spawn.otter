@@ -5,7 +5,7 @@
 // `await` and lock a `Shared<T>` (docs/20 §4), unlike a synchronous worker.
 
 import { println } from "std:io";
-import { Future } from "core:prelude";
+import { Future } from "core:async";
 import { Shared } from "std:sync";
 import { Thread, JoinHandle, Joined, Panicked } from "std:thread";
 import { Sender, Receiver, ChannelClosed, channel } from "std:sync";

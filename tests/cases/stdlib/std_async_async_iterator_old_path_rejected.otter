@@ -1,0 +1,6 @@
+//@ kind: compile-error
+//@ description: AsyncIterator is syntax substrate in core:async, not runtime API in std:async
+//@ stderr: no `AsyncIterator` in the imported module
+import { AsyncIterator } from "std:async";
+
+function main() {}

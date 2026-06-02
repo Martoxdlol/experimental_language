@@ -1,0 +1,26 @@
+//@ kind: compile-error
+//@ description: core:collections follows the near-empty prelude rule; collection names are not visible unless imported
+//@ stderr: cannot find type `List`
+//@ stderr: cannot find value `List`
+//@ stderr: cannot find type `Map`
+//@ stderr: cannot find value `Map`
+//@ stderr: cannot find type `Set`
+//@ stderr: cannot find value `Set`
+//@ stderr: cannot find type `Entry`
+function make_list(): List<i64> {
+  List<i64>()
+}
+
+function make_map(): Map<str, i64> {
+  Map<str, i64>()
+}
+
+function make_set(): Set<i64> {
+  Set<i64>()
+}
+
+function make_entry(): Entry<str, i64> {
+  Entry { key: "x", value: 1 }
+}
+
+function main() {}

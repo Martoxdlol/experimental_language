@@ -1,0 +1,34 @@
+struct Item<T> { value: T }
+struct Done {}
+interface Iterator<T> {
+  function next(self): Item<T> | Done;
+}
+interface FromResidual<R> {
+  function from_residual(r: R): Self;
+}
+interface Try<Output, Residual> {
+  function branch(self): Output | Residual;
+}
+interface Clone {
+  function clone(self): Self;
+}
+interface Eq {
+  function eq(self, other: Self): bool;
+}
+interface Ord {
+  function lt(self, other: Self): bool;
+  function le(self, other: Self): bool;
+  function gt(self, other: Self): bool;
+  function ge(self, other: Self): bool;
+}
+interface ToStr {
+  function to_str(self): str;
+}
+interface Hash {
+  function hash(self): u64;
+}
+interface Drop {
+  function drop(self);
+}
+function panic(msg: str) {}
+function panic_with<T>(value: T) {}

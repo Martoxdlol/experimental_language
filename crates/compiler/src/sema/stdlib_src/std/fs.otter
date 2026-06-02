@@ -1,0 +1,1271 @@
+struct Path {
+  raw: str,
+}
+
+struct RegularFile {}
+struct Directory {}
+struct Symlink {}
+struct OtherKind {}
+type FileKind = RegularFile | Directory | Symlink | OtherKind;
+
+struct DirEntry {
+  path: Path,
+  kind: FileKind,
+}
+
+struct DirEntries {
+  entries: List<DirEntry>,
+  index: i64,
+}
+
+struct Permissions {
+  read_only: bool,
+  executable: bool,
+}
+
+struct Metadata {
+  kind: FileKind,
+  byte_len: u64,
+  permissions: Permissions,
+}
+
+struct File {
+  path: Path,
+  append_mode: bool,
+  handle: i64,
+}
+
+struct OpenOptions {
+  read: bool,
+  write: bool,
+  append: bool,
+  truncate: bool,
+  create: bool,
+  create_new: bool,
+}
+
+extern function lang_fs_read_text(path: str): str;
+extern function lang_fs_write_text(path: str, contents: str): str;
+extern function lang_fs_append_text(path: str, contents: str): str;
+extern function lang_fs_read_bytes(path: str): str;
+extern function lang_fs_write_bytes(path: str, contents_hex: str): str;
+extern function lang_fs_file_open(path: str, mode: str): str;
+extern function lang_fs_file_close(handle: i64): str;
+extern function lang_fs_file_read(handle: i64, count: i64): str;
+extern function lang_fs_file_read_to_end(handle: i64): str;
+extern function lang_fs_file_write(handle: i64, contents_hex: str): str;
+extern function lang_fs_file_flush(handle: i64): str;
+extern function lang_fs_file_seek(handle: i64, mode: str, offset: i64): str;
+extern function lang_fs_exists(path: str): str;
+extern function lang_fs_is_file(path: str): str;
+extern function lang_fs_is_dir(path: str): str;
+extern function lang_fs_kind(path: str): str;
+extern function lang_fs_len(path: str): str;
+extern function lang_fs_read_only(path: str): str;
+extern function lang_fs_executable(path: str): str;
+extern function lang_fs_remove(path: str): str;
+extern function lang_fs_rename(from: str, to: str): str;
+extern function lang_fs_create_dir(path: str): str;
+extern function lang_fs_create_dir_all(path: str): str;
+extern function lang_fs_canonicalize(path: str): str;
+extern function lang_fs_native_separator(): str;
+extern function lang_fs_read_dir(path: str): str;
+
+function regular_file(): FileKind { RegularFile {} }
+function directory(): FileKind { Directory {} }
+function symlink(): FileKind { Symlink {} }
+function other_kind(): FileKind { OtherKind {} }
+
+function dir_entry(path: Path, kind: FileKind): DirEntry {
+  DirEntry { path: path.clone(), kind: kind.clone() }
+}
+
+function permissions(read_only: bool, executable: bool): Permissions {
+  Permissions { read_only: read_only, executable: executable }
+}
+
+function metadata(kind: FileKind, byte_len: u64, permissions: Permissions): Metadata {
+  Metadata { kind: kind.clone(), byte_len: byte_len, permissions: permissions.clone() }
+}
+
+function open_options(): OpenOptions { OpenOptions.new() }
+
+function __fs_io_error(message: str): IoError {
+  IoError { kind: OtherIo {}, message: message }
+}
+
+function __fs_status_is_error(result: str): bool {
+  result.size() == 0 || result.substring(0, 1) == "1"
+}
+
+function __fs_status_payload(result: str): str {
+  if result.size() <= 1 { "" } else { result.substring(1, result.size()) }
+}
+
+function __fs_decode_text(result: str): str | IoError {
+  if __fs_status_is_error(result) {
+    __fs_io_error(__fs_status_payload(result))
+  } else {
+    __fs_status_payload(result)
+  }
+}
+
+function __fs_decode_unit(result: str): null | IoError {
+  if __fs_status_is_error(result) {
+    __fs_io_error(__fs_status_payload(result))
+  } else {
+    null
+  }
+}
+
+function __fs_decode_bool(result: str): bool | IoError {
+  if __fs_status_is_error(result) {
+    __fs_io_error(__fs_status_payload(result))
+  } else {
+    __fs_status_payload(result) == "1"
+  }
+}
+
+function __fs_decode_kind(result: str): FileKind | IoError {
+  if __fs_status_is_error(result) {
+    __fs_io_error(__fs_status_payload(result))
+  } else {
+    var payload = __fs_status_payload(result);
+    if payload == "file" {
+      RegularFile {}
+    } else if payload == "dir" {
+      Directory {}
+    } else if payload == "symlink" {
+      Symlink {}
+    } else {
+      OtherKind {}
+    }
+  }
+}
+
+function __fs_digit(ch: char): u64 | IoError {
+  var cp = ch as i64;
+  if cp >= 48 && cp <= 57 {
+    (cp - 48) as u64
+  } else {
+    __fs_io_error("invalid decimal digit in filesystem metadata")
+  }
+}
+
+function __fs_parse_u64(text: str): u64 | IoError {
+  if text == "" {
+    __fs_io_error("empty decimal value in filesystem metadata")
+  } else {
+    var value = 0u64;
+    var max_div = 1844674407370955161u64;
+    var max_rem = 5u64;
+    var i = 0;
+    while i < text.size() {
+      var digit_result: u64 | IoError = 0u64;
+      for ch in text.substring(i, i + 1).chars() {
+        digit_result = __fs_digit(ch);
+      }
+      if digit_result is IoError {
+        return digit_result as IoError;
+      }
+      var digit = digit_result as u64;
+      if value > max_div || (value == max_div && digit > max_rem) {
+        return __fs_io_error("decimal value in filesystem metadata overflows u64");
+      }
+      value = value * 10u64 + digit;
+      i = i + 1;
+    }
+    value
+  }
+}
+
+function __fs_decode_u64(result: str): u64 | IoError {
+  if __fs_status_is_error(result) {
+    __fs_io_error(__fs_status_payload(result))
+  } else {
+    __fs_parse_u64(__fs_status_payload(result))
+  }
+}
+
+function __fs_decode_i64(result: str): i64 | IoError {
+  var parsed = __fs_decode_u64(result);
+  if parsed is IoError {
+    parsed as IoError
+  } else {
+    var value = parsed as u64;
+    if value > 9223372036854775807u64 {
+      __fs_io_error("filesystem handle result overflows i64")
+    } else {
+      value as i64
+    }
+  }
+}
+
+function __fs_hex_digit(value: u8): str {
+  var n = value as i64;
+  var cp = if n < 10 { 48 + n } else { 87 + n };
+  (cp as char) as str
+}
+
+function __fs_bytes_to_hex(data: Bytes): str {
+  var out = "";
+  for b in data.iter() {
+    out = out + __fs_hex_digit((b / 16u8) as u8) + __fs_hex_digit((b % 16u8) as u8);
+  }
+  out
+}
+
+function __fs_hex_value(ch: char): u8 | IoError {
+  var cp = ch as i64;
+  if cp >= 48 && cp <= 57 {
+    (cp - 48) as u8
+  } else if cp >= 97 && cp <= 102 {
+    (cp - 87) as u8
+  } else if cp >= 65 && cp <= 70 {
+    (cp - 55) as u8
+  } else {
+    __fs_io_error("invalid hexadecimal digit in filesystem byte payload")
+  }
+}
+
+function __fs_hex_char_at(text: str, index: i64): u8 | IoError {
+  var result: u8 | IoError = __fs_io_error("missing hexadecimal digit in filesystem byte payload");
+  for ch in text.substring(index, index + 1).chars() {
+    result = __fs_hex_value(ch);
+  }
+  result
+}
+
+function __fs_hex_to_bytes(text: str): Bytes | IoError {
+  if text.size() % 2 != 0 {
+    __fs_io_error("odd-length filesystem byte payload")
+  } else {
+    var out = Bytes.new();
+    var i = 0;
+    while i < text.size() {
+      var hi = __fs_hex_char_at(text, i);
+      if hi is IoError {
+        return hi as IoError;
+      }
+      var lo = __fs_hex_char_at(text, i + 1);
+      if lo is IoError {
+        return lo as IoError;
+      }
+      out.push(((hi as u8) * 16u8 + (lo as u8)) as u8);
+      i = i + 2;
+    }
+    out
+  }
+}
+
+function __fs_decode_bytes(result: str): Bytes | IoError {
+  var text = __fs_decode_text(result);
+  if text is IoError {
+    text as IoError
+  } else {
+    __fs_hex_to_bytes(text as str)
+  }
+}
+
+function __fs_options_mode(options: OpenOptions): str {
+  var out = if options.read { "1" } else { "0" };
+  out = out + if options.write { "1" } else { "0" };
+  out = out + if options.append { "1" } else { "0" };
+  out = out + if options.truncate { "1" } else { "0" };
+  out = out + if options.create { "1" } else { "0" };
+  out = out + if options.create_new { "1" } else { "0" };
+  out
+}
+
+function __fs_options_can_write(options: OpenOptions): bool {
+  options.write || options.append
+}
+
+function __fs_open_file(path: Path, mode: str, append_mode: bool): File | IoError {
+  var handle = __fs_decode_i64(lang_fs_file_open(path.as_str(), mode));
+  if handle is IoError {
+    handle as IoError
+  } else {
+    File { path: path.clone(), append_mode: append_mode, handle: handle as i64 }
+  }
+}
+
+function __fs_open_file_options(path: Path, options: OpenOptions): File | IoError {
+  var validation = options.validate();
+  if validation is IoError {
+    return validation as IoError;
+  }
+  __fs_open_file(path, __fs_options_mode(options), options.append)
+}
+
+struct FsReadDirField {
+  text: str,
+  next: i64,
+}
+
+function __fs_read_until(text: str, start: i64, sep: str): FsReadDirField | IoError {
+  var i = start;
+  while i < text.size() && text.substring(i, i + 1) != sep {
+    i = i + 1;
+  }
+  if i >= text.size() {
+    __fs_io_error("malformed filesystem directory entry payload")
+  } else {
+    FsReadDirField { text: text.substring(start, i), next: i + sep.size() }
+  }
+}
+
+function __fs_parse_i64_len(text: str): i64 | IoError {
+  var parsed = __fs_parse_u64(text);
+  if parsed is IoError {
+    parsed as IoError
+  } else {
+    var value = parsed as u64;
+    if value > 9223372036854775807u64 {
+      __fs_io_error("filesystem directory entry path length overflows i64")
+    } else {
+      value as i64
+    }
+  }
+}
+
+function __fs_kind_from_tag(tag: str): FileKind | IoError {
+  if tag == "f" {
+    RegularFile {}
+  } else if tag == "d" {
+    Directory {}
+  } else if tag == "s" {
+    Symlink {}
+  } else if tag == "o" {
+    OtherKind {}
+  } else {
+    __fs_io_error("unknown filesystem directory entry kind")
+  }
+}
+
+function __fs_decode_read_dir(payload: str): List<DirEntry> | IoError {
+  var entries = List<DirEntry>();
+  var pos = 0;
+  while pos < payload.size() {
+    var tag = payload.substring(pos, pos + 1);
+    pos = pos + 1;
+
+    var len_field = __fs_read_until(payload, pos, ":");
+    if len_field is IoError {
+      return len_field as IoError;
+    }
+    var len_text = (len_field as FsReadDirField).text;
+    pos = (len_field as FsReadDirField).next;
+
+    var path_len = __fs_parse_i64_len(len_text);
+    if path_len is IoError {
+      return path_len as IoError;
+    }
+    var end = pos + (path_len as i64);
+    if end > payload.size() {
+      return __fs_io_error("truncated filesystem directory entry path");
+    }
+
+    var kind = __fs_kind_from_tag(tag);
+    if kind is IoError {
+      return kind as IoError;
+    }
+
+    entries.push(DirEntry { path: path_from_native(payload.substring(pos, end)), kind: (kind as FileKind).clone() });
+    pos = end;
+  }
+  entries
+}
+
+function read_to_string(path: Path): str | IoError {
+  __fs_decode_text(lang_fs_read_text(path.as_str()))
+}
+
+function write_string(path: Path, contents: str): null | IoError {
+  __fs_decode_unit(lang_fs_write_text(path.as_str(), contents))
+}
+
+function append_string(path: Path, contents: str): null | IoError {
+  __fs_decode_unit(lang_fs_append_text(path.as_str(), contents))
+}
+
+function read(path: Path): Bytes | IoError {
+  var result = __fs_decode_text(lang_fs_read_bytes(path.as_str()));
+  if result is IoError {
+    result as IoError
+  } else {
+    __fs_hex_to_bytes(result as str)
+  }
+}
+
+function write(path: Path, data: Bytes): null | IoError {
+  __fs_decode_unit(lang_fs_write_bytes(path.as_str(), __fs_bytes_to_hex(data)))
+}
+
+function remove(path: Path): null | IoError {
+  __fs_decode_unit(lang_fs_remove(path.as_str()))
+}
+
+function rename(from: Path, to: Path): null | IoError {
+  __fs_decode_unit(lang_fs_rename(from.as_str(), to.as_str()))
+}
+
+function create_dir(path: Path): null | IoError {
+  __fs_decode_unit(lang_fs_create_dir(path.as_str()))
+}
+
+function create_dir_all(path: Path): null | IoError {
+  __fs_decode_unit(lang_fs_create_dir_all(path.as_str()))
+}
+
+function __fs_canonicalize_path(path: Path): Path | IoError {
+  var result = __fs_decode_text(lang_fs_canonicalize(path.as_str()));
+  if result is IoError {
+    result as IoError
+  } else {
+    Path { raw: result as str }
+  }
+}
+
+function canonicalize(path: Path): Path | IoError {
+  __fs_canonicalize_path(path)
+}
+
+function read_dir(path: Path): DirEntries | IoError {
+  var result = __fs_decode_text(lang_fs_read_dir(path.as_str()));
+  if result is IoError {
+    result as IoError
+  } else {
+    var entries = __fs_decode_read_dir(result as str);
+    if entries is IoError {
+      entries as IoError
+    } else {
+      DirEntries { entries: entries as List<DirEntry>, index: 0 }
+    }
+  }
+}
+
+function native_separator(): str {
+  lang_fs_native_separator()
+}
+
+function __fs_from_native_text(s: str): Path {
+  var sep = native_separator();
+  if sep == "/" {
+    Path { raw: s }
+  } else {
+    Path { raw: s.replace(sep, "/") }
+  }
+}
+
+function path_from_native(s: str): Path {
+  __fs_from_native_text(s)
+}
+
+extend Path {
+  function new(s: str): Path { Path { raw: s } }
+
+  function from_native(s: str): Path { __fs_from_native_text(s) }
+
+  function as_str(self): str { self.raw }
+
+  function to_native_str(self): str {
+    var sep = native_separator();
+    if sep == "/" {
+      self.raw
+    } else {
+      self.raw.replace("/", sep)
+    }
+  }
+
+  function exists(self): bool | IoError {
+    __fs_decode_bool(lang_fs_exists(self.raw))
+  }
+
+  function is_file(self): bool | IoError {
+    __fs_decode_bool(lang_fs_is_file(self.raw))
+  }
+
+  function is_dir(self): bool | IoError {
+    __fs_decode_bool(lang_fs_is_dir(self.raw))
+  }
+
+  function file_kind(self): FileKind | IoError {
+    __fs_decode_kind(lang_fs_kind(self.raw))
+  }
+
+  function byte_len(self): u64 | IoError {
+    __fs_decode_u64(lang_fs_len(self.raw))
+  }
+
+  function permissions(self): Permissions | IoError {
+    var read_only = __fs_decode_bool(lang_fs_read_only(self.raw));
+    if read_only is IoError {
+      read_only as IoError
+    } else {
+      var executable = __fs_decode_bool(lang_fs_executable(self.raw));
+      if executable is IoError {
+        executable as IoError
+      } else {
+        Permissions { read_only: read_only as bool, executable: executable as bool }
+      }
+    }
+  }
+
+  function metadata(self): Metadata | IoError {
+    var kind = self.file_kind();
+    if kind is IoError {
+      kind as IoError
+    } else {
+      var len = self.byte_len();
+      if len is IoError {
+        len as IoError
+      } else {
+        var perms = self.permissions();
+        if perms is IoError {
+          perms as IoError
+        } else {
+          Metadata { kind: (kind as FileKind).clone(), byte_len: len as u64, permissions: (perms as Permissions).clone() }
+        }
+      }
+    }
+  }
+
+  function canonicalize(self): Path | IoError {
+    __fs_canonicalize_path(self)
+  }
+
+  function join(self, segment: str): Path {
+    if self.raw == "" {
+      Path { raw: segment }
+    } else if segment == "" {
+      self
+    } else if self.raw.ends_with("/") {
+      Path { raw: self.raw + segment }
+    } else {
+      Path { raw: self.raw + "/" + segment }
+    }
+  }
+
+  function join_path(self, other: Path): Path {
+    if other.is_absolute() {
+      other
+    } else {
+      self.join(other.as_str())
+    }
+  }
+
+  function normalize(self): Path {
+    var absolute = self.is_absolute();
+    var parts = self.raw.split("/");
+    var stack = List<str>();
+
+    for part in parts {
+      if part == "" || part == "." {
+      } else if part == ".." {
+        if stack.size() > 0 && stack[stack.size() - 1] != ".." {
+          stack.pop();
+        } else if !absolute {
+          stack.push(part);
+        }
+      } else {
+        stack.push(part);
+      }
+    }
+
+    var out = if absolute { "/" } else { "" };
+    var first = true;
+    for part in stack {
+      if first {
+        first = false;
+      } else {
+        out = out + "/";
+      }
+      out = out + part;
+    }
+
+    if out == "" {
+      Path { raw: "." }
+    } else {
+      Path { raw: out }
+    }
+  }
+
+  function components(self): List<str> {
+    var normalized = self.normalize();
+    var out = List<str>();
+    if normalized.raw == "." || normalized.raw == "/" {
+      out
+    } else {
+      var parts = normalized.raw.split("/");
+      for part in parts {
+        if part != "" {
+          out.push(part);
+        }
+      }
+      out
+    }
+  }
+
+  function starts_with(self, base: Path): bool {
+    var path = self.normalize();
+    var prefix = base.normalize();
+    if path.is_absolute() != prefix.is_absolute() {
+      false
+    } else {
+      var path_parts = path.components();
+      var prefix_parts = prefix.components();
+      if prefix_parts.size() > path_parts.size() {
+        false
+      } else {
+        var same = true;
+        var i = 0;
+        while same && i < prefix_parts.size() {
+          same = path_parts[i] == prefix_parts[i];
+          i = i + 1;
+        }
+        same
+      }
+    }
+  }
+
+  function ends_with(self, suffix: Path): bool {
+    var path = self.normalize();
+    var tail = suffix.normalize();
+    if tail.is_absolute() {
+      path == tail
+    } else {
+      var path_parts = path.components();
+      var tail_parts = tail.components();
+      if tail_parts.size() > path_parts.size() {
+        false
+      } else {
+        var same = true;
+        var i = 0;
+        while same && i < tail_parts.size() {
+          same = path_parts[path_parts.size() - tail_parts.size() + i] == tail_parts[i];
+          i = i + 1;
+        }
+        same
+      }
+    }
+  }
+
+  function strip_prefix(self, base: Path): Path | null {
+    var path = self.normalize();
+    var prefix = base.normalize();
+    if !path.starts_with(prefix) {
+      null
+    } else {
+      var path_parts = path.components();
+      var prefix_parts = prefix.components();
+      var out = "";
+      var first = true;
+      var i = prefix_parts.size();
+      while i < path_parts.size() {
+        if first {
+          first = false;
+        } else {
+          out = out + "/";
+        }
+        out = out + path_parts[i];
+        i = i + 1;
+      }
+      if out == "" {
+        Path { raw: "." }
+      } else {
+        Path { raw: out }
+      }
+    }
+  }
+
+  function parent(self): Path | null {
+    var trimmed = self.trim_trailing_slashes();
+    if trimmed == "" || trimmed == "/" {
+      null
+    } else {
+      var parts = trimmed.split("/");
+      if parts.size() <= 1 {
+        null
+      } else {
+        var end = trimmed.size() - parts[parts.size() - 1].size() - 1;
+        if end <= 0 {
+          Path { raw: "/" }
+        } else {
+          Path { raw: trimmed.substring(0, end) }
+        }
+      }
+    }
+  }
+
+  function file_name(self): str | null {
+    var trimmed = self.trim_trailing_slashes();
+    if trimmed == "" || trimmed == "/" {
+      null
+    } else {
+      var parts = trimmed.split("/");
+      var last = parts[parts.size() - 1];
+      if last == "" { null } else { last }
+    }
+  }
+
+  function file_stem(self): str | null {
+    var name = self.file_name();
+    if name is str {
+      var text = name as str;
+      var ext = self.extension();
+      if ext is str {
+        var ext_text = ext as str;
+        var end = text.size() - ext_text.size() - 1;
+        if end <= 0 { null } else { text.substring(0, end) }
+      } else {
+        text
+      }
+    } else {
+      null
+    }
+  }
+
+  function extension(self): str | null {
+    var name = self.file_name();
+    if name is str {
+      var text = name as str;
+      var parts = text.split(".");
+      if parts.size() <= 1 {
+        null
+      } else if parts.size() == 2 && parts[0] == "" {
+        null
+      } else {
+        var ext = parts[parts.size() - 1];
+        if ext == "" { null } else { ext }
+      }
+    } else {
+      null
+    }
+  }
+
+  function with_extension(self, ext: str): Path {
+    var stem = self.file_stem();
+    if stem is str {
+      var base = stem as str;
+      var next = if ext == "" { base } else { base + "." + ext };
+      var parent = self.parent();
+      if parent is Path {
+        (parent as Path).join(next)
+      } else {
+        Path { raw: next }
+      }
+    } else {
+      self
+    }
+  }
+
+  function is_absolute(self): bool { self.raw.starts_with("/") }
+
+  function is_relative(self): bool { !self.is_absolute() }
+
+  function is_empty(self): bool { self.raw == "" }
+
+  function is_root(self): bool { self.normalize().raw == "/" }
+
+  function component_count(self): i64 { self.components().size() }
+
+  function trim_trailing_slashes(self): str {
+    var s = self.raw;
+    while s.size() > 1 && s.ends_with("/") {
+      s = s.substring(0, s.size() - 1);
+    }
+    s
+  }
+}
+
+extend Path: Eq {
+  function eq(self, other: Path): bool { self.raw == other.raw }
+}
+
+extend Path: Hash {
+  function hash(self): u64 { self.raw.hash() }
+}
+
+extend Path: Clone {
+  function clone(self): Path { Path { raw: self.raw } }
+}
+
+extend Path: ToStr {
+  function to_str(self): str { self.raw }
+}
+
+extend Path: Debug {
+  function debug(self): str { "Path { raw: \"" + self.raw + "\" }" }
+}
+
+extend FileKind {
+  function as_str(self): str {
+    if self is RegularFile {
+      "file"
+    } else if self is Directory {
+      "directory"
+    } else if self is Symlink {
+      "symlink"
+    } else {
+      "other"
+    }
+  }
+
+  function debug_string(self): str {
+    if self is RegularFile {
+      "RegularFile"
+    } else if self is Directory {
+      "Directory"
+    } else if self is Symlink {
+      "Symlink"
+    } else {
+      "OtherKind"
+    }
+  }
+
+  function equals(self, other: FileKind): bool {
+    self.as_str() == other.as_str()
+  }
+}
+
+extend FileKind: Eq {
+  function eq(self, other: FileKind): bool { self.equals(other) }
+}
+
+extend FileKind: Clone {
+  function clone(self): FileKind {
+    if self is RegularFile {
+      RegularFile {}
+    } else if self is Directory {
+      Directory {}
+    } else if self is Symlink {
+      Symlink {}
+    } else {
+      OtherKind {}
+    }
+  }
+}
+
+extend FileKind: Hash {
+  function hash(self): u64 { self.as_str().hash() }
+}
+
+extend FileKind: ToStr {
+  function to_str(self): str { self.as_str() }
+}
+
+extend FileKind: Debug {
+  function debug(self): str { self.debug_string() }
+}
+
+extend DirEntry {
+  function new(path: Path, kind: FileKind): DirEntry {
+    DirEntry { path: path.clone(), kind: kind.clone() }
+  }
+
+  function path(self): Path { self.path.clone() }
+
+  function kind(self): FileKind { self.kind.clone() }
+
+  function with_path(self, path: Path): DirEntry {
+    DirEntry { path: path.clone(), kind: self.kind.clone() }
+  }
+
+  function with_kind(self, kind: FileKind): DirEntry {
+    DirEntry { path: self.path.clone(), kind: kind.clone() }
+  }
+}
+
+extend DirEntry: Eq {
+  function eq(self, other: DirEntry): bool {
+    self.path == other.path && self.kind.equals(other.kind)
+  }
+}
+
+extend DirEntry: Clone {
+  function clone(self): DirEntry {
+    DirEntry { path: self.path.clone(), kind: self.kind.clone() }
+  }
+}
+
+extend DirEntry: Hash {
+  function hash(self): u64 {
+    (self.path.as_str() + ":" + self.kind.as_str()).hash()
+  }
+}
+
+extend DirEntry: ToStr {
+  function to_str(self): str {
+    self.path.as_str() + " (" + self.kind.as_str() + ")"
+  }
+}
+
+extend DirEntry: Debug {
+  function debug(self): str {
+    "DirEntry { path: " + self.path.debug() + ", kind: " + self.kind.debug_string() + " }"
+  }
+}
+
+extend DirEntries: Iterator<DirEntry | IoError> {
+  function next(self): Item<DirEntry | IoError> | Done {
+    if self.index >= self.entries.size() {
+      Done {}
+    } else {
+      var entry: DirEntry | IoError = self.entries[self.index].clone();
+      self.index = self.index + 1;
+      Item { value: entry }
+    }
+  }
+}
+
+extend OpenOptions {
+  function new(): OpenOptions {
+    OpenOptions { read: false, write: false, append: false, truncate: false, create: false, create_new: false }
+  }
+
+  function read(self): bool { self.read }
+
+  function write(self): bool { self.write }
+
+  function append(self): bool { self.append }
+
+  function truncate(self): bool { self.truncate }
+
+  function create(self): bool { self.create }
+
+  function create_new(self): bool { self.create_new }
+
+  function with_read(self, value: bool): OpenOptions {
+    OpenOptions { read: value, write: self.write, append: self.append, truncate: self.truncate, create: self.create, create_new: self.create_new }
+  }
+
+  function with_write(self, value: bool): OpenOptions {
+    OpenOptions { read: self.read, write: value, append: self.append, truncate: self.truncate, create: self.create, create_new: self.create_new }
+  }
+
+  function with_append(self, value: bool): OpenOptions {
+    OpenOptions { read: self.read, write: self.write, append: value, truncate: self.truncate, create: self.create, create_new: self.create_new }
+  }
+
+  function with_truncate(self, value: bool): OpenOptions {
+    OpenOptions { read: self.read, write: self.write, append: self.append, truncate: value, create: self.create, create_new: self.create_new }
+  }
+
+  function with_create(self, value: bool): OpenOptions {
+    OpenOptions { read: self.read, write: self.write, append: self.append, truncate: self.truncate, create: value, create_new: self.create_new }
+  }
+
+  function with_create_new(self, value: bool): OpenOptions {
+    OpenOptions { read: self.read, write: self.write, append: self.append, truncate: self.truncate, create: self.create, create_new: value }
+  }
+
+  function validation_error(self): IoError | null {
+    if !self.read && !self.write && !self.append {
+      __fs_io_error("filesystem open options must enable read, write, or append")
+    } else if self.truncate && !__fs_options_can_write(self) {
+      __fs_io_error("filesystem open options using truncate require write or append access")
+    } else if self.create && !__fs_options_can_write(self) {
+      __fs_io_error("filesystem open options using create require write or append access")
+    } else if self.create_new && !__fs_options_can_write(self) {
+      __fs_io_error("filesystem open options using create_new require write or append access")
+    } else {
+      null
+    }
+  }
+
+  function validate(self): null | IoError {
+    var error = self.validation_error();
+    if error is IoError {
+      error as IoError
+    } else {
+      null
+    }
+  }
+
+  function is_valid(self): bool {
+    self.validation_error() is null
+  }
+}
+
+extend OpenOptions: Eq {
+  function eq(self, other: OpenOptions): bool {
+    self.read == other.read &&
+      self.write == other.write &&
+      self.append == other.append &&
+      self.truncate == other.truncate &&
+      self.create == other.create &&
+      self.create_new == other.create_new
+  }
+}
+
+extend OpenOptions: Clone {
+  function clone(self): OpenOptions {
+    OpenOptions { read: self.read, write: self.write, append: self.append, truncate: self.truncate, create: self.create, create_new: self.create_new }
+  }
+}
+
+extend OpenOptions: Hash {
+  function hash(self): u64 {
+    var out = 0u64;
+    if self.read { out = out + 1u64; }
+    if self.write { out = out + 2u64; }
+    if self.append { out = out + 4u64; }
+    if self.truncate { out = out + 8u64; }
+    if self.create { out = out + 16u64; }
+    if self.create_new { out = out + 32u64; }
+    out
+  }
+}
+
+extend OpenOptions: ToStr {
+  function to_str(self): str {
+    "OpenOptions(read=" + (self.read as str) +
+      ", write=" + (self.write as str) +
+      ", append=" + (self.append as str) +
+      ", truncate=" + (self.truncate as str) +
+      ", create=" + (self.create as str) +
+      ", create_new=" + (self.create_new as str) + ")"
+  }
+}
+
+extend OpenOptions: Debug {
+  function debug(self): str {
+    "OpenOptions { read: " + (self.read as str) +
+      ", write: " + (self.write as str) +
+      ", append: " + (self.append as str) +
+      ", truncate: " + (self.truncate as str) +
+      ", create: " + (self.create as str) +
+      ", create_new: " + (self.create_new as str) + " }"
+  }
+}
+
+extend File {
+  function open(path: Path): File | IoError {
+    __fs_open_file(path, "open", false)
+  }
+
+  function create(path: Path): File | IoError {
+    __fs_open_file(path, "create", false)
+  }
+
+  function append(path: Path): File | IoError {
+    __fs_open_file(path, "append", true)
+  }
+
+  function open_with(path: Path, options: OpenOptions): File | IoError {
+    __fs_open_file_options(path, options)
+  }
+
+  function path(self): Path { self.path.clone() }
+
+  function is_append_mode(self): bool { self.append_mode }
+
+  function handle_id(self): i64 { self.handle }
+
+  function read_to_string(self): str | IoError {
+    read_to_string(self.path)
+  }
+
+  function write_string(self, contents: str): null | IoError {
+    if self.append_mode {
+      append_string(self.path, contents)
+    } else {
+      write_string(self.path, contents)
+    }
+  }
+
+  function append_string(self, contents: str): null | IoError {
+    append_string(self.path, contents)
+  }
+
+  function close(self): null | IoError {
+    __fs_decode_unit(lang_fs_file_close(self.handle))
+  }
+}
+
+extend File: Reader {
+  function read(self, buf: Bytes): i64 | IoError {
+    var data = __fs_decode_bytes(lang_fs_file_read(self.handle, buf.size()));
+    if data is IoError {
+      data as IoError
+    } else {
+      var chunk = data as Bytes;
+      for b in chunk.iter() {
+        buf.push(b);
+      }
+      chunk.size()
+    }
+  }
+
+  function read_to_end(self, buf: Bytes): i64 | IoError {
+    var data = __fs_decode_bytes(lang_fs_file_read_to_end(self.handle));
+    if data is IoError {
+      data as IoError
+    } else {
+      var chunk = data as Bytes;
+      for b in chunk.iter() {
+        buf.push(b);
+      }
+      chunk.size()
+    }
+  }
+}
+
+extend File: Writer {
+  function write(self, buf: Bytes): i64 | IoError {
+    __fs_decode_i64(lang_fs_file_write(self.handle, __fs_bytes_to_hex(buf)))
+  }
+
+  function write_all(self, buf: Bytes): null | IoError {
+    var written = self.write(buf);
+    if written is IoError {
+      written as IoError
+    } else {
+      null
+    }
+  }
+
+  function flush(self): null | IoError {
+    __fs_decode_unit(lang_fs_file_flush(self.handle))
+  }
+}
+
+extend File: Seeker {
+  function seek(self, pos: SeekFrom): i64 | IoError {
+    if pos is Start {
+      var offset = (pos as Start).offset;
+      if offset > 9223372036854775807u64 {
+        __fs_io_error("invalid seek")
+      } else {
+        __fs_decode_i64(lang_fs_file_seek(self.handle, "start", offset as i64))
+      }
+    } else if pos is Current {
+      __fs_decode_i64(lang_fs_file_seek(self.handle, "current", (pos as Current).offset))
+    } else {
+      __fs_decode_i64(lang_fs_file_seek(self.handle, "end", (pos as End).offset))
+    }
+  }
+}
+
+extend File: ToStr {
+  function to_str(self): str { self.path.to_str() }
+}
+
+extend File: Debug {
+  function debug(self): str {
+    "File { path: " + self.path.debug() + ", append_mode: " + (self.append_mode as str) + ", handle: " + (self.handle as str) + " }"
+  }
+}
+
+extend Permissions {
+  function new(read_only: bool, executable: bool): Permissions {
+    Permissions { read_only: read_only, executable: executable }
+  }
+
+  function is_read_only(self): bool { self.read_only }
+
+  function is_executable(self): bool { self.executable }
+
+  function with_read_only(self, read_only: bool): Permissions {
+    Permissions { read_only: read_only, executable: self.executable }
+  }
+
+  function with_executable(self, executable: bool): Permissions {
+    Permissions { read_only: self.read_only, executable: executable }
+  }
+}
+
+extend Permissions: Eq {
+  function eq(self, other: Permissions): bool {
+    self.read_only == other.read_only && self.executable == other.executable
+  }
+}
+
+extend Permissions: Clone {
+  function clone(self): Permissions {
+    Permissions { read_only: self.read_only, executable: self.executable }
+  }
+}
+
+extend Permissions: Hash {
+  function hash(self): u64 {
+    self.to_str().hash()
+  }
+}
+
+extend Permissions: ToStr {
+  function to_str(self): str {
+    "permissions(read_only=" + (self.read_only as str) + ", executable=" + (self.executable as str) + ")"
+  }
+}
+
+extend Permissions: Debug {
+  function debug(self): str {
+    "Permissions { read_only: " + (self.read_only as str) + ", executable: " + (self.executable as str) + " }"
+  }
+}
+
+extend Metadata {
+  function new(kind: FileKind, byte_len: u64, permissions: Permissions): Metadata {
+    Metadata { kind: kind.clone(), byte_len: byte_len, permissions: permissions.clone() }
+  }
+
+  function file_kind(self): FileKind { self.kind.clone() }
+
+  function len(self): u64 { self.byte_len }
+
+  function permissions(self): Permissions { self.permissions.clone() }
+
+  function is_file(self): bool { self.kind is RegularFile }
+
+  function is_dir(self): bool { self.kind is Directory }
+
+  function is_symlink(self): bool { self.kind is Symlink }
+
+  function with_file_kind(self, kind: FileKind): Metadata {
+    Metadata { kind: kind.clone(), byte_len: self.byte_len, permissions: self.permissions.clone() }
+  }
+
+  function with_len(self, byte_len: u64): Metadata {
+    Metadata { kind: self.kind.clone(), byte_len: byte_len, permissions: self.permissions.clone() }
+  }
+
+  function with_permissions(self, permissions: Permissions): Metadata {
+    Metadata { kind: self.kind.clone(), byte_len: self.byte_len, permissions: permissions.clone() }
+  }
+}
+
+extend Metadata: Eq {
+  function eq(self, other: Metadata): bool {
+    self.kind.equals(other.kind) && self.byte_len == other.byte_len && self.permissions == other.permissions
+  }
+}
+
+extend Metadata: Clone {
+  function clone(self): Metadata {
+    Metadata {
+      kind: self.kind.clone(),
+      byte_len: self.byte_len,
+      permissions: self.permissions.clone(),
+    }
+  }
+}
+
+extend Metadata: Hash {
+  function hash(self): u64 {
+    (self.kind.as_str() + ":" + (self.byte_len as str) + ":" + self.permissions.to_str()).hash()
+  }
+}
+
+extend Metadata: ToStr {
+  function to_str(self): str {
+    self.kind.as_str() + " " + (self.byte_len as str) + " bytes " + self.permissions.to_str()
+  }
+}
+
+extend Metadata: Debug {
+  function debug(self): str {
+    "Metadata { kind: " + self.kind.debug_string() + ", len: " + (self.byte_len as str) + ", permissions: " + self.permissions.debug() + " }"
+  }
+}

@@ -1,0 +1,78 @@
+struct Relaxed {}
+struct Acquire {}
+struct Release {}
+struct AcqRel {}
+struct SeqCst {}
+type Ordering = Relaxed | Acquire | Release | AcqRel | SeqCst;
+
+function ordering_relaxed(): Ordering { Relaxed {} }
+function ordering_acquire(): Ordering { Acquire {} }
+function ordering_release(): Ordering { Release {} }
+function ordering_acq_rel(): Ordering { AcqRel {} }
+function ordering_seq_cst(): Ordering { SeqCst {} }
+
+extend Ordering {
+  function as_str(self): str {
+    if self is Relaxed {
+      "relaxed"
+    } else if self is Acquire {
+      "acquire"
+    } else if self is Release {
+      "release"
+    } else if self is AcqRel {
+      "acq_rel"
+    } else {
+      "seq_cst"
+    }
+  }
+
+  function debug_string(self): str {
+    if self is Relaxed {
+      "Relaxed"
+    } else if self is Acquire {
+      "Acquire"
+    } else if self is Release {
+      "Release"
+    } else if self is AcqRel {
+      "AcqRel"
+    } else {
+      "SeqCst"
+    }
+  }
+
+  function equals(self, other: Ordering): bool {
+    self.as_str() == other.as_str()
+  }
+}
+
+extend Ordering: Eq {
+  function eq(self, other: Ordering): bool { self.equals(other) }
+}
+
+extend Ordering: Clone {
+  function clone(self): Ordering {
+    if self is Relaxed {
+      Relaxed {}
+    } else if self is Acquire {
+      Acquire {}
+    } else if self is Release {
+      Release {}
+    } else if self is AcqRel {
+      AcqRel {}
+    } else {
+      SeqCst {}
+    }
+  }
+}
+
+extend Ordering: Hash {
+  function hash(self): u64 { self.as_str().hash() }
+}
+
+extend Ordering: ToStr {
+  function to_str(self): str { self.as_str() }
+}
+
+extend Ordering: Debug {
+  function debug(self): str { self.debug_string() }
+}

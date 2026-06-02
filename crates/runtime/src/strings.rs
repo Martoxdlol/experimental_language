@@ -2,7 +2,7 @@
 //! comparisons, substring/case ops, and `print`/`println`. Split from `lib.rs`.
 
 use crate::gc;
-use std::io::Write;
+use std::io::{Read, Write};
 
 /// The runtime representation of a `str`: a managed object whose field block is
 /// `[len: u64][UTF-8 bytes …]` (bytes inline). A `str` value is a pointer to
@@ -319,15 +319,142 @@ pub unsafe extern "C" fn lang_str_char_at(s: *const LangStr, i: i64) -> i64 {
     }
 }
 
-fn write_str(s: *const LangStr, newline: bool) {
+fn write_stream_str(s: *const LangStr, newline: bool, stderr: bool) {
     let bytes = unsafe { str_bytes(s) };
-    let stdout = std::io::stdout();
-    let mut lock = stdout.lock();
-    let _ = lock.write_all(bytes);
-    if newline {
-        let _ = lock.write_all(b"\n");
+    if stderr {
+        let stderr = std::io::stderr();
+        let mut lock = stderr.lock();
+        let _ = lock.write_all(bytes);
+        if newline {
+            let _ = lock.write_all(b"\n");
+        }
+        let _ = lock.flush();
+    } else {
+        let stdout = std::io::stdout();
+        let mut lock = stdout.lock();
+        let _ = lock.write_all(bytes);
+        if newline {
+            let _ = lock.write_all(b"\n");
+        }
+        let _ = lock.flush();
     }
-    let _ = lock.flush();
+}
+
+fn make_io_result(payload: &str) -> *const LangStr {
+    unsafe { lang_str_from_utf8(payload.as_ptr(), payload.len()) }
+}
+
+fn encode_io_success(payload: &str) -> *const LangStr {
+    let mut out = String::with_capacity(payload.len() + 1);
+    out.push('0');
+    out.push_str(payload);
+    make_io_result(&out)
+}
+
+fn encode_io_error(error: impl std::fmt::Display) -> *const LangStr {
+    let message = error.to_string();
+    let mut out = String::with_capacity(message.len() + 1);
+    out.push('1');
+    out.push_str(&message);
+    make_io_result(&out)
+}
+
+fn encode_io_bytes_hex(bytes: &[u8]) -> *const LangStr {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut payload = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        payload.push(HEX[(byte >> 4) as usize] as char);
+        payload.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    encode_io_success(&payload)
+}
+
+fn decode_hex_digit(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn decode_io_hex_bytes(hex: &str) -> std::io::Result<Vec<u8>> {
+    let bytes = hex.as_bytes();
+    if bytes.len() % 2 != 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "odd-length io byte payload",
+        ));
+    }
+    let mut out = Vec::with_capacity(bytes.len() / 2);
+    let mut i = 0;
+    while i < bytes.len() {
+        let hi = decode_hex_digit(bytes[i]).ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid io byte payload")
+        })?;
+        let lo = decode_hex_digit(bytes[i + 1]).ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid io byte payload")
+        })?;
+        out.push((hi << 4) | lo);
+        i += 2;
+    }
+    Ok(out)
+}
+
+fn write_stream_bytes(contents_hex: *const LangStr, stderr: bool) -> *const LangStr {
+    let hex = String::from_utf8_lossy(unsafe { str_bytes(contents_hex) });
+    let bytes = match decode_io_hex_bytes(&hex) {
+        Ok(bytes) => bytes,
+        Err(error) => return encode_io_error(error),
+    };
+    let result = if stderr {
+        let stream = std::io::stderr();
+        let mut lock = stream.lock();
+        lock.write_all(&bytes)
+    } else {
+        let stream = std::io::stdout();
+        let mut lock = stream.lock();
+        lock.write_all(&bytes)
+    };
+    match result {
+        Ok(()) => encode_io_success(&bytes.len().to_string()),
+        Err(error) => encode_io_error(error),
+    }
+}
+
+fn flush_stream(stderr: bool) -> *const LangStr {
+    let result = if stderr {
+        std::io::stderr().lock().flush()
+    } else {
+        std::io::stdout().lock().flush()
+    };
+    match result {
+        Ok(()) => encode_io_success(""),
+        Err(error) => encode_io_error(error),
+    }
+}
+
+fn read_stdin_count(count: i64) -> *const LangStr {
+    if count < 0 {
+        return encode_io_error("negative stdin read size");
+    }
+    let mut buf = vec![0u8; count as usize];
+    let result = std::io::stdin().lock().read(&mut buf);
+    match result {
+        Ok(n) => {
+            buf.truncate(n);
+            encode_io_bytes_hex(&buf)
+        }
+        Err(error) => encode_io_error(error),
+    }
+}
+
+fn read_stdin_to_end() -> *const LangStr {
+    let mut buf = Vec::new();
+    match std::io::stdin().lock().read_to_end(&mut buf) {
+        Ok(_) => encode_io_bytes_hex(&buf),
+        Err(error) => encode_io_error(error),
+    }
 }
 
 /// Write a `str` to stdout with no trailing newline.
@@ -336,7 +463,7 @@ fn write_str(s: *const LangStr, newline: bool) {
 /// `s` must be a valid `LangStr` pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lang_print(s: *const LangStr) {
-    write_str(s, false);
+    write_stream_str(s, false, false);
 }
 
 /// Write a `str` to stdout followed by a newline.
@@ -345,5 +472,90 @@ pub unsafe extern "C" fn lang_print(s: *const LangStr) {
 /// `s` must be a valid `LangStr` pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lang_println(s: *const LangStr) {
-    write_str(s, true);
+    write_stream_str(s, true, false);
+}
+
+/// Write a `str` to stderr with no trailing newline.
+///
+/// # Safety
+/// `s` must be a valid `LangStr` pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lang_eprint(s: *const LangStr) {
+    write_stream_str(s, false, true);
+}
+
+/// Write a `str` to stderr followed by a newline.
+///
+/// # Safety
+/// `s` must be a valid `LangStr` pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lang_eprintln(s: *const LangStr) {
+    write_stream_str(s, true, true);
+}
+
+/// Read up to `count` bytes from stdin.
+#[unsafe(no_mangle)]
+pub extern "C" fn lang_io_stdin_read(count: i64) -> *const LangStr {
+    read_stdin_count(count)
+}
+
+/// Read all remaining bytes from stdin.
+#[unsafe(no_mangle)]
+pub extern "C" fn lang_io_stdin_read_to_end() -> *const LangStr {
+    read_stdin_to_end()
+}
+
+/// Write raw bytes to stdout from a hex payload.
+///
+/// # Safety
+/// `contents_hex` must be a valid runtime `str` pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lang_io_stdout_write(contents_hex: *const LangStr) -> *const LangStr {
+    write_stream_bytes(contents_hex, false)
+}
+
+/// Write raw bytes to stderr from a hex payload.
+///
+/// # Safety
+/// `contents_hex` must be a valid runtime `str` pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lang_io_stderr_write(contents_hex: *const LangStr) -> *const LangStr {
+    write_stream_bytes(contents_hex, true)
+}
+
+/// Flush stdout.
+#[unsafe(no_mangle)]
+pub extern "C" fn lang_io_stdout_flush() -> *const LangStr {
+    flush_stream(false)
+}
+
+/// Flush stderr.
+#[unsafe(no_mangle)]
+pub extern "C" fn lang_io_stderr_flush() -> *const LangStr {
+    flush_stream(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lang(s: &str) -> *const LangStr {
+        unsafe { lang_str_from_utf8(s.as_ptr(), s.len()) }
+    }
+
+    fn decode(s: *const LangStr) -> String {
+        String::from_utf8_lossy(unsafe { str_bytes(s) }).into_owned()
+    }
+
+    #[test]
+    fn raw_stream_hooks_write_flush_and_report_bad_hex() {
+        assert_eq!(decode(unsafe { lang_io_stdout_write(lang("4f4b")) }), "02");
+        assert_eq!(
+            decode(unsafe { lang_io_stderr_write(lang("455252")) }),
+            "03"
+        );
+        assert_eq!(decode(lang_io_stdout_flush()), "0");
+        assert_eq!(decode(lang_io_stderr_flush()), "0");
+        assert!(decode(unsafe { lang_io_stdout_write(lang("0x")) }).starts_with('1'));
+    }
 }

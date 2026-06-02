@@ -552,7 +552,7 @@ import { my_helper } from "pkg:iter_ext"   // also bring a name
 <table>
 <thead><tr><th>Scheme</th><th>Meaning</th><th>Escapes pkg?</th></tr></thead>
 <tbody>
-<tr><td><code>"core:..."</code>, <code>"std:..."</code></td><td>Built-in module supplied by the toolchain (see 17.8). <code>core:</code> assumes only an allocator; <code>std:</code> assumes an OS.</td><td>—</td></tr>
+<tr><td><code>"core:..."</code>, <code>"std:..."</code></td><td>Built-in module supplied by the toolchain (see 17.8). <code>core:</code> is compiler/runtime substrate; <code>std:</code> is official library API.</td><td>—</td></tr>
 <tr><td><code>"pkg:&lt;name&gt;"</code>, <code>"pkg:&lt;name&gt;/&lt;sub&gt;"</code></td><td>An external dependency listed in the manifest. <strong>Requires project context</strong> (<a href="#17-13-run-modes">17.13</a>).</td><td>—</td></tr>
 <tr><td><code>"self:&lt;segment&gt;/..."</code></td><td>A module inside the current package, addressed <strong>from the package root</strong> — names trace through the <code>mod</code> tree from the entry's siblings. <strong>Requires project context.</strong></td><td>No</td></tr>
 <tr><td><code>"self:./&lt;segment&gt;"</code>, <code>"self:../&lt;segment&gt;"</code></td><td>A module inside the current package, addressed <strong>relative</strong> to the importing file's directory. Still a <code>mod</code>-tree lookup.</td><td>No</td></tr>
@@ -804,11 +804,11 @@ pub struct B { a: A }
 <p>Two reserved prefixes identify modules supplied by the toolchain:</p>
 
 <ul>
-<li><strong><code>core:</code></strong> — assumes an allocator, <strong>no OS</strong>. Always available wherever the language runs (including bare metal with a heap). No <code>core:</code> module is implicitly in scope: even <code>List</code> (from <code>core:collections</code>) must be imported by name. The one thing the toolchain supplies without an <code>import</code> is the desugaring of built-in <em>syntax</em> — see <a href="#the-prelude-rule">the prelude rule</a> below.</li>
-<li><strong><code>std:</code></strong> — assumes an OS. Sub-modules under <code>std:</code> provide IO, threading, synchronization, async runtime, time, filesystem, networking. Must be explicitly imported. Not available on freestanding targets.</li>
+<li><strong><code>core:</code></strong> — the compiler/runtime substrate. It contains language-privileged definitions: desugar targets, runtime-recognized layouts, syntax protocols, FFI substrate, atomic primitive contracts, and compiler/macro APIs. No <code>core:</code> module is implicitly in scope: even <code>List</code> (from <code>core:collections</code>) must be imported by name. The one thing the toolchain supplies without an <code>import</code> is the desugaring of built-in <em>syntax</em> — see <a href="#the-prelude-rule">the prelude rule</a> below.</li>
+<li><strong><code>std:</code></strong> — the official toolchain library surface. A <code>std:</code> module may be portable, target-backed, or mixed; what makes it <code>std:</code> is that it is ordinary library API rather than compiler substrate. Must be explicitly imported.</li>
 </ul>
 
-<p>The name distinction reflects the realistic minimum the language can run on: an allocator is mandatory (structs are RC-managed on the heap, <code>str</code> is heap-allocated, closures box their environments), but an OS is not.</p>
+<p>The name distinction reflects <strong>authority</strong>, not portability. If the compiler or runtime must recognize a definition specially, it belongs under <code>core:</code>. If users could implement the same shape as an ordinary library, it belongs under <code>std:</code> even when it can run on a freestanding target.</p>
 
 <div class="diagram">
   <svg viewBox="0 0 920 360" role="img" aria-label="core: and std: layers">
@@ -817,19 +817,21 @@ pub struct B { a: A }
       <rect x="40" y="270" width="800" height="36" rx="4" fill="#fff" stroke="#d6d3cd"/>
       <text x="440" y="292" text-anchor="middle" font-weight="700">Hardware / allocator (always assumed)</text>
       <rect x="40" y="170" width="800" height="86" rx="6" fill="#f3eefa" stroke="#6b4ba8" stroke-width="2"/>
-      <text x="60" y="194" font-weight="700" fill="#6b4ba8">core:  &nbsp;— no OS required</text>
-      <rect x="60" y="208" width="176" height="36" rx="4" fill="#fff" stroke="#6b4ba8"/>
-      <text x="148" y="230" text-anchor="middle" font-size="11">core:prelude  (syntax)</text>
-      <rect x="244" y="208" width="180" height="36" rx="4" fill="#fff" stroke="#6b4ba8"/>
-      <text x="334" y="230" text-anchor="middle" font-size="11">core:collections</text>
-      <rect x="432" y="208" width="150" height="36" rx="4" fill="#fff" stroke="#6b4ba8"/>
-      <text x="507" y="230" text-anchor="middle" font-size="11">core:ffi</text>
-      <rect x="590" y="208" width="184" height="36" rx="4" fill="#fff" stroke="#6b4ba8"/>
-      <text x="682" y="230" text-anchor="middle" font-size="11">core:compiler</text>
+      <text x="60" y="194" font-weight="700" fill="#6b4ba8">core:  &nbsp;— compiler/runtime substrate</text>
+      <rect x="60" y="208" width="150" height="36" rx="4" fill="#fff" stroke="#6b4ba8"/>
+      <text x="135" y="230" text-anchor="middle" font-size="11">core:prelude  (syntax)</text>
+      <rect x="218" y="208" width="154" height="36" rx="4" fill="#fff" stroke="#6b4ba8"/>
+      <text x="295" y="230" text-anchor="middle" font-size="11">core:collections</text>
+      <rect x="380" y="208" width="110" height="36" rx="4" fill="#fff" stroke="#6b4ba8"/>
+      <text x="435" y="230" text-anchor="middle" font-size="11">core:ffi</text>
+      <rect x="498" y="208" width="150" height="36" rx="4" fill="#fff" stroke="#6b4ba8"/>
+      <text x="573" y="230" text-anchor="middle" font-size="11">core:sync:atomic</text>
+      <rect x="656" y="208" width="160" height="36" rx="4" fill="#fff" stroke="#6b4ba8"/>
+      <text x="736" y="230" text-anchor="middle" font-size="11">core:compiler</text>
       <rect x="40" y="130" width="800" height="32" rx="4" fill="#fff" stroke="#d6d3cd" stroke-dasharray="3 3"/>
-      <text x="440" y="151" text-anchor="middle" font-style="italic" fill="#5a5a60">OS (only for std: targets)</text>
+      <text x="440" y="151" text-anchor="middle" font-style="italic" fill="#5a5a60">provider boundary — std may be portable or target-backed</text>
       <rect x="40" y="30" width="800" height="92" rx="6" fill="#eaf0f8" stroke="#1a4a8a" stroke-width="2"/>
-      <text x="60" y="54" font-weight="700" fill="#1a4a8a">std:  &nbsp;— OS required, explicit import</text>
+      <text x="60" y="54" font-weight="700" fill="#1a4a8a">std:  &nbsp;— official library, explicit import</text>
       <g transform="translate(60, 66)" font-size="10.5">
         <rect width="100" height="22" rx="3" fill="#fff" stroke="#1a4a8a"/><text x="50" y="16" text-anchor="middle">std:io</text>
         <rect x="110" width="110" height="22" rx="3" fill="#fff" stroke="#1a4a8a"/><text x="165" y="16" text-anchor="middle">std:thread</text>
@@ -840,7 +842,7 @@ pub struct B { a: A }
         <rect x="680" width="100" height="22" rx="3" fill="#fff" stroke="#1a4a8a"/><text x="730" y="16" text-anchor="middle">std:net</text>
       </g>
       <text x="440" y="116" text-anchor="middle" font-size="11" fill="#5a5a60" font-style="italic">
-        freestanding (no-OS) targets compile fine without these
+        target providers choose which std: modules are available
       </text>
     </g>
   </svg>
@@ -866,32 +868,34 @@ pub struct B { a: A }
 </div>
 
 <ul>
-<li><strong>Free (no import):</strong> literals (<code>[1, 2]</code> list literals, map literals, number and string literals, string interpolation), operators (<code>+</code>, <code>==</code>, <code>[]</code>, …), <code>for</code>, <code>?</code>, <code>await</code>. These desugar to interfaces defined in <code>core:prelude</code>, and the compiler resolves those interfaces <strong>fully-qualified</strong> — exactly how Rust's <code>+</code> works without <code>use std::ops::Add</code>.</li>
-<li><strong>Requires <code>import</code>:</strong> every name you actually <em>spell out</em> — <code>List</code>, <code>Map</code>, <code>panic</code>, <code>Clone</code>, <code>ToStr</code> — and the desugar interfaces themselves <em>when you name them</em> (e.g. <code>extend T: Add</code>, or calling <code>x.add(y)</code> by method name rather than via <code>+</code>).</li>
+<li><strong>Free (no import):</strong> literals (<code>[1, 2]</code> list literals, map literals, number and string literals, string interpolation), operators (<code>+</code>, <code>==</code>, <code>[]</code>, …), <code>for</code>, <code>?</code>, <code>await</code>. The compiler resolves these through language-known core substrate and stored toolchain definitions without placing any names in scope.</li>
+<li><strong>Requires <code>import</code>:</strong> every name you actually <em>spell out</em> — <code>List</code>, <code>Map</code>, <code>panic</code>, <code>Clone</code>, <code>ToStr</code> — and every named interface/type you use in bounds, signatures, or calls. Operator protocol labels such as <code>Add</code> are not exported from <code>core:prelude</code> today; user operator overloading is driven by visible <code>extend</code> methods such as <code>add</code>, <code>eq</code>, or <code>lt</code>.</li>
 </ul>
 
 <p>So <code>core:prelude</code> is best understood as a <strong>desugar-resolution table</strong>, not a bag of in-scope names. Nothing it contains is implicitly visible by name.</p>
 
 <h3><code>core:prelude</code></h3>
 
-<p>Defines the interfaces and primitives that built-in syntax desugars into. They are resolved fully-qualified for that syntax; to refer to any of them <em>by name</em>, import it from <code>core:prelude</code>.</p>
+<p>Defines importable interfaces and primitives that built-in syntax depends on.
+They are resolved through stored toolchain definitions for syntax; to refer to
+an exported item <em>by name</em>, import it from <code>core:prelude</code>.</p>
 
 <ul>
-<li><strong>Operator interfaces</strong> — <code>Add</code>, <code>Sub</code>, <code>Mul</code>, <code>Div</code>, <code>Mod</code>, <code>Neg</code>, <code>Not</code>, <code>BitAnd</code>, <code>BitOr</code>, <code>BitXor</code>, <code>Shl</code>, <code>Shr</code>, <code>Eq</code>, <code>Ord</code>, <code>Index</code>, <code>IndexMut</code>, <code>Hash</code>. The <code>Ordering</code> type and its <code>Less</code> / <code>Equal</code> / <code>Greater</code> variants.</li>
+<li><strong>Core contracts used by operators and containers</strong> — <code>Eq</code>, <code>Ord</code>, and <code>Hash</code>. <code>Ord</code> is the boolean comparison contract; the memory-ordering <code>Ordering</code> value lives separately in <code>core:sync:atomic</code>. Arithmetic and bitwise operator labels such as <code>Add</code> are compiler-recognized method protocols today, not importable <code>core:prelude</code> exports.</li>
 <li><strong>Iterator protocol</strong> — <code>Iterator&lt;T&gt;</code>, <code>Item&lt;T&gt;</code>, <code>Done</code>.</li>
 <li><strong>Future protocol</strong> — <code>Future&lt;T&gt;</code>, <code>Ready&lt;T&gt;</code>, <code>Pending</code>, <code>Context</code>.</li>
 <li><strong>Error propagation</strong> — <code>Try&lt;O, R&gt;</code>, <code>FromResidual&lt;R&gt;</code>.</li>
 <li><strong>Lifecycle</strong> — <code>Clone</code>, <code>Drop</code>.</li>
 <li><strong>Stringification</strong> — <code>ToStr</code> (used by string interpolation; see <a href="01-lexical.html#19-string-literals-and-interpolation">01-lexical.md §1.9</a> and <a href="15-operators.html#1510-stringification--tostr">15-operators.md §15.10</a>).</li>
-<li><strong>FFI</strong> — <code>ReprC</code>, the <code>Buffer</code> extern struct. (The rest of the FFI surface — <code>with_pin</code>, <code>Pin</code>, <code>PinHandle&lt;T&gt;</code>, <code>Foreign</code>, <code>CStr</code>, <code>CString</code>, <code>Callback&lt;C, R&gt;</code>, the C-width aliases, <code>c_void</code>, <code>c_va_list</code>, <code>attach_thread</code>, <code>detach_thread</code> — lives in <code>core:ffi</code> and is explicitly imported. See <a href="19-ffi.html">19-ffi.html</a>.)</li>
+<li><strong>FFI</strong> — <code>ReprC</code> and ABI layout rules are compiler substrate. Named boundary helpers such as <code>Foreign</code>, <code>CString</code>, <code>CStr</code>, <code>Buffer</code>, C-width aliases, <code>c_void</code>, and <code>c_va_list</code> live in <code>core:ffi</code> and are explicitly imported. See <a href="19-ffi.html">19-ffi.html</a>.</li>
 <li><strong>Panic</strong> — <code>panic(msg: str)</code>, <code>panic_with(value: T)</code>. Like any name, these are imported: <code>import { panic } from "core:prelude"</code>.</li>
 </ul>
 
 <p>Two things remain reachable without an <code>import</code> because they are not names you bring into scope: <strong>methods on primitive <code>str</code></strong> (<code>str</code> is heap-allocated and its methods are inherent to the type), and <strong>numeric helper namespaces</strong> (<code>i32.wrapping_add</code> etc.) — numeric primitives are keywords, so their static methods come along for free.</p>
 
-<h3><code>core:collections</code> — allocator-only containers</h3>
+<h3><code>core:collections</code> — compiler-backed containers</h3>
 
-<p>The general-purpose heap container <em>types</em> live here. They need <strong>only an allocator</strong>, so they remain usable on freestanding targets. They are ordinary names: import what you use.</p>
+<p>The general-purpose heap container <em>types</em> live here because literals, iteration, indexing, and runtime layout make them part of the language substrate. They are ordinary names: import what you use.</p>
 
 <pre><code>import { List, Map, Set } from "core:collections"
 
@@ -901,54 +905,90 @@ var ys: List&lt;i64&gt; = List.new()    // …but naming the type List does
 
 <ul>
 <li><code>List&lt;T&gt;</code> — growable list.</li>
-<li><code>Map&lt;K, V&gt;</code>, <code>Set&lt;T&gt;</code> — hash containers. They use a <strong>deterministic</strong> default hasher from <code>core:hash</code>, so they need only an allocator.</li>
+<li><code>Map&lt;K, V&gt;</code> — hash container with a deterministic toolchain hasher today; public hasher customization belongs in <code>std:hash</code>.</li>
+<li><code>Set&lt;T: Eq&gt;</code> — unique-list set today; hash-backed storage is planned with generic map-key support.</li>
 </ul>
 
 <div class="callout warn">
   <strong>The default hasher is deterministic</strong>
-  <code>Map</code>/<code>Set</code> default to a fixed-seed hasher — fast and freestanding-safe, but <strong>not</strong> HashDoS-resistant. If a map ingests <em>untrusted, attacker-chosen keys</em> (e.g. request data on a server), supply a keyed hasher instead. A HashDoS-safe keyed hasher is available opt-in (pass your own; an OS-auto-seeded convenience version is planned). See <a href="24-stdlib-extended.html#hash">24 §10</a>.
+  <code>Map</code>/<code>Set</code> default to a fixed-seed hasher — fast and
+  portable, but <strong>not</strong> HashDoS-resistant. If a map ingests
+  <em>untrusted, attacker-chosen keys</em> (e.g. request data on a server),
+  supply a keyed hasher once <a href="24-stdlib-extended.html#hash">24 §11</a>
+  lands the public hasher API.
 </div>
 
 <h3><code>core:ffi</code> — explicit-import FFI module</h3>
 
-<p>The FFI surface beyond <code>ReprC</code> and <code>Buffer</code> lives in <code>core:ffi</code>. It is <code>core:</code>-tier (no OS dependency, works on freestanding targets) but is <strong>not</strong> auto-imported:</p>
+<p>The FFI surface beyond <code>ReprC</code> and <code>Buffer</code> lives in <code>core:ffi</code>. It is <code>core:</code>-tier because the compiler and runtime must recognize ABI, pinning, callback, and foreign-allocation contracts, but it is <strong>not</strong> auto-imported:</p>
 
 <pre><code>import {
   c_int, c_uint, c_long, c_ulong, c_size_t, c_void, c_va_list,
-  Foreign, CStr, CString, Callback,
-  Pin, PinHandle, with_pin,
-  attach_thread, detach_thread,
+  Foreign, CStr, CString, Buffer,
 } from "core:ffi"
 </code></pre>
 
-<p>See <a href="19-ffi.html">19-ffi.html</a> for the full contents.</p>
+<p>Pinning helpers, callback wrapper types, and foreign-thread attach/detach helpers are planned in <a href="19-ffi.html">19-ffi.html</a>, but they are not catalog exports until their runtime/compiler contracts are implemented.</p>
+
+<h3><code>core:async</code> — explicit-import async syntax protocols</h3>
+
+<p><code>Future</code>, <code>Ready</code>, <code>Pending</code>, <code>Context</code>, and
+<code>AsyncIterator</code> are compiler-recognized async shapes. They are exported from
+<code>core:async</code> because <code>await</code>, <code>async</code>, and
+<code>for await</code> lower through these contracts. Runtime helpers such as
+<code>sleep</code>, <code>timeout</code>, and executor scheduling remain in
+<code>std:async</code>.</p>
+
+<pre><code>import { Future, Ready, Pending, Context, AsyncIterator } from "core:async"
+</code></pre>
+
+<h3><code>core:sync:atomic</code> — explicit-import atomic primitive contracts</h3>
+
+<p><code>Ordering</code> and its <code>Relaxed</code>, <code>Acquire</code>, <code>Release</code>,
+<code>AcqRel</code>, and <code>SeqCst</code> variants live in <code>core:sync:atomic</code>
+because atomic operations require compiler/runtime primitive semantics. The
+current implemented slice is the value contract and constructor helpers; atomic
+handle types remain planned.</p>
+
+<pre><code>import { Ordering, SeqCst, ordering_seq_cst } from "core:sync:atomic"
+</code></pre>
 
 <h3><code>std:*</code> — explicit-import modules</h3>
 
 <table>
-<thead><tr><th>Module</th><th>What it provides</th><th>Why it's not in <code>core:</code></th></tr></thead>
+<thead><tr><th>Module</th><th>What it provides</th><th>Why it's <code>std:</code></th></tr></thead>
 <tbody>
-<tr><td><code>std:io</code></td><td><code>print</code>, <code>println</code>, file handles, byte streams</td><td>Needs an OS (stdout/stderr, file descriptors).</td></tr>
-<tr><td><code>std:thread</code></td><td><code>Thread.spawn</code>, <code>JoinHandle</code>, <code>Joined</code>, <code>Panicked</code></td><td>Needs OS threads.</td></tr>
-<tr><td><code>std:task</code></td><td><code>Task.spawn</code>, <code>JoinHandle</code>, <code>Joined</code>, <code>Panicked</code>, <code>Cancelled</code></td><td>Needs the work-stealing executor.</td></tr>
-<tr><td><code>std:sync</code></td><td><code>Shared&lt;T&gt;</code>, <code>LockBusy</code>, channels (<code>channel</code>, <code>channel_bounded</code>, <code>channel_mpmc</code>, <code>channel_mpmc_bounded</code>), <code>Sender&lt;T&gt;</code>, <code>Receiver&lt;T&gt;</code>, <code>MpmcSender&lt;T&gt;</code>, <code>MpmcReceiver&lt;T&gt;</code>, <code>ChannelClosed</code></td><td>Needs OS mutexes / condvars.</td></tr>
-<tr><td><code>std:async</code></td><td><code>yield_now</code>, <code>sleep</code>, <code>timeout</code>, the default work-stealing executor, <code>AsyncIterator</code> adapters</td><td>Needs an executor, timers, and future I/O readiness.</td></tr>
-<tr><td><code>std:time</code></td><td>wall-clock, monotonic time, durations</td><td>Needs an OS clock.</td></tr>
-<tr><td><code>std:fs</code></td><td>filesystem</td><td>Needs an OS filesystem.</td></tr>
-<tr><td><code>std:net</code></td><td>sockets, TCP, UDP</td><td>Needs an OS network stack.</td></tr>
+<tr><td><code>std:error</code></td><td><code>Error</code>, <code>Annotated</code>, <code>with_context</code></td><td>Shared library shape for errors; <code>Annotated</code> supports debug rendering but is not compiler-privileged.</td></tr>
+<tr><td><code>std:bytes</code></td><td><code>Bytes</code>, <code>BytesCursor</code>, <code>Utf8Error</code></td><td>Managed byte container, in-memory cursor-backed reader/seeker, and byte error shape; ordinary library API, not compiler substrate.</td></tr>
+<tr><td><code>std:collections</code></td><td><code>Deque</code>, <code>deque</code>, <code>deque_from_list</code>, bulk front/back extension, membership testing, snapshots, iterators, and value/debug semantics</td><td>Ordinary library collection; no syntax or compiler lowering depends on the deque layout.</td></tr>
+<tr><td><code>std:fmt</code></td><td><code>Display</code>, <code>Debug</code>, <code>FmtSink</code>, <code>FmtError</code></td><td>Formatting contracts; <code>FmtError</code> has error/value semantics; interpolation still lowers through <code>ToStr</code>.</td></tr>
+<tr><td><code>std:io</code></td><td><code>print</code>, <code>println</code>, <code>eprint</code>, <code>eprintln</code>, <code>Reader</code>, <code>Writer</code>, <code>Seeker</code>, <code>SeekFrom</code>, <code>IoError</code>, stdin/stdout/stderr handles, <code>BufReader</code>, <code>BufWriter</code></td><td>Official IO contracts, stream handles, buffered adapters, and IO value semantics.</td></tr>
+<tr><td><code>std:thread</code></td><td><code>Thread.spawn</code>, <code>JoinHandle</code>, <code>Joined</code>, <code>Panicked</code></td><td>Official threading API over target worker primitives; <code>Panicked</code> has value semantics.</td></tr>
+<tr><td><code>std:sync</code></td><td><code>Shared&lt;T&gt;</code>, <code>LockBusy</code>, channels (<code>channel</code>, <code>channel_bounded</code>, <code>channel_mpmc</code>, <code>channel_mpmc_bounded</code>), <code>Sender&lt;T&gt;</code>, <code>Receiver&lt;T&gt;</code>, <code>MpmcSender&lt;T&gt;</code>, <code>MpmcReceiver&lt;T&gt;</code>, <code>ChannelClosed</code></td><td>Official synchronization API over target/runtime primitives; marker values have value semantics.</td></tr>
+<tr><td><code>std:async</code></td><td><code>yield_now</code>, <code>sleep</code>, <code>timeout</code>, <code>TimedOut</code>, executor/runtime adapters</td><td>Official executor library; async syntax substrate lives in <code>core:async</code>.</td></tr>
+<tr><td><code>std:time</code></td><td><code>Duration</code>, monotonic <code>Instant</code>, wall-clock <code>SystemTime</code>, <code>TimeZone</code>, <code>DateTime</code>, <code>TimeError</code>, ISO-like formatting/parsing, and <code>sleep</code></td><td>Official time API; portable values and target-backed hooks stay under <code>std:</code>. System-time calendar conversion, local timezone lookup, and timezone databases remain planned.</td></tr>
+<tr><td><code>std:fs</code></td><td><code>Path</code> values, native separator conversion, target-backed existence/type/metadata/canonicalization queries, binary/text read-write helpers, descriptor-backed <code>File</code> handles with <code>OpenOptions</code>, snapshot <code>read_dir</code>, <code>DirEntry</code>/<code>Metadata</code>/<code>Permissions</code> value shapes, and non-recursive mutation ops</td><td>Official filesystem API for targets that provide one; portable values and target-backed hooks stay under <code>std:</code>, not <code>core:</code>.</td></tr>
+<tr><td><code>std:hash</code></td><td><code>Hasher</code>, <code>DefaultHasher</code>, <code>hash_value</code>, <code>combine_hash</code></td><td>Ordinary deterministic hasher helpers layered over compiler-recognized <code>core:prelude.Hash</code>; <code>DefaultHasher</code> has state value semantics.</td></tr>
+<tr><td><code>std:http</code></td><td>Comparable <code>Method</code>/<code>HttpVersion</code>, standard <code>Status</code> helpers/reason phrases, case-insensitive normalized <code>Headers</code>, <code>HeaderEntry</code>, <code>HttpRequest</code>, <code>HttpResponse</code></td><td>Portable HTTP value types with snapshot accessors, header builders, equality/clone/hash/debug semantics; clients, servers, parsing, and wire I/O live outside this value slice.</td></tr>
+<tr><td><code>std:json</code></td><td><code>Json</code> value tree, constructor/extractor helpers, immutable array/object builders, deep clone/equality/hash, escaped compact and pretty rendering, and debug formatting</td><td>Shared interchange value type; parsers and stricter canonical serializers live in packages.</td></tr>
+<tr><td><code>std:net:types</code></td><td><code>IpAddr</code>, <code>SocketAddr</code>, <code>Uri</code>, <code>Url</code>, <code>ParseError</code>, constructors, IPv4/IPv6 including scoped zone IDs/socket/URI/URL parser helpers including bracketed IPv6 URL hosts, URI/URL accessors, URL builders, and UTF-8 percent component helpers</td><td>Portable network identifier values and parser error shape; sockets and DNS remain in target-backed <code>std:net</code>.</td></tr>
+<tr><td><code>std:process</code></td><td><code>Command</code>, <code>ExitStatus</code>, <code>Output</code>, <code>args</code>, <code>env</code>, <code>env_all</code>, <code>set_env</code>, <code>exit</code>, and <code>abort</code></td><td>Official process API: value records are portable, while argv/environment access and process-control hooks are target-backed std provider behavior.</td></tr>
+<tr><td><code>std:rand</code></td><td><code>Rng</code>, <code>SeededRng</code>, <code>OsRng</code>, <code>ThreadRng</code>, <code>RandomError</code>, integer/f64 range helpers, ratio booleans, choose, and shuffle helpers</td><td>Deterministic reproducible RNG helpers plus OS-backed entropy handles; cryptographic-strength guarantees and richer distributions remain provider work.</td></tr>
+<tr><td><code>std:log</code></td><td><code>Level</code>, <code>Record</code>, <code>LoggerAlreadySet</code>, record accessors/builders, field-map snapshots with field-order-independent equality/hash, level constructors, default and structured line logging helpers</td><td>Ordinary diagnostic library API with value semantics; replaceable logger backends remain planned.</td></tr>
+<tr><td><code>std:net</code></td><td>sockets, TCP, UDP</td><td>Official networking API for targets that provide it.</td></tr>
 </tbody>
 </table>
 
 <p>Typical imports:</p>
 
 <pre><code>import { print, println } from "std:io"
+import { Error, with_context } from "std:error"
 import { Thread, JoinHandle } from "std:thread"
-import { Task } from "std:task"
 import { Shared, channel } from "std:sync"
 import { yield_now, sleep, timeout } from "std:async"
 </code></pre>
 
-<p>A freestanding (no-OS) target compiles fine without any <code>std:*</code> import; <code>core:prelude</code> is enough to define types, run pure computation, and interact with FFI.</p>
+<p>A freestanding target still has the compiler substrate in <code>core:*</code>. Which <code>std:*</code> modules exist is decided by the selected stdlib provider/sysroot; portable <code>std:</code> modules can be available even when OS-backed modules such as <code>std:fs</code> are not.</p>
 
 <h2 id="17-9-shadowing-rules-at-import">17.9 Shadowing rules at import</h2>
 
@@ -1124,7 +1164,7 @@ pub import { Foo as Bar }  from "self:util/helpers"  // re-export with alias
 <thead><tr><th>Scheme</th><th>Project context</th><th>No project context (loose / <code>exec</code>)</th></tr></thead>
 <tbody>
 <tr><td><code>core:</code></td><td>✓</td><td>✓ (no project needed)</td></tr>
-<tr><td><code>std:</code></td><td>✓</td><td>✓ (OS targets)</td></tr>
+<tr><td><code>std:</code></td><td>✓ (selected provider)</td><td>✓ (selected provider)</td></tr>
 <tr><td><code>pkg:</code></td><td>✓ (manifest deps)</td><td>✗ hard error <span class="small">(see 17.14)</span></td></tr>
 <tr><td><code>self:</code></td><td>✓</td><td>✗ hard error — no module tree to anchor to</td></tr>
 <tr><td><code>file:</code></td><td>✓ — allowlist-gated</td><td>✓ — unrestricted</td></tr>

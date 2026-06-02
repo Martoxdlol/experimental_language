@@ -1,0 +1,29 @@
+//@ kind: run
+//@ description: core:ffi exposes C ABI aliases and boundary helper values through explicit imports
+//@ stdout:
+//~ ffi=42 8 otter 2
+import { println } from "std:io";
+import { Buffer, CString, c_double, c_float, c_int, c_size_t, c_void } from "core:ffi";
+
+function add_one(x: c_int): c_int {
+  x + 1
+}
+
+function main() {
+  var n: c_int = add_one(41i32);
+  var size: c_size_t = 8usize;
+  var raw: *c_void | null = null;
+  var f: c_float = 1.5f32;
+  var d: c_double = f as f64;
+  var cs = CString.from_str("otter");
+  var maybe = Buffer.alloc(2u64);
+  if maybe is Buffer {
+    var buf = maybe as Buffer;
+    buf.set(0u64, 0xCAu8);
+    buf.set(1u64, 0xFEu8);
+    println("ffi=${n} ${size} ${cs.to_str()} ${buf.size}");
+    buf.free();
+  } else {
+    println("ffi=${n} ${size} ${cs.to_str()} 0");
+  }
+}

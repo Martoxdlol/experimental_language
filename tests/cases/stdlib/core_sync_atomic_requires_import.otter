@@ -1,0 +1,30 @@
+//@ kind: compile-error
+//@ description: core:sync:atomic Ordering contract values are not available without an explicit import
+//@ stderr: cannot find type `Ordering`
+//@ stderr: cannot find type `Relaxed`
+//@ stderr: cannot find type `Acquire`
+//@ stderr: cannot find type `Release`
+//@ stderr: cannot find type `AcqRel`
+//@ stderr: cannot find type `SeqCst`
+//@ stderr: cannot find value `ordering_relaxed`
+//@ stderr: cannot find value `ordering_acquire`
+//@ stderr: cannot find value `ordering_release`
+//@ stderr: cannot find value `ordering_acq_rel`
+//@ stderr: cannot find value `ordering_seq_cst`
+
+function needs_ordering(value: Ordering): null {
+  null
+}
+
+function main() {
+  var relaxed: Ordering = Relaxed {};
+  var acquire: Ordering = Acquire {};
+  var release: Ordering = Release {};
+  var acq_rel: Ordering = AcqRel {};
+  var seq_cst: Ordering = SeqCst {};
+  var a = ordering_relaxed();
+  var b = ordering_acquire();
+  var c = ordering_release();
+  var d = ordering_acq_rel();
+  var e = ordering_seq_cst();
+}

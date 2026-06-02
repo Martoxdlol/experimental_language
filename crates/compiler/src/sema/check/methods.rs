@@ -3,6 +3,63 @@
 use super::*;
 
 impl<'a> Checker<'a> {
+    /// Does interface `from` equal or inherit from interface `target`?
+    pub(crate) fn iface_reaches(&mut self, from: DefId, target: DefId) -> bool {
+        if from == target {
+            return true;
+        }
+        self.iface_supers(from)
+            .into_iter()
+            .any(|sup| self.iface_reaches(sup, target))
+    }
+
+    /// Direct super-interfaces declared by an interface (`interface A: B + C`).
+    pub(crate) fn iface_supers(&mut self, iface: DefId) -> Vec<DefId> {
+        let Some(ItemKind::Interface(i)) = self.prog.def(iface).item.clone() else {
+            return Vec::new();
+        };
+        let module = self.prog.def(iface).module;
+        i.supers
+            .iter()
+            .filter_map(|sup| {
+                let TypeKind::Named { name, .. } = &sup.kind else {
+                    return None;
+                };
+                let def = self.prog.resolve_type_in(module, &name.name)?;
+                (self.prog.def(def).kind == DefKind::Interface).then_some(def)
+            })
+            .collect()
+    }
+
+    pub(crate) fn iface_supers_transitive(&mut self, iface: DefId) -> Vec<DefId> {
+        let mut out = Vec::new();
+        let mut stack = self.iface_supers(iface);
+        while let Some(next) = stack.pop() {
+            if out.contains(&next) {
+                continue;
+            }
+            stack.extend(self.iface_supers(next));
+            out.push(next);
+        }
+        out
+    }
+
+    fn interface_method_by_name(&mut self, iface: DefId, name: &str) -> Option<(DefId, DefId)> {
+        for d in (0..self.prog.defs.len() as u32).map(DefId) {
+            let def = self.prog.def(d);
+            if def.kind == DefKind::InterfaceMethod && def.parent == Some(iface) && def.name == name
+            {
+                return Some((d, iface));
+            }
+        }
+        for sup in self.iface_supers(iface) {
+            if let Some(found) = self.interface_method_by_name(sup, name) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
     // -- methods -------------------------------------------------------------
 
     pub(crate) fn check_method_call_with_generics(
@@ -70,9 +127,9 @@ impl<'a> Checker<'a> {
                 let elem = targs.first().copied().unwrap_or(self.tcx.error);
                 return self.check_shared_method(elem, name, args, span);
             }
-            // `Future<T>.cancel()` (`docs/21` §8): runtime futures that carry
-            // cancellation metadata (currently `spawn EXPR`) stop scheduling
-            // their task; other future shapes remain safe repeatable no-ops.
+            // `Future<T>.cancel()` (`docs/21` §8): for the compute-only futures
+            // we build there is no I/O registration to release, so cancel is a
+            // safe no-op. Callable repeatedly.
             if def == self.prog.future_def
                 && self.prog.future_def != DefId(0)
                 && name.name == "cancel"
@@ -466,7 +523,7 @@ impl<'a> Checker<'a> {
         // expects `I`.
         if let TyKind::Param(p) = self.tcx.kind(ty).clone() {
             for (i, _iargs) in self.bound_ifaces(p) {
-                if i == iface {
+                if self.iface_reaches(i, iface) {
                     return true;
                 }
             }
@@ -522,8 +579,11 @@ impl<'a> Checker<'a> {
             }
             for itf in &e.interfaces {
                 if let TypeKind::Named { name, .. } = &itf.kind {
-                    if self.prog.resolve_type_in(module, &name.name) == Some(iface) {
-                        return true;
+                    let ext_module = self.prog.def(ext).module;
+                    if let Some(impl_iface) = self.prog.resolve_type_in(ext_module, &name.name) {
+                        if self.iface_reaches(impl_iface, iface) {
+                            return true;
+                        }
                     }
                 }
             }
@@ -560,15 +620,8 @@ impl<'a> Checker<'a> {
         name: &str,
     ) -> Option<(DefId, DefId, Vec<Ty>)> {
         for (iface, iargs) in self.bound_ifaces(param) {
-            for id in 0..self.prog.defs.len() {
-                let d = DefId(id as u32);
-                let def = self.prog.def(d);
-                if def.kind == DefKind::InterfaceMethod
-                    && def.parent == Some(iface)
-                    && def.name == name
-                {
-                    return Some((d, iface, iargs));
-                }
+            if let Some((method, owner_iface)) = self.interface_method_by_name(iface, name) {
+                return Some((method, owner_iface, iargs));
             }
         }
         None
@@ -672,12 +725,9 @@ impl<'a> Checker<'a> {
             TyKind::Named { args, .. } => args,
             _ => Vec::new(),
         };
-        let method = (0..self.prog.defs.len() as u32).map(DefId).find(|&d| {
-            let def = self.prog.def(d);
-            def.kind == DefKind::InterfaceMethod
-                && def.parent == Some(iface)
-                && def.name == name.name
-        });
+        let method = self
+            .interface_method_by_name(iface, &name.name)
+            .map(|(m, _)| m);
         let Some(method) = method else {
             for a in args {
                 self.check_expr(a, None);
@@ -1058,8 +1108,9 @@ impl<'a> Checker<'a> {
             return self.tcx.error;
         }
 
-        // Operator overloading: a user nominal operand dispatches to its
-        // `extend` method (`a + b` → `Add.add`, `a == b` → `Eq.eq`, …).
+        // Operator overloading: operands with a resolved operator method
+        // dispatch to their `extend` method (`a + b` -> `Add.add`,
+        // `a == b` -> `Eq.eq`, ...).
         if let Some(result) = self.try_operator_overload(op, l, r, right, op_span) {
             return result;
         }
@@ -1105,8 +1156,8 @@ impl<'a> Checker<'a> {
     }
 
     /// Resolve an overloaded operator to an `extend` method when the left
-    /// operand is a user nominal type. Returns `None` for builtin operands
-    /// (numerics, `str`, `bool`, …) so the primitive handling applies.
+    /// operand has one. Returns `None` for builtin operands (numerics, `str`,
+    /// `bool`, ...) so the primitive handling applies.
     pub(crate) fn try_operator_overload(
         &mut self,
         op: BinaryOp,
@@ -1116,9 +1167,7 @@ impl<'a> Checker<'a> {
         op_span: Span,
     ) -> Option<Ty> {
         use BinaryOp::*;
-        if !matches!(self.tcx.kind(l), TyKind::Named { .. }) {
-            return None;
-        }
+        let left_is_named = matches!(self.tcx.kind(l), TyKind::Named { .. });
         let name = match op {
             Add => "add",
             Sub => "sub",
@@ -1138,6 +1187,9 @@ impl<'a> Checker<'a> {
             And | Or => return None,
         };
         let Some((mdef, op_subst)) = self.resolve_method(l, name) else {
+            if !left_is_named {
+                return None;
+            }
             self.emit(
                 op_span,
                 SemaErrorKind::Message(format!(

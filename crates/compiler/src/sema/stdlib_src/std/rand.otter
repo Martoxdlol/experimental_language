@@ -1,0 +1,305 @@
+interface Rng {
+  function next_u32(self): u32;
+  function next_u64(self): u64;
+  function fill_bytes(self, buf: Bytes): null;
+}
+
+struct RandomError {}
+
+struct OsRng {}
+
+struct SeededRng {
+  state: u64,
+}
+
+struct ThreadRng {
+  inner: SeededRng,
+}
+
+extern function lang_rand_os_u32(): i64;
+
+function random_error(): RandomError { RandomError {} }
+
+function os_rng(): OsRng { OsRng {} }
+
+function thread_rng(): ThreadRng | RandomError {
+  var seed = OsRng {}.try_next_u64();
+  match seed {
+    u64 => ThreadRng { inner: SeededRng.from_seed(seed as u64) },
+    RandomError => seed as RandomError,
+  }
+}
+
+function rand_modulus(): u64 { 4294967291u64 }
+
+function normalize_seed(seed: u64): u64 {
+  var n = seed % rand_modulus();
+  if n == 0u64 {
+    1u64
+  } else {
+    n
+  }
+}
+
+function gen_range_i64(rng: Rng, low: i64, high: i64): i64 {
+  if high <= low {
+    low
+  } else {
+    var width = (high - low) as u64;
+    low + (rng.next_u64() % width) as i64
+  }
+}
+
+function gen_range_u64(rng: Rng, low: u64, high: u64): u64 {
+  if high <= low {
+    low
+  } else {
+    low + (rng.next_u64() % (high - low))
+  }
+}
+
+function gen_f64(rng: Rng): f64 {
+  (rng.next_u64() % 9007199254740992u64) as f64 / 9007199254740992.0
+}
+
+function gen_range_f64(rng: Rng, low: f64, high: f64): f64 {
+  if high <= low {
+    low
+  } else {
+    low + gen_f64(rng) * (high - low)
+  }
+}
+
+function gen_bool(rng: Rng, numerator: i64, denominator: i64): bool {
+  if denominator <= 0 || numerator <= 0 {
+    false
+  } else if numerator >= denominator {
+    true
+  } else {
+    gen_range_i64(rng, 0, denominator) < numerator
+  }
+}
+
+function gen_index(rng: Rng, len: i64): i64 | null {
+  if len <= 0 {
+    null
+  } else {
+    gen_range_i64(rng, 0, len)
+  }
+}
+
+function fill_bytes_n(rng: Rng, buf: Bytes, count: i64): null {
+  var written = 0;
+  while written < count {
+    var value = rng.next_u64();
+    var i = 0;
+    while i < 8 && written < count {
+      buf.push((value % 256u64) as u8);
+      value = value / 256u64;
+      i = i + 1;
+      written = written + 1;
+    }
+  }
+  null
+}
+
+function gen_bytes(rng: Rng, count: i64): Bytes {
+  var out = Bytes.new();
+  fill_bytes_n(rng, out, count);
+  out
+}
+
+function choose_index<T>(rng: Rng, list: List<T>): i64 | null {
+  gen_index(rng, list.size())
+}
+
+function choose<T>(rng: Rng, list: List<T>): T | null {
+  var index = choose_index<T>(rng, list);
+  if index is null {
+    null
+  } else {
+    list[index as i64]
+  }
+}
+
+function shuffle<T>(rng: Rng, list: List<T>): null {
+  var i = list.size() - 1;
+  while i > 0 {
+    var j = gen_range_i64(rng, 0, i + 1);
+    var a = list[i];
+    var b = list[j];
+    list.set(i, b);
+    list.set(j, a);
+    i = i - 1;
+  }
+}
+
+extend SeededRng {
+  function from_seed(seed: u64): SeededRng {
+    SeededRng { state: normalize_seed(seed) }
+  }
+}
+
+extend SeededRng: Rng {
+  function next_u32(self): u32 {
+    self.state = (self.state * 1664525u64 + 1013904223u64) % rand_modulus();
+    self.state as u32
+  }
+
+  function next_u64(self): u64 {
+    var high = self.next_u32() as u64;
+    var low = self.next_u32() as u64;
+    high * rand_modulus() + low
+  }
+
+  function fill_bytes(self, buf: Bytes): null {
+    var value = self.next_u64();
+    var i = 0;
+    while i < 8 {
+      buf.push((value % 256u64) as u8);
+      value = value / 256u64;
+      i = i + 1;
+    }
+  }
+}
+
+extend SeededRng: Eq {
+  function eq(self, other: SeededRng): bool { self.state == other.state }
+}
+
+extend SeededRng: Clone {
+  function clone(self): SeededRng { SeededRng { state: self.state } }
+}
+
+extend SeededRng: Hash {
+  function hash(self): u64 { self.state.hash() }
+}
+
+extend SeededRng: ToStr {
+  function to_str(self): str { "SeededRng(state=" + (self.state as str) + ")" }
+}
+
+extend SeededRng: Debug {
+  function debug(self): str { "SeededRng { state: " + (self.state as str) + " }" }
+}
+
+extend RandomError: Error {
+  function message(self): str { "OS entropy unavailable" }
+}
+
+extend RandomError: Eq {
+  function eq(self, other: RandomError): bool { true }
+}
+
+extend RandomError: Clone {
+  function clone(self): RandomError { RandomError {} }
+}
+
+extend RandomError: Hash {
+  function hash(self): u64 { 780992319u64 }
+}
+
+extend RandomError: ToStr {
+  function to_str(self): str { self.message() }
+}
+
+extend RandomError: Debug {
+  function debug(self): str { "RandomError { message: \"" + self.message() + "\" }" }
+}
+
+extend OsRng {
+  function try_next_u32(self): u32 | RandomError {
+    var value = lang_rand_os_u32();
+    if value < 0 {
+      RandomError {}
+    } else {
+      value as u32
+    }
+  }
+
+  function try_next_u64(self): u64 | RandomError {
+    var high = self.try_next_u32();
+    match high {
+      u32 => {
+        var low = self.try_next_u32();
+        match low {
+          u32 => ((high as u32) as u64) * 4294967296u64 + ((low as u32) as u64),
+          RandomError => low as RandomError,
+        }
+      },
+      RandomError => high as RandomError,
+    }
+  }
+
+  function try_fill_bytes(self, buf: Bytes): null | RandomError {
+    var value = self.try_next_u64();
+    match value {
+      u64 => {
+        var current = value as u64;
+        var i = 0;
+        while i < 8 {
+          buf.push((current % 256u64) as u8);
+          current = current / 256u64;
+          i = i + 1;
+        }
+        null
+      },
+      RandomError => value as RandomError,
+    }
+  }
+
+  function try_fill_bytes_n(self, buf: Bytes, count: i64): null | RandomError {
+    var written = 0;
+    while written < count {
+      var value = self.try_next_u64();
+      match value {
+        u64 => {
+          var current = value as u64;
+          var i = 0;
+          while i < 8 && written < count {
+            buf.push((current % 256u64) as u8);
+            current = current / 256u64;
+            i = i + 1;
+            written = written + 1;
+          }
+        },
+        RandomError => return value as RandomError,
+      }
+    }
+    null
+  }
+}
+
+extend OsRng: Rng {
+  function next_u32(self): u32 {
+    var value = self.try_next_u32();
+    match value {
+      u32 => value as u32,
+      RandomError => panic((value as RandomError).message()),
+    }
+  }
+
+  function next_u64(self): u64 {
+    var value = self.try_next_u64();
+    match value {
+      u64 => value as u64,
+      RandomError => panic((value as RandomError).message()),
+    }
+  }
+
+  function fill_bytes(self, buf: Bytes): null {
+    var result = self.try_fill_bytes(buf);
+    match result {
+      null => null,
+      RandomError => panic((result as RandomError).message()),
+    }
+  }
+}
+
+extend ThreadRng: Rng {
+  function next_u32(self): u32 { self.inner.next_u32() }
+
+  function next_u64(self): u64 { self.inner.next_u64() }
+
+  function fill_bytes(self, buf: Bytes): null { self.inner.fill_bytes(buf) }
+}

@@ -18,7 +18,7 @@
 // from its own copy — the language's "no implicit sharing" rule (docs/20 §6).
 
 import { println } from "std:io";
-import { Future } from "core:prelude";
+import { Future } from "core:async";
 import { JoinHandle, Joined, Panicked } from "std:thread";
 
 import { Thread } from "std:thread";

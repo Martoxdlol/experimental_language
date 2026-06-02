@@ -1,0 +1,225 @@
+//@ kind: run
+//@ description: std:fs exposes target-backed filesystem helpers and descriptor-backed File IO
+//@ stdout:
+//~ top=alpha-beta
+//~ query=true true false true false true false false false
+//~ meta=file 10 true false kind=file len=10 readonly=false
+//~ dir_meta=directory true
+//~ bytes=true bytes[0,255,65,66] true true
+//~ file_io=4 2 bytes[0,255] 2 bytes[65,66] true true true true true
+//~ mutate=true true true true true true true true true
+//~ canon=true true true
+//~ read_dir=true true true
+//~ file=alpha-beta path=/tmp/otter_fusion_std_fs_text_basic.txt append=false
+//~ overwrite=reset
+//~ append_mode=true after=reset+tail close=true
+//~ open_options=true true opts+more true true OpenOptions(read=true, write=true, append=false, truncate=true, create=true, create_new=false)
+//~ open_options_validate=true true true filesystem open options must enable read, write, or append true filesystem open options using create require write or append access
+//~ missing=true
+import { println } from "std:io";
+import { Bytes } from "std:bytes";
+import { DirEntries, DirEntry, File, FileKind, Metadata, OpenOptions, Path, Permissions, append_string, canonicalize, create_dir, create_dir_all, open_options, read_dir, read_to_string, remove, rename, write_string } from "std:fs";
+import { read, write } from "std:fs";
+import { End, IoError, Start } from "std:io";
+
+function main() {
+  var path = Path.new("/tmp/otter_fusion_std_fs_text_basic.txt");
+  var missing_path = Path.new("/tmp/otter_fusion_std_fs_text_missing_never_exists.txt");
+  var bytes_path = Path.new("/tmp/otter_fusion_std_fs_bytes_basic.bin");
+
+  var wrote = write_string(path, "alpha");
+  if wrote is null {
+    var appended = append_string(path, "-beta");
+    if appended is null {
+      var text = read_to_string(path);
+      if text is str {
+        println("top=${text as str}");
+      }
+    }
+  }
+
+  var path_exists = path.exists();
+  var path_is_file = path.is_file();
+  var path_is_dir = path.is_dir();
+  var tmp = Path.new("/tmp");
+  var tmp_exists = tmp.exists();
+  var tmp_is_file = tmp.is_file();
+  var tmp_is_dir = tmp.is_dir();
+  var missing_exists = missing_path.exists();
+  var missing_is_file = missing_path.is_file();
+  var missing_is_dir = missing_path.is_dir();
+  if path_exists is bool && path_is_file is bool && path_is_dir is bool &&
+    tmp_exists is bool && tmp_is_file is bool && tmp_is_dir is bool &&
+    missing_exists is bool && missing_is_file is bool && missing_is_dir is bool {
+    println("query=${path_exists as bool} ${path_is_file as bool} ${path_is_dir as bool} ${tmp_exists as bool} ${tmp_is_file as bool} ${tmp_is_dir as bool} ${missing_exists as bool} ${missing_is_file as bool} ${missing_is_dir as bool}");
+  }
+
+  var meta = path.metadata();
+  var kind = path.file_kind();
+  var len = path.byte_len();
+  var perms = path.permissions();
+  if meta is Metadata && kind is FileKind && len is u64 && perms is Permissions {
+    var m = meta as Metadata;
+    var p = perms as Permissions;
+    println("meta=${m.file_kind().to_str()} ${m.len()} ${m.is_file()} ${m.is_dir()} kind=${(kind as FileKind).to_str()} len=${len as u64} readonly=${p.is_read_only()}");
+  }
+
+  var cwd_meta = Path.new(".").metadata();
+  if cwd_meta is Metadata {
+    var m = cwd_meta as Metadata;
+    println("dir_meta=${m.file_kind().to_str()} ${m.is_dir()}");
+  }
+
+  var binary = Bytes.new();
+  binary.push(0u8);
+  binary.push(255u8);
+  binary.push(65u8);
+  binary.push(66u8);
+  var wrote_bytes = write(bytes_path, binary);
+  var read_bytes = read(bytes_path);
+  var missing_bytes = read(bytes_path.join("missing"));
+  if read_bytes is Bytes {
+    println("bytes=${wrote_bytes is null} ${(read_bytes as Bytes).to_str()} ${(read_bytes as Bytes) == binary} ${missing_bytes is IoError}");
+  }
+  remove(bytes_path);
+
+  var file_io_path = Path.new("/tmp/otter_fusion_std_fs_file_io.bin");
+  remove(file_io_path);
+  var handle_file = File.create(file_io_path);
+  if handle_file is File {
+    var f = handle_file as File;
+    var write_count = f.write(binary);
+    var flushed = f.flush();
+    var seek_start = f.seek(Start { offset: 0u64 });
+    var read_buf = Bytes.new();
+    read_buf.push(0u8);
+    read_buf.push(0u8);
+    var read_count = f.read(read_buf);
+    var first_two = read_buf.slice(2, read_buf.size());
+    var rest = Bytes.new();
+    var rest_count = f.read_to_end(rest);
+    var seek_end = f.seek(End { offset: 0 });
+    var closed = f.close();
+    var after_close = f.read_to_end(Bytes.new());
+    println("file_io=${write_count as i64} ${read_count as i64} ${first_two.to_str()} ${rest_count as i64} ${rest.to_str()} ${flushed is null} ${seek_start is i64} ${seek_end is i64} ${closed is null} ${after_close is IoError}");
+  }
+  remove(file_io_path);
+
+  var mutation_root = Path.new("/tmp/otter_fusion_std_fs_mutation_basic");
+  var mutation_a = mutation_root.join("a");
+  var mutation_nested = mutation_a.join("b");
+  var mutation_file = mutation_nested.join("first.txt");
+  var mutation_moved = mutation_nested.join("second.txt");
+  remove(mutation_moved);
+  remove(mutation_file);
+  remove(mutation_nested);
+  remove(mutation_a);
+  remove(mutation_root);
+
+  var made_root = create_dir(mutation_root);
+  var made_nested = create_dir_all(mutation_nested);
+  var wrote_mutation = write_string(mutation_file, "move-me");
+  var renamed = rename(mutation_file, mutation_moved);
+  var old_exists = mutation_file.exists();
+  var moved_exists = mutation_moved.exists();
+  var canonical_method = mutation_moved.canonicalize();
+  var canonical_function = canonicalize(mutation_nested.join("..").join("b").join("second.txt"));
+  var canonical_missing = canonicalize(mutation_nested.join("missing.txt"));
+  var listing = read_dir(mutation_nested);
+  var missing_listing = read_dir(mutation_nested.join("missing-dir"));
+  var listing_count = 0;
+  var saw_moved = false;
+  if listing is DirEntries {
+    for item in (listing as DirEntries) {
+      if item is DirEntry {
+        var entry = item as DirEntry;
+        listing_count = listing_count + 1;
+        if entry.path().ends_with(Path.new("second.txt")) && entry.kind().to_str() == "file" {
+          saw_moved = true;
+        }
+      }
+    }
+  }
+  var removed_file = remove(mutation_moved);
+  var removed_nested = remove(mutation_nested);
+  var removed_a = remove(mutation_a);
+  var removed_root = remove(mutation_root);
+  var root_exists_after = mutation_root.exists();
+  if made_root is null && made_nested is null && wrote_mutation is null && renamed is null &&
+    old_exists is bool && moved_exists is bool && removed_file is null && removed_nested is null &&
+    removed_a is null && removed_root is null && root_exists_after is bool {
+    println("mutate=${made_root is null} ${made_nested is null} ${wrote_mutation is null} ${renamed is null} ${!(old_exists as bool)} ${moved_exists as bool} ${removed_file is null} ${removed_root is null} ${!(root_exists_after as bool)}");
+  }
+  if canonical_method is Path && canonical_function is Path {
+    println("canon=${(canonical_method as Path).ends_with(Path.new("otter_fusion_std_fs_mutation_basic/a/b/second.txt"))} ${(canonical_function as Path).ends_with(Path.new("otter_fusion_std_fs_mutation_basic/a/b/second.txt"))} ${canonical_missing is IoError}");
+  }
+  println("read_dir=${listing_count == 1} ${saw_moved} ${missing_listing is IoError}");
+
+  var opened = File.open(path);
+  if opened is File {
+    var file = opened as File;
+    var text = file.read_to_string();
+    if text is str {
+      println("file=${text as str} path=${file.path().as_str()} append=${file.is_append_mode()}");
+    }
+  }
+
+  var created = File.create(path);
+  if created is File {
+    var file = created as File;
+    var rewrote = file.write_string("reset");
+    if rewrote is null {
+      var text = file.read_to_string();
+      if text is str {
+        println("overwrite=${text as str}");
+      }
+    }
+  }
+
+  var appender = File.append(path);
+  if appender is File {
+    var file = appender as File;
+    var wrote_tail = file.write_string("+tail");
+    if wrote_tail is null {
+      var text = file.read_to_string();
+      var closed = file.close();
+      if text is str {
+        println("append_mode=${file.is_append_mode()} after=${text as str} close=${closed is null}");
+      }
+    }
+  }
+
+  var options_path = Path.new("/tmp/otter_fusion_std_fs_options_basic.txt");
+  remove(options_path);
+  var options = open_options().with_read(true).with_write(true).with_create(true).with_truncate(true);
+  var option_file = File.open_with(options_path, options);
+  if option_file is File {
+    var file = option_file as File;
+    var wrote_options = file.write_string("opts");
+    var closed_options = file.close();
+    var append_options = open_options().with_read(true).with_append(true).with_create(true);
+    var appended_options = File.open_with(options_path, append_options);
+    if wrote_options is null && closed_options is null && appended_options is File {
+      var app = appended_options as File;
+      var wrote_more = app.write_string("+more");
+      var closed_app = app.close();
+      var text = read_to_string(options_path);
+      var duplicate = File.open_with(options_path, open_options().with_write(true).with_create_new(true));
+      if wrote_more is null && closed_app is null && text is str {
+        println("open_options=${options == options.clone()} ${options.hash() == options.clone().hash()} ${text as str} ${duplicate is IoError} ${app.is_append_mode()} ${options.to_str()}");
+      }
+    }
+  }
+  var invalid_empty = open_options();
+  var invalid_create = open_options().with_read(true).with_create(true);
+  var invalid_empty_error = invalid_empty.validation_error();
+  var invalid_create_error = invalid_create.validate();
+  var invalid_open = File.open_with(options_path, invalid_empty);
+  if invalid_empty_error is IoError && invalid_create_error is IoError {
+    println("open_options_validate=${options.is_valid()} ${options.validate() is null} ${!invalid_empty.is_valid()} ${(invalid_empty_error as IoError).message()} ${invalid_open is IoError} ${(invalid_create_error as IoError).message()}");
+  }
+  remove(options_path);
+
+  var missing = read_to_string(missing_path);
+  println("missing=${missing is IoError}");
+}

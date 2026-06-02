@@ -4,7 +4,7 @@
 //@ stdout:
 
 import { List } from "core:collections";
-import { Future } from "core:prelude";
+import { Future } from "core:async";
 import { JoinHandle } from "std:thread";
 
 import { Thread } from "std:thread";

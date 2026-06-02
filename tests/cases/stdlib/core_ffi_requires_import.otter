@@ -1,0 +1,59 @@
+//@ kind: compile-error
+//@ description: core:ffi follows the near-empty prelude rule; C ABI aliases and boundary helpers require explicit imports
+//@ stderr: cannot find type `c_int`
+//@ stderr: cannot find type `c_uint`
+//@ stderr: cannot find type `c_long`
+//@ stderr: cannot find type `c_ulong`
+//@ stderr: cannot find type `c_longlong`
+//@ stderr: cannot find type `c_ulonglong`
+//@ stderr: cannot find type `c_short`
+//@ stderr: cannot find type `c_ushort`
+//@ stderr: cannot find type `c_char`
+//@ stderr: cannot find type `c_schar`
+//@ stderr: cannot find type `c_uchar`
+//@ stderr: cannot find type `c_float`
+//@ stderr: cannot find type `c_double`
+//@ stderr: cannot find type `c_size_t`
+//@ stderr: cannot find type `c_ptrdiff_t`
+//@ stderr: cannot find type `c_intptr_t`
+//@ stderr: cannot find type `c_uintptr_t`
+//@ stderr: cannot find type `c_void`
+//@ stderr: cannot find type `c_va_list`
+//@ stderr: cannot find type `Foreign`
+//@ stderr: cannot find type `CString`
+//@ stderr: cannot find type `CStr`
+//@ stderr: cannot find type `Buffer`
+
+function needs_aliases(
+  a: c_int,
+  b: c_uint,
+  c: c_long,
+  d: c_ulong,
+  e: c_longlong,
+  f: c_ulonglong,
+  g: c_short,
+  h: c_ushort,
+  i: c_char,
+  j: c_schar,
+  k: c_uchar,
+  l: c_float,
+  m: c_double,
+  n: c_size_t,
+  o: c_ptrdiff_t,
+  p: c_intptr_t,
+  q: c_uintptr_t,
+  r: *c_void,
+  s: c_va_list,
+): null {
+  null
+}
+
+function needs_cstring(value: CString): null {
+  null
+}
+
+function needs_boundary_types(foreign: Foreign, view: CStr, buffer: Buffer): null {
+  null
+}
+
+function main() {}

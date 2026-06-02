@@ -1,0 +1,25 @@
+struct TimedOut {}
+
+extend TimedOut: Eq {
+  function eq(self, other: TimedOut): bool { true }
+}
+
+extend TimedOut: Clone {
+  function clone(self): TimedOut { TimedOut {} }
+}
+
+extend TimedOut: Hash {
+  function hash(self): u64 { self.to_str().hash() }
+}
+
+extend TimedOut: ToStr {
+  function to_str(self): str { "timed out" }
+}
+
+extend TimedOut: Debug {
+  function debug(self): str { "TimedOut" }
+}
+
+function yield_now() {}
+function sleep(ms: i64) {}
+function timeout() {}

@@ -1,0 +1,605 @@
+struct Json { value: JsonValue }
+
+type JsonValue = JsonNull | JsonBool | JsonNumber | JsonStr | JsonArray | JsonObject;
+struct JsonNull {}
+struct JsonBool { value: bool }
+struct JsonNumber { value: f64 }
+struct JsonStr { value: str }
+struct JsonArray { items: List<Json> }
+struct JsonObject { entries: Map<str, Json> }
+
+function json_null(): Json { Json { value: JsonNull {} } }
+function json_bool(value: bool): Json { Json { value: JsonBool { value: value } } }
+function json_number(value: f64): Json { Json { value: JsonNumber { value: value } } }
+function json_string(value: str): Json { Json { value: JsonStr { value: value } } }
+function json_array(items: List<Json>): Json { Json { value: JsonArray { items: __json_clone_list(items) } } }
+function json_object(entries: Map<str, Json>): Json {
+  Json { value: JsonObject { entries: __json_clone_map(entries) } }
+}
+
+function __json_clone_list(items: List<Json>): List<Json> {
+  var out = List<Json>();
+  for item in items {
+    out.push(item.deep_clone());
+  }
+  out
+}
+
+function __json_clone_map(entries: Map<str, Json>): Map<str, Json> {
+  var out = Map.new<str, Json>();
+  for entry in entries {
+    out.set(entry.key, entry.value.deep_clone());
+  }
+  out
+}
+
+function __json_hash_add(left: u64, right: u64): u64 {
+  ((left % 4294967291u64) + (right % 4294967291u64)) % 4294967291u64
+}
+
+function __json_hash_mix(left: u64, right: u64): u64 {
+  ((left % 4294967291u64) * 16777619u64 + (right % 4294967291u64)) % 4294967291u64
+}
+
+function __json_hex_digit(n: i64): str {
+  if n == 0 { "0" }
+  else if n == 1 { "1" }
+  else if n == 2 { "2" }
+  else if n == 3 { "3" }
+  else if n == 4 { "4" }
+  else if n == 5 { "5" }
+  else if n == 6 { "6" }
+  else if n == 7 { "7" }
+  else if n == 8 { "8" }
+  else if n == 9 { "9" }
+  else if n == 10 { "a" }
+  else if n == 11 { "b" }
+  else if n == 12 { "c" }
+  else if n == 13 { "d" }
+  else if n == 14 { "e" }
+  else { "f" }
+}
+
+function __json_escape_control(cp: i64): str {
+  "\\u00" + __json_hex_digit(cp / 16) + __json_hex_digit(cp % 16)
+}
+
+function __json_escape_string(value: str): str {
+  var out = "";
+  for ch in value.chars() {
+    var cp = ch as i64;
+    if ch == '"' {
+      out = out + "\\\"";
+    } else if ch == '\\' {
+      out = out + "\\\\";
+    } else if ch == '\n' {
+      out = out + "\\n";
+    } else if ch == '\r' {
+      out = out + "\\r";
+    } else if ch == '\t' {
+      out = out + "\\t";
+    } else if cp == 8 {
+      out = out + "\\b";
+    } else if cp == 12 {
+      out = out + "\\f";
+    } else if cp < 32 {
+      out = out + __json_escape_control(cp);
+    } else {
+      out = out + (ch as str);
+    }
+  }
+  out
+}
+
+function __json_indent(depth: i64, width: i64): str {
+  var out = "";
+  var total = depth * width;
+  var i = 0;
+  while i < total {
+    out = out + " ";
+    i = i + 1;
+  }
+  out
+}
+
+function __json_pretty(value: Json, depth: i64, width: i64): str {
+  if width <= 0 {
+    value.render()
+  } else if value.value is JsonNull {
+    "null"
+  } else if value.value is JsonBool {
+    if (value.value as JsonBool).value { "true" } else { "false" }
+  } else if value.value is JsonNumber {
+    (value.value as JsonNumber).value as str
+  } else if value.value is JsonStr {
+    "\"" + __json_escape_string((value.value as JsonStr).value) + "\""
+  } else if value.value is JsonArray {
+    var items = (value.value as JsonArray).items;
+    if items.size() == 0 {
+      "[]"
+    } else {
+      var out = "[\n";
+      var first = true;
+      for item in items {
+        if first {
+          first = false;
+        } else {
+          out = out + ",\n";
+        }
+        out = out + __json_indent(depth + 1, width) + __json_pretty(item, depth + 1, width);
+      }
+      out + "\n" + __json_indent(depth, width) + "]"
+    }
+  } else if value.value is JsonObject {
+    var entries = (value.value as JsonObject).entries;
+    if entries.size() == 0 {
+      "{}"
+    } else {
+      var out = "{\n";
+      var first = true;
+      for entry in entries {
+        if first {
+          first = false;
+        } else {
+          out = out + ",\n";
+        }
+        out = out + __json_indent(depth + 1, width) + "\"" + __json_escape_string(entry.key) + "\": " + __json_pretty(entry.value, depth + 1, width);
+      }
+      out + "\n" + __json_indent(depth, width) + "}"
+    }
+  } else {
+    "null"
+  }
+}
+
+extend Json {
+  function is_null(self): bool { self.value is JsonNull }
+
+  function is_bool(self): bool { self.value is JsonBool }
+
+  function is_number(self): bool { self.value is JsonNumber }
+
+  function is_str(self): bool { self.value is JsonStr }
+
+  function is_array(self): bool { self.value is JsonArray }
+
+  function is_object(self): bool { self.value is JsonObject }
+
+  function len(self): i64 {
+    if self.value is JsonArray {
+      (self.value as JsonArray).items.size()
+    } else if self.value is JsonObject {
+      (self.value as JsonObject).entries.size()
+    } else {
+      0
+    }
+  }
+
+  function contains_key(self, key: str): bool {
+    if self.value is JsonObject {
+      (self.value as JsonObject).entries.get(key) is Json
+    } else {
+      false
+    }
+  }
+
+  function keys(self): List<str> {
+    var out = List<str>();
+    if self.value is JsonObject {
+      for entry in (self.value as JsonObject).entries {
+        out.push(entry.key);
+      }
+    }
+    out
+  }
+
+  function values(self): List<Json> {
+    var out = List<Json>();
+    if self.value is JsonObject {
+      for entry in (self.value as JsonObject).entries {
+        out.push(entry.value.deep_clone());
+      }
+    }
+    out
+  }
+
+  function as_bool(self): bool | null {
+    if self.value is JsonBool {
+      (self.value as JsonBool).value
+    } else {
+      null
+    }
+  }
+
+  function as_number(self): f64 | null {
+    if self.value is JsonNumber {
+      (self.value as JsonNumber).value
+    } else {
+      null
+    }
+  }
+
+  function as_str(self): str | null {
+    if self.value is JsonStr {
+      (self.value as JsonStr).value
+    } else {
+      null
+    }
+  }
+
+  function as_array(self): List<Json> | null {
+    if self.value is JsonArray {
+      __json_clone_list((self.value as JsonArray).items)
+    } else {
+      null
+    }
+  }
+
+  function as_object(self): Map<str, Json> | null {
+    if self.value is JsonObject {
+      __json_clone_map((self.value as JsonObject).entries)
+    } else {
+      null
+    }
+  }
+
+  function get(self, key: str): Json | null {
+    if self.value is JsonObject {
+      var value = (self.value as JsonObject).entries.get(key);
+      if value is Json { (value as Json).deep_clone() } else { null }
+    } else {
+      null
+    }
+  }
+
+  function get_bool(self, key: str): bool | null {
+    if self.value is JsonObject {
+      var value = (self.value as JsonObject).entries.get(key);
+      if value is null { null } else { value.as_bool() }
+    } else {
+      null
+    }
+  }
+
+  function get_number(self, key: str): f64 | null {
+    if self.value is JsonObject {
+      var value = (self.value as JsonObject).entries.get(key);
+      if value is null { null } else { value.as_number() }
+    } else {
+      null
+    }
+  }
+
+  function get_str(self, key: str): str | null {
+    if self.value is JsonObject {
+      var value = (self.value as JsonObject).entries.get(key);
+      if value is null { null } else { value.as_str() }
+    } else {
+      null
+    }
+  }
+
+  function get_array(self, key: str): List<Json> | null {
+    if self.value is JsonObject {
+      var value = (self.value as JsonObject).entries.get(key);
+      if value is null { null } else { value.as_array() }
+    } else {
+      null
+    }
+  }
+
+  function get_object(self, key: str): Map<str, Json> | null {
+    if self.value is JsonObject {
+      var value = (self.value as JsonObject).entries.get(key);
+      if value is null { null } else { value.as_object() }
+    } else {
+      null
+    }
+  }
+
+  function get_is_null(self, key: str): bool {
+    if self.value is JsonObject {
+      var value = (self.value as JsonObject).entries.get(key);
+      if value is null { false } else { value.is_null() }
+    } else {
+      false
+    }
+  }
+
+  function at(self, i: i64): Json | null {
+    if self.value is JsonArray {
+      var value = (self.value as JsonArray).items.get(i);
+      if value is Json { (value as Json).deep_clone() } else { null }
+    } else {
+      null
+    }
+  }
+
+  function at_bool(self, i: i64): bool | null {
+    if self.value is JsonArray {
+      var value = (self.value as JsonArray).items.get(i);
+      if value is null { null } else { value.as_bool() }
+    } else {
+      null
+    }
+  }
+
+  function at_number(self, i: i64): f64 | null {
+    if self.value is JsonArray {
+      var value = (self.value as JsonArray).items.get(i);
+      if value is null { null } else { value.as_number() }
+    } else {
+      null
+    }
+  }
+
+  function at_str(self, i: i64): str | null {
+    if self.value is JsonArray {
+      var value = (self.value as JsonArray).items.get(i);
+      if value is null { null } else { value.as_str() }
+    } else {
+      null
+    }
+  }
+
+  function at_array(self, i: i64): List<Json> | null {
+    if self.value is JsonArray {
+      var value = (self.value as JsonArray).items.get(i);
+      if value is null { null } else { value.as_array() }
+    } else {
+      null
+    }
+  }
+
+  function at_object(self, i: i64): Map<str, Json> | null {
+    if self.value is JsonArray {
+      var value = (self.value as JsonArray).items.get(i);
+      if value is null { null } else { value.as_object() }
+    } else {
+      null
+    }
+  }
+
+  function at_is_null(self, i: i64): bool {
+    if self.value is JsonArray {
+      var value = (self.value as JsonArray).items.get(i);
+      if value is null { false } else { value.is_null() }
+    } else {
+      false
+    }
+  }
+
+  function append(self, value: Json): Json {
+    if self.value is JsonArray {
+      var out = __json_clone_list((self.value as JsonArray).items);
+      out.push(value.deep_clone());
+      Json { value: JsonArray { items: out } }
+    } else {
+      self.deep_clone()
+    }
+  }
+
+  function set_at(self, i: i64, value: Json): Json {
+    if self.value is JsonArray {
+      var out = __json_clone_list((self.value as JsonArray).items);
+      if i >= 0 && i < out.size() {
+        out[i] = value.deep_clone();
+      }
+      Json { value: JsonArray { items: out } }
+    } else {
+      self.deep_clone()
+    }
+  }
+
+  function with_key(self, key: str, value: Json): Json {
+    if self.value is JsonObject {
+      var out = __json_clone_map((self.value as JsonObject).entries);
+      out.set(key, value.deep_clone());
+      Json { value: JsonObject { entries: out } }
+    } else {
+      self.deep_clone()
+    }
+  }
+
+  function without_key(self, key: str): Json {
+    if self.value is JsonObject {
+      var out = __json_clone_map((self.value as JsonObject).entries);
+      out.remove(key);
+      Json { value: JsonObject { entries: out } }
+    } else {
+      self.deep_clone()
+    }
+  }
+
+  function deep_eq(self, other: Json): bool {
+    if self.value is JsonNull {
+      other.value is JsonNull
+    } else if self.value is JsonBool {
+      if other.value is JsonBool {
+        (self.value as JsonBool).value == (other.value as JsonBool).value
+      } else {
+        false
+      }
+    } else if self.value is JsonNumber {
+      if other.value is JsonNumber {
+        (self.value as JsonNumber).value == (other.value as JsonNumber).value
+      } else {
+        false
+      }
+    } else if self.value is JsonStr {
+      if other.value is JsonStr {
+        (self.value as JsonStr).value == (other.value as JsonStr).value
+      } else {
+        false
+      }
+    } else if self.value is JsonArray {
+      if other.value is JsonArray {
+        var left = (self.value as JsonArray).items;
+        var right = (other.value as JsonArray).items;
+        if left.size() != right.size() {
+          false
+        } else {
+          var same = true;
+          var i = 0;
+          while same && i < left.size() {
+            var l = left.get(i);
+            var r = right.get(i);
+            if l is Json && r is Json {
+              same = (l as Json).deep_eq(r as Json);
+            } else {
+              same = false;
+            }
+            i = i + 1;
+          }
+          same
+        }
+      } else {
+        false
+      }
+    } else if self.value is JsonObject {
+      if other.value is JsonObject {
+        var left = (self.value as JsonObject).entries;
+        var right = (other.value as JsonObject).entries;
+        if left.size() != right.size() {
+          false
+        } else {
+          var same = true;
+          for entry in left {
+            if same {
+              var r = right.get(entry.key);
+              if r is Json {
+                same = entry.value.deep_eq(r as Json);
+              } else {
+                same = false;
+              }
+            }
+          }
+          same
+        }
+      } else {
+        false
+      }
+    } else {
+      false
+    }
+  }
+
+  function deep_clone(self): Json {
+    if self.value is JsonNull {
+      json_null()
+    } else if self.value is JsonBool {
+      json_bool((self.value as JsonBool).value)
+    } else if self.value is JsonNumber {
+      json_number((self.value as JsonNumber).value)
+    } else if self.value is JsonStr {
+      json_string((self.value as JsonStr).value)
+    } else if self.value is JsonArray {
+      var out = List<Json>();
+      for item in (self.value as JsonArray).items {
+        out.push(item.deep_clone());
+      }
+      Json { value: JsonArray { items: out } }
+    } else if self.value is JsonObject {
+      var out = Map.new<str, Json>();
+      for entry in (self.value as JsonObject).entries {
+        out.set(entry.key, entry.value.deep_clone());
+      }
+      Json { value: JsonObject { entries: out } }
+    } else {
+      json_null()
+    }
+  }
+
+  function render(self): str {
+    if self.value is JsonNull {
+      "null"
+    } else if self.value is JsonBool {
+      if (self.value as JsonBool).value { "true" } else { "false" }
+    } else if self.value is JsonNumber {
+      (self.value as JsonNumber).value as str
+    } else if self.value is JsonStr {
+      "\"" + __json_escape_string((self.value as JsonStr).value) + "\""
+    } else if self.value is JsonArray {
+      var out = "[";
+      var first = true;
+      for item in (self.value as JsonArray).items {
+        if first {
+          first = false;
+        } else {
+          out = out + ",";
+        }
+        out = out + item.render();
+      }
+      out + "]"
+    } else if self.value is JsonObject {
+      var out = "{";
+      var first = true;
+      for entry in (self.value as JsonObject).entries {
+        if first {
+          first = false;
+        } else {
+          out = out + ",";
+        }
+        out = out + "\"" + __json_escape_string(entry.key) + "\":" + entry.value.render();
+      }
+      out + "}"
+    } else {
+      "null"
+    }
+  }
+
+  function pretty(self, indent: i64): str {
+    __json_pretty(self, 0, indent)
+  }
+
+  function deep_hash(self): u64 {
+    if self.value is JsonNull {
+      "json:null".hash() % 4294967291u64
+    } else if self.value is JsonBool {
+      if (self.value as JsonBool).value {
+        "json:true".hash() % 4294967291u64
+      } else {
+        "json:false".hash() % 4294967291u64
+      }
+    } else if self.value is JsonNumber {
+      __json_hash_add("json:number".hash(), ((self.value as JsonNumber).value as str).hash())
+    } else if self.value is JsonStr {
+      __json_hash_add("json:str".hash(), (self.value as JsonStr).value.hash())
+    } else if self.value is JsonArray {
+      var out = "json:array".hash() % 4294967291u64;
+      for item in (self.value as JsonArray).items {
+        out = __json_hash_mix(out, item.deep_hash());
+      }
+      out
+    } else if self.value is JsonObject {
+      var out = "json:object".hash() % 4294967291u64;
+      for entry in (self.value as JsonObject).entries {
+        var entry_hash = __json_hash_add(("key:" + entry.key).hash(), entry.value.deep_hash());
+        out = __json_hash_add(out, entry_hash);
+      }
+      out
+    } else {
+      "json:null".hash() % 4294967291u64
+    }
+  }
+}
+
+extend Json: Eq {
+  function eq(self, other: Json): bool { self.deep_eq(other) }
+}
+
+extend Json: Clone {
+  function clone(self): Json { self.deep_clone() }
+}
+
+extend Json: Hash {
+  function hash(self): u64 { self.deep_hash() }
+}
+
+extend Json: ToStr {
+  function to_str(self): str { self.render() }
+}
+
+extend Json: Debug {
+  function debug(self): str { "Json(" + self.render() + ")" }
+}

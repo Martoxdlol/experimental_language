@@ -1,0 +1,7 @@
+//@ kind: compile-error
+//@ description: time values are ordinary stdlib API, not compiler substrate; the old core:time path is rejected
+//@ stderr: no built-in module `core:time`
+
+import { Duration, Instant, SystemTime } from "core:time";
+
+function main() {}

@@ -1,0 +1,118 @@
+//@ kind: run
+//@ description: std:rand exposes deterministic seeded RNG helpers and OS-backed RNG handles
+//@ stdout:
+//~ 1025555898
+//~ 1025555898
+//~ 16859511753338015573
+//~ 11
+//~ 5
+//~ ranges=195 100 bools=false false true false
+//~ floats=0.02315984728420506 0.02315984728420506 10.023159847284205 5
+//~ indices=2 true true true
+//~ c
+//~ empty=true
+//~ abc
+//~ 8
+//~ 36
+//~ 1025555898
+//~ rng-state=true true true SeededRng { state: 7 }
+//~ rng-next=true false
+//~ SeededRng(state=1025555898)
+//~ rand-error=OS entropy unavailable true true true RandomError { message: "OS entropy unavailable" }
+//~ os-u32=true 1
+//~ os-fill=true true
+//~ bytes-n=5 5 true
+//~ os-fill-n=true true
+//~ thread-rng=true 8 0
+
+import { List } from "core:collections";
+import { println } from "std:io";
+import { Bytes } from "std:bytes";
+import { Clone, Eq, Hash, ToStr } from "core:prelude";
+import { Debug } from "std:fmt";
+import { OsRng, RandomError, Rng, SeededRng, ThreadRng, choose, choose_index, fill_bytes_n, gen_bool, gen_bytes, gen_f64, gen_index, gen_range_f64, gen_range_i64, gen_range_u64, os_rng, random_error, shuffle, thread_rng } from "std:rand";
+
+function next_from_interface(rng: Rng): u32 {
+  rng.next_u32()
+}
+
+function render_debug(value: Debug): str {
+  value.debug()
+}
+
+function main() {
+  var a = SeededRng.from_seed(7u64);
+  var b = SeededRng.from_seed(7u64);
+  println("${a.next_u32()}");
+  println("${b.next_u32()}");
+  println("${a.next_u64()}");
+  println("${gen_range_i64(a, 10, 20)}");
+  println("${gen_range_i64(a, 5, 5)}");
+  var ranges = SeededRng.from_seed(7u64);
+  println("ranges=${gen_range_u64(ranges, 100u64, 200u64)} ${gen_range_u64(ranges, 100u64, 100u64)} bools=${gen_bool(SeededRng.from_seed(7u64), 1, 2)} ${gen_bool(SeededRng.from_seed(7u64), 0, 2)} ${gen_bool(SeededRng.from_seed(7u64), 2, 2)} ${gen_bool(SeededRng.from_seed(7u64), 1, 0)}");
+  println("floats=${gen_f64(SeededRng.from_seed(7u64))} ${gen_f64(SeededRng.from_seed(7u64))} ${gen_range_f64(SeededRng.from_seed(7u64), 10.0, 11.0)} ${gen_range_f64(SeededRng.from_seed(7u64), 5.0, 5.0)}");
+
+  var values = List<str>();
+  values.push("a");
+  values.push("b");
+  values.push("c");
+  println("indices=${gen_index(SeededRng.from_seed(7u64), values.size()) as i64} ${gen_index(SeededRng.from_seed(7u64), 0) is null} ${choose_index(SeededRng.from_seed(7u64), values) is i64} ${choose_index(SeededRng.from_seed(7u64), List<str>()) is null}");
+  match choose(b, values) {
+    str item => println(item),
+    null => println("none"),
+  }
+  var empty = List<str>();
+  println("empty=${choose(b, empty) is null}");
+
+  shuffle(b, values);
+  println(values[0] + values[1] + values[2]);
+
+  var bytes = Bytes.new();
+  b.fill_bytes(bytes);
+  println("${bytes.size()}");
+  var first = bytes.get(0);
+  if first is u8 {
+    println("${first as u8}");
+  }
+
+  println("${next_from_interface(SeededRng.from_seed(7u64))}");
+
+  var snap = SeededRng.from_seed(7u64);
+  var snap_copy = snap.clone();
+  println("rng-state=${snap == snap_copy} ${snap.hash() == snap_copy.hash()} ${snap.to_str() == snap_copy.to_str()} ${render_debug(snap)}");
+  println("rng-next=${snap.next_u32() == snap_copy.next_u32()} ${snap == SeededRng.from_seed(7u64)}");
+  println(snap_copy.to_str());
+
+  var err = random_error();
+  println("rand-error=${err.message()} ${err == RandomError {}} ${err.clone() == err} ${err.hash() == err.clone().hash()} ${render_debug(err)}");
+
+  var os = os_rng();
+  var os_value = os.try_next_u32();
+  match os_value {
+    u32 => println("os-u32=true ${gen_range_u64(os, 1u64, 2u64)}"),
+    RandomError => println("os-u32=false 1"),
+  }
+
+  var os_bytes = Bytes.new();
+  var os_fill = os.try_fill_bytes(os_bytes);
+  println("os-fill=${os_fill is null || os_fill is RandomError} ${os_bytes.size() == 0 || os_bytes.size() == 8}");
+
+  var exact = gen_bytes(SeededRng.from_seed(7u64), 5);
+  var exact_fill = Bytes.new();
+  fill_bytes_n(SeededRng.from_seed(7u64), exact_fill, 5);
+  println("bytes-n=${exact.size()} ${exact_fill.size()} ${exact == exact_fill}");
+
+  var os_exact = Bytes.new();
+  var os_exact_fill = os.try_fill_bytes_n(os_exact, 5);
+  println("os-fill-n=${os_exact_fill is null || os_exact_fill is RandomError} ${os_exact.size() == 0 || os_exact.size() == 5}");
+
+  var thread = thread_rng();
+  match thread {
+    ThreadRng => {
+      var thread_bytes = Bytes.new();
+      (thread as ThreadRng).fill_bytes(thread_bytes);
+      println("thread-rng=true ${thread_bytes.size()} ${gen_range_i64(thread as ThreadRng, 0, 1)}");
+    },
+    RandomError => println("thread-rng=false 0 0"),
+  }
+}

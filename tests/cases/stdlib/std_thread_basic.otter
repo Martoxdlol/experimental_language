@@ -1,0 +1,30 @@
+//@ kind: run
+//@ serial
+//@ description: std:thread exposes Thread, JoinHandle, Joined, and Panicked through the official std module
+//@ stdout:
+//~ joined=42
+//~ true true boom Panicked { message: "boom" }
+import { println } from "std:io";
+import { Future } from "core:async";
+import { Clone, Eq, Hash, ToStr } from "core:prelude";
+import { Debug } from "std:fmt";
+import { Thread, JoinHandle, Joined, Panicked } from "std:thread";
+
+function work(): i64 { 42 }
+
+function render_debug(value: Debug): str {
+  value.debug()
+}
+
+function main(): Future<null> async {
+  var handle: JoinHandle<i64> = Thread.spawn(() => work());
+  var result: Joined<i64> | Panicked = await handle.join();
+  match result {
+    Joined<i64> ok => println("joined=${ok.value}"),
+    Panicked p => println("panic=${p.message}"),
+  }
+
+  var panic_value = Panicked { message: "boom" };
+  var panic_copy = panic_value.clone();
+  println("${panic_value == panic_copy} ${panic_value.hash() == panic_copy.hash()} ${panic_value.to_str()} ${render_debug(panic_value)}");
+}

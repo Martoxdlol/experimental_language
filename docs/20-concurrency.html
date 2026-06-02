@@ -158,6 +158,11 @@ extend&lt;R&gt; JoinHandle&lt;R&gt; {
 pub struct Joined&lt;R&gt; { pub value: R }
 pub struct Panicked  { pub message: str }</code></pre>
 
+<p><code>Panicked</code> is an ordinary result value: it implements
+<code>Eq</code>, <code>Clone</code>, <code>Hash</code>, <code>ToStr</code>, and
+<code>std:fmt.Debug</code>. Runtime handles such as <code>JoinHandle</code> remain
+handle types, not plain value records.</p>
+
 <div class="callout good">
   <strong><code>join</code> is async and non-blocking.</strong>
   <code>join()</code> does <em>not</em> park the calling OS thread. It returns a
@@ -359,6 +364,11 @@ extend&lt;T&gt; Receiver&lt;T&gt;: Iterator&lt;T&gt; {            // `for x in r
 
 pub struct ChannelClosed;</code></pre>
 
+<p><code>ChannelClosed</code> is an ordinary marker value and implements
+<code>Eq</code>, <code>Clone</code>, <code>Hash</code>, <code>ToStr</code>, and
+<code>std:fmt.Debug</code>. Channel endpoints themselves are runtime handles with
+deterministic endpoint-release behavior.</p>
+
 <div class="callout good">
   <strong>Channels are async, non-blocking, and deterministically closeable.</strong>
   <code>send</code> enqueues onto an unbounded queue and returns at once — it
@@ -533,6 +543,10 @@ var snapshot = await state.lock { c =&gt; c.value }
 // critical section spans the awaited work (an async-aware mutex).
 var loaded = await state.lock { c async =&gt; { c.value = await fetch(); c.value } }</code></pre>
 
+<p><code>LockBusy</code> is an ordinary marker value and implements
+<code>Eq</code>, <code>Clone</code>, <code>Hash</code>, <code>ToStr</code>, and
+<code>std:fmt.Debug</code>. <code>Shared&lt;T&gt;</code> itself remains a runtime handle.</p>
+
 <div class="callout good">
   <strong>Always async — acquire suspends the task, it never blocks the thread</strong>
   There is exactly <strong>one</strong> lock primitive and it is async. Acquiring a
@@ -594,8 +608,11 @@ await h</code></pre>
 <!-- =========================================================== -->
 <h2 id="atomics">5. Atomics</h2>
 
-<p>The initial spec does not expose individual atomic primitives. <code>Shared&lt;T&gt;</code>
-covers the common cases. For lock-free patterns, drop down to FFI atomics.</p>
+<p><code>core:sync:atomic</code> exposes the portable <code>Ordering</code> value
+contract today. Individual atomic handle types and load/store/swap/
+compare-exchange/fetch operations remain planned compiler/runtime substrate.
+<code>Shared&lt;T&gt;</code> covers the common cases; for lock-free patterns before the
+native atomic handle work lands, drop down to FFI atomics.</p>
 
 <!-- =========================================================== -->
 <h2 id="safety">6. Thread safety summary</h2>

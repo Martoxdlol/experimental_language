@@ -1,0 +1,63 @@
+//@ kind: compile-error
+//@ description: std:rand follows the near-empty prelude rule; RNG helpers and handles require imports
+//@ stderr: cannot find type `Rng`
+//@ stderr: cannot find type `RandomError`
+//@ stderr: cannot find type `OsRng`
+//@ stderr: cannot find type `SeededRng`
+//@ stderr: cannot find type `ThreadRng`
+//@ stderr: cannot find value `SeededRng` in scope
+//@ stderr: cannot find value `random_error` in scope
+//@ stderr: cannot find value `os_rng` in scope
+//@ stderr: cannot find value `thread_rng` in scope
+//@ stderr: cannot find value `gen_range_i64` in scope
+//@ stderr: cannot find value `gen_range_u64` in scope
+//@ stderr: cannot find value `gen_f64` in scope
+//@ stderr: cannot find value `gen_range_f64` in scope
+//@ stderr: cannot find value `gen_bool` in scope
+//@ stderr: cannot find value `gen_index` in scope
+//@ stderr: cannot find value `fill_bytes_n` in scope
+//@ stderr: cannot find value `gen_bytes` in scope
+//@ stderr: cannot find value `choose_index` in scope
+//@ stderr: cannot find value `choose` in scope
+//@ stderr: cannot find value `shuffle` in scope
+
+import { List } from "core:collections";
+import { Bytes } from "std:bytes";
+
+function takes_rng(rng: Rng): i64 {
+  gen_range_i64(rng, 1, 10)
+}
+
+function make_error(): RandomError {
+  random_error()
+}
+
+function make_os(): OsRng {
+  os_rng()
+}
+
+function make_seeded(): SeededRng {
+  SeededRng.from_seed(42u64)
+}
+
+function make_thread(): ThreadRng {
+  thread_rng()
+}
+
+function main() {
+  var rng = SeededRng.from_seed(7u64);
+  var values = List<i64>();
+  values.push(1);
+  values.push(2);
+  gen_range_i64(rng, 1, 10);
+  gen_range_u64(rng, 1u64, 10u64);
+  gen_f64(rng);
+  gen_range_f64(rng, 0.0, 1.0);
+  gen_bool(rng, 1, 2);
+  gen_index(rng, values.size());
+  fill_bytes_n(rng, Bytes.new(), 4);
+  gen_bytes(rng, 4);
+  choose_index(rng, values);
+  choose(rng, values);
+  shuffle(rng, values);
+}

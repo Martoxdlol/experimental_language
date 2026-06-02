@@ -1,0 +1,52 @@
+struct Sender<T> { chan: i64 }
+struct Receiver<T> { chan: i64 }
+struct ChannelClosed {}
+struct Shared<T> { id: i64 }
+struct LockBusy {}
+struct MpmcSender<T> { chan: i64 }
+struct MpmcReceiver<T> { chan: i64 }
+
+extend ChannelClosed: Eq {
+  function eq(self, other: ChannelClosed): bool { true }
+}
+
+extend ChannelClosed: Clone {
+  function clone(self): ChannelClosed { ChannelClosed {} }
+}
+
+extend ChannelClosed: Hash {
+  function hash(self): u64 { self.to_str().hash() }
+}
+
+extend ChannelClosed: ToStr {
+  function to_str(self): str { "channel closed" }
+}
+
+extend ChannelClosed: Debug {
+  function debug(self): str { "ChannelClosed" }
+}
+
+extend LockBusy: Eq {
+  function eq(self, other: LockBusy): bool { true }
+}
+
+extend LockBusy: Clone {
+  function clone(self): LockBusy { LockBusy {} }
+}
+
+extend LockBusy: Hash {
+  function hash(self): u64 { self.to_str().hash() }
+}
+
+extend LockBusy: ToStr {
+  function to_str(self): str { "lock busy" }
+}
+
+extend LockBusy: Debug {
+  function debug(self): str { "LockBusy" }
+}
+
+function channel() {}
+function channel_bounded() {}
+function channel_mpmc() {}
+function channel_mpmc_bounded() {}

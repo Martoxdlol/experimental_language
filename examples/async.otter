@@ -18,8 +18,9 @@
 
 // An async function. The body's trailing value is the future's Output.
 import { println } from "std:io";
-import { Item, Done, Future, Pending } from "core:prelude";
-import { AsyncIterator, TimedOut } from "std:async";
+import { Item, Done } from "core:prelude";
+import { Future, Pending, AsyncIterator } from "core:async";
+import { TimedOut } from "std:async";
 
 import { yield_now, sleep, timeout } from "std:async";
 function answer(): Future<i64> async {

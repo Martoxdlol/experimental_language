@@ -1,0 +1,17 @@
+//@ kind: compile-error
+//@ description: std:collections follows the near-empty prelude rule; Deque helpers are not visible unless imported
+//@ stderr: cannot find type `Deque`
+//@ stderr: cannot find value `Deque` in scope
+//@ stderr: cannot find value `deque` in scope
+//@ stderr: cannot find value `deque_from_list` in scope
+import { List } from "core:collections";
+
+function make(): Deque<i64> {
+  Deque.new<i64>()
+}
+
+function main() {
+  var values = List<i64>();
+  var q: Deque<i64> = deque_from_list<i64>(values);
+  var empty = deque<i64>();
+}

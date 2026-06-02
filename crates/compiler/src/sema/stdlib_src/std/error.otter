@@ -1,0 +1,28 @@
+interface Error: ToStr {
+  function message(self): str;
+  function cause(self): Error | null;
+  function to_str(self): str;
+}
+struct Annotated {
+  note: str,
+  source: Error,
+}
+extend Annotated: Error {
+  function message(self): str { self.note }
+  function cause(self): Error | null { self.source }
+  function to_str(self): str { self.note + ": " + self.source.to_str() }
+}
+
+extend Annotated: Debug {
+  function debug(self): str {
+    "Annotated { note: \"" + self.note + "\", source: " + self.source.to_str() + " }"
+  }
+}
+
+function with_context<T, E: Error>(value: T | E, note: str): T | Annotated {
+  if value is E {
+    Annotated { note: note, source: value }
+  } else {
+    value
+  }
+}

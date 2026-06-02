@@ -5,7 +5,7 @@
 // explicitly).
 
 import { println } from "std:io";
-import { exit, Drop } from "core:prelude";
+import { Drop } from "core:prelude";
 
 struct Resource { id: i64 }
 

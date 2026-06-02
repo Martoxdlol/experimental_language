@@ -1,0 +1,58 @@
+//@ kind: compile-error
+//@ description: std:net:types follows the near-empty prelude rule; value types and helpers are not visible unless imported
+//@ stderr: cannot find type `IpAddr`
+//@ stderr: cannot find type `SocketAddr`
+//@ stderr: cannot find type `Uri`
+//@ stderr: cannot find type `Url`
+//@ stderr: cannot find type `ParseError`
+//@ stderr: cannot find value `ip_v4` in scope
+//@ stderr: cannot find value `ip_v6` in scope
+//@ stderr: cannot find value `parse_socket_addr` in scope
+//@ stderr: cannot find value `ip_v6_scoped` in scope
+//@ stderr: cannot find value `socket_addr` in scope
+//@ stderr: cannot find value `uri` in scope
+//@ stderr: cannot find value `url` in scope
+//@ stderr: cannot find value `parse_ip_v4` in scope
+//@ stderr: cannot find value `parse_ip_v6` in scope
+//@ stderr: cannot find value `parse_ipv4_socket_addr` in scope
+//@ stderr: cannot find value `parse_uri` in scope
+//@ stderr: cannot find value `parse_url` in scope
+//@ stderr: cannot find value `percent_encode_component` in scope
+//@ stderr: cannot find value `percent_decode_component` in scope
+
+function make_ip(): IpAddr {
+  ip_v4(127u8, 0u8, 0u8, 1u8)
+}
+
+function make_socket(): SocketAddr {
+  socket_addr(ip_v4(127u8, 0u8, 0u8, 1u8), 80u16)
+}
+
+function make_uri(): Uri {
+  uri("otter", "docs.example", "/guide", null, null)
+}
+
+function make_url(): Url {
+  url("https", null, "example.com", null, "/", null, null)
+}
+
+function make_error(): ParseError {
+  ParseError { message: "bad", position: 0 }
+}
+
+function main() {
+  var ip4 = ip_v4(127u8, 0u8, 0u8, 1u8);
+  var ip6 = ip_v6(0u16, 0u16, 0u16, 0u16, 0u16, 0u16, 0u16, 1u16);
+  var loopback = parse_socket_addr("127.0.0.1:80");
+  var scoped = ip_v6_scoped(0xfe80u16, 0u16, 0u16, 0u16, 0u16, 0u16, 0u16, 1u16, "eth0");
+  var sock = socket_addr(ip4, 80u16);
+  var docs = uri("otter", "docs.example", "/guide", null, null);
+  var link = url("https", null, "example.com", null, "/", null, null);
+  parse_ip_v4("127.0.0.1");
+  parse_ip_v6("::1");
+  parse_ipv4_socket_addr("127.0.0.1:80");
+  parse_uri("urn:otter:fusion");
+  parse_url("https://example.com/");
+  var encoded = percent_encode_component("a b");
+  var decoded = percent_decode_component("a%20b");
+}

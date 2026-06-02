@@ -1,0 +1,713 @@
+struct Start { offset: u64 }
+struct Current { offset: i64 }
+struct End { offset: i64 }
+type SeekFrom = Start | Current | End;
+
+struct NotFound {}
+struct PermissionDenied {}
+struct ConnectionRefused {}
+struct IoTimedOut {}
+struct UnexpectedEof {}
+struct Interrupted {}
+struct OtherIo {}
+type IoErrorKind = NotFound | PermissionDenied | ConnectionRefused
+                 | IoTimedOut | UnexpectedEof | Interrupted | OtherIo;
+
+struct IoError {
+  kind: IoErrorKind,
+  message: str,
+}
+
+struct Stdin {}
+struct Stdout {}
+struct Stderr {}
+
+struct BufReader {
+  inner: Reader,
+  buffer: Bytes,
+  pos: i64,
+  capacity: i64,
+  eof: bool,
+}
+
+struct Lines {
+  reader: BufReader,
+  done: bool,
+}
+
+struct BufWriter {
+  inner: Writer,
+  buffer: Bytes,
+  capacity: i64,
+}
+
+extern function lang_io_stdin_read(count: i64): str;
+extern function lang_io_stdin_read_to_end(): str;
+extern function lang_io_stdout_write(contents_hex: str): str;
+extern function lang_io_stderr_write(contents_hex: str): str;
+extern function lang_io_stdout_flush(): str;
+extern function lang_io_stderr_flush(): str;
+
+function __io_error(message: str): IoError {
+  IoError { kind: OtherIo {}, message: message }
+}
+
+function __io_hex_digit(n: u8): str {
+  if n == 0u8 {
+    "0"
+  } else if n == 1u8 {
+    "1"
+  } else if n == 2u8 {
+    "2"
+  } else if n == 3u8 {
+    "3"
+  } else if n == 4u8 {
+    "4"
+  } else if n == 5u8 {
+    "5"
+  } else if n == 6u8 {
+    "6"
+  } else if n == 7u8 {
+    "7"
+  } else if n == 8u8 {
+    "8"
+  } else if n == 9u8 {
+    "9"
+  } else if n == 10u8 {
+    "a"
+  } else if n == 11u8 {
+    "b"
+  } else if n == 12u8 {
+    "c"
+  } else if n == 13u8 {
+    "d"
+  } else if n == 14u8 {
+    "e"
+  } else {
+    "f"
+  }
+}
+
+function __io_bytes_to_hex(data: Bytes): str {
+  var out = "";
+  for b in data.iter() {
+    out = out + __io_hex_digit(b / 16u8);
+    out = out + __io_hex_digit(b % 16u8);
+  }
+  out
+}
+
+function __io_hex_value(ch: char): u8 | IoError {
+  var cp = ch as i64;
+  if cp >= 48 && cp <= 57 {
+    (cp - 48) as u8
+  } else if cp >= 97 && cp <= 102 {
+    (cp - 87) as u8
+  } else if cp >= 65 && cp <= 70 {
+    (cp - 55) as u8
+  } else {
+    __io_error("invalid hex digit in io byte payload")
+  }
+}
+
+function __io_hex_at(text: str, index: i64): u8 | IoError {
+  var result: u8 | IoError = __io_error("missing hex digit in io byte payload");
+  for ch in text.substring(index, index + 1).chars() {
+    result = __io_hex_value(ch);
+  }
+  result
+}
+
+function __io_hex_to_bytes(hex: str): Bytes | IoError {
+  if hex.size() % 2 != 0 {
+    __io_error("odd-length io byte payload")
+  } else {
+    var out = Bytes.new();
+    var i = 0;
+    while i < hex.size() {
+      var hi = __io_hex_at(hex, i);
+      if hi is IoError {
+        return hi as IoError;
+      }
+      var lo = __io_hex_at(hex, i + 1);
+      if lo is IoError {
+        return lo as IoError;
+      }
+      out.push((hi as u8) * 16u8 + (lo as u8));
+      i = i + 2;
+    }
+    out
+  }
+}
+
+function __io_decode_result(result: str): str | IoError {
+  if result.size() == 0 {
+    __io_error("empty io result")
+  } else {
+    var tag = result.substring(0, 1);
+    var payload = result.substring(1, result.size());
+    if tag == "0" {
+      payload
+    } else if tag == "1" {
+      __io_error(payload)
+    } else {
+      __io_error("malformed io result")
+    }
+  }
+}
+
+function __io_decode_unit(result: str): null | IoError {
+  var decoded = __io_decode_result(result);
+  if decoded is IoError {
+    decoded as IoError
+  } else {
+    null
+  }
+}
+
+function __io_digit(ch: char): u64 | IoError {
+  var cp = ch as i64;
+  if cp >= 48 && cp <= 57 {
+    (cp - 48) as u64
+  } else {
+    __io_error("invalid decimal digit in io result")
+  }
+}
+
+function __io_parse_u64(text: str): u64 | IoError {
+  if text == "" {
+    __io_error("empty decimal value in io result")
+  } else {
+    var value = 0u64;
+    var max_div = 1844674407370955161u64;
+    var max_rem = 5u64;
+    var i = 0;
+    while i < text.size() {
+      var digit_result: u64 | IoError = 0u64;
+      for ch in text.substring(i, i + 1).chars() {
+        digit_result = __io_digit(ch);
+      }
+      if digit_result is IoError {
+        return digit_result as IoError;
+      }
+      var digit = digit_result as u64;
+      if value > max_div || (value == max_div && digit > max_rem) {
+        return __io_error("decimal value in io result overflows u64");
+      }
+      value = value * 10u64 + digit;
+      i = i + 1;
+    }
+    value
+  }
+}
+
+function __io_decode_i64(result: str): i64 | IoError {
+  var decoded = __io_decode_result(result);
+  if decoded is IoError {
+    decoded as IoError
+  } else {
+    var parsed = __io_parse_u64(decoded as str);
+    if parsed is IoError {
+      return parsed as IoError;
+    }
+    var value = parsed as u64;
+    if value > 9223372036854775807u64 {
+      __io_error("io count overflow")
+    } else {
+      value as i64
+    }
+  }
+}
+
+function __io_decode_bytes(result: str): Bytes | IoError {
+  var decoded = __io_decode_result(result);
+  if decoded is IoError {
+    decoded as IoError
+  } else {
+    __io_hex_to_bytes(decoded as str)
+  }
+}
+
+extend SeekFrom {
+  function offset_string(self): str {
+    if self is Start {
+      (self as Start).offset as str
+    } else if self is Current {
+      (self as Current).offset as str
+    } else {
+      (self as End).offset as str
+    }
+  }
+
+  function tag(self): str {
+    if self is Start {
+      "Start"
+    } else if self is Current {
+      "Current"
+    } else {
+      "End"
+    }
+  }
+
+  function debug_string(self): str {
+    self.tag() + " { offset: " + self.offset_string() + " }"
+  }
+
+  function equals(self, other: SeekFrom): bool {
+    if self is Start {
+      if other is Start {
+        (self as Start).offset == (other as Start).offset
+      } else {
+        false
+      }
+    } else if self is Current {
+      if other is Current {
+        (self as Current).offset == (other as Current).offset
+      } else {
+        false
+      }
+    } else if other is End {
+      (self as End).offset == (other as End).offset
+    } else {
+      false
+    }
+  }
+}
+
+extend SeekFrom: Clone {
+  function clone(self): SeekFrom {
+    if self is Start {
+      Start { offset: (self as Start).offset }
+    } else if self is Current {
+      Current { offset: (self as Current).offset }
+    } else {
+      End { offset: (self as End).offset }
+    }
+  }
+}
+
+extend SeekFrom: Eq {
+  function eq(self, other: SeekFrom): bool { self.equals(other) }
+}
+
+extend SeekFrom: Hash {
+  function hash(self): u64 { self.debug_string().hash() }
+}
+
+extend SeekFrom: ToStr {
+  function to_str(self): str { self.debug_string() }
+}
+
+extend SeekFrom: Debug {
+  function debug(self): str { self.debug_string() }
+}
+
+extend IoErrorKind {
+  function as_str(self): str {
+    if self is NotFound {
+      "not_found"
+    } else if self is PermissionDenied {
+      "permission_denied"
+    } else if self is ConnectionRefused {
+      "connection_refused"
+    } else if self is IoTimedOut {
+      "timed_out"
+    } else if self is UnexpectedEof {
+      "unexpected_eof"
+    } else if self is Interrupted {
+      "interrupted"
+    } else {
+      "other"
+    }
+  }
+
+  function debug_string(self): str {
+    if self is NotFound {
+      "NotFound"
+    } else if self is PermissionDenied {
+      "PermissionDenied"
+    } else if self is ConnectionRefused {
+      "ConnectionRefused"
+    } else if self is IoTimedOut {
+      "IoTimedOut"
+    } else if self is UnexpectedEof {
+      "UnexpectedEof"
+    } else if self is Interrupted {
+      "Interrupted"
+    } else {
+      "OtherIo"
+    }
+  }
+
+  function equals(self, other: IoErrorKind): bool { self.as_str() == other.as_str() }
+}
+
+extend IoErrorKind: Clone {
+  function clone(self): IoErrorKind {
+    if self is NotFound {
+      NotFound {}
+    } else if self is PermissionDenied {
+      PermissionDenied {}
+    } else if self is ConnectionRefused {
+      ConnectionRefused {}
+    } else if self is IoTimedOut {
+      IoTimedOut {}
+    } else if self is UnexpectedEof {
+      UnexpectedEof {}
+    } else if self is Interrupted {
+      Interrupted {}
+    } else {
+      OtherIo {}
+    }
+  }
+}
+
+extend IoErrorKind: Eq {
+  function eq(self, other: IoErrorKind): bool { self.equals(other) }
+}
+
+extend IoErrorKind: Hash {
+  function hash(self): u64 { self.as_str().hash() }
+}
+
+extend IoErrorKind: ToStr {
+  function to_str(self): str { self.as_str() }
+}
+
+extend IoErrorKind: Debug {
+  function debug(self): str { self.debug_string() }
+}
+
+extend IoError: Error {
+  function message(self): str { self.message }
+  function cause(self): Error | null { null }
+  function to_str(self): str { self.message }
+}
+
+extend IoError: Eq {
+  function eq(self, other: IoError): bool {
+    self.kind.equals(other.kind) && self.message == other.message
+  }
+}
+
+extend IoError: Clone {
+  function clone(self): IoError {
+    IoError { kind: self.kind.clone(), message: self.message }
+  }
+}
+
+extend IoError: Hash {
+  function hash(self): u64 {
+    (self.kind.as_str() + ":" + self.message).hash()
+  }
+}
+
+extend IoError: Debug {
+  function debug(self): str {
+    "IoError { kind: " + self.kind.debug_string() + ", message: \"" + self.message + "\" }"
+  }
+}
+
+interface Reader {
+  function read(self, buf: Bytes): i64 | IoError;
+  function read_to_end(self, buf: Bytes): i64 | IoError;
+}
+
+interface Writer {
+  function write(self, buf: Bytes): i64 | IoError;
+  function write_all(self, buf: Bytes): null | IoError;
+  function flush(self): null | IoError;
+}
+
+interface Seeker {
+  function seek(self, pos: SeekFrom): i64 | IoError;
+}
+
+function buf_reader(inner: Reader): BufReader {
+  BufReader.new(inner)
+}
+
+function buf_writer(inner: Writer): BufWriter {
+  BufWriter.new(inner)
+}
+
+function stdin(): Stdin { Stdin {} }
+function stdout(): Stdout { Stdout {} }
+function stderr(): Stderr { Stderr {} }
+
+function print(s: str) {}
+function println(s: str) {}
+function eprint(s: str) {}
+function eprintln(s: str) {}
+
+extend Stdin: Reader {
+  function read(self, buf: Bytes): i64 | IoError {
+    var data = __io_decode_bytes(lang_io_stdin_read(buf.size()));
+    if data is IoError {
+      data as IoError
+    } else {
+      var chunk = data as Bytes;
+      for b in chunk.iter() {
+        buf.push(b);
+      }
+      chunk.size()
+    }
+  }
+
+  function read_to_end(self, buf: Bytes): i64 | IoError {
+    var data = __io_decode_bytes(lang_io_stdin_read_to_end());
+    if data is IoError {
+      data as IoError
+    } else {
+      var chunk = data as Bytes;
+      for b in chunk.iter() {
+        buf.push(b);
+      }
+      chunk.size()
+    }
+  }
+}
+
+extend BufReader {
+  function new(inner: Reader): BufReader {
+    BufReader.with_capacity(8192, inner)
+  }
+
+  function with_capacity(capacity: i64, inner: Reader): BufReader {
+    var cap = capacity;
+    if cap <= 0 {
+      cap = 8192;
+    }
+    BufReader { inner: inner, buffer: Bytes.new(), pos: 0, capacity: cap, eof: false }
+  }
+
+  function buffered_len(self): i64 {
+    if self.pos >= self.buffer.size() {
+      0
+    } else {
+      self.buffer.size() - self.pos
+    }
+  }
+
+  function fill(self): i64 | IoError {
+    if self.pos < self.buffer.size() {
+      self.buffer.size() - self.pos
+    } else if self.eof {
+      0
+    } else {
+      var request = Bytes.new();
+      var i = 0;
+      while i < self.capacity {
+        request.push(0u8);
+        i = i + 1;
+      }
+      var n = self.inner.read(request);
+      if n is IoError {
+        n as IoError
+      } else {
+        self.buffer = request.slice(self.capacity, request.size());
+        self.pos = 0;
+        if (n as i64) == 0 {
+          self.eof = true;
+        }
+        n as i64
+      }
+    }
+  }
+
+  function read_byte(self): u8 | IoError | null {
+    var filled = self.fill();
+    if filled is IoError {
+      filled as IoError
+    } else if (filled as i64) == 0 {
+      null
+    } else {
+      var b = self.buffer.get(self.pos);
+      if b is u8 {
+        self.pos = self.pos + 1;
+        b as u8
+      } else {
+        null
+      }
+    }
+  }
+
+  function read_line(self): str | IoError {
+    var bytes = Bytes.new();
+    var done = false;
+    while !done {
+      var b = self.read_byte();
+      if b is IoError {
+        return b as IoError;
+      } else if b is null {
+        done = true;
+      } else {
+        var value = b as u8;
+        bytes.push(value);
+        if value == 10u8 {
+          done = true;
+        }
+      }
+    }
+    var decoded = bytes.decode_utf8();
+    if decoded is str {
+      decoded as str
+    } else {
+      __io_error((decoded as Utf8Error).message())
+    }
+  }
+
+  function lines(self): Iterator<str | IoError> {
+    Lines { reader: self, done: false }
+  }
+}
+
+extend BufReader: Reader {
+  function read(self, buf: Bytes): i64 | IoError {
+    var limit = buf.size();
+    var count = 0;
+    while count < limit {
+      var b = self.read_byte();
+      if b is IoError {
+        return b as IoError;
+      } else if b is null {
+        return count;
+      } else {
+        buf.push(b as u8);
+        count = count + 1;
+      }
+    }
+    count
+  }
+
+  function read_to_end(self, buf: Bytes): i64 | IoError {
+    var count = 0;
+    var done = false;
+    while !done {
+      var b = self.read_byte();
+      if b is IoError {
+        return b as IoError;
+      } else if b is null {
+        done = true;
+      } else {
+        buf.push(b as u8);
+        count = count + 1;
+      }
+    }
+    count
+  }
+}
+
+extend Lines: Iterator<str | IoError> {
+  function next(self): Item<str | IoError> | Done {
+    if self.done {
+      Done {}
+    } else {
+      var line = self.reader.read_line();
+      if line is IoError {
+        self.done = true;
+        var value: str | IoError = line as IoError;
+        Item { value: value }
+      } else if (line as str) == "" {
+        self.done = true;
+        Done {}
+      } else {
+        var value: str | IoError = line as str;
+        Item { value: value }
+      }
+    }
+  }
+}
+
+extend Stdout: Writer {
+  function write(self, buf: Bytes): i64 | IoError {
+    __io_decode_i64(lang_io_stdout_write(__io_bytes_to_hex(buf)))
+  }
+
+  function write_all(self, buf: Bytes): null | IoError {
+    var written = self.write(buf);
+    if written is IoError {
+      written as IoError
+    } else {
+      null
+    }
+  }
+
+  function flush(self): null | IoError {
+    __io_decode_unit(lang_io_stdout_flush())
+  }
+}
+
+extend Stderr: Writer {
+  function write(self, buf: Bytes): i64 | IoError {
+    __io_decode_i64(lang_io_stderr_write(__io_bytes_to_hex(buf)))
+  }
+
+  function write_all(self, buf: Bytes): null | IoError {
+    var written = self.write(buf);
+    if written is IoError {
+      written as IoError
+    } else {
+      null
+    }
+  }
+
+  function flush(self): null | IoError {
+    __io_decode_unit(lang_io_stderr_flush())
+  }
+}
+
+extend BufWriter {
+  function new(inner: Writer): BufWriter {
+    BufWriter.with_capacity(8192, inner)
+  }
+
+  function with_capacity(capacity: i64, inner: Writer): BufWriter {
+    var cap = capacity;
+    if cap <= 0 {
+      cap = 8192;
+    }
+    BufWriter { inner: inner, buffer: Bytes.new(), capacity: cap }
+  }
+
+  function buffered_len(self): i64 { self.buffer.size() }
+}
+
+extend BufWriter: Writer {
+  function write(self, buf: Bytes): i64 | IoError {
+    for b in buf.iter() {
+      self.buffer.push(b);
+    }
+    if self.buffer.size() >= self.capacity {
+      var flushed = self.flush();
+      if flushed is IoError {
+        return flushed as IoError;
+      }
+    }
+    buf.size()
+  }
+
+  function write_all(self, buf: Bytes): null | IoError {
+    var written = self.write(buf);
+    if written is IoError {
+      written as IoError
+    } else {
+      null
+    }
+  }
+
+  function flush(self): null | IoError {
+    if self.buffer.is_empty() {
+      self.inner.flush()
+    } else {
+      var pending = self.buffer.clone();
+      var wrote = self.inner.write_all(pending);
+      if wrote is IoError {
+        wrote as IoError
+      } else {
+        self.buffer = Bytes.new();
+        self.inner.flush()
+      }
+    }
+  }
+}

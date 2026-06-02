@@ -1,0 +1,188 @@
+//@ kind: run
+//@ description: std:json exposes the portable JSON value tree and extraction helpers
+//@ stdout:
+//~ true
+//~ Ada
+//~ 2
+//~ false
+//~ none
+//~ typed-miss=true true true true false true true true false false
+//~ scalar-shape=true/true/true/false/false
+//~ shape=true/true/false/false len=3/2/0 has=true/true/false/false keys=none,name,items values=null|"Ada"|["Ada",false] snapshots=4/4
+//~ true
+//~ true
+//~ true
+//~ hash-order=true true array-order=false
+//~ source_snapshot={"none":null,"name":"Ada","items":["Ada",false]} array_snapshot=["Ada",false,"mutated"] object_snapshot=Ada item_snapshot=["Ada",false]
+//~ "Ada"
+//~ [true,"otter"]
+//~ builders={"none":null,"items":["Ada","Grace"]} original={"none":null,"name":"Ada","items":["Ada",false]} nested=["Ada","Grace"] removed={"none":null,"items":["Ada","Grace"]} appended=["Ada",false,"tail"] set=["Ada",true] scalar="Ada"
+//~ "quote: \" slash: \\ tab:\t newline:\n"
+//~ {"line\nkey":"snow é"}
+//~ {
+//~   "items": [
+//~     true,
+//~     "x"
+//~   ]
+//~ }
+//~ [true,"x"]
+//~ pretty-fallback=true true
+
+import { List, Map } from "core:collections";
+import { Clone, Eq, Hash, ToStr } from "core:prelude";
+import { println } from "std:io";
+import { Json, json_array, json_bool, json_null, json_number, json_object, json_string } from "std:json";
+
+function main() {
+  var items = List<Json>();
+  items.push(json_string("Ada"));
+  items.push(json_bool(false));
+
+  var fields = Map.new<str, Json>();
+  fields.set("name", json_string("Ada"));
+  fields.set("items", json_array(items));
+  fields.set("none", json_null());
+
+  var value = json_object(fields);
+  println("${json_null().is_null()}");
+  match value.get_str("name") {
+    str s => println(s),
+    null => println("missing"),
+  }
+
+  match value.get_array("items") {
+    List<Json> list => println("${list.size()}"),
+    null => println("not-list"),
+  }
+
+  var array = json_array(items);
+  match array.at_bool(1) {
+    bool flag => println("${flag}"),
+    null => println("not-bool"),
+  }
+
+  if value.get_is_null("none") {
+    println("none");
+  } else {
+    println("not-none");
+  }
+  println("typed-miss=${value.get_bool("name") is null} ${value.get_number("missing") is null} ${value.get_array("name") is null} ${value.get_object("name") is null} ${value.get_is_null("missing")} ${array.at_str(99) is null} ${array.at_number(-1) is null} ${array.at_object(0) is null} ${array.at_is_null(99)} ${json_string("Ada").get_is_null("none")}");
+  println("scalar-shape=${json_bool(true).is_bool()}/${json_number(1.5).is_number()}/${json_string("Ada").is_str()}/${json_null().is_bool()}/${array.is_str()}");
+
+  var key_text = "";
+  var first_key = true;
+  var keys = value.keys();
+  for key in keys {
+    if first_key {
+      first_key = false;
+    } else {
+      key_text = key_text + ",";
+    }
+    key_text = key_text + key;
+  }
+  var value_text = "";
+  var first_value = true;
+  var values = value.values();
+  for entry_value in values {
+    if first_value {
+      first_value = false;
+    } else {
+      value_text = value_text + "|";
+    }
+    value_text = value_text + entry_value.render();
+  }
+  keys.push("mutated");
+  values.push(json_string("mutated"));
+  println("shape=${value.is_object()}/${array.is_array()}/${value.is_array()}/${json_null().is_object()} len=${value.len()}/${array.len()}/${json_string("Ada").len()} has=${value.contains_key("name")}/${value.contains_key("none")}/${value.contains_key("missing")}/${array.contains_key("name")} keys=${key_text} values=${value_text} snapshots=${keys.size()}/${values.size()}");
+
+  var copy = value.clone();
+  println("${copy == value}");
+  println("${copy.hash() == value.hash()}");
+  fields.set("name", json_string("Grace"));
+  println("${copy == value}");
+
+  var order_a = Map.new<str, Json>();
+  order_a.set("a", json_number(1.0));
+  order_a.set("b", json_array(items));
+  var order_b = Map.new<str, Json>();
+  order_b.set("b", json_array(items));
+  order_b.set("a", json_number(1.0));
+  var obj_a = json_object(order_a);
+  var obj_b = json_object(order_b);
+  var arr_ab_items = List<Json>();
+  arr_ab_items.push(json_string("a"));
+  arr_ab_items.push(json_string("b"));
+  var arr_ba_items = List<Json>();
+  arr_ba_items.push(json_string("b"));
+  arr_ba_items.push(json_string("a"));
+  println("hash-order=${obj_a == obj_b} ${obj_a.hash() == obj_b.hash()} array-order=${json_array(arr_ab_items) == json_array(arr_ba_items)}");
+
+  var extracted_array = value.get_array("items");
+  var array_snapshot_text = "missing";
+  if extracted_array is List<Json> {
+    var list = extracted_array as List<Json>;
+    list.push(json_string("mutated"));
+    array_snapshot_text = json_array(list).render();
+  }
+  var extracted_object = value.as_object();
+  var object_snapshot_text = "missing";
+  if extracted_object is Map<str, Json> {
+    var object = extracted_object as Map<str, Json>;
+    object.set("name", json_string("Lovelace"));
+    var name = value.get_str("name");
+    if name is str {
+      object_snapshot_text = name as str;
+    }
+  }
+  var item_snapshot = value.get("items");
+  var item_snapshot_text = "missing";
+  if item_snapshot is Json {
+    var item_array = (item_snapshot as Json).as_array();
+    if item_array is List<Json> {
+      var item_list = item_array as List<Json>;
+      item_list.push(json_bool(true));
+      item_snapshot_text = (item_snapshot as Json).render();
+    }
+  }
+  println("source_snapshot=${value.render()} array_snapshot=${array_snapshot_text} object_snapshot=${object_snapshot_text} item_snapshot=${item_snapshot_text}");
+
+  println(json_string("Ada").to_str());
+  var rendered_items = List<Json>();
+  rendered_items.push(json_bool(true));
+  rendered_items.push(json_string("otter"));
+  println(json_array(rendered_items).to_str());
+
+  var replacement_items = List<Json>();
+  replacement_items.push(json_string("Ada"));
+  var replacement_array = json_array(replacement_items);
+  var rebuilt = value.with_key("items", replacement_array.append(json_string("Grace"))).without_key("name");
+  replacement_items.push(json_string("mutated"));
+  var nested = rebuilt.get("items");
+  var nested_text = "missing";
+  if nested is Json {
+    var nested_list = (nested as Json).as_array();
+    if nested_list is List<Json> {
+      (nested_list as List<Json>).push(json_string("mutated"));
+      nested_text = (nested as Json).render();
+    }
+  }
+  var removed = rebuilt.without_key("missing");
+  var appended = array.append(json_string("tail"));
+  var set = array.set_at(1, json_bool(true)).set_at(99, json_string("ignored"));
+  var scalar = json_string("Ada").append(json_bool(true)).with_key("ignored", json_bool(true));
+  println("builders=${rebuilt.render()} original=${value.render()} nested=${nested_text} removed=${removed.render()} appended=${appended.render()} set=${set.render()} scalar=${scalar.render()}");
+
+  println(json_string("quote: \" slash: \\ tab:\t newline:\n").render());
+  var escaped_fields = Map.new<str, Json>();
+  escaped_fields.set("line\nkey", json_string("snow é"));
+  println(json_object(escaped_fields).render());
+
+  var pretty_items = List<Json>();
+  pretty_items.push(json_bool(true));
+  pretty_items.push(json_string("x"));
+  var pretty_fields = Map.new<str, Json>();
+  pretty_fields.set("items", json_array(pretty_items));
+  println(json_object(pretty_fields).pretty(2));
+  println(json_array(pretty_items).pretty(0));
+  println("pretty-fallback=${json_array(pretty_items).pretty(0) == json_array(pretty_items).render()} ${json_array(pretty_items).pretty(-1) == json_array(pretty_items).render()}");
+}

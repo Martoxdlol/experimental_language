@@ -50,6 +50,10 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 "interface data is not a nominal type",
             ));
         };
+        let cargs: Vec<Ty> = cargs
+            .into_iter()
+            .map(|arg| resolve_shallow(analysis, arg, &self.subst))
+            .collect();
         let TyKind::Named { def: idef, .. } = analysis.tcx.kind(iface).clone() else {
             return Err(CodegenError::new(
                 span,

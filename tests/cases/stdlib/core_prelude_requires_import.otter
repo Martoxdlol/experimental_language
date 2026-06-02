@@ -1,0 +1,49 @@
+//@ kind: compile-error
+//@ description: core:prelude follows the near-empty prelude rule; named language protocols and panic hooks require explicit imports
+//@ stderr: cannot find type `Iterator`
+//@ stderr: cannot find type `Item`
+//@ stderr: cannot find type `Done`
+//@ stderr: cannot find type `FromResidual`
+//@ stderr: cannot find type `Try`
+//@ stderr: cannot find type `Clone`
+//@ stderr: cannot find type `Drop`
+//@ stderr: cannot find type `Eq`
+//@ stderr: cannot find type `Ord`
+//@ stderr: cannot find type `ToStr`
+//@ stderr: cannot find type `Hash`
+//@ stderr: cannot find type `Future`
+//@ stderr: cannot find type `Ready`
+//@ stderr: cannot find type `Pending`
+//@ stderr: cannot find type `Context`
+//@ stderr: cannot find value `panic` in scope
+//@ stderr: cannot find value `panic_with` in scope
+
+function needs_protocols<T>(
+  iter: Iterator<T>,
+  item: Item<T>,
+  done: Done,
+  residual: FromResidual<T>,
+  attempt: Try<T, Done>,
+): null {
+  null
+}
+
+function needs_value_protocols(
+  clone: Clone,
+  drop: Drop,
+  eq: Eq,
+  ord: Ord,
+  text: ToStr,
+  hash: Hash,
+): null {
+  null
+}
+
+function poll_shape(future: Future<i64>, ctx: *Context): Ready<i64> | Pending {
+  Pending {}
+}
+
+function main() {
+  panic("boom");
+  panic_with<i64>(1);
+}

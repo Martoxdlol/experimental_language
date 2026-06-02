@@ -1,0 +1,5 @@
+//@ kind: compile-error
+//@ description: operator protocol labels such as Add are compiler-recognized method protocols, not core:prelude exports
+//@ stderr: no `Add` in the imported module
+import { Add } from "core:prelude";
+function main() {}

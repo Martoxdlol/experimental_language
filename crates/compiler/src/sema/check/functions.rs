@@ -218,10 +218,45 @@ impl<'a> Checker<'a> {
 
     /// Unify a parameter type (which may contain `Param`s) against a concrete
     /// argument type, recording inferred bindings into `map`.
-    pub(crate) fn unify(&self, pat: Ty, val: Ty, map: &mut HashMap<DefId, Ty>) {
+    pub(crate) fn unify(&mut self, pat: Ty, val: Ty, map: &mut HashMap<DefId, Ty>) {
         match (self.tcx.kind(pat).clone(), self.tcx.kind(val).clone()) {
             (TyKind::Param(d), _) => {
                 map.entry(d).or_insert(val);
+            }
+            (TyKind::Union(pats), TyKind::Union(vals)) => {
+                let mut remaining = vals;
+                let mut params = Vec::new();
+                for p in pats {
+                    if matches!(self.tcx.kind(p), TyKind::Param(_)) {
+                        params.push(p);
+                        continue;
+                    }
+                    if let Some(idx) = remaining.iter().position(|&v| p == v) {
+                        let v = remaining.remove(idx);
+                        self.unify(p, v, map);
+                    }
+                }
+                for p in params {
+                    let TyKind::Param(def) = self.tcx.kind(p).clone() else {
+                        continue;
+                    };
+                    if map.contains_key(&def) {
+                        continue;
+                    }
+                    let bounds = self.bound_ifaces(def);
+                    let idx = if bounds.is_empty() {
+                        (!remaining.is_empty()).then_some(0)
+                    } else {
+                        remaining.iter().position(|&v| {
+                            bounds
+                                .iter()
+                                .all(|(iface, _)| self.type_implements(v, *iface))
+                        })
+                    };
+                    if let Some(idx) = idx {
+                        map.insert(def, remaining.remove(idx));
+                    }
+                }
             }
             (TyKind::Named { def: d1, args: a1 }, TyKind::Named { def: d2, args: a2 })
                 if d1 == d2 && a1.len() == a2.len() =>

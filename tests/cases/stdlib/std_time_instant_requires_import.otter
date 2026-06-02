@@ -1,0 +1,15 @@
+//@ kind: compile-error
+//@ description: std:time follows the near-empty prelude rule; clock values are not visible unless imported
+//@ stderr: cannot find type `Instant`
+//@ stderr: cannot find value `Instant`
+//@ stderr: cannot find type `SystemTime`
+//@ stderr: cannot find value `SystemTime`
+function make(): Instant {
+  Instant.now()
+}
+
+function make_system(): SystemTime {
+  SystemTime.unix_epoch()
+}
+
+function main() {}

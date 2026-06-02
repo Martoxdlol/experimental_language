@@ -233,8 +233,9 @@ but not <code>core:ffi</code>.</p>
 <pre><code>Isolate.new().allow([
   "core:prelude",        // Iterator, Clone, Eq, Ord, ToStr, panic, ... (usually granted)
   "core:collections",    // List, Map, Set, Entry
-  "std:io",              // print, println
-  "std:async",           // yield_now, sleep, timeout, AsyncIterator
+  "core:async",          // Future, Ready, Pending, Context, AsyncIterator
+  "std:io",              // print, println, stdin/stdout/stderr handles
+  "std:async",           // yield_now, sleep, timeout
 ])
 </code></pre>
 

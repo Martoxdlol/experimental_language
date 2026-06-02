@@ -94,11 +94,11 @@ function consume&lt;T: Iterator&lt;i64&gt;&gt;(it: T) { ... }</code></pre>
 <!-- =========================================================== -->
 <h2 id="defaults">2. Default type parameters</h2>
 
-<pre><code>interface Add&lt;Rhs = Self, Output = Self&gt; {
-  function add(self, rhs: Rhs): Output
+<pre><code>interface Combine&lt;Rhs = Self, Output = Self&gt; {
+  function combine(self, rhs: Rhs): Output
 }
 
-// Callers may omit the arguments — Add&lt;&gt; means Add&lt;Self, Self&gt;.</code></pre>
+// Callers may omit the arguments — Combine&lt;&gt; means Combine&lt;Self, Self&gt;.</code></pre>
 
 <p>Defaults can refer to earlier parameters and to <code>Self</code>.</p>
 
@@ -261,15 +261,15 @@ interface Iterator&lt;T&gt; {
   function next(self): Item&lt;T&gt; | Done
 }
 
-interface Add&lt;Rhs = Self, Output = Self&gt; {
-  function add(self, rhs: Rhs): Output
+interface Combine&lt;Rhs = Self, Output = Self&gt; {
+  function combine(self, rhs: Rhs): Output
 }
 
 // Same type, multiple impls with different type arguments
-extend i32: Add&lt;i32, i32&gt; { function add(self, rhs: i32): i32 { ... } }
-extend i32: Add&lt;f64, f64&gt; { function add(self, rhs: f64): f64 { ... } }</code></pre>
+extend i32: Combine&lt;i32, i32&gt; { function combine(self, rhs: i32): i32 { ... } }
+extend i32: Combine&lt;f64, f64&gt; { function combine(self, rhs: f64): f64 { ... } }</code></pre>
 
-<p>Resolving <code>x.add(y)</code> uses argument types to pick the impl.</p>
+<p>Resolving <code>x.combine(y)</code> uses argument types to pick the impl.</p>
 
 <!-- =========================================================== -->
 <h2 id="overlap">7. Overlap &amp; specificity</h2>

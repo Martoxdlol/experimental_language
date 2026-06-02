@@ -1,0 +1,24 @@
+struct JoinHandle<R> { id: i64 }
+struct Joined<R> { value: R }
+struct Panicked { message: str }
+struct Thread {}
+
+extend Panicked: Eq {
+  function eq(self, other: Panicked): bool { self.message == other.message }
+}
+
+extend Panicked: Clone {
+  function clone(self): Panicked { Panicked { message: self.message } }
+}
+
+extend Panicked: Hash {
+  function hash(self): u64 { self.message.hash() }
+}
+
+extend Panicked: ToStr {
+  function to_str(self): str { self.message }
+}
+
+extend Panicked: Debug {
+  function debug(self): str { "Panicked { message: \"" + self.message + "\" }" }
+}

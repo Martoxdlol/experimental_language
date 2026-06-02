@@ -1,0 +1,7 @@
+//@ kind: compile-error
+//@ description: HTTP value types are ordinary stdlib API, not compiler substrate; core:http is rejected
+//@ stderr: no built-in module `core:http`
+
+import { Status } from "core:http";
+
+function main() {}

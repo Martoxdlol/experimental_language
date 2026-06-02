@@ -76,14 +76,18 @@
 
 <h1>15. Operators &amp; Operator Overloading</h1>
 <p class="lead">
-  Most operators are sugar for method calls on built-in interfaces in <code>core:prelude</code>.
-  Implement the interface; get the operator.
+  Most operators are compiler-lowered syntax over primitive operations or
+  well-known methods on <code>extend</code> blocks. The importable
+  <code>core:prelude</code> contracts cover equality, ordering, hashing,
+  cloning, dropping, iteration, error propagation, stringification, and panic;
+  arithmetic/bitwise operator labels such as <code>Add</code> are protocol names
+  used by the checker today, not exported stdlib interfaces.
 </p>
 
 <div class="toc">
   <strong>Contents</strong>
   <ol>
-    <li><a href="#map">Operator → interface map</a></li>
+    <li><a href="#map">Operator → protocol map</a></li>
     <li><a href="#arith">Arithmetic</a></li>
     <li><a href="#log">Logical</a></li>
     <li><a href="#bit">Bitwise</a></li>
@@ -101,73 +105,73 @@
 </div>
 
 <!-- =========================================================== -->
-<h2 id="map">Operator → interface map</h2>
+<h2 id="map">Operator → protocol map</h2>
 
 <div class="ifgrid">
-  <div class="ifcard arith"><span class="op">a + b</span><span class="name">Add.add</span></div>
-  <div class="ifcard arith"><span class="op">a - b</span><span class="name">Sub.sub</span></div>
-  <div class="ifcard arith"><span class="op">a * b</span><span class="name">Mul.mul</span></div>
-  <div class="ifcard arith"><span class="op">a / b</span><span class="name">Div.div</span></div>
-  <div class="ifcard arith"><span class="op">a % b</span><span class="name">Mod.mod</span></div>
-  <div class="ifcard arith"><span class="op">-a</span><span class="name">Neg.neg</span></div>
-  <div class="ifcard misc"><span class="op">!a</span><span class="name">Not.not</span></div>
-  <div class="ifcard bit"><span class="op">a &amp; b</span><span class="name">BitAnd.bitand</span></div>
-  <div class="ifcard bit"><span class="op">a | b</span><span class="name">BitOr.bitor</span></div>
-  <div class="ifcard bit"><span class="op">a ^ b</span><span class="name">BitXor.bitxor</span></div>
-  <div class="ifcard bit"><span class="op">a &lt;&lt; b</span><span class="name">Shl.shl</span></div>
-  <div class="ifcard bit"><span class="op">a &gt;&gt; b</span><span class="name">Shr.shr</span></div>
+  <div class="ifcard arith"><span class="op">a + b</span><span class="name">add method</span></div>
+  <div class="ifcard arith"><span class="op">a - b</span><span class="name">sub method</span></div>
+  <div class="ifcard arith"><span class="op">a * b</span><span class="name">mul method</span></div>
+  <div class="ifcard arith"><span class="op">a / b</span><span class="name">div method</span></div>
+  <div class="ifcard arith"><span class="op">a % b</span><span class="name">mod method</span></div>
+  <div class="ifcard arith"><span class="op">-a</span><span class="name">neg method</span></div>
+  <div class="ifcard misc"><span class="op">!a</span><span class="name">not method</span></div>
+  <div class="ifcard bit"><span class="op">a &amp; b</span><span class="name">bitand method</span></div>
+  <div class="ifcard bit"><span class="op">a | b</span><span class="name">bitor method</span></div>
+  <div class="ifcard bit"><span class="op">a ^ b</span><span class="name">bitxor method</span></div>
+  <div class="ifcard bit"><span class="op">a &lt;&lt; b</span><span class="name">shl method</span></div>
+  <div class="ifcard bit"><span class="op">a &gt;&gt; b</span><span class="name">shr method</span></div>
   <div class="ifcard cmp"><span class="op">a == b</span><span class="name">Eq.eq</span></div>
-  <div class="ifcard cmp"><span class="op">a != b</span><span class="name">Eq.ne</span></div>
+  <div class="ifcard cmp"><span class="op">a != b</span><span class="name">!Eq.eq</span></div>
   <div class="ifcard cmp"><span class="op">a &lt; b</span><span class="name">Ord.lt</span></div>
   <div class="ifcard cmp"><span class="op">a &lt;= b</span><span class="name">Ord.le</span></div>
   <div class="ifcard cmp"><span class="op">a &gt; b</span><span class="name">Ord.gt</span></div>
   <div class="ifcard cmp"><span class="op">a &gt;= b</span><span class="name">Ord.ge</span></div>
-  <div class="ifcard misc"><span class="op">x[i]</span><span class="name">Index.index</span></div>
-  <div class="ifcard misc"><span class="op">x[i] = v</span><span class="name">IndexMut.index_mut</span></div>
+  <div class="ifcard misc"><span class="op">x[i]</span><span class="name">index syntax</span></div>
+  <div class="ifcard misc"><span class="op">x[i] = v</span><span class="name">index assignment</span></div>
 </div>
 
 <div class="callout warn">
   <strong>NOT overloadable</strong>
   <code>&amp;&amp;</code>, <code>||</code>, <code>!</code> on <code>bool</code> are built-in and
   cannot be overloaded — they short-circuit, which can't be expressed as method calls.
-  <code>!</code> on user types <em>can</em> be overloaded (via <code>Not</code>).
+  <code>!</code> on user types <em>can</em> be overloaded with a <code>not</code> method.
 </div>
 
 <!-- =========================================================== -->
 <h2 id="arith">1. Arithmetic</h2>
 
-<pre><code>pub interface Add&lt;Rhs = Self, Output = Self&gt; { function add(self, rhs: Rhs): Output }
-pub interface Sub&lt;Rhs = Self, Output = Self&gt; { function sub(self, rhs: Rhs): Output }
-pub interface Mul&lt;Rhs = Self, Output = Self&gt; { function mul(self, rhs: Rhs): Output }
-pub interface Div&lt;Rhs = Self, Output = Self&gt; { function div(self, rhs: Rhs): Output }
-pub interface Mod&lt;Rhs = Self, Output = Self&gt; { function mod(self, rhs: Rhs): Output }
-pub interface Neg&lt;Output = Self&gt; { function neg(self): Output }</code></pre>
+<pre><code>// Operator protocol method names recognized by the checker today:
+// +  add(self, rhs)
+// -  sub(self, rhs)
+// *  mul(self, rhs)
+// /  div(self, rhs)
+// %  mod(self, rhs)
+// -x neg(self)</code></pre>
 
 <p>Primitives implement these for matching types. <code>str</code> implements
-<code>Add&lt;str, str&gt;</code> (concatenation).</p>
+<code>+</code> concatenation for <code>str + str</code>.</p>
 
-<pre><code>extend Vec3: Add&lt;f64, Vec3&gt; {
+<pre><code>extend Vec3 {
   function add(self, k: f64): Vec3 {
     Vec3 { x: self.x + k, y: self.y + k, z: self.z + k }
   }
 }</code></pre>
 
-<p><code>a + b</code> resolves by matching the types of <code>a</code> and <code>b</code> to the most specific <code>Add</code> impl.</p>
+<p><code>a + b</code> resolves by matching the left operand type and dispatching
+to its visible <code>add</code> method when one exists; otherwise primitive handling applies.</p>
 
 <!-- =========================================================== -->
 <h2 id="log">2. Logical</h2>
 
-<pre><code>pub interface Not&lt;Output = Self&gt; { function not(self): Output }
-
-// !mask on integers means bitwise NOT (Not impl on i32, i64, etc.)
-extend i32: Not&lt;i32&gt; {
+<pre><code>// !mask on integers means bitwise NOT.
+extend i32 {
   function not(self): i32 { ... }
 }</code></pre>
 
 <div class="callout">
   <strong>Bitwise NOT is <code>!</code>; <code>~</code> is an accepted synonym</strong>
   The canonical NOT operator is <code>!</code>. On integers it resolves to the
-  <code>Not</code> impl (bitwise NOT); on <code>bool</code> it is logical NOT — the
+  <code>not</code> method (bitwise NOT); on <code>bool</code> it is logical NOT — the
   compiler picks based on the operand type. The lexer also recognises <code>~</code>
   for users coming from C / Rust; <code>~x</code> on an integer is desugared to
   <code>!x</code> in the parser. Prefer <code>!</code> in new code.
@@ -176,18 +180,19 @@ extend i32: Not&lt;i32&gt; {
 <!-- =========================================================== -->
 <h2 id="bit">3. Bitwise</h2>
 
-<pre><code>pub interface BitAnd&lt;Rhs = Self, Output = Self&gt; { function bitand(self, rhs: Rhs): Output }
-pub interface BitOr&lt;Rhs = Self, Output = Self&gt;  { function bitor(self, rhs: Rhs): Output }
-pub interface BitXor&lt;Rhs = Self, Output = Self&gt; { function bitxor(self, rhs: Rhs): Output }
-pub interface Shl&lt;Rhs = Self, Output = Self&gt;    { function shl(self, rhs: Rhs): Output }
-pub interface Shr&lt;Rhs = Self, Output = Self&gt;    { function shr(self, rhs: Rhs): Output }</code></pre>
+<pre><code>// Operator protocol method names recognized by the checker today:
+// &amp;   bitand(self, rhs)
+// |   bitor(self, rhs)
+// ^   bitxor(self, rhs)
+// &lt;&lt;  shl(self, rhs)
+// &gt;&gt;  shr(self, rhs)</code></pre>
 
 <div class="callout warn">
   <strong>Two key rules</strong>
   <ul>
     <li>Shift right on signed integers is <strong>arithmetic</strong> (sign-extending).</li>
     <li>Shifting by <code>&gt;= width(T)</code> <strong>panics</strong> in both debug and release.</li>
-    <li><code>|</code> in type position constructs unions; in expression position it is <code>BitOr</code>. Context disambiguates.</li>
+    <li><code>|</code> in type position constructs unions; in expression position it uses the bitwise-OR protocol. Context disambiguates.</li>
   </ul>
 </div>
 
@@ -196,58 +201,45 @@ pub interface Shr&lt;Rhs = Self, Output = Self&gt;    { function shr(self, rhs: 
 
 <pre><code>pub interface Eq {
   function eq(self, other: Self): bool
-  function ne(self, other: Self): bool { !self.eq(other) }
 }</code></pre>
+
+<p><code>!=</code> is defined by the checker as the negation of <code>eq</code>;
+there is no separate importable <code>ne</code> method in the current
+<code>core:prelude.Eq</code> contract.</p>
 
 <p>Primitives have built-in <code>Eq</code>. User types must implement it explicitly — there is
 <strong>no</strong> implicit field-by-field equality. Derive with <code>@derive(Eq)</code>
 (see <a href="22-macros.html">22-macros</a>).</p>
 
 <!-- =========================================================== -->
-<h2 id="ord">5. Ordering</h2>
+<h2 id="ord">5. Ordering comparisons</h2>
 
-<pre><code>pub type Ordering = Less | Equal | Greater
-pub struct Less;
-pub struct Equal;
-pub struct Greater;
-
-pub interface Ord: Eq {
-  function cmp(self, other: Self): Ordering
-
-  function lt(self, other: Self): bool { self.cmp(other) is Less }
-  function le(self, other: Self): bool {
-    var o = self.cmp(other)
-    o is Less || o is Equal
-  }
-  function gt(self, other: Self): bool { self.cmp(other) is Greater }
-  function ge(self, other: Self): bool {
-    var o = self.cmp(other)
-    o is Greater || o is Equal
-  }
+<pre><code>pub interface Ord {
+  function lt(self, other: Self): bool
+  function le(self, other: Self): bool
+  function gt(self, other: Self): bool
+  function ge(self, other: Self): bool
 }</code></pre>
 
 <p>Numeric primitives and <code>char</code> implement <code>Ord</code>. <code>str</code>
 implements <code>Ord</code> (lexicographic by Unicode scalar values). <code>bool</code> and
-<code>null</code> do <strong>not</strong>.</p>
+<code>null</code> do <strong>not</strong>. This comparison contract is separate from the
+memory-ordering value type in <code>core:sync:atomic.Ordering</code>; comparison
+operators do not construct or return an <code>Ordering</code> enum.</p>
 
 <!-- =========================================================== -->
 <h2 id="idx">6. Indexing</h2>
 
-<pre><code>pub interface Index&lt;Idx, Output&gt; {
-  function index(self, i: Idx): Output
-}
-
-pub interface IndexMut&lt;Idx, Output&gt;: Index&lt;Idx, Output&gt; {
-  function index_mut(self, i: Idx, v: Output)
-}</code></pre>
-
-<p>Out-of-bounds behavior is per-type. <code>List&lt;T&gt;</code> and <code>Map&lt;K, V&gt;</code>
-panic on <code>[]</code> for missing or out-of-range; use <code>.get(i)</code>/<code>.get(k)</code>
+<p>Indexing is compiler-recognized syntax for collection-like layouts and future
+indexable user-type protocols. The stable implemented surface today is the
+built-in collection behavior for <code>List&lt;T&gt;</code> and <code>Map&lt;K, V&gt;</code>,
+which panic on <code>[]</code> for missing or out-of-range; use <code>.get(i)</code>/<code>.get(k)</code>
 for the <code>T | null</code> variant.</p>
 
-<p>A type can implement multiple <code>Index&lt;Idx, Output&gt;</code> impls for different
-<code>Idx</code> types — e.g. a <code>Matrix</code> indexed by both <code>i64</code> and
-<code>(i64, i64)</code>.</p>
+<p>Importable <code>Index</code> / <code>IndexMut</code> interfaces are not part of the
+current stdlib catalog. Adding them as real user-facing interfaces should be a
+deliberate language-design step, because it changes both the named
+<code>core:prelude</code> surface and operator dispatch rules.</p>
 
 <!-- =========================================================== -->
 <h2 id="hash">7. Hashing</h2>
@@ -370,7 +362,7 @@ resources, log, etc.</p>
 
     <g transform="translate(670, 30)">
       <rect width="220" height="50" rx="6" fill="#f3eefa" stroke="#6b4ba8" stroke-width="2"/>
-      <text x="110" y="30" text-anchor="middle" font-size="13">Add&lt;str,str&gt; · ToStr</text>
+      <text x="110" y="30" text-anchor="middle" font-size="13">str + str · ToStr</text>
     </g>
 
     <g transform="translate(40, 110)">
@@ -404,10 +396,12 @@ pub struct Person { pub name: str, pub age: i32 }
 // "Person { name: Alice, age: 30 }"</code></pre>
 
 <div class="callout">
-  <strong>No <code>Display</code> / <code>Debug</code> split</strong>
-  Some languages distinguish user-facing from developer-facing stringification. This spec
-  collapses them into one <code>ToStr</code>. Rationale: most string output is logs or UI
-  (which goes through a localization layer anyway). One interface, smaller surface.
+  <strong>Language-level stringification uses <code>ToStr</code></strong>
+  Interpolation and <code>value as str</code> both lower through <code>ToStr</code>.
+  The library-level <code>std:fmt</code> module adds ordinary <code>Display</code> and
+  <code>Debug</code> contracts for APIs that need to distinguish user-facing and
+  developer-facing rendering, but those contracts do not change interpolation
+  semantics.
 </div>
 
 <p>For numeric primitives, <code>value as str</code> is sugar for <code>value.to_str()</code> —
@@ -456,9 +450,10 @@ at the operator level.</p>
 <!-- =========================================================== -->
 <h2 id="dispatch">13. Operator overloading and dispatch</h2>
 
-<p>Operator method calls follow the same monomorphization / dyn-dispatch rules as any other
-method call (see <a href="11-generics.html">11-generics</a>). Operators on generic-bounded types
-compile to direct calls; operators on interface-typed values use vtable dispatch.</p>
+<p>Resolved operator method calls follow the same monomorphization rules as any
+other method call (see <a href="11-generics.html">11-generics</a>). Interface-backed
+operators such as <code>Eq.eq</code> and <code>Ord.lt</code> use the normal interface dispatch
+path when the operand is interface-typed.</p>
 
 <!-- =========================================================== -->
 <h2 id="nobespoke">14. No bespoke operator definitions</h2>
@@ -466,7 +461,7 @@ compile to direct calls; operators on interface-typed values use vtable dispatch
 <div class="callout warn">
   <strong>No new operators</strong>
   You can only overload the operators in §<a href="#map">Map</a> by implementing the corresponding
-  interface. There is no way to define new operator symbols or override operator precedence per-type.
+  protocol method. There is no way to define new operator symbols or override operator precedence per-type.
 </div>
 
 </body>

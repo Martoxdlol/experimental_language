@@ -1,0 +1,19 @@
+//@ kind: run
+//@ description: core:ffi exports C-width aliases and opaque C helper types through the stdlib catalog
+//@ stdout:
+//~ n=42 size=8 ptr_null=true
+import { println } from "std:io";
+import { c_int, c_size_t, c_void, c_float, c_double } from "core:ffi";
+
+function add_one(x: c_int): c_int {
+  x + 1
+}
+
+function main() {
+  var n: c_int = add_one(41i32);
+  var size: c_size_t = 8usize;
+  var raw: *c_void | null = null;
+  var f: c_float = 1.5f32;
+  var d: c_double = f as f64;
+  println("n=${n} size=${size} ptr_null=${raw is null}");
+}

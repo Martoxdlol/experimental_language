@@ -1,0 +1,9 @@
+//@ kind: compile-error
+//@ description: std:fs follows the near-empty prelude rule; Path is not visible unless imported
+//@ stderr: cannot find type `Path`
+//@ stderr: cannot find value `Path` in scope
+function make(): Path {
+  Path.new("src/lib.otter")
+}
+
+function main() {}

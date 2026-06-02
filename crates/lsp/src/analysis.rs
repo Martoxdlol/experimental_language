@@ -876,6 +876,8 @@ pub fn builtin_signature(b: Builtin) -> &'static str {
     match b {
         Builtin::Print => "print(str): null",
         Builtin::Println => "println(str): null",
+        Builtin::Eprint => "eprint(str): null",
+        Builtin::Eprintln => "eprintln(str): null",
         Builtin::Panic => "panic(str): never",
         Builtin::PanicWith => "panic_with(value: dynamic): never",
         Builtin::Exit => "exit(i32): never",

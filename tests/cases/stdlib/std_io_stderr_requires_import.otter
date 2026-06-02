@@ -1,0 +1,11 @@
+//@ kind: compile-error
+//@ description: std:io stream helpers and handles follow the near-empty prelude rule
+//@ stderr: cannot find value `eprintln` in scope
+//@ stderr: cannot find value `stdin` in scope
+//@ stderr: cannot find value `stdout` in scope
+
+function main() {
+  eprintln("hi");
+  stdin();
+  stdout().flush();
+}

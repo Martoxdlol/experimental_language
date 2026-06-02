@@ -1,0 +1,10 @@
+//@ kind: compile-error
+//@ description: std:task follows the near-empty prelude rule; task handles require explicit imports
+//@ stderr: cannot find type `Task`
+//@ stderr: cannot find type `Cancelled`
+
+function needs_task(t: Task, c: Cancelled): null {
+  null
+}
+
+function main() {}

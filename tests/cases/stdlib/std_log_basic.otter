@@ -1,0 +1,111 @@
+//@ kind: run
+//@ description: std:log exposes portable log levels, records, marker values, and default line logging
+//@ stdout:
+//~ levels=TRACE DEBUG INFO WARN ERROR true
+//~ level-order=0/1/2/3/4 true true false
+//~ record=[INFO] demo: boot request=42 true true
+//~ Record { level: INFO, message: "boot", module: "demo", fields: request=42, time: SystemTime { nanos_since_unix_epoch: 123000000000 } }
+//~ access=INFO boot demo 1 42 true false 123000000000
+//~ built=[WARN] worker: retry request=42 attempt=2 orig=[INFO] demo: boot request=42 snap=1
+//~ fields=[WARN] worker: retry attempt=2 count=1 has=false/true cleared=[WARN] worker: retry count=0 missing=true orig=[WARN] worker: retry request=42 attempt=2
+//~ helper-snapshot=[INFO] svc: helper request=42 source=changed replacement=[INFO] svc: helper source=external extra=1 source_fields=1 time=456000000000
+//~ field-order-eq=true hash=true render-left=[INFO] svc: order a=1 b=2 render-right=[INFO] svc: order a=1 b=2
+//~ marker=logger already set true true LoggerAlreadySet
+//~ [INFO] hello
+//~ [INFO] with-field request=42
+//~ [TRACE] trace-field request=42
+//~ [DEBUG] debug-field request=42
+//~ [WARN] warn-field request=42
+//~ [ERROR] error-field request=42
+import { Map } from "core:collections";
+import { println } from "std:io";
+import { Debug } from "std:fmt";
+import { SystemTime } from "std:time";
+import {
+  Level,
+  Record,
+  LoggerAlreadySet,
+  level_trace,
+  level_debug,
+  level_info,
+  level_warn,
+  level_error,
+  info,
+  info_with,
+  trace_with,
+  debug_with,
+  warn_with,
+  error_with,
+  record,
+} from "std:log";
+
+function render_debug(value: Debug): str {
+  value.debug()
+}
+
+function main() {
+  var trace: Level = level_trace();
+  var debug = level_debug();
+  var info_level = level_info();
+  var warn = level_warn();
+  var error = level_error();
+  println("levels=${trace.to_str()} ${debug.to_str()} ${info_level.to_str()} ${warn.to_str()} ${error.to_str()} ${debug.equals(level_debug())}");
+  println("level-order=${trace.rank()}/${debug.rank()}/${info_level.rank()}/${warn.rank()}/${error.rank()} ${warn.is_at_least(info_level)} ${error.is_at_least(warn)} ${debug.is_at_least(warn)}");
+
+  var fields = Map.new<str, str>();
+  fields["request"] = "42";
+  var rec = Record {
+    level: info_level,
+    message: "boot",
+    module: "demo",
+    fields: fields,
+    time: SystemTime.from_unix_nanos(123000000000),
+  };
+  var rec_copy = rec.clone();
+  println("record=${rec.to_str()} ${rec == rec_copy} ${rec.hash() == rec_copy.hash()}");
+  println(render_debug(rec));
+  var field_snapshot = rec.fields();
+  field_snapshot["request"] = "changed";
+  println("access=${rec.level().to_str()} ${rec.message()} ${rec.module()} ${rec.field_count()} ${rec.field("request") as str} ${rec.has_field("request")} ${rec.has_field("missing")} ${rec.time().as_unix_nanos()}");
+  var built = rec
+    .with_level(level_warn())
+    .with_message("retry")
+    .with_module("worker")
+    .with_field("attempt", "2");
+  println("built=${built.to_str()} orig=${rec.to_str()} snap=${field_snapshot.size()}");
+  var without_request = built.without_field("request");
+  var cleared = without_request.clear_fields();
+  println("fields=${without_request.to_str()} count=${without_request.field_count()} has=${without_request.has_field("request")}/${without_request.has_field("attempt")} cleared=${cleared.to_str()} count=${cleared.field_count()} missing=${cleared.field("attempt") is null} orig=${built.to_str()}");
+
+  var helper_fields = Map.new<str, str>();
+  helper_fields["request"] = "42";
+  var helper = record(level_info(), "helper", "svc", helper_fields);
+  helper_fields["request"] = "changed";
+  var replacement_fields = Map.new<str, str>();
+  replacement_fields["source"] = "external";
+  var replacement = helper.with_fields(replacement_fields).with_field("extra", "1");
+  replacement_fields["source"] = "changed";
+  var timed = replacement.with_time(SystemTime.from_unix_nanos(456000000000));
+  println("helper-snapshot=${helper.to_str()} source=${helper_fields["request"]} replacement=${replacement.to_str()} source_fields=${replacement_fields.size()} time=${timed.time().as_unix_nanos()}");
+
+  var left_fields = Map.new<str, str>();
+  left_fields["a"] = "1";
+  left_fields["b"] = "2";
+  var right_fields = Map.new<str, str>();
+  right_fields["b"] = "2";
+  right_fields["a"] = "1";
+  var left = record(level_info(), "order", "svc", left_fields).with_time(SystemTime.from_unix_nanos(789000000000));
+  var right = record(level_info(), "order", "svc", right_fields).with_time(SystemTime.from_unix_nanos(789000000000));
+  println("field-order-eq=${left == right} hash=${left.hash() == right.hash()} render-left=${left.to_str()} render-right=${right.to_str()}");
+
+  var marker = LoggerAlreadySet {};
+  var marker_copy = marker.clone();
+  println("marker=${marker.to_str()} ${marker == marker_copy} ${marker.hash() == marker_copy.hash()} ${render_debug(marker)}");
+
+  info("hello");
+  info_with("with-field", fields);
+  trace_with("trace-field", fields);
+  debug_with("debug-field", fields);
+  warn_with("warn-field", fields);
+  error_with("error-field", fields);
+}

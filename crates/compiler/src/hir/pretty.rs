@@ -14,12 +14,37 @@ use super::*;
 
 /// Render a whole program's HIR to a stable string.
 pub fn print_program(hir: &Hir, tcx: &TyCtxt, program: &Program) -> String {
+    print_program_with_filter(hir, tcx, program, |_| true)
+}
+
+/// Render the HIR for definitions originating in real source files below
+/// `file_count`. Bundled toolchain sources use high synthetic file ids, so this
+/// keeps `otter_fusion emit hir <file>` focused on the user's program while the
+/// full HIR remains available to codegen and tests through [`print_program`].
+pub fn print_program_for_files(
+    hir: &Hir,
+    tcx: &TyCtxt,
+    program: &Program,
+    file_count: usize,
+) -> String {
+    print_program_with_filter(hir, tcx, program, |def| {
+        program.def(def).span.file.0 < file_count as u32
+    })
+}
+
+fn print_program_with_filter(
+    hir: &Hir,
+    tcx: &TyCtxt,
+    program: &Program,
+    include_def: impl Fn(DefId) -> bool,
+) -> String {
     let mut p = Printer {
         hir,
         tcx,
         program,
         out: String::new(),
         indent: 0,
+        include_def: &include_def,
     };
     p.program();
     p.out
@@ -31,6 +56,7 @@ struct Printer<'a> {
     program: &'a Program,
     out: String,
     indent: usize,
+    include_def: &'a dyn Fn(DefId) -> bool,
 }
 
 impl<'a> Printer<'a> {
@@ -57,6 +83,7 @@ impl<'a> Printer<'a> {
     fn program(&mut self) {
         // Structs, in DefId order.
         let mut struct_defs: Vec<DefId> = self.hir.structs.keys().copied().collect();
+        struct_defs.retain(|def| (self.include_def)(*def));
         struct_defs.sort();
         for def in struct_defs {
             let layout = match &self.hir.structs[&def] {
@@ -83,6 +110,7 @@ impl<'a> Printer<'a> {
 
         // Extern signatures, in DefId order.
         let mut extern_defs: Vec<DefId> = self.hir.extern_sigs.keys().copied().collect();
+        extern_defs.retain(|def| (self.include_def)(*def));
         extern_defs.sort();
         for def in extern_defs {
             let sig = &self.hir.extern_sigs[&def];
@@ -98,6 +126,7 @@ impl<'a> Printer<'a> {
 
         // Bodies, in DefId order.
         let mut body_defs: Vec<DefId> = self.hir.bodies.keys().copied().collect();
+        body_defs.retain(|def| (self.include_def)(*def));
         body_defs.sort();
         for def in body_defs {
             self.body(def);
@@ -550,6 +579,8 @@ fn intrinsic_str(i: &Intrinsic) -> &'static str {
         Intrinsic::YieldNow => "yield-now",
         Intrinsic::AsyncSleep => "async-sleep",
         Intrinsic::AsyncTimeout { .. } => "async-timeout",
+        Intrinsic::TimeMonotonicNanos => "time-monotonic-nanos",
+        Intrinsic::TimeSystemNanos => "time-system-nanos",
         Intrinsic::FutureCancel => "future-cancel",
         Intrinsic::ForeignAlloc { .. } => "foreign-alloc",
         Intrinsic::ForeignFree => "foreign-free",

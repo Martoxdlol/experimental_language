@@ -639,6 +639,11 @@ impl<'a> Checker<'a> {
                 if let Some(idef) = self.prog.resolve_type_in(ext_module, &name.name) {
                     if self.prog.def(idef).kind == DefKind::Interface {
                         self.hir.iface_impls.insert((tdef, idef), ext);
+                        for sup in self.iface_supers_transitive(idef) {
+                            if self.prog.def(sup).kind == DefKind::Interface {
+                                self.hir.iface_impls.insert((tdef, sup), ext);
+                            }
+                        }
                     }
                 }
             }

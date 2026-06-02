@@ -1,0 +1,38 @@
+//@ kind: compile-error
+//@ description: std:fmt contracts are not in the prelude
+//@ stderr: cannot find type `Display`
+//@ stderr: cannot find type `Debug`
+//@ stderr: cannot find type `FmtSink`
+//@ stderr: cannot find type `FmtError`
+struct Thing {}
+
+extend Thing: Display {
+  function display(self): str { "thing" }
+  function to_str(self): str { self.display() }
+}
+
+extend Thing: Debug {
+  function debug(self): str { "Thing" }
+}
+
+struct Capture {}
+
+extend Capture: FmtSink {
+  function write_str(self, s: str): null | FmtError {
+    FmtError { message: s }
+  }
+}
+
+function render(value: Display): str {
+  value.display()
+}
+
+function render_debug(value: Debug): str {
+  value.debug()
+}
+
+function write(sink: FmtSink): null | FmtError {
+  sink.write_str("x")
+}
+
+function main() {}

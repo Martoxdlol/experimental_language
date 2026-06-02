@@ -1,0 +1,43 @@
+//@ kind: compile-error
+//@ description: std:process values and helpers are not available without an explicit import
+//@ stderr: cannot find type `Command`
+//@ stderr: cannot find type `ExitStatus`
+//@ stderr: cannot find type `Output`
+//@ stderr: cannot find value `Command` in scope
+//@ stderr: cannot find value `ExitStatus` in scope
+//@ stderr: cannot find value `Output` in scope
+//@ stderr: cannot find value `command` in scope
+//@ stderr: cannot find value `exit_status` in scope
+//@ stderr: cannot find value `output` in scope
+//@ stderr: cannot find value `args` in scope
+//@ stderr: cannot find value `env` in scope
+//@ stderr: cannot find value `env_all` in scope
+//@ stderr: cannot find value `set_env` in scope
+//@ stderr: cannot find value `exit` in scope
+//@ stderr: cannot find value `abort` in scope
+
+import { Bytes } from "std:bytes";
+
+function make_command(): Command {
+  Command.new("otter_fusion")
+}
+
+function make_status(): ExitStatus {
+  ExitStatus.exited(0i32)
+}
+
+function make_output(): Output {
+  Output.new(ExitStatus.exited(0i32), Bytes.new(), Bytes.new())
+}
+
+function main() {
+  var cmd = command("otter_fusion");
+  var status = exit_status(0i32, null);
+  var captured = output(status, Bytes.new(), Bytes.new());
+  args();
+  env("OTTER_FUSION_PROCESS_IMPORT_CHECK");
+  env_all();
+  set_env("A", "B");
+  exit(0i32);
+  abort();
+}

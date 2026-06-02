@@ -1399,14 +1399,16 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
 
     fn h_builtin_call(&mut self, b: Builtin, args: &[hir::Expr]) -> CgResult<Option<Value>> {
         match b {
-            Builtin::Print | Builtin::Println => {
+            Builtin::Print | Builtin::Println | Builtin::Eprint | Builtin::Eprintln => {
                 let arg = self.h_expr(&args[0])?.ok_or_else(|| {
                     CodegenError::new(args[0].span, "builtin argument has no value")
                 })?;
-                let name = if matches!(b, Builtin::Print) {
-                    "lang_print"
-                } else {
-                    "lang_println"
+                let name = match b {
+                    Builtin::Print => "lang_print",
+                    Builtin::Println => "lang_println",
+                    Builtin::Eprint => "lang_eprint",
+                    Builtin::Eprintln => "lang_eprintln",
+                    _ => unreachable!("print builtin branch only handles print builtins"),
                 };
                 self.call_intrinsic(name, &[PTR], None, &[arg]);
                 Ok(None)
@@ -3059,6 +3061,8 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             hir::Intrinsic::CollectionCtor => {
                 if let Some((kt, vt)) = self.map_kv_of(ty) {
                     Ok(Some(self.gen_map_new(kt, vt)))
+                } else if let Some(elem) = self.set_elem_of(ty) {
+                    Ok(Some(self.gen_set_new(elem)))
                 } else if let Some(elem) = self.list_elem_of(ty) {
                     Ok(Some(self.gen_list_new(elem)))
                 } else {
@@ -3265,6 +3269,12 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                     &[fut, ms, t_id, tp, tu, to, rt, pt],
                 ))
             }
+            hir::Intrinsic::TimeMonotonicNanos => {
+                Ok(self.call_intrinsic("lang_time_monotonic_nanos", &[], Some(types::I64), &[]))
+            }
+            hir::Intrinsic::TimeSystemNanos => {
+                Ok(self.call_intrinsic("lang_time_system_nanos", &[], Some(types::I64), &[]))
+            }
             hir::Intrinsic::FutureCancel => {
                 let fut = self.h_expr(&args[0])?.ok_or_else(|| {
                     CodegenError::new(args[0].span, "future cancel receiver has no value")
@@ -3292,8 +3302,9 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 if npo_union(self.cx.analysis, src).is_some() {
                     return Ok(v);
                 }
+                let target = resolve_shallow(self.cx.analysis, *target, &self.subst);
                 let ptr = v.expect("unbox target is a boxed pointer");
-                match clty_of(self.cx.analysis, *target) {
+                match clty_of(self.cx.analysis, target) {
                     Some(ct) => Ok(Some(self.b.ins().load(ct, MemFlags::trusted(), ptr, 8))),
                     None => Ok(None),
                 }

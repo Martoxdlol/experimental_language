@@ -1,0 +1,40 @@
+//@ kind: run
+//@ description: core:sync:atomic exposes the compiler/runtime atomic Ordering value contract
+//@ stdout:
+//~ relaxed Relaxed true true
+//~ acquire Acquire true
+//~ release Release true
+//~ acq_rel AcqRel true
+//~ seq_cst SeqCst true
+//~ helper=true hash=true clone=SeqCst
+
+import { println } from "std:io";
+import {
+  AcqRel,
+  Acquire,
+  Ordering,
+  Relaxed,
+  Release,
+  SeqCst,
+  ordering_acq_rel,
+  ordering_acquire,
+  ordering_relaxed,
+  ordering_release,
+  ordering_seq_cst,
+} from "core:sync:atomic";
+
+function show(label: str, value: Ordering, expected: Ordering): str {
+  "${label} ${value.debug()} ${value.equals(expected)}"
+}
+
+function main() {
+  var relaxed = ordering_relaxed();
+  println("${relaxed.to_str()} ${relaxed.debug()} ${relaxed.equals(Relaxed {})} ${relaxed.hash() == ordering_relaxed().hash()}");
+  println(show("acquire", ordering_acquire(), Acquire {}));
+  println(show("release", ordering_release(), Release {}));
+  println(show("acq_rel", ordering_acq_rel(), AcqRel {}));
+  println(show("seq_cst", ordering_seq_cst(), SeqCst {}));
+  var cloned = ordering_seq_cst().clone();
+  var release: Ordering = Release {};
+  println("helper=${ordering_acquire().to_str() == "acquire"} hash=${ordering_release().hash() == release.hash()} clone=${cloned.debug()}");
+}

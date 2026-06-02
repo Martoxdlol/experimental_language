@@ -1,0 +1,228 @@
+//@ kind: run
+//@ description: std:http exposes portable HTTP value types without client/server networking
+//@ stdout:
+//~ 200 OK
+//~ true true I'm a teapot
+//~ classes=true true true true true unknown=599
+//~ reasons=100 Continue|101 Switching Protocols|202 Accepted|301 Moved Permanently|302 Found|303 See Other|304 Not Modified|307 Temporary Redirect|308 Permanent Redirect
+//~ client-reasons=400 Bad Request|401 Unauthorized|403 Forbidden|405 Method Not Allowed|409 Conflict|418 I'm a Teapot|422 Unprocessable Content|429 Too Many Requests
+//~ server-reasons=501 Not Implemented|502 Bad Gateway|503 Service Unavailable|504 Gateway Timeout
+//~ status-extra=204 No Content|500 Internal Server Error|Elsewhere|true
+//~ status-builders=200 Fine|200 OK|Fine|true|200 OK
+//~ GET/POST/REPORT
+//~ true false
+//~ method-eq=true/true/false version-eq=true/true/false
+//~ header-edge=true true true true 0 true 0
+//~ header-set=1 b mixed: b empty=false values=1
+//~ header-clear=0 true 0 1
+//~ true b=2 2
+//~ false
+//~ 2 3
+//~ entries=set-cookie: a=1|set-cookie: b=2 names=set-cookie entry_eq=true hash_eq=true HeaderEntry { name: "set-cookie", value: "a=1" }
+//~ snapshot=2 current=4
+//~ hash-contract status=true headers=true/true req=true/true resp=true/true
+//~ GET https://example.com/search?q=otter HTTP/2
+//~ 201 Created HTTP/1.1
+//~ true
+//~ Method("GET")
+//~ Custom("REPORT")
+//~ Status { code: 418, reason: "I'm a teapot" }
+//~ Headers { set-cookie: ["a=1", "b=2"] }
+//~ HttpRequest { method: Method("GET"), url: Url("https://example.com/search?q=otter"), headers: Headers { set-cookie: ["a=1", "b=2"] }, body: bytes[79,75], version: HttpVersion("HTTP/2") }
+//~ HttpResponse { status: Status { code: 201, reason: null }, headers: Headers {  }, body: bytes[], version: HttpVersion("HTTP/1.1") }
+//~ true true
+//~ false
+//~ true true
+//~ true
+//~ true true
+//~ true
+//~ ctor-snap req=1/2 resp=1/2 source=2/3
+//~ built=POST 1 text/plain 1 HTTP/1.1 orig=2 HTTP/2 body=2
+//~ req-snap headers=2 body=2 removed=false cleared=0 built=3 builder=1/1
+//~ resp-built=404 Not Found 2 text/plain HTTP/2 orig=0 HTTP/1.1 body=1
+//~ resp-snap headers=2 body=0 removed=false cleared=0 built=2 builder=1/1
+
+import { Map } from "core:collections";
+import { Clone, Eq, Hash, ToStr } from "core:prelude";
+import { Debug } from "std:fmt";
+import { println } from "std:io";
+import { Bytes } from "std:bytes";
+import { url } from "std:net:types";
+import {
+  Headers,
+  HeaderEntry,
+  Status,
+  header_entry,
+  headers,
+  http_11,
+  http_2,
+  http_request,
+  http_response,
+  method_custom,
+  method_get,
+  method_post,
+  http_3,
+  status,
+} from "std:http";
+
+function debug(value: Debug): str {
+  value.debug()
+}
+
+function main() {
+  var ok = Status.ok();
+  var missing = Status.not_found();
+  var custom = status(418u16, "I'm a teapot");
+  println(ok.to_str());
+  println("${ok.is_success()} ${missing.is_client_error()} ${custom.reason_or_default()}");
+  println("classes=${Status.continue_().is_informational()} ${Status.accepted().is_success()} ${Status.moved_permanently().is_redirection()} ${Status.bad_request().is_client_error()} ${Status.service_unavailable().is_server_error()} unknown=${status(599u16, null).to_str()}");
+  println("reasons=${Status.continue_().to_str()}|${Status.switching_protocols().to_str()}|${Status.accepted().to_str()}|${Status.moved_permanently().to_str()}|${Status.found().to_str()}|${Status.see_other().to_str()}|${Status.not_modified().to_str()}|${Status.temporary_redirect().to_str()}|${Status.permanent_redirect().to_str()}");
+  println("client-reasons=${Status.bad_request().to_str()}|${Status.unauthorized().to_str()}|${Status.forbidden().to_str()}|${Status.method_not_allowed().to_str()}|${Status.conflict().to_str()}|${status(418u16, null).to_str()}|${Status.unprocessable_content().to_str()}|${Status.too_many_requests().to_str()}");
+  println("server-reasons=${Status.not_implemented().to_str()}|${Status.bad_gateway().to_str()}|${Status.service_unavailable().to_str()}|${Status.gateway_timeout().to_str()}");
+  println("status-extra=${Status.no_content().to_str()}|${Status.internal_err().to_str()}|${status(302u16, "Elsewhere").reason() as str}|${status(599u16, null).reason_or_default() == ""}");
+  var reasoned = ok.with_reason("Fine");
+  var cleared_reason = reasoned.without_reason();
+  println("status-builders=${reasoned.to_str()}|${cleared_reason.to_str()}|${reasoned.reason() as str}|${cleared_reason.reason() is null}|${ok.to_str()}");
+
+  var get = method_get();
+  var post = method_post();
+  var custom_method = method_custom("REPORT");
+  println(get.to_str() + "/" + post.to_str() + "/" + custom_method.to_str());
+  println("${get.to_str() == method_get().to_str()} ${get.to_str() == custom_method.to_str()}");
+  println("method-eq=${get.eq(method_get())}/${get == method_get()}/${get == custom_method} version-eq=${http_2().eq(http_2())}/${http_2() == http_2()}/${http_2() == http_3()}");
+
+  var edge_headers = Headers.new();
+  println("header-edge=${edge_headers.get("missing") is null} ${edge_headers.get_all("missing").is_empty()} ${edge_headers.names().is_empty()} ${edge_headers.entries().is_empty()} ${edge_headers.size()} ${edge_headers.is_empty()} ${edge_headers.value_count()}");
+  edge_headers.append("MiXeD", "a");
+  edge_headers.append("mixed", "old");
+  edge_headers.set("MIXED", "b");
+  println("header-set=${edge_headers.get_all("mixed").size()} ${edge_headers.get("mixed") as str} ${edge_headers.entries()[0].to_str()} empty=${edge_headers.is_empty()} values=${edge_headers.value_count()}");
+  var before_clear = edge_headers.get_all("mixed");
+  edge_headers.clear();
+  println("header-clear=${edge_headers.size()} ${edge_headers.is_empty()} ${edge_headers.value_count()} ${before_clear.size()}");
+
+  var h = headers();
+  h.set("Content-Type", "text/plain");
+  h.append("Set-Cookie", "a=1");
+  h.append("set-cookie", "b=2");
+  println("${h.contains("content-type")} ${h.get("SET-COOKIE") as str} ${h.get_all("set-Cookie").size()}");
+  h.remove("CONTENT-TYPE");
+  println("${h.contains("content-type")}");
+
+  var copied = h.clone();
+  h.append("set-cookie", "c=3");
+  println("${copied.get_all("set-cookie").size()} ${h.get_all("set-cookie").size()}");
+
+  var entries = copied.entries();
+  var names = copied.names();
+  var first_entry = entries[0];
+  var same_entry = header_entry("Set-Cookie", "a=1");
+  println("entries=${entries[0].to_str()}|${entries[1].to_str()} names=${names[0]} entry_eq=${first_entry == same_entry} hash_eq=${first_entry.hash() == same_entry.hash()} ${debug(first_entry)}");
+  h.append("set-cookie", "d=4");
+  println("snapshot=${entries.size()} current=${h.entries().size()}");
+
+  var ordered_left = Headers.new();
+  ordered_left.append("A", "1");
+  ordered_left.append("B", "2");
+  ordered_left.append("B", "3");
+  var ordered_right = Headers.new();
+  ordered_right.append("b", "2");
+  ordered_right.append("B", "3");
+  ordered_right.append("a", "1");
+  var contract_body = Bytes.from_str("OK");
+  var contract_req_left = http_request(method_get(), url("https", null, "example.com", null, "/", Map.new<str, str>(), null), ordered_left, contract_body, http_11());
+  var contract_req_right = http_request(method_get(), url("https", null, "example.com", null, "/", Map.new<str, str>(), null), ordered_right, contract_body, http_11());
+  var contract_resp_left = http_response(Status.ok(), ordered_left, contract_body, http_11());
+  var contract_resp_right = http_response(Status.ok(), ordered_right, contract_body, http_11());
+  println("hash-contract status=${Status.ok().eq(Status.ok())} headers=${ordered_left.eq(ordered_right)}/${ordered_left.hash() == ordered_right.hash()} req=${contract_req_left.eq(contract_req_right)}/${contract_req_left.hash() == contract_req_right.hash()} resp=${contract_resp_left.eq(contract_resp_right)}/${contract_resp_left.hash() == contract_resp_right.hash()}");
+
+  var query = Map.new<str, str>();
+  query.set("q", "otter");
+  var target = url("https", null, "example.com", null, "/search", query, null);
+  var body = Bytes.new();
+  body.push(79u8);
+  body.push(75u8);
+  var req = http_request(method_get(), target, copied, body, http_2());
+  println(req.method().to_str() + " " + req.url().to_str() + " " + req.version().to_str());
+
+  var resp = http_response(Status.created(), Headers.new(), Bytes.new(), http_11());
+  println(resp.status().to_str() + " " + resp.version().to_str());
+  println("${req.method().hash() == method_get().hash()}");
+  println(get.debug());
+  println(custom_method.debug());
+  println(debug(custom));
+  println(debug(copied));
+  println(debug(req));
+  println(debug(resp));
+
+  var copied_again = copied.clone();
+  println("${copied_again == copied} ${copied_again.hash() == copied.hash()}");
+  copied_again.append("set-cookie", "z=9");
+  println("${copied_again == copied}");
+
+  var req_clone = req.clone();
+  println("${req_clone == req} ${req_clone.hash() == req.hash()}");
+  var req_clone_body = req_clone.body();
+  req_clone_body.push(33u8);
+  println("${req_clone == req}");
+
+  var resp_clone = resp.clone();
+  println("${resp_clone == resp} ${resp_clone.hash() == resp.hash()}");
+  var resp_clone_body = resp_clone.body();
+  resp_clone_body.push(1u8);
+  println("${resp_clone == resp}");
+
+  var source_headers = Headers.new();
+  source_headers.append("x", "1");
+  var source_body = Bytes.new();
+  source_body.push(1u8);
+  source_body.push(2u8);
+  var source_req = http_request(method_get(), target, source_headers, source_body, http_11());
+  var source_resp = http_response(Status.ok(), source_headers, source_body, http_11());
+  source_headers.append("x", "2");
+  source_body.push(3u8);
+  println("ctor-snap req=${source_req.headers().get_all("x").size()}/${source_req.body().size()} resp=${source_resp.headers().get_all("x").size()}/${source_resp.body().size()} source=${source_headers.get_all("x").size()}/${source_body.size()}");
+
+  var builder_body = Bytes.new();
+  builder_body.push(88u8);
+  var builder_headers = Headers.new();
+  builder_headers.append("builder", "one");
+  var built_req = req
+    .with_method(method_post())
+    .with_headers(builder_headers)
+    .with_header("Accept", "text/plain")
+    .with_set_header("SET-Cookie", "single=1")
+    .with_body(builder_body)
+    .with_version(http_11());
+  builder_headers.append("builder", "two");
+  builder_body.push(89u8);
+  println("built=${built_req.method().to_str()} ${built_req.headers().get_all("set-cookie").size()} ${built_req.headers().get("accept") as str} ${built_req.body().size()} ${built_req.version().to_str()} orig=${req.headers().get_all("set-cookie").size()} ${req.version().to_str()} body=${req.body().size()}");
+  var req_headers_snapshot = req.headers();
+  req_headers_snapshot.remove("set-cookie");
+  var req_body_snapshot = req.body();
+  req_body_snapshot.push(33u8);
+  var req_removed = built_req.without_header("ACCEPT");
+  var req_cleared = built_req.clear_headers();
+  println("req-snap headers=${req.headers().get_all("set-cookie").size()} body=${req.body().size()} removed=${req_removed.headers().contains("accept")} cleared=${req_cleared.headers().size()} built=${built_req.headers().size()} builder=${built_req.headers().get_all("builder").size()}/${built_req.body().size()}");
+
+  var resp_body = Bytes.new();
+  resp_body.push(1u8);
+  var resp_builder_headers = Headers.new();
+  resp_builder_headers.append("builder", "one");
+  var built_resp = resp
+    .with_status(Status.not_found())
+    .with_headers(resp_builder_headers)
+    .with_header("Accept", "text/plain")
+    .with_body(resp_body)
+    .with_version(http_2());
+  resp_builder_headers.append("builder", "two");
+  resp_body.push(2u8);
+  println("resp-built=${built_resp.status().to_str()} ${built_resp.headers().size()} ${built_resp.headers().get("accept") as str} ${built_resp.version().to_str()} orig=${resp.headers().size()} ${resp.version().to_str()} body=${built_resp.body().size()}");
+  var resp_headers_snapshot = built_resp.headers();
+  resp_headers_snapshot.remove("accept");
+  var resp_body_snapshot = resp.body();
+  resp_body_snapshot.push(2u8);
+  var resp_removed = built_resp.without_header("ACCEPT");
+  var resp_cleared = built_resp.clear_headers();
+  println("resp-snap headers=${built_resp.headers().size()} body=${resp.body().size()} removed=${resp_removed.headers().contains("accept")} cleared=${resp_cleared.headers().size()} built=${built_resp.headers().size()} builder=${built_resp.headers().get_all("builder").size()}/${built_resp.body().size()}");
+}

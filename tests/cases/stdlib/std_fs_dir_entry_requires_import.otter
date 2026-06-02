@@ -1,0 +1,14 @@
+//@ kind: compile-error
+//@ description: std:fs DirEntry is not available without an explicit import
+//@ stderr: cannot find type `DirEntry`
+//@ stderr: cannot find value `DirEntry`
+
+import { Path, regular_file } from "std:fs";
+
+function make(): DirEntry {
+  DirEntry.new(Path.new("src/lib.otter"), regular_file())
+}
+
+function main() {
+  var entry = DirEntry.new(Path.new("src/lib.otter"), regular_file());
+}

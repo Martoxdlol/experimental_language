@@ -1,0 +1,22 @@
+//@ kind: run
+//@ description: spawn widens a concrete Future implementation before scheduling it
+//@ stdout:
+//~ spawned=9
+import { println } from "std:io";
+import { Future, Ready, Pending, Context } from "core:async";
+
+struct Once {
+  value: i64,
+}
+
+extend Once: Future<i64> {
+  function poll(self, ctx: *Context): Ready<i64> | Pending {
+    Ready { value: self.value }
+  }
+}
+
+function main(): Future<null> async {
+  var task = spawn Once { value: 9 };
+  var value = await task;
+  println("spawned=${value}");
+}

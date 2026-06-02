@@ -89,10 +89,12 @@
 </p>
 
 <div class="callout">
-  <strong>Design principle: types live in <code>core:</code>, runtimes live in <code>std:</code></strong>
-  Standardizing data <em>shapes</em> early (HTTP request/response, JSON value, error chains,
-  reader/writer) prevents the JavaScript-style fragmentation where every library invents
-  incompatible types for the same concept. Implementations of those shapes can be third-party.
+  <strong>Design principle: <code>core:</code> is substrate, <code>std:</code> is the official library</strong>
+  Standardizing common data <em>shapes</em> early (HTTP request/response, JSON value,
+  error chains, reader/writer) prevents the JavaScript-style fragmentation where
+  every library invents incompatible types for the same concept. Those ordinary
+  library shapes live in <code>std:</code> unless the compiler/runtime gives them
+  special semantics.
 </div>
 
 <div class="toc">
@@ -100,24 +102,25 @@
   <ol>
     <li><a href="#tiers">The two tiers, revisited</a></li>
     <li><a href="#layering">Layering: shape vs runtime</a></li>
+    <li><a href="#implementation-architecture">Implementation architecture</a></li>
     <li><a href="#fragmentation">The Request/Response problem</a></li>
     <li><a href="#prelude-additions"><code>core:prelude</code> additions</a></li>
-    <li><a href="#collections"><code>core:collections</code> — List · Map · Set</a></li>
-    <li><a href="#io"><code>core:io</code> — Reader · Writer · Seeker</a></li>
-    <li><a href="#fmt"><code>core:fmt</code> — Display · Debug</a></li>
-    <li><a href="#error"><code>core:error</code> — error interface</a></li>
-    <li><a href="#time-core"><code>core:time</code> — Duration</a></li>
-    <li><a href="#hash"><code>core:hash</code> — Hasher</a></li>
+    <li><a href="#collections"><code>core:collections</code> — List · Map · Set · Entry</a></li>
+    <li><a href="#io"><code>std:io</code> — Reader · Writer · Seeker</a></li>
+    <li><a href="#fmt"><code>std:fmt</code> — Display · Debug</a></li>
+    <li><a href="#error"><code>std:error</code> — error interface</a></li>
+    <li><a href="#time-core"><code>std:time</code> — Duration · Instant · SystemTime</a></li>
+    <li><a href="#hash"><code>std:hash</code> — Hasher</a></li>
     <li><a href="#async-core"><code>core:async</code> — shapes</a></li>
-    <li><a href="#json"><code>core:json</code> — value type</a></li>
-    <li><a href="#net-types"><code>core:net:types</code></a></li>
-    <li><a href="#http"><code>core:http</code> — Method · Status · Headers · Request · Response</a></li>
+    <li><a href="#json"><code>std:json</code> — value type</a></li>
+    <li><a href="#net-types"><code>std:net:types</code></a></li>
+    <li><a href="#http"><code>std:http</code> — Method · Status · Headers · Request · Response</a></li>
     <li><a href="#io-impl"><code>std:io</code> — concrete handles</a></li>
     <li><a href="#fs"><code>std:fs</code> — files · Path</a></li>
     <li><a href="#net"><code>std:net</code> — TCP · UDP · DNS</a></li>
     <li><a href="#time-std"><code>std:time</code> — Instant · DateTime · TimeZone</a></li>
     <li><a href="#sync-extra"><code>std:sync</code> additions</a></li>
-    <li><a href="#atomic"><code>std:sync:atomic</code></a></li>
+    <li><a href="#atomic"><code>core:sync:atomic</code></a></li>
     <li><a href="#process"><code>std:process</code></a></li>
     <li><a href="#rand"><code>std:rand</code></a></li>
     <li><a href="#log"><code>std:log</code></a></li>
@@ -128,9 +131,10 @@
 <!-- =========================================================== -->
 <h2 id="tiers">1. The two tiers, revisited</h2>
 
-<p>Chapter 18 introduced two tiers. This chapter splits the <code>core:</code> tier into
-several modules so that interfaces and value types live close to language semantics, while
-keeping <code>std:</code> for everything that needs an OS.</p>
+<p>Chapter 18 now defines <code>core:</code> as the compiler/runtime substrate and
+<code>std:</code> as the official toolchain library. This chapter uses that rule:
+only language-privileged modules remain in <code>core:</code>; portable but ordinary
+library APIs move to <code>std:</code>.</p>
 
 <div class="diagram">
   <svg viewBox="0 0 940 460" role="img" aria-label="Full stdlib tier map">
@@ -143,37 +147,38 @@ keeping <code>std:</code> for everything that needs an OS.</p>
 
       <!-- core tier -->
       <rect x="40" y="170" width="820" height="190" rx="8" fill="#f3eefa" stroke="#6b4ba8" stroke-width="2"/>
-      <text x="60" y="194" font-weight="700" fill="#6b4ba8">core:* · OS-independent · types &amp; interfaces</text>
+      <text x="60" y="194" font-weight="700" fill="#6b4ba8">core:* substrate + portable std:* API roadmap</text>
 
       <!-- core boxes -->
       <g transform="translate(60, 208)" font-size="10.5">
         <rect width="100" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="50" y="16" text-anchor="middle">core:prelude</text>
         <rect x="110" width="130" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="175" y="16" text-anchor="middle">core:collections</text>
-        <rect x="250" width="80" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="290" y="16" text-anchor="middle">core:io</text>
-        <rect x="340" width="90" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="385" y="16" text-anchor="middle">core:fmt</text>
-        <rect x="440" width="90" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="485" y="16" text-anchor="middle">core:error</text>
-        <rect x="540" width="90" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="585" y="16" text-anchor="middle">core:time</text>
-        <rect x="640" width="90" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="685" y="16" text-anchor="middle">core:hash</text>
+        <rect x="250" width="80" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="290" y="16" text-anchor="middle">std:io</text>
+        <rect x="340" width="90" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="385" y="16" text-anchor="middle">std:fmt</text>
+        <rect x="440" width="90" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="485" y="16" text-anchor="middle">std:error</text>
+        <rect x="540" width="90" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="585" y="16" text-anchor="middle">std:time</text>
+        <rect x="640" width="90" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="685" y="16" text-anchor="middle">std:hash</text>
         <rect x="740" width="100" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="790" y="16" text-anchor="middle">core:async</text>
       </g>
       <g transform="translate(60, 240)" font-size="10.5">
-        <rect width="80" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="40" y="16" text-anchor="middle">core:json</text>
-        <rect x="90" width="130" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="155" y="16" text-anchor="middle">core:net:types</text>
-        <rect x="230" width="90" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="275" y="16" text-anchor="middle">core:http</text>
+        <rect width="80" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="40" y="16" text-anchor="middle">std:json</text>
+        <rect x="90" width="130" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="155" y="16" text-anchor="middle">std:net:types</text>
+        <rect x="230" width="90" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="275" y="16" text-anchor="middle">std:http</text>
         <rect x="330" width="80" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="370" y="16" text-anchor="middle">core:ffi</text>
+        <rect x="420" width="130" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="485" y="16" text-anchor="middle">core:sync:atomic</text>
       </g>
 
-      <text x="60" y="298" font-size="11" class="small">prelude (no import — syntax desugaring): str · Iterator · Item/Done · Buffer · numeric helpers · Deque · Bytes</text>
-      <text x="60" y="316" font-size="11" class="small">collections (explicit): List · Map · Set — opt-in to keep prelude small and the GC-heap surface visible at import sites</text>
-      <text x="60" y="334" font-size="11" class="small">Interfaces / value types in their own modules: Reader · Writer · Display · Debug · Error · Duration · Json · Url · HttpRequest · ...</text>
+      <text x="60" y="298" font-size="11" class="small">prelude substrate: syntax protocols · Iterator · Item/Done · Future · Try · numeric primitives</text>
+      <text x="60" y="316" font-size="11" class="small">collections (explicit): List · Map · Set · Entry — opt-in to keep prelude small and the GC-heap surface visible at import sites</text>
+      <text x="60" y="334" font-size="11" class="small">core:sync:atomic is primitive substrate; ordinary portable APIs remain std:*.</text>
 
       <!-- OS line -->
       <rect x="40" y="138" width="820" height="24" rx="4" fill="#fff" stroke="#d6d3cd" stroke-dasharray="3 3"/>
-      <text x="450" y="155" text-anchor="middle" font-style="italic" fill="#5a5a60">OS — required for std: targets</text>
+      <text x="450" y="155" text-anchor="middle" font-style="italic" fill="#5a5a60">provider boundary — std may be portable or host-backed</text>
 
       <!-- std tier -->
       <rect x="40" y="24" width="820" height="106" rx="8" fill="#eaf0f8" stroke="#1a4a8a" stroke-width="2"/>
-      <text x="60" y="44" font-weight="700" fill="#1a4a8a">std:* · OS-bound · implementations &amp; runtimes</text>
+      <text x="60" y="44" font-weight="700" fill="#1a4a8a">std:* · official library · portable APIs + target implementations</text>
 
       <g transform="translate(60, 54)" font-size="10.5">
         <rect width="70" height="20" rx="3" fill="#fff" stroke="#1a4a8a"/><text x="35" y="14" text-anchor="middle">std:io</text>
@@ -182,18 +187,18 @@ keeping <code>std:</code> for everything that needs an OS.</p>
         <rect x="250" width="80" height="20" rx="3" fill="#fff" stroke="#1a4a8a"/><text x="290" y="14" text-anchor="middle">std:time</text>
         <rect x="340" width="100" height="20" rx="3" fill="#fff" stroke="#1a4a8a"/><text x="390" y="14" text-anchor="middle">std:thread</text>
         <rect x="450" width="80" height="20" rx="3" fill="#fff" stroke="#1a4a8a"/><text x="490" y="14" text-anchor="middle">std:sync</text>
-        <rect x="540" width="120" height="20" rx="3" fill="#fff" stroke="#1a4a8a"/><text x="600" y="14" text-anchor="middle">std:sync:atomic</text>
-        <rect x="670" width="90" height="20" rx="3" fill="#fff" stroke="#1a4a8a"/><text x="715" y="14" text-anchor="middle">std:async</text>
+        <rect x="540" width="90" height="20" rx="3" fill="#fff" stroke="#1a4a8a"/><text x="585" y="14" text-anchor="middle">std:async</text>
+        <rect x="640" width="80" height="20" rx="3" fill="#fff" stroke="#1a4a8a"/><text x="680" y="14" text-anchor="middle">std:task</text>
       </g>
       <g transform="translate(60, 82)" font-size="10.5">
         <rect width="100" height="20" rx="3" fill="#fff" stroke="#1a4a8a"/><text x="50" y="14" text-anchor="middle">std:process</text>
         <rect x="110" width="80" height="20" rx="3" fill="#fff" stroke="#1a4a8a"/><text x="150" y="14" text-anchor="middle">std:rand</text>
         <rect x="200" width="80" height="20" rx="3" fill="#fff" stroke="#1a4a8a"/><text x="240" y="14" text-anchor="middle">std:log</text>
       </g>
-      <text x="60" y="118" font-size="11" class="small">Each std:* module implements the shapes declared in core:* — e.g. std:fs.File implements core:io.Reader/Writer/Seeker.</text>
+      <text x="60" y="118" font-size="11" class="small">Target-backed std modules implement portable std contracts — e.g. std:fs.File implements std:io.Reader/Writer/Seeker.</text>
     </g>
   </svg>
-  <div class="diagram-caption">Shapes flow downward. Anything in <code>std:*</code> can be replaced by another implementation that satisfies the same <code>core:*</code> interface.</div>
+  <div class="diagram-caption"><code>core:</code> is the small privileged substrate. <code>std:</code> carries both portable contracts and target-backed implementations.</div>
 </div>
 
 <!-- =========================================================== -->
@@ -205,37 +210,62 @@ keeping <code>std:</code> for everything that needs an OS.</p>
   <div class="layer core">
     <h4>core: declares</h4>
     <ul>
-      <li>Interfaces (contracts)</li>
-      <li>Plain value types (records, unions)</li>
-      <li>Behaviour that needs only an allocator</li>
+      <li>Compiler desugar contracts</li>
+      <li>Runtime-recognized layouts and handles</li>
+      <li>Language-privileged interfaces</li>
     </ul>
   </div>
   <div class="layer std">
     <h4>std: provides</h4>
     <ul>
-      <li>OS-bound implementations (files, sockets, clocks)</li>
-      <li>Runtimes (async executor, logger backend)</li>
-      <li>Thread / process primitives</li>
+      <li>Official portable library APIs</li>
+      <li>Target-backed implementations (files, sockets, clocks)</li>
+      <li>Runtimes and host services</li>
     </ul>
   </div>
   <div class="layer">
     <h4>pkg: extends</h4>
     <ul>
-      <li>Specific implementations of <code>core:*</code> shapes</li>
+      <li>Specific implementations of <code>std:*</code> contracts</li>
       <li>Alternative runtimes</li>
       <li>Anything not universal</li>
     </ul>
   </div>
 </div>
 
-<p>For example: <code>core:http</code> defines <code>HttpRequest</code> and
+<p>For example: <code>std:http</code> defines <code>HttpRequest</code> and
 <code>HttpResponse</code>. A library that ships an HTTP client takes a
 <code>HttpRequest</code> and returns a <code>HttpResponse</code>. A library that ships an
 HTTP server consumes <code>HttpRequest</code>. They interoperate <em>without</em> knowing
 about each other — because the shape is shared.</p>
 
+<h2 id="implementation-architecture">3. Implementation architecture</h2>
+
+<p>The standard library is not one implementation language. Each importable
+toolchain module is described by a catalog entry with its path, tier, exported
+symbols, and implementation kind:</p>
+
+<table>
+  <thead><tr><th>Kind</th><th>Use for</th><th>Examples</th></tr></thead>
+  <tbody>
+    <tr><td><code>Otter</code></td><td>Interfaces, value types, adapters, and pure library helpers authored in Otter Fusion.</td><td><code>std:error</code>, <code>std:bytes</code>, <code>std:fmt</code>, <code>std:time.Duration</code>, <code>std:fs.Path</code>, <code>std:net:types</code></td></tr>
+    <tr><td><code>RustBacked</code></td><td>Runtime/compiler intrinsics with a small importable marker surface.</td><td><code>std:io.print</code>, <code>std:io.eprintln</code>, <code>core:prelude.panic</code>, <code>std:process.exit</code>/<code>abort</code></td></tr>
+    <tr><td><code>Mixed</code></td><td>Otter Fusion API definitions layered over Rust runtime primitives.</td><td><code>core:ffi</code>, <code>std:time.Instant</code>, <code>std:time.SystemTime</code>, <code>std:sync</code>, <code>std:thread</code>, <code>std:task</code>, <code>std:async</code>, <code>std:fs.File</code> handles and file helpers, <code>std:process</code> host environment/execution helpers, <code>std:rand.OsRng</code>/<code>ThreadRng</code></td></tr>
+  </tbody>
+</table>
+
+<p>Today the compiler's built-in provider is the default catalog. Future sysroots
+may supply target-specific providers for the same <code>std:*</code> paths — for example
+POSIX, WASI, embedded, browser, or sandboxed engine profiles — while preserving
+the documented public shape. A provider may replace a target-backed
+<code>std:*</code> module, omit it for <code>no-std</code> targets, or add extra target
+modules gated by the manifest/sysroot. <code>core:*</code> remains the stable,
+language-privileged substrate that portable packages should rarely depend on directly
+outside syntax-adjacent APIs. The step-by-step
+contributor workflow is defined in <a href="./29-extending-stdlib.html">29-extending-stdlib</a>.</p>
+
 <!-- =========================================================== -->
-<h2 id="fragmentation">3. The Request/Response problem</h2>
+<h2 id="fragmentation">4. The Request/Response problem</h2>
 
 <p>JavaScript's <code>fetch</code> introduced <code>Request</code> and <code>Response</code>
 late. Before that, every HTTP library shipped its own. The cost compounds:</p>
@@ -256,33 +286,37 @@ late. Before that, every HTTP library shipped its own. The cost compounds:</p>
 
       <text x="0" y="124" font-weight="700">With one shared shape</text>
       <rect x="0" y="134" width="880" height="48" rx="6" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
-      <text x="440" y="162" text-anchor="middle">core:http.HttpRequest · core:http.HttpResponse</text>
+      <text x="440" y="162" text-anchor="middle">std:http.HttpRequest · std:http.HttpResponse</text>
       <text x="0" y="200" font-size="11" class="small">Any client/server/middleware authored by anyone interoperates without translation.</text>
     </g>
   </svg>
   <div class="diagram-caption">Standardize the shape; let the implementations compete.</div>
 </div>
 
-<p>The same logic motivates <code>core:io</code> (Reader/Writer), <code>core:json</code>
-(the JSON value tree), <code>core:error</code> (the error chain), and <code>std:log</code>
+<p>The same logic motivates <code>std:io</code> (Reader/Writer), <code>std:json</code>
+(the JSON value tree), <code>std:error</code> (the error chain), and <code>std:log</code>
 (the Logger interface).</p>
 
 <!-- =========================================================== -->
-<h2 id="prelude-additions">4. <code>core:prelude</code> — additions</h2>
+<h2 id="prelude-additions">5. <code>core:prelude</code> — additions</h2>
 
-<p>Chapter 18 leaves the prelude with <code>str</code>, <code>List</code>, <code>Map</code>,
-<code>Iterator</code>, <code>Item/Done</code>, <code>Buffer</code>, the <code>Error</code>
-interface + <code>Annotated</code> wrapper, and the numeric helper namespaces. The roadmap
-<strong>removes</strong>:</p>
+<p>Chapter 18 originally grouped several core shapes near the prelude. The
+implemented near-empty-prelude rule keeps named symbols explicit: collections
+come from <code>core:collections</code>, FFI helpers from <code>core:ffi</code>, and the
+error chain from <code>std:error</code>. Current placement:</p>
 <ul>
-  <li><code>List</code> and <code>Map</code> — move to
+  <li><code>List</code> and <code>Map</code> — live in
     <a href="#collections"><code>core:collections</code></a> along with <code>Set</code>.</li>
-  <li><code>Error</code>, <code>Annotated</code>, <code>with_context</code> — move to
-    <a href="#error"><code>core:error</code></a>.</li>
+  <li><code>Error</code>, <code>Annotated</code>, <code>with_context</code> — already live in
+    <a href="#error"><code>std:error</code></a>.</li>
+  <li><code>Bytes</code> — already lives in
+    <a href="#bytes"><code>std:bytes</code></a>, because it is an ordinary managed
+    library container rather than compiler substrate.</li>
 </ul>
-<p>The prelude gains <code>Deque</code> and <code>Bytes</code>. After the move, the
-import-free surface (what built-in syntax desugars to) contains only language-fundamental
-shapes (text, iteration, FFI bytes, numeric helpers); see
+<p><code>Deque</code> is implemented as <code>std:collections.Deque</code>, an
+ordinary explicit-import standard-library collection rather than compiler
+substrate. The import-free surface (what built-in syntax desugars to) contains
+only language-fundamental shapes (text, iteration, FFI bytes, numeric helpers); see
 <a href="17-modules.html#the-prelude-rule">the prelude rule</a> — these are resolved without
 an import, but naming any of them still requires one.</p>
 
@@ -295,35 +329,82 @@ an import, but naming any of them still requires one.</p>
   helpers).
 </div>
 
-<h3 id="deque"><code>Deque&lt;T&gt;</code></h3>
+<h3 id="deque"><code>std:collections.Deque&lt;T&gt;</code></h3>
 
-<p>Double-ended queue. Same backing as <code>List&lt;T&gt;</code> but with
-<code>push_front</code> / <code>pop_front</code> in O(1).</p>
+<p>Double-ended queue implemented in Otter Fusion over two internal lists:
+the front side is stored reversed and the back side is stored forward. Pushes on
+either end are cheap; popping from an empty side refills from the other side.
+The module is <code>std:</code>, not <code>core:</code>, because no syntax or compiler
+lowering depends on the deque layout.</p>
+
+<pre><code>import { List } from "core:collections"
+import { Deque, deque, deque_from_list } from "std:collections"
+
+var q = deque&lt;i64&gt;()
+q.push_back(2)
+q.push_front(1)
+q.set(0, 3)
+
+var seeded = List&lt;i64&gt;()
+seeded.push(3)
+seeded.push(4)
+var from = deque_from_list&lt;i64&gt;(seeded)</code></pre>
 
 <table>
   <thead><tr><th>Method</th><th>Returns</th></tr></thead>
   <tbody>
-    <tr><td><code>new()</code> static</td><td><code>Deque&lt;T&gt;</code></td></tr>
+    <tr><td><code>deque&lt;T&gt;()</code> · <code>Deque.new()</code> · <code>deque_from_list&lt;T&gt;(List&lt;T&gt;)</code></td><td><code>Deque&lt;T&gt;</code></td></tr>
     <tr><td><code>push_back(v)</code> · <code>push_front(v)</code></td><td><code>null</code></td></tr>
+    <tr><td><code>extend_back(values)</code> · <code>extend_front(values)</code></td><td><code>null</code></td></tr>
     <tr><td><code>pop_back()</code> · <code>pop_front()</code></td><td><code>T | null</code></td></tr>
     <tr><td><code>front()</code> · <code>back()</code></td><td><code>T | null</code></td></tr>
+    <tr><td><code>get(index)</code></td><td><code>T | null</code></td></tr>
+    <tr><td><code>set(index, value)</code></td><td><code>bool</code></td></tr>
+    <tr><td><code>remove_at(index)</code></td><td><code>T | null</code></td></tr>
     <tr><td><code>size()</code> · <code>is_empty()</code></td><td><code>i64</code> · <code>bool</code></td></tr>
-    <tr><td><code>iter()</code></td><td><code>Iterator&lt;T&gt;</code></td></tr>
+    <tr><td><code>contains(value)</code> when <code>T: Eq</code></td><td><code>bool</code></td></tr>
+    <tr><td><code>to_list()</code> · <code>iter()</code></td><td><code>List&lt;T&gt;</code> · <code>Iterator&lt;T&gt;</code></td></tr>
+    <tr><td><code>clear()</code></td><td><code>null</code></td></tr>
   </tbody>
 </table>
 
-<h3 id="bytes"><code>Bytes</code> — managed byte container</h3>
+<p><code>deque_from_list</code>, <code>extend_back</code>, and
+<code>extend_front</code> preserve list iteration order; front extension inserts
+the whole list before the existing front rather than reversing it.
+<code>get(index)</code> reads the logical zero-based order and returns
+<code>null</code> for negative or out-of-range indexes. <code>set(index, value)</code>
+mutates the same logical order and returns <code>false</code> without mutating for
+negative or out-of-range indexes. <code>remove_at(index)</code> removes and returns
+the value at the same logical index, or <code>null</code> for negative or out-of-range
+indexes.</p>
+
+<p><code>Deque</code> implements equality when <code>T: Eq</code>, clone when
+<code>T: Clone</code>, deterministic ordered hashing when <code>T: Hash</code>,
+stringification when <code>T: ToStr</code>, and an explicit diagnostic debug
+implementation when <code>T: std:fmt.Debug</code>.</p>
+
+<h3 id="bytes"><code>std:bytes</code> — managed byte container</h3>
 
 <p>The managed-heap counterpart of <code>Buffer</code>. Unlike <code>Buffer</code>, it
-implements interfaces and is usable as a generic argument.</p>
+implements interfaces and is usable as a generic argument. <code>BytesCursor</code>
+adds a pure in-memory cursor over a snapshot of <code>Bytes</code> for code written
+against <code>std:io.Reader</code> and <code>std:io.Seeker</code>.</p>
 
-<pre><code>var b = Bytes.new()
+<pre><code>import { Bytes } from "std:bytes"
+
+var b = Bytes.new()
 b.push(0x41u8)
-b.extend([0x42u8, 0x43u8])
-b.size()                              // 3
+b.append_iter([0x42u8, 0x43u8].iter())
+b.append(Bytes.from_str("DE"))
+b.set(1, 0x78u8)
+b.pop()
+b.remove_at(0)
+b.truncate(2)
+b.size()                              // 2
 
-var s = b.to_str()                    // str | Utf8Error
-var raw = b.as_buffer()               // Buffer view (pinned for caller scope)</code></pre>
+var part = b.slice(1, 3)              // copy
+var it = b.iter()                     // Iterator&lt;u8&gt;
+var r = b.cursor()                    // BytesCursor snapshot</code></pre>
 
 <table>
   <thead><tr><th>Method</th><th>Returns</th><th>Notes</th></tr></thead>
@@ -332,36 +413,82 @@ var raw = b.as_buffer()               // Buffer view (pinned for caller scope)</
     <tr><td><code>from_str(s: str)</code></td><td><code>Bytes</code></td><td>UTF-8 encoding</td></tr>
     <tr><td><code>size()</code> · <code>is_empty()</code></td><td><code>i64</code> · <code>bool</code></td><td></td></tr>
     <tr><td><code>get(i)</code></td><td><code>u8 | null</code></td><td></td></tr>
-    <tr><td><code>push(b)</code> · <code>extend(it)</code></td><td><code>null</code></td><td><code>it: Iterator&lt;u8&gt;</code></td></tr>
+    <tr><td><code>set(i, b)</code></td><td><code>bool</code></td><td>Returns <code>false</code> for negative or out-of-range indexes</td></tr>
+    <tr><td><code>push(b)</code> · <code>pop()</code> · <code>remove_at(i)</code> · <code>append(other)</code> · <code>append_iter(it)</code> · <code>truncate(len)</code> · <code>clear()</code></td><td><code>null</code> / <code>u8 | null</code></td><td><code>other: Bytes</code>, <code>it: Iterator&lt;u8&gt;</code>; <code>truncate</code> only shrinks</td></tr>
     <tr><td><code>slice(start, end)</code></td><td><code>Bytes</code></td><td>Copy</td></tr>
-    <tr><td><code>to_str()</code></td><td><code>str | Utf8Error</code></td><td></td></tr>
-    <tr><td><code>as_buffer()</code></td><td><code>Buffer</code></td><td>Pinned until next mutation</td></tr>
+    <tr><td><code>starts_with(prefix)</code> · <code>ends_with(suffix)</code></td><td><code>bool</code></td><td>Bytewise prefix/suffix checks; empty affixes match</td></tr>
+    <tr><td><code>cursor()</code></td><td><code>BytesCursor</code></td><td>Snapshot reader/seeker</td></tr>
+    <tr><td><code>decode_utf8()</code></td><td><code>str | Utf8Error</code></td><td>Strict UTF-8 decoding; <code>to_str()</code> remains diagnostic</td></tr>
+    <tr><td><code>clone()</code></td><td><code>Bytes</code></td><td>Deep copy</td></tr>
+    <tr><td><code>==</code> · <code>hash()</code> · <code>as str</code></td><td><code>bool</code> · <code>u64</code> · <code>str</code></td><td><code>Eq</code>, <code>Hash</code>, <code>ToStr</code></td></tr>
+    <tr><td><code>write(buf)</code> · <code>write_all(buf)</code> · <code>flush()</code></td><td><code>i64 | IoError</code> · <code>null | IoError</code> · <code>null | IoError</code></td><td><code>std:io.Writer</code>; appends to the buffer</td></tr>
+    <tr><td><code>write_str(s)</code></td><td><code>null | FmtError</code></td><td><code>std:fmt.FmtSink</code>; UTF-8 encodes and appends to the buffer</td></tr>
+    <tr><td><code>BytesCursor.new(bytes)</code> · <code>position()</code> · <code>remaining()</code> · <code>rewind()</code></td><td><code>BytesCursor</code> · <code>i64</code> · <code>i64</code> · <code>null</code></td><td>In-memory cursor state</td></tr>
+    <tr><td><code>read_byte()</code> · <code>read_bytes(n)</code></td><td><code>u8 | null</code> · <code>Bytes</code></td><td>Advances the cursor</td></tr>
+    <tr><td><code>read(buf)</code> · <code>read_to_end(buf)</code> · <code>seek(pos)</code></td><td><code>i64 | IoError</code> · <code>i64 | IoError</code> · <code>i64 | IoError</code></td><td><code>BytesCursor</code> implements <code>Reader</code> and <code>Seeker</code></td></tr>
+    <tr><td><code>as_buffer()</code></td><td><code>Buffer</code></td><td>planned pinned view</td></tr>
     <tr><td><code>iter()</code></td><td><code>Iterator&lt;u8&gt;</code></td><td></td></tr>
   </tbody>
 </table>
 
-<p>Implements <code>Reader</code>, <code>Writer</code>, <code>Clone</code>, <code>Eq</code>,
-<code>Hash</code>.</p>
+<p><code>Bytes</code> implements <code>std:io.Writer</code> and
+<code>std:fmt.FmtSink</code> today as an in-memory sink.
+<code>set(i, b)</code> mutates one byte and returns <code>false</code> when the index is
+outside the buffer. <code>pop()</code> removes and returns the last byte, or
+<code>null</code> for an empty buffer. <code>remove_at(i)</code> removes and returns
+one indexed byte, or <code>null</code> for negative or out-of-range indexes.
+<code>truncate(len)</code> removes trailing bytes
+when <code>len</code> is shorter than the current size, clears the buffer for
+non-positive lengths, and leaves the buffer unchanged when <code>len</code> is larger.
+<code>append(other)</code> snapshots the other byte buffer before appending, so
+<code>b.append(b)</code> doubles the current contents once and then stops.
+<code>write</code> snapshots its input before appending, so writing a buffer to itself
+doubles the current contents rather than looping over newly appended bytes.
+<code>write_str</code> UTF-8 encodes the string and appends those bytes, returning
+<code>null</code> because an in-memory <code>Bytes</code> sink cannot fail today.
+<code>Bytes.cursor()</code> and <code>BytesCursor.new(bytes)</code> snapshot their source so
+later mutations to the original <code>Bytes</code> do not change what the cursor reads.
+<code>Bytes.starts_with</code> and <code>Bytes.ends_with</code> compare raw bytes directly and
+do not decode UTF-8.
+<code>BytesCursor</code> implements equality and hashing over both the snapshot and
+current cursor position, plus clone, diagnostic stringification, and
+<code>std:fmt.Debug</code>.
+The <code>Reader.read(buf)</code> implementation appends up to the current
+<code>buf.size()</code> bytes, matching the existing <code>std:io.Reader</code> contract;
+<code>read_to_end(buf)</code> appends all remaining bytes.
+<code>Bytes.decode_utf8()</code> validates strict UTF-8 and rejects invalid leading
+bytes, malformed continuations, truncation, overlong sequences, surrogate code
+points, and scalar values above U+10FFFF.
+<code>Utf8Error</code> implements <code>std:error.Error</code>, equality, clone, hash,
+diagnostic stringification, and <code>std:fmt.Debug</code>; the type exists now so the
+decoder has a stable error shape.
+Future slices will add pinned <code>Buffer</code> views. The
+implemented <code>ToStr</code> rendering is a compact
+diagnostic form like <code>bytes[65,66]</code>, not UTF-8 decoding.</p>
 
 <!-- =========================================================== -->
-<h2 id="collections">5. <code>core:collections</code> — List · Map · Set</h2>
+<h2 id="collections">6. <code>core:collections</code> — List · Map · Set · Entry</h2>
 
-<p>Explicit-import module within the <code>core:</code> tier. Holds the three
-heap-allocated, GC-managed general-purpose containers.</p>
+<p>Explicit-import module within the <code>core:</code> tier. Holds the
+runtime-recognized, GC-managed collection shapes that the compiler lowers,
+constructs, traces, or reserves for collection syntax.</p>
 
-<pre><code>import { List, Map, Set } from "core:collections"
+<pre><code>import { List, Map, Set, Entry } from "core:collections"
 
 var xs: List&lt;i64&gt;     = [1, 2, 3]
 var m:  Map&lt;str, i64&gt; = { "x": 1 }
-var s:  Set&lt;str&gt;      = { "a", "b" }</code></pre>
+var s = Set&lt;str&gt;()
+s.insert("a")</code></pre>
 
 <div class="callout">
-  <strong>Literal syntax still works without prelude</strong>
-  The literal forms <code>[...]</code>, <code>{ k: v, ... }</code>, and <code>{ a, b }</code>
+  <strong>Literal syntax still respects the near-empty prelude</strong>
+  The implemented literal forms <code>[...]</code> and <code>{ k: v, ... }</code>
   are language-level syntax (chapters 1 &amp; 18). They construct the corresponding
-  container type — but the <em>name</em> <code>List</code> / <code>Map</code> /
+  container type — but the <em>name</em> <code>List</code>, <code>Map</code>, or
   <code>Set</code> must still be imported to write type annotations, call static
-  constructors, or use the type-as-constructor shorthand.
+  constructors, or use named methods. <code>Set</code> also remains in this substrate
+  because the compiler recognizes its construction/tracing shape and reserves it
+  for future set literals. Set literals remain planned.
 </div>
 
 <h3 id="list-collections"><code>List&lt;T&gt;</code></h3>
@@ -376,26 +503,27 @@ var c = List&lt;i64&gt;()</code></pre>
 <h3 id="map-collections"><code>Map&lt;K, V&gt;</code> where <code>K: Eq + Hash</code></h3>
 
 <p>Hash map. Full definition in <a href="./18-stdlib.html#map">18.4</a>; the type lives
-in <code>core:collections</code>.</p>
+in <code>core:collections</code>. <code>Entry&lt;K, V&gt;</code>, the value yielded by
+<code>entries()</code> and <code>for entry in map</code>, is exported from the same module.</p>
 
-<pre><code>var m: Map&lt;str, i64&gt; = { "x": 1, "y": 2 }   // deterministic core:hash DefaultHasher
-var n = Map.new&lt;str, i64&gt;()
-var k = Map.with_hasher&lt;str, i64&gt;(my_hasher) // opt-in keyed hasher for untrusted keys</code></pre>
+<pre><code>var m: Map&lt;str, i64&gt; = { "x": 1, "y": 2 }   // deterministic toolchain hasher
+var n = Map.new&lt;str, i64&gt;()</code></pre>
 
 <div class="callout warn">
   <strong>Deterministic default hasher</strong>
   <code>Map</code>/<code>Set</code> default to a <strong>deterministic</strong> fixed-seed hasher
-  (<a href="#hash"><code>core:hash</code></a>) — fast and freestanding-safe, but <strong>not</strong>
-  HashDoS-resistant. For maps fed <em>untrusted, attacker-chosen keys</em>, supply a keyed hasher
-  via <code>with_hasher</code>. A HashDoS-safe, OS-auto-seeded convenience constructor is planned
-  for when an entropy source exists.
+  (<a href="#hash"><code>std:hash</code></a>) — fast and portable, but <strong>not</strong>
+  HashDoS-resistant. Explicit keyed hasher values live in
+  <code>std:hash</code>; keyed map/set construction is not part of the implemented
+  collection surface yet.
 </div>
 
-<h3 id="set-collections"><code>Set&lt;T&gt;</code> where <code>T: Eq + Hash</code></h3>
+<h3 id="set-collections"><code>Set&lt;T&gt;</code> where <code>T: Eq</code></h3>
 
-<pre><code>var s: Set&lt;str&gt; = { "a", "b" }       // set literal
-var t = Set.new&lt;str&gt;()
-var u = Set&lt;str&gt;()                    // shorthand</code></pre>
+<pre><code>var s = Set&lt;str&gt;()
+s.insert("a")
+s.insert("b")
+var snapshot = s.to_list()</code></pre>
 
 <table>
   <thead><tr><th>Method</th><th>Returns</th><th>Notes</th></tr></thead>
@@ -403,24 +531,42 @@ var u = Set&lt;str&gt;()                    // shorthand</code></pre>
     <tr><td><code>new()</code> static</td><td><code>Set&lt;T&gt;</code></td><td>Empty</td></tr>
     <tr><td><code>size()</code> · <code>is_empty()</code></td><td><code>i64</code> · <code>bool</code></td><td></td></tr>
     <tr><td><code>contains(v)</code></td><td><code>bool</code></td><td></td></tr>
-    <tr><td><code>add(v)</code></td><td><code>bool</code></td><td><code>true</code> if newly inserted</td></tr>
+    <tr><td><code>insert(v)</code></td><td><code>bool</code></td><td><code>true</code> if newly inserted</td></tr>
     <tr><td><code>remove(v)</code></td><td><code>bool</code></td><td><code>true</code> if removed</td></tr>
+    <tr><td><code>insert_all(o)</code></td><td><code>null</code></td><td>Mutates by inserting members from another set</td></tr>
+    <tr><td><code>is_subset(o)</code> · <code>is_superset(o)</code> · <code>is_disjoint(o)</code></td><td><code>bool</code></td><td>Membership predicates</td></tr>
     <tr><td><code>union(o)</code> · <code>intersect(o)</code> · <code>difference(o)</code></td><td><code>Set&lt;T&gt;</code></td><td>New set</td></tr>
+    <tr><td><code>to_list()</code></td><td><code>List&lt;T&gt;</code></td><td>Snapshot in current iteration order</td></tr>
     <tr><td><code>iter()</code></td><td><code>Iterator&lt;T&gt;</code></td><td></td></tr>
   </tbody>
 </table>
 
+<p><code>Set</code> implements <code>Eq</code> when <code>T: Eq</code>,
+<code>Clone</code> when <code>T: Eq + Clone</code>, <code>Hash</code> when
+<code>T: Eq + Hash</code>, and compact <code>ToStr</code> rendering when
+<code>T: Eq + ToStr</code>. Equality is membership-based, cloning snapshots every
+member, and hashing is deterministic and order-insensitive by combining member
+hashes modulo a fixed prime. <code>to_list()</code> snapshots the set's current
+iteration order, <code>insert_all(other)</code> mutates by inserting every member from
+another set, and <code>is_subset</code>/<code>is_superset</code>/<code>is_disjoint</code>
+compare membership.
+<code>to_str()</code> renders members in the current iteration order.
+It is suitable for stable value semantics, not for
+adversarial hash-flooding resistance.</p>
+
 <div class="callout warn">
-  <strong>Set literal vs map literal</strong>
-  <code>{ a, b }</code> (no <code>:</code>) is a <strong>set literal</strong>;
-  <code>{ a: 1, b: 2 }</code> is a map literal. The disambiguation rules from §18.4 are
-  extended: the parser commits to <em>set</em> if it sees comma-separated bare expressions,
-  to <em>map</em> if it sees <code>key : value</code>. <code>{}</code> is still the empty
-  block — use <code>Set.new</code> / <code>Map.new</code> for empty containers.
+  <strong>Set literals are not syntax yet</strong>
+  <code>{ a: 1, b: 2 }</code> is a map literal today, and <code>{}</code> is still the
+  empty block. Set literal syntax remains planned; use <code>Set&lt;T&gt;()</code>
+  plus <code>insert</code> for the implemented surface.
 </div>
 
+<p>The current implementation is an Otter-authored unique-list set. Hash-backed
+storage will land with keyed <code>std:hash</code> map/set construction and generic
+map-key support.</p>
+
 <!-- =========================================================== -->
-<h2 id="io">6. <code>core:io</code> — Reader · Writer · Seeker</h2>
+<h2 id="io">7. <code>std:io</code> — Reader · Writer · Seeker</h2>
 
 <p>The single most load-bearing addition. Every I/O source/sink in <code>std:</code>
 implements these three interfaces, so parsers, encoders, compressors, and protocol code
@@ -431,7 +577,7 @@ uniformly.</p>
   // Reads up to buf.size() bytes. Returns bytes-read, or 0 on EOF, or IoError.
   function read(self, buf: Bytes): i64 | IoError
 
-  // Convenience: read until EOF, append to buf. Default impl provided.
+  // Convenience: read until EOF, append to buf. Implemented by each Reader.
   function read_to_end(self, buf: Bytes): i64 | IoError
 }
 
@@ -455,40 +601,68 @@ pub struct IoError {
 }
 
 pub union IoErrorKind = NotFound | PermissionDenied | ConnectionRefused
-                      | TimedOut | UnexpectedEof | Interrupted | Other</code></pre>
+                      | IoTimedOut | UnexpectedEof | Interrupted | OtherIo</code></pre>
+
+<p>The implemented catalog exports the contracts above, <code>IoError</code>,
+<code>IoErrorKind</code>, the seek-position variants, <code>print</code>, and
+<code>println</code>, plus stderr counterparts <code>eprint</code> and
+<code>eprintln</code>. It also exports <code>stdin()</code> as a <code>Reader</code>
+handle and stdout/stderr <code>Writer</code> handles via <code>stdout()</code> and
+<code>stderr()</code>. <code>IoTimedOut</code> and
+<code>OtherIo</code> are deliberately named with an IO prefix for clarity at call
+sites; bundled toolchain source now uses hidden module-local owners under the
+private <code>__builtins__</code> root, so future modules can still use ordinary local
+names without colliding across <code>std:*</code> packages.</p>
+
+<p><code>SeekFrom</code> and <code>IoErrorKind</code> are union aliases. They provide direct
+<code>equals(...)</code> helpers plus <code>Eq.eq</code>, overloaded <code>==</code>, <code>Clone</code>, <code>Hash</code>,
+<code>ToStr</code>, and <code>Debug</code> methods. <code>IoError</code> is struct-shaped and implements
+<code>Error</code>, <code>Eq</code>, <code>Clone</code>, <code>Hash</code>, and <code>Debug</code>.</p>
 
 <h3>Buffered variants</h3>
 
-<pre><code>pub struct BufReader&lt;R: Reader&gt; { ... }
-extend&lt;R: Reader&gt; BufReader&lt;R&gt;: Reader {
-  function new(inner: R): BufReader&lt;R&gt;
-  function with_capacity(cap: i64, inner: R): BufReader&lt;R&gt;
+<p>The implemented adapters store ordinary <code>Reader</code>/<code>Writer</code>
+interface objects. Generic-specialized wrappers may be added later as an
+optimization, but the stable surface is the interface-object adapter.</p>
+
+<pre><code>pub function buf_reader(inner: Reader): BufReader
+pub function buf_writer(inner: Writer): BufWriter
+
+pub struct BufReader { ... }
+extend BufReader: Reader {
+  function new(inner: Reader): BufReader
+  function with_capacity(cap: i64, inner: Reader): BufReader
+  function buffered_len(self): i64
   function read_line(self): str | IoError      // up to '\n' inclusive; '' on EOF
   function lines(self): Iterator&lt;str | IoError&gt;
 }
 
-pub struct BufWriter&lt;W: Writer&gt; { ... }
-extend&lt;W: Writer&gt; BufWriter&lt;W&gt;: Writer {
-  function new(inner: W): BufWriter&lt;W&gt;
+pub struct BufWriter { ... }
+extend BufWriter: Writer {
+  function new(inner: Writer): BufWriter
+  function with_capacity(cap: i64, inner: Writer): BufWriter
+  function buffered_len(self): i64
 }</code></pre>
 
 <div class="callout good">
-  <strong>Why this lives in <code>core:</code></strong>
-  None of these depend on the OS. A no-OS target can implement <code>Reader</code> for a
-  ROM-backed byte source and write portable parsers against it. The OS-bound concrete handles
-  (files, sockets) live in <code>std:io</code> / <code>std:fs</code> / <code>std:net</code>.
+  <strong>Why this lives in <code>std:</code></strong>
+  These interfaces are portable, but they are ordinary library contracts rather than
+  compiler substrate. A freestanding target can still provide <code>std:io.Reader</code> for a
+  ROM-backed byte source, while target-backed handles live in <code>std:io</code>,
+  <code>std:fs</code>, and <code>std:net</code>.
 </div>
 
 <!-- =========================================================== -->
-<h2 id="fmt">7. <code>core:fmt</code> — Display &amp; Debug</h2>
+<h2 id="fmt">8. <code>std:fmt</code> — Display &amp; Debug</h2>
 
 <p>Chapter 18 notes that there is no formatting machinery. The roadmap adds the minimum
 needed to prevent every library inventing its own stringification. The existing
 <code>ToStr</code> interface (§15) becomes the <code>Display</code> output path.</p>
 
-<pre><code>// User-facing string form. Re-export of the existing ToStr interface.
-pub interface Display {
+<pre><code>// User-facing string form. Display is also a ToStr implementation.
+pub interface Display: ToStr {
   function display(self): str
+  function to_str(self): str
 }
 
 // Developer-facing form. Distinct from Display so logging / debug output
@@ -505,9 +679,23 @@ pub interface FmtSink {
 
 pub struct FmtError { pub message: str }</code></pre>
 
-<p>Implementations of <code>Debug</code> for built-in types: <code>i32</code>,
-<code>f64</code>, <code>str</code>, <code>List&lt;T: Debug&gt;</code>,
-<code>Map&lt;K: Debug, V: Debug&gt;</code>, etc.</p>
+<p>The contract surface is implemented in the Otter-authored
+<code>std:fmt</code> module. <code>std:bytes.Bytes</code> implements
+<code>FmtSink</code> as the standard in-memory UTF-8 formatting sink.
+<code>FmtError</code> implements
+<code>std:error.Error</code>, equality, clone, hash, and diagnostic debug
+rendering so sink failures can be compared, copied, stored in hash-based
+structures, and passed through generic error code. The pure stdlib value types
+<code>std:bytes.Bytes</code>, <code>std:bytes.Utf8Error</code>,
+<code>std:time.Duration</code>, <code>std:time.Instant</code>,
+<code>std:time.SystemTime</code>, <code>std:fs.Path</code>,
+<code>std:json.Json</code>, <code>std:net:types</code> identifier values, and
+struct-shaped <code>std:http</code> values implement <code>Debug</code>.
+Collections implement diagnostic rendering when their contents are renderable:
+<code>List&lt;T: Debug&gt;</code>, <code>Set&lt;T: Eq + Debug&gt;</code>, and
+<code>Map&lt;K: Eq + Hash + ToStr, V: Debug&gt;</code>. Primitive <code>Debug</code>
+remains planned because primitive-to-<code>std:fmt.Debug</code> interface objects need
+compiler/backend intrinsic vtable support.</p>
 
 <div class="callout">
   <strong>Format strings are still out</strong>
@@ -517,15 +705,14 @@ pub struct FmtError { pub message: str }</code></pre>
 </div>
 
 <!-- =========================================================== -->
-<h2 id="error">8. <code>core:error</code> — error interface</h2>
+<h2 id="error">9. <code>std:error</code> — error interface</h2>
 
-<p>The <code>Error</code> interface and the <code>Annotated</code> wrapper are
-<strong>spec'd in chapter 18</strong> (<a href="./18-stdlib.html#error">§18.3</a>) and live
-in <code>core:prelude</code> today. This roadmap moves them out of the prelude into a
-dedicated <code>core:error</code> module — same definitions, explicit import.</p>
+<p>The <code>Error</code> interface, the <code>Annotated</code> wrapper, and
+<code>with_context</code> are implemented in the dedicated <code>std:error</code> module.
+They are imported explicitly like the rest of the near-empty-prelude standard
+library surface.</p>
 
-<pre><code>// Re-spec from 18.3, unchanged shape:
-pub interface Error: ToStr {
+<pre><code>pub interface Error: ToStr {
   function message(self): str
   function cause(self): Error | null
 }
@@ -541,10 +728,19 @@ extend Annotated: Error {
   function to_str(self):  str          { self.note + ": " + self.source.to_str() }
 }
 
+extend Annotated: Debug {
+  function debug(self):   str          { "Annotated { note: \"" + self.note + "\", source: " + self.source.to_str() + " }" }
+}
+
 pub function with_context&lt;T, E: Error&gt;(
   value: T | E,
   note: str,
 ): T | Annotated</code></pre>
+
+<p><code>Annotated</code> implements <code>std:fmt.Debug</code> for diagnostics, but it
+does not implement generic clone, equality, or hash. Its <code>source</code> field is
+only constrained to <code>Error</code>, and the <code>Error</code> interface deliberately
+does not promise those value semantics.</p>
 
 <div class="callout">
   <strong>Conventions (recap from chapter 13)</strong>
@@ -556,15 +752,20 @@ pub function with_context&lt;T, E: Error&gt;(
       to its rules.</li>
     <li>Logging and tracing libraries accept any <code>Error</code> without knowing the
       concrete type, and call <code>to_str()</code> to render.</li>
-    <li>No <code>Display</code> / <code>Debug</code> split — <code>ToStr</code> (chapter 15)
-      is the only stringification path, so <code>Error: ToStr</code> alone is enough.</li>
+    <li><code>ToStr</code> (chapter 15) remains the interpolation path. Libraries that
+      need separate user-facing or developer-facing rendering can additionally
+      accept <code>std:fmt.Display</code> or <code>std:fmt.Debug</code>.</li>
   </ul>
 </div>
 
 <!-- =========================================================== -->
-<h2 id="time-core">9. <code>core:time</code> — Duration</h2>
+<h2 id="time-core">10. <code>std:time</code> — Duration · Instant · SystemTime · DateTime</h2>
 
-<p>Just the shape — no clock. <code>Duration</code> is OS-independent.</p>
+<p><code>Duration</code> is portable Otter-authored value API. <code>Instant</code> and
+<code>SystemTime</code> are mixed stdlib values: their methods and value semantics are
+ordinary Otter Fusion definitions, while <code>now()</code> reads target-backed Rust
+runtime clock hooks. They still live in <code>std:time</code>, not <code>core:</code>, because
+the compiler does not treat time values specially.</p>
 
 <pre><code>pub struct Duration {
   // Always stored in nanoseconds. Signed so durations can be negative.
@@ -572,66 +773,215 @@ pub function with_context&lt;T, E: Error&gt;(
 }
 
 extend Duration {
+  function from_days(d: i64):   Duration
+  function from_hours(h: i64):  Duration
+  function from_minutes(m: i64): Duration
   function from_secs(s: i64):   Duration
   function from_millis(m: i64): Duration
   function from_micros(u: i64): Duration
   function from_nanos(n: i64):  Duration
 
+  function as_days(self):   i64
+  function as_hours(self):  i64
+  function as_minutes(self): i64
   function as_secs(self):   i64
   function as_millis(self): i64
   function as_micros(self): i64
   function as_nanos(self):  i64
+  function subsec_millis(self): i64
+  function subsec_micros(self): i64
+  function subsec_nanos(self):  i64
 
   function is_zero(self):     bool
+  function is_positive(self): bool
   function is_negative(self): bool
+  function abs(self):         Duration
+
+  function add(self, other: Duration): Duration
+  function sub(self, other: Duration): Duration
 }</code></pre>
 
 <p>Implements <code>Eq</code>, <code>Ord</code>, <code>Hash</code>, <code>Clone</code>,
-<code>Add</code>, <code>Sub</code>, <code>Display</code>, <code>Debug</code>.</p>
+<code>ToStr</code>, <code>std:fmt.Debug</code>, plus overloaded <code>+</code> and <code>-</code> through the
+<code>add</code>/<code>sub</code> methods. Duration arithmetic uses normal checked integer
+semantics; overflowing a constructor or arithmetic operation is a runtime panic
+rather than a wrap. The <code>subsec_*</code> helpers return the absolute fractional
+remainder within the current second, so negative durations expose positive
+component values for formatting. Optional <code>std:fmt.Display</code>
+implementations for standard types remain follow-up library work.</p>
+
+<pre><code>pub struct Instant { ... }
+
+extend Instant {
+  function now(): Instant
+  function from_nanos(nanos: i64): Instant
+  function as_nanos(self): i64
+  function duration_since(self, earlier: Instant): Duration
+  function elapsed(self): Duration
+  function add_duration(self, duration: Duration): Instant
+  function sub_duration(self, duration: Duration): Instant
+}
+
+pub struct SystemTime { ... }
+
+extend SystemTime {
+  function now(): SystemTime
+  function unix_epoch(): SystemTime
+  function from_unix_nanos(nanos: i64): SystemTime
+  function as_unix_nanos(self): i64
+  function duration_since(self, earlier: SystemTime): Duration
+  function duration_since_unix_epoch(self): Duration
+  function add_duration(self, duration: Duration): SystemTime
+  function sub_duration(self, duration: Duration): SystemTime
+  function to_datetime(self, tz: TimeZone): DateTime | TimeError
+}</code></pre>
+
+<p><code>Instant</code> and <code>SystemTime</code> implement <code>Eq</code>, <code>Ord</code>,
+<code>Hash</code>, <code>Clone</code>, <code>ToStr</code>, and <code>std:fmt.Debug</code>. The current
+clock ABI returns signed nanoseconds: <code>Instant</code> uses a process-local
+monotonic epoch, and <code>SystemTime</code> uses Unix-epoch nanoseconds.</p>
+
+<pre><code>pub union TimeZone = Utc | FixedOffset | NamedTimeZone
+
+pub function utc(): TimeZone
+pub function fixed_offset(seconds: i32): TimeZone
+pub function named_timezone(name: str): TimeZone
+pub function parse_iso8601(s: str): DateTime | TimeError
+
+pub struct DateTime {
+  pub year: i32, pub month: u8, pub day: u8,
+  pub hour: u8, pub minute: u8, pub second: u8, pub nanos: u32,
+  pub tz: TimeZone,
+}
+
+extend DateTime {
+  function new(year: i32, month: u8, day: u8,
+               hour: u8, minute: u8, second: u8, nanos: u32,
+               tz: TimeZone): DateTime | TimeError
+  function format_iso8601(self): str
+  function to_system_time(self): SystemTime | TimeError
+  function timezone(self): TimeZone
+  function with_timezone(self, tz: TimeZone): DateTime
+  function is_leap_year(year: i32): bool
+  function days_in_month(year: i32, month: u8): i64
+  function parse_iso8601(s: str): DateTime | TimeError
+}
+
+pub struct TimeError { pub message: str }</code></pre>
+
+<p><code>TimeZone</code>, <code>DateTime</code>, and <code>TimeError</code> are
+implemented as portable value contracts. <code>DateTime.new</code> validates calendar
+ranges, leap years, time-of-day ranges, and nanosecond precision before
+constructing a value. <code>TimeZone</code> supports UTC, fixed offsets in seconds, and
+named timezone identifiers as values; resolving named zones is still
+provider-backed future work. <code>DateTime</code> implements equality, clone, hash,
+stringification through ISO-like rendering, and diagnostic debug rendering.
+<code>parse_iso8601</code> accepts the same portable shapes emitted by
+<code>format_iso8601</code>: UTC <code>Z</code>, fixed <code>+HH:MM</code> /
+<code>-HH:MM</code> offsets, optional fractional seconds up to nanosecond precision,
+and bracketed named timezone identifiers.
+<code>SystemTime.to_datetime(tz)</code> and <code>DateTime.to_system_time()</code>
+perform portable UTC and fixed-offset conversions over Unix-epoch nanoseconds.
+Named timezone conversion returns <code>TimeError</code> until provider-backed
+timezone databases exist.
+<code>DateTime.with_timezone(tz)</code> rebuilds the value with the same local
+date/time fields and a cloned replacement timezone.</p>
+<code>TimeError</code> implements <code>std:error.Error</code>, equality, clone, hash, and
+debug rendering. <code>sleep(Duration)</code> is implemented as a mixed stdlib function
+over a Rust-backed runtime sleep hook; non-positive durations are no-ops.
+Local timezone lookup, timezone databases, and leap-second policy remain planned
+follow-up work.</p>
 
 <!-- =========================================================== -->
-<h2 id="hash">10. <code>core:hash</code> — Hasher</h2>
+<h2 id="hash">11. <code>std:hash</code> — Hasher <span class="pill spec">spec</span> + <span class="pill planned">planned</span></h2>
 
-<p>The existing <code>Hash</code> interface (§15) hashes a value into a 64-bit number.
-That hides which hasher is used. <code>core:hash</code> exposes the hasher so users can pick
-deterministic / cryptographic / fast variants.</p>
+<p>The compiler-recognized <code>Hash</code> interface remains in
+<code>core:prelude</code> because map lookup and other runtime-recognized paths call
+<code>hash(self): u64</code>. <code>std:hash</code> is the ordinary library layer over that
+contract: deterministic default hasher values, explicit keyed hasher values,
+and helper functions. Collection-level keyed map/set construction remains
+future work.</p>
 
 <pre><code>pub interface Hasher {
-  function write(self, bytes: Bytes): null
-  function write_u8(self, n: u8):   null
-  function write_u64(self, n: u64): null
+  function write_u8(self, value: u8): null
+  function write_u64(self, value: u64): null
+  function write_bytes(self, value: Bytes): null
   function finish(self): u64
 }
 
-pub interface Hash {
-  function hash&lt;H: Hasher&gt;(self, h: H): null
-}
+pub struct DefaultHasher
+pub struct KeyedHasher
 
-// Default hasher: deterministic, fixed-seed (SipHash-1-3 or similar). No OS entropy → freestanding-safe.
-pub struct DefaultHasher { ... }
-extend DefaultHasher: Hasher { ... }
+pub function hash_value&lt;T: Hash&gt;(value: T): u64
+pub function write_hash&lt;T: Hash&gt;(hasher: Hasher, value: T): null
+pub function combine_hash(left: u64, right: u64): u64
+pub function keyed_hasher(seed: u64): KeyedHasher
+
 extend DefaultHasher {
-  function new(): DefaultHasher            // fixed, deterministic seed
+  function new(): DefaultHasher
+  function with_seed(seed: u64): DefaultHasher
+  function write_u8(self, value: u8): null
+  function write_i64(self, value: i64): null
+  function write_bool(self, value: bool): null
+  function write_str(self, value: str): null
+  function write_bytes(self, value: Bytes): null
+  function write_hash&lt;T: Hash&gt;(self, value: T): null
 }
 
-// A HashDoS-safe keyed hasher is opt-in: supply your own seed via Map.with_hasher.
-// An OS-auto-seeded convenience version is planned. Fast / cryptographic variants are pkg:-tier.</code></pre>
+extend DefaultHasher: Hasher {
+  function write_u8(self, value: u8): null
+  function write_u64(self, value: u64): null
+  function write_bytes(self, value: Bytes): null
+  function finish(self): u64
+}
 
-<p>The shape of <code>Hash</code> changes slightly from §15: it now writes <em>into</em> a
-hasher rather than returning <code>u64</code> directly. <code>Map</code>/<code>Set</code> default
-to this deterministic <code>DefaultHasher</code>; for untrusted keys, pass a keyed hasher via
-<code>with_hasher</code> (a HashDoS-safe, OS-auto-seeded constructor is planned).</p>
+extend KeyedHasher {
+  function new(seed: u64): KeyedHasher
+  function seed(self): u64
+  function write_u8(self, value: u8): null
+  function write_i64(self, value: i64): null
+  function write_bool(self, value: bool): null
+  function write_str(self, value: str): null
+  function write_bytes(self, value: Bytes): null
+  function write_hash&lt;T: Hash&gt;(self, value: T): null
+}
+
+extend KeyedHasher: Hasher {
+  function write_u8(self, value: u8): null
+  function write_u64(self, value: u64): null
+  function write_bytes(self, value: Bytes): null
+  function finish(self): u64
+}</code></pre>
+
+<p><code>DefaultHasher</code> is deterministic and fixed-algorithm for reproducible
+toolchain behavior. <code>KeyedHasher</code> uses the same deterministic stream
+algorithm but mixes a caller-provided seed into the initial state, giving
+libraries an explicit comparable keyed hasher value without changing map/set
+construction yet. Neither hasher is a cryptographic hash or an OS-seeded
+HashDoS-resistant hasher. The implementation deliberately avoids wrapping
+arithmetic because Otter Fusion integer overflow is checked. Both hashers
+support byte-stream writes through <code>write_u8</code> and
+<code>write_bytes(Bytes)</code>, plus convenience writes for signed integers, booleans,
+strings, and <code>Hash</code> values. The top-level <code>write_hash</code>
+helper writes any <code>T: Hash</code> into any <code>Hasher</code> interface object,
+so generic code does not need to know which concrete hasher it received.
+<code>DefaultHasher</code> and
+<code>KeyedHasher</code> implement equality, clone, hash, diagnostic
+stringification, and <code>std:fmt.Debug</code> over their current deterministic state,
+so callers can snapshot and compare hasher streams. Future work: keyed map/set
+construction, OS-seeded HashDoS-safe convenience hashers, and fast or cryptographic variants in pkg:
+libraries.</p>
 
 <!-- =========================================================== -->
-<h2 id="async-core">11. <code>core:async</code> — shapes only <span class="pill planned">planned</span></h2>
+<h2 id="async-core">12. <code>core:async</code> — syntax protocols <span class="pill spec">spec</span></h2>
 
 <p>Chapter 21 introduces <code>Future</code>, <code>Ready</code>, <code>Pending</code>,
-<code>Context</code>, and <code>AsyncIterator</code> in <code>core:prelude</code>. The
-roadmap pulls them into their own module <code>core:async</code> so they can be referred to
-without polluting the prelude.</p>
+<code>Context</code>, and <code>AsyncIterator</code>. They are compiler-recognized
+syntax protocols, so they are exported from <code>core:async</code>. Runtime helpers
+such as timers and executor scheduling remain in <code>std:async</code>.</p>
 
 <pre><code>pub interface Future&lt;T&gt; {
-  function poll(self, ctx: Context): Ready&lt;T&gt; | Pending
+  function poll(self, ctx: *Context): Ready&lt;T&gt; | Pending
 }
 
 pub struct Ready&lt;T&gt; { pub value: T }
@@ -640,159 +990,301 @@ pub struct Pending;
 pub struct Context { ... }    // opaque; constructed by executor
 
 pub interface AsyncIterator&lt;T&gt; {
-  function poll_next(self, ctx: Context): Ready&lt;Item&lt;T&gt; | Done&gt; | Pending
+  function next_async(self): Future&lt;Item&lt;T&gt; | Done&gt;
 }</code></pre>
 
-<p>Re-exported from <code>core:prelude</code> for ergonomics. <code>std:async</code>
-provides the executor that drives them.</p>
+<p><code>std:async</code> provides the executor/runtime helpers that drive these
+protocols; it does not own the syntax protocols themselves. <code>await</code> and
+<code>spawn</code> accept either a <code>Future&lt;T&gt;</code> interface object or a concrete
+type implementing <code>Future&lt;T&gt;</code>; concrete futures are widened to the
+interface object before executor polling or scheduling.</p>
 
 <!-- =========================================================== -->
-<h2 id="json">12. <code>core:json</code> — value type</h2>
+<h2 id="json">13. <code>std:json</code> — value type <span class="pill spec">spec</span></h2>
 
-<p>No parser. No serializer. Just the value tree that any parser must produce and any
-serializer must accept.</p>
+<p>No parser. The core surface is the value tree that any parser must produce and any
+serializer must accept, plus compact deterministic rendering for values already in
+memory.</p>
 
-<pre><code>pub union Json = JsonNull
-               | JsonBool   { value: bool }
-               | JsonNumber { value: f64 }
-               | JsonStr    { value: str }
-               | JsonArray  { items: List&lt;Json&gt; }
-               | JsonObject { entries: Map&lt;str, Json&gt; }
+<p>The public <code>Json</code> type is opaque rather than a public union. Internally it
+stores the usual JSON variants, but users construct and inspect it through
+functions and extractor methods. That keeps <code>List&lt;Json&gt;</code> and
+<code>Map&lt;str, Json&gt;</code> stable across module boundaries.</p>
 
-pub struct JsonNull;</code></pre>
+<p>Array/object constructors and extractors use deep snapshots. Passing a
+mutable <code>List&lt;Json&gt;</code> or <code>Map&lt;str, Json&gt;</code> to
+<code>json_array</code> / <code>json_object</code> does not let later source-container
+mutations change the <code>Json</code> value, and returned arrays, objects, and nested
+<code>Json</code> elements can be mutated without aliasing the original tree.</p>
+
+<pre><code>pub struct Json { ... }
+
+pub function json_null(): Json
+pub function json_bool(value: bool): Json
+pub function json_number(value: f64): Json
+pub function json_string(value: str): Json
+pub function json_array(items: List&lt;Json&gt;): Json
+pub function json_object(entries: Map&lt;str, Json&gt;): Json</code></pre>
 
 <p>Helpers:</p>
 
 <table>
   <thead><tr><th>Method</th><th>Returns</th><th>Notes</th></tr></thead>
   <tbody>
-    <tr><td><code>Json.null()</code> static</td><td><code>Json</code></td><td>Convenience</td></tr>
+    <tr><td><code>is_null()</code> · <code>is_bool()</code> · <code>is_number()</code> · <code>is_str()</code> · <code>is_array()</code> · <code>is_object()</code></td><td><code>bool</code></td><td>Shape predicates</td></tr>
+    <tr><td><code>len()</code></td><td><code>i64</code></td><td>Array/object length; scalars return <code>0</code></td></tr>
     <tr><td><code>as_bool()</code> · <code>as_number()</code> · <code>as_str()</code></td><td><code>T | null</code></td><td>Type-check &amp; extract</td></tr>
     <tr><td><code>as_array()</code></td><td><code>List&lt;Json&gt; | null</code></td><td></td></tr>
     <tr><td><code>as_object()</code></td><td><code>Map&lt;str, Json&gt; | null</code></td><td></td></tr>
+    <tr><td><code>contains_key(key: str)</code></td><td><code>bool</code></td><td>Object key membership; non-objects return <code>false</code></td></tr>
+    <tr><td><code>keys()</code> · <code>values()</code></td><td><code>List&lt;str&gt;</code> / <code>List&lt;Json&gt;</code></td><td>Object snapshots; non-objects return empty lists</td></tr>
     <tr><td><code>get(key: str)</code></td><td><code>Json | null</code></td><td>Object lookup</td></tr>
+    <tr><td><code>get_bool</code> · <code>get_number</code> · <code>get_str</code></td><td><code>T | null</code></td><td>Typed object lookup</td></tr>
+    <tr><td><code>get_array</code> · <code>get_object</code> · <code>get_is_null</code></td><td><code>List&lt;Json&gt; | null</code> / <code>Map&lt;str, Json&gt; | null</code> / <code>bool</code></td><td></td></tr>
     <tr><td><code>at(i: i64)</code></td><td><code>Json | null</code></td><td>Array index</td></tr>
+    <tr><td><code>at_bool</code> · <code>at_number</code> · <code>at_str</code></td><td><code>T | null</code></td><td>Typed array index</td></tr>
+    <tr><td><code>at_array</code> · <code>at_object</code> · <code>at_is_null</code></td><td><code>List&lt;Json&gt; | null</code> / <code>Map&lt;str, Json&gt; | null</code> / <code>bool</code></td><td></td></tr>
+    <tr><td><code>append</code> · <code>set_at</code></td><td><code>Json</code></td><td>Array replacement builders; non-arrays clone unchanged</td></tr>
+    <tr><td><code>with_key</code> · <code>without_key</code></td><td><code>Json</code></td><td>Object replacement builders; non-objects clone unchanged</td></tr>
+    <tr><td><code>render()</code></td><td><code>str</code></td><td>Compact escaped representation</td></tr>
+    <tr><td><code>pretty(indent: i64)</code></td><td><code>str</code></td><td>Multi-line escaped representation; indent &lt;= 0 falls back to compact rendering</td></tr>
   </tbody>
 </table>
 
-<p>Implements <code>Display</code> (canonical JSON), <code>Debug</code>, <code>Clone</code>,
-<code>Eq</code>. <em>Parsing</em> a string into <code>Json</code> is a pkg:-tier concern.</p>
+<p><code>Json</code> implements <code>Clone</code>, <code>Eq</code>, <code>Hash</code>,
+<code>ToStr</code>, and <code>Debug</code>. Clone and equality are deep: arrays compare
+element-by-element and objects compare by key/value contents. Constructors and
+extractors, object <code>values()</code>, and nested lookups also deep-clone
+array/object contents, preserving value semantics around mutable
+<code>List</code> and <code>Map</code> containers. Array/object replacement
+builders also deep-clone inserted values and preserve snapshot semantics, so
+mutating a builder input or an extracted nested container cannot change an
+existing JSON tree. Hashing and
+<code>to_str()</code> are intentionally separate: <code>hash()</code> walks the tree
+structurally, keeps array order significant, and folds object entries
+order-independently so equal objects have equal hashes regardless of insertion
+order; <code>to_str()</code> uses compact deterministic rendering for values,
+arrays, and objects using the map's deterministic iteration order. String values
+and object keys are JSON-escaped for quotes, backslashes, common control escapes,
+and remaining U+0000..U+001F control characters. <code>pretty(indent)</code>
+uses the same escaping rules and emits multi-line arrays/objects with the
+requested number of spaces per indentation level. Stricter canonicalization
+remains follow-up library work.
+<em>Parsing</em> a string into <code>Json</code> is a pkg:-tier concern.</p>
 
 <!-- =========================================================== -->
-<h2 id="net-types">13. <code>core:net:types</code> — IP, sockets, URLs</h2>
+<h2 id="net-types">14. <code>std:net:types</code> — IP, sockets, URLs <span class="pill spec">spec</span> + <span class="pill planned">planned</span></h2>
 
-<p>Parsed network identifiers. No connections — those live in <code>std:net</code>.</p>
+<p><code>std:net:types</code> provides portable value types for network identifiers.
+It does not open sockets, perform DNS, or read from the network; those target-backed
+operations live in <code>std:net</code>. The implemented surface is constructor-based
+so the representation can evolve without exposing fixed-size array or parser
+internals.</p>
 
-<pre><code>pub union IpAddr = V4 { octets: [u8; 4] }
-                 | V6 { segments: [u16; 8] }
+<pre><code>pub struct IpAddr
+pub struct SocketAddr
+pub struct Uri
+pub struct Url
+pub struct ParseError
 
-pub struct SocketAddr {
-  pub ip:   IpAddr,
-  pub port: u16,
-}
+pub function ip_v4(a: u8, b: u8, c: u8, d: u8): IpAddr
+pub function ip_v6(a: u16, b: u16, c: u16, d: u16,
+                   e: u16, f: u16, g: u16, h: u16): IpAddr
+pub function ip_v6_scoped(a: u16, b: u16, c: u16, d: u16,
+                          e: u16, f: u16, g: u16, h: u16,
+                          zone: str): IpAddr
+pub function socket_addr(ip: IpAddr, port: u16): SocketAddr
+pub function uri(scheme: str, authority: str | null, path: str,
+                 query: str | null, fragment: str | null): Uri
+pub function url(scheme: str, user: str | null, host: str, port: u16 | null,
+                 path: str, query: Map&lt;str, str&gt;, fragment: str | null): Url
+pub function parse_ip_v4(text: str): IpAddr | ParseError
+pub function parse_ip_v6(text: str): IpAddr | ParseError
+pub function parse_ipv4_socket_addr(text: str): SocketAddr | ParseError
+pub function parse_socket_addr(text: str): SocketAddr | ParseError
+pub function parse_uri(text: str): Uri | ParseError
+pub function parse_url(text: str): Url | ParseError
+pub function percent_encode_component(text: str): str
+pub function percent_decode_component(text: str): str | ParseError</code></pre>
 
-pub struct Uri {
-  pub scheme:   str,
-  pub authority: str | null,
-  pub path:     str,
-  pub query:    str | null,
-  pub fragment: str | null,
-}
+<p>Implemented methods:</p>
 
-pub struct Url {
-  pub scheme:   str,
-  pub user:     str | null,
-  pub host:     str,
-  pub port:     u16 | null,
-  pub path:     str,
-  pub query:    Map&lt;str, str&gt;,
-  pub fragment: str | null,
-}
+<table>
+  <thead><tr><th>Type</th><th>Methods</th><th>Interfaces</th></tr></thead>
+  <tbody>
+    <tr><td><code>IpAddr</code></td><td><code>is_v4()</code>, <code>is_v6()</code>, <code>zone_id()</code>, <code>render()</code></td><td><code>Eq</code>, <code>Hash</code>, <code>Clone</code>, <code>ToStr</code>, <code>Debug</code></td></tr>
+    <tr><td><code>SocketAddr</code></td><td><code>ip()</code>, <code>port()</code>, <code>render()</code></td><td><code>Eq</code>, <code>Hash</code>, <code>Clone</code>, <code>ToStr</code>, <code>Debug</code></td></tr>
+    <tr><td><code>Uri</code></td><td><code>scheme()</code>, <code>authority()</code>, <code>path()</code>, <code>query()</code>, <code>fragment()</code>, <code>render()</code></td><td><code>Eq</code>, <code>Hash</code>, <code>Clone</code>, <code>ToStr</code>, <code>Debug</code></td></tr>
+    <tr><td><code>Url</code></td><td><code>scheme()</code>, <code>user()</code>, <code>host()</code>, <code>port()</code>, <code>path()</code>, <code>query()</code>, <code>query_get()</code>, <code>fragment()</code>, <code>with_scheme()</code>, <code>with_user()</code>, <code>with_host()</code>, <code>with_port()</code>, <code>with_path()</code>, <code>with_query()</code>, <code>with_query_param()</code>, <code>without_query_param()</code>, <code>clear_query()</code>, <code>with_fragment()</code>, <code>query_string()</code>, <code>render()</code></td><td><code>Eq</code>, <code>Hash</code>, <code>Clone</code>, <code>ToStr</code>, <code>Debug</code></td></tr>
+    <tr><td><code>ParseError</code></td><td><code>message()</code>, <code>cause()</code>, <code>to_str()</code></td><td><code>Error</code>, <code>Eq</code>, <code>Hash</code>, <code>Clone</code>, <code>Debug</code></td></tr>
+  </tbody>
+</table>
 
-extend IpAddr   { function parse(s: str): IpAddr   | ParseError }
-extend SocketAddr { function parse(s: str): SocketAddr | ParseError }
-extend Uri      { function parse(s: str): Uri      | ParseError }
-extend Url      { function parse(s: str): Url      | ParseError }
-
-pub struct ParseError { pub message: str, pub position: i64 }</code></pre>
-
-<p>All implement <code>Display</code> (serialize back to the canonical form),
-<code>Debug</code>, <code>Eq</code>, <code>Hash</code>, <code>Clone</code>.</p>
+<p><code>parse_ip_v4</code> parses dotted decimal IPv4 addresses,
+<code>parse_ip_v6</code> parses eight-group and <code>::</code>-compressed IPv6
+addresses, including final dotted IPv4 tails such as
+<code>::ffff:192.0.2.128</code> and nonempty scoped zone IDs such as
+<code>fe80::1%eth0</code>. IPv6 rendering uses lowercase hex groups without
+leading zeroes, preserving an attached zone ID. <code>parse_ipv4_socket_addr</code> parses
+<code>IPv4:port</code> endpoints, and
+<code>parse_socket_addr</code> parses either <code>IPv4:port</code> or bracketed
+<code>[IPv6]:port</code> endpoints, including bracketed scoped IPv6 hosts, without opening a socket.
+<code>parse_uri</code> parses the existing <code>Uri</code> value shape: scheme, optional
+<code>//authority</code>, path, query, and fragment. <code>parse_url</code> parses the
+existing <code>Url</code> value shape: <code>scheme://</code>, optional user,
+host, optional decimal port, path, <code>key=value</code> query pairs, and fragment.
+URL hosts may be ordinary host strings or bracketed IPv6 literals, including
+scoped literals such as <code>http://[fe80::1%en0]/</code>; parsed IPv6 URL hosts
+are rendered back in bracketed lowercase-hex form.
+They return <code>ParseError</code> with a diagnostic message and character position
+for malformed decimal/hex fields, wrong arity, out-of-range values, invalid
+IPv6 compression, missing scheme delimiters, empty authorities/hosts, missing
+IPv6 URL host brackets, invalid IPv6 URL host delimiters, or
+malformed query pairs, non-final IPv4 tails, invalid zone identifiers, or invalid embedded IPv4 decimal
+groups. <code>ParseError</code>
+implements <code>std:error.Error</code>, equality, clone, hash, stringification, and
+<code>std:fmt.Debug</code>. Stricter URI/URL validation, canonical URL normalization,
+IDNA, DNS, sockets, and <code>Display</code> formatting contracts remain planned
+follow-up work.
+<code>percent_encode_component</code> keeps unreserved ASCII characters
+(<code>A-Z</code>, <code>a-z</code>, <code>0-9</code>, <code>-</code>, <code>.</code>,
+<code>_</code>, <code>~</code>) and percent-encodes every other Unicode scalar
+as uppercase UTF-8 byte escapes. <code>percent_decode_component</code> decodes
+<code>%HH</code> byte runs as strict UTF-8 and returns <code>ParseError</code> for
+truncated escapes, non-hex digits, invalid leading/continuation bytes, overlong
+encodings, surrogate scalars, and code points above U+10FFFF; raw non-escaped
+characters pass through unchanged.
+The current URL parser stores query pairs in <code>Map&lt;str, str&gt;</code>, so repeated
+keys follow normal map replacement semantics, and rendering uses deterministic
+map iteration. The <code>url(...)</code> constructor, parsed URLs,
+<code>Url.query()</code>, and <code>Url.with_query(...)</code> snapshot their query maps,
+so mutating the caller's source map or an accessor result does not change the
+<code>Url</code> value. The <code>Url.with_*</code> methods are immutable replacement
+builders: they return a new <code>Url</code> and preserve snapshot semantics for
+unchanged query pairs. <code>Url.query_get(key)</code> performs direct key lookup,
+while <code>with_query_param</code>, <code>without_query_param</code>, and
+<code>clear_query</code> provide immutable query-entry updates without exposing the
+internal query map for mutation. <code>Url.eq</code> compares query maps by
+key/value membership rather than rendered order, and <code>Url.hash()</code> folds
+query entries order-independently so equal URLs have equal hashes even when
+their query pairs were inserted in different orders.</p>
 
 <!-- =========================================================== -->
-<h2 id="http">14. <code>core:http</code> — Method · Status · Headers · Request · Response</h2>
+<h2 id="http">15. <code>std:http</code> — Method · Status · Headers · Request · Response <span class="pill spec">spec</span> + <span class="pill planned">planned</span></h2>
 
-<p>The single most important fragmentation defense. Implementations of clients and servers
-live in pkg: or are layered on <code>std:net</code>; the <em>types</em> are universal.</p>
+<p>The single most important fragmentation defense. Implementations of clients
+and servers live in pkg: or are layered on <code>std:net</code>; the <em>types</em>
+are universal. The implemented slice is a pure Otter-authored value layer: no
+HTTP client/server, socket integration, or wire parser.</p>
 
 <pre><code>pub union Method = Get | Head | Post | Put | Delete | Patch
-                 | Options | Trace | Connect
-                 | Custom { name: str }
+                 | Options | Trace | Connect | Custom { name: str }
 
-pub struct Status {
-  pub code: u16,                    // 100 .. 599
-  pub reason: str | null,           // null means default for code
-}
+pub union HttpVersion = Http10 | Http11 | Http2 | Http3
 
-extend Status {
-  function ok():           Status   // 200
-  function created():      Status   // 201
-  function no_content():   Status   // 204
-  function not_found():    Status   // 404
-  function internal_err(): Status   // 500
-  function is_success(self):     bool       // 200..300
-  function is_redirection(self): bool       // 300..400
-  function is_client_error(self): bool      // 400..500
-  function is_server_error(self): bool      // 500..600
-}
+pub struct Status
+pub struct Headers
+pub struct HeaderEntry
+pub struct HttpRequest
+pub struct HttpResponse
 
-pub struct Headers {
-  // Case-insensitive multi-map. Stores last-write-wins per name for `get`,
-  // exposes all values via `get_all`.
-}
+pub function method_get(): Method
+pub function method_head(): Method
+pub function method_post(): Method
+pub function method_put(): Method
+pub function method_delete(): Method
+pub function method_patch(): Method
+pub function method_options(): Method
+pub function method_trace(): Method
+pub function method_connect(): Method
+pub function method_custom(name: str): Method
 
-extend Headers {
-  function new(): Headers
-  function get(self, name: str):     str | null
-  function get_all(self, name: str): List&lt;str&gt;
-  function set(self, name: str, value: str): null
-  function append(self, name: str, value: str): null
-  function remove(self, name: str):  null
-  function contains(self, name: str): bool
-  function iter(self): Iterator&lt;Entry&lt;str, str&gt;&gt;
-}
+pub function http_10(): HttpVersion
+pub function http_11(): HttpVersion
+pub function http_2():  HttpVersion
+pub function http_3():  HttpVersion
 
-pub struct HttpRequest {
-  pub method:  Method,
-  pub url:     Url,
-  pub headers: Headers,
-  pub body:    Bytes,
-  pub version: HttpVersion,
-}
+pub function status(code: u16, reason: str | null): Status
+pub function headers(): Headers
+pub function header_entry(name: str, value: str): HeaderEntry
+pub function http_request(method: Method, url: Url, headers: Headers,
+                          body: Bytes, version: HttpVersion): HttpRequest
+pub function http_response(status: Status, headers: Headers,
+                           body: Bytes, version: HttpVersion): HttpResponse</code></pre>
 
-pub struct HttpResponse {
-  pub status:  Status,
-  pub headers: Headers,
-  pub body:    Bytes,
-  pub version: HttpVersion,
-}
+<p>Implemented methods:</p>
 
-pub union HttpVersion = Http10 | Http11 | Http2 | Http3</code></pre>
+<table>
+  <thead><tr><th>Type</th><th>Methods</th><th>Interfaces</th></tr></thead>
+  <tbody>
+    <tr><td><code>Method</code></td><td><code>as_str()</code>, <code>debug()</code></td><td><code>Eq</code>, <code>Clone</code>, <code>Hash</code>, <code>ToStr</code></td></tr>
+    <tr><td><code>HttpVersion</code></td><td><code>as_str()</code>, <code>debug()</code></td><td><code>Eq</code>, <code>Clone</code>, <code>Hash</code>, <code>ToStr</code></td></tr>
+    <tr><td><code>Status</code></td><td>standard status constructors, <code>code()</code>, <code>reason()</code>, <code>with_reason()</code>, <code>without_reason()</code>, class predicates, <code>reason_or_default()</code></td><td><code>Eq</code>, <code>Clone</code>, <code>Hash</code>, <code>ToStr</code>, <code>Debug</code></td></tr>
+    <tr><td><code>Headers</code></td><td><code>new()</code>, <code>get()</code>, <code>get_all()</code>, <code>entries()</code>, <code>names()</code>, <code>set()</code>, <code>append()</code>, <code>remove()</code>, <code>contains()</code>, <code>size()</code>, <code>is_empty()</code>, <code>value_count()</code>, <code>clear()</code></td><td><code>Eq</code>, <code>Clone</code>, <code>Hash</code>, <code>Debug</code></td></tr>
+    <tr><td><code>HeaderEntry</code></td><td><code>new()</code>, <code>name()</code>, <code>value()</code></td><td><code>Eq</code>, <code>Clone</code>, <code>Hash</code>, <code>ToStr</code>, <code>Debug</code></td></tr>
+    <tr><td><code>HttpRequest</code></td><td><code>method()</code>, <code>url()</code>, <code>headers()</code>, <code>body()</code>, <code>version()</code>, <code>with_method()</code>, <code>with_url()</code>, <code>with_headers()</code>, <code>with_body()</code>, <code>with_version()</code>, <code>with_header()</code>, <code>with_set_header()</code>, <code>without_header()</code>, <code>clear_headers()</code></td><td><code>Eq</code>, <code>Clone</code>, <code>Hash</code>, <code>Debug</code></td></tr>
+    <tr><td><code>HttpResponse</code></td><td><code>status()</code>, <code>headers()</code>, <code>body()</code>, <code>version()</code>, <code>with_status()</code>, <code>with_headers()</code>, <code>with_body()</code>, <code>with_version()</code>, <code>with_header()</code>, <code>with_set_header()</code>, <code>without_header()</code>, <code>clear_headers()</code></td><td><code>Eq</code>, <code>Clone</code>, <code>Hash</code>, <code>Debug</code></td></tr>
+  </tbody>
+</table>
+
+<p><code>Headers</code> is a case-insensitive normalized multi-map: all header
+names are lowercased with ASCII rules on insertion, lookup, removal, snapshots,
+equality, hashing, and debug rendering. <code>get</code> returns the last value for a
+name, and <code>get_all</code> returns a snapshot list.
+<code>entries()</code> returns flattened <code>HeaderEntry</code> snapshots preserving each
+header value as its own name/value pair, and <code>names()</code> returns a snapshot of
+the normalized header names. <code>size()</code> counts normalized header names,
+<code>value_count()</code> counts flattened values, <code>is_empty()</code> checks for no
+header names, and <code>clear()</code> removes all headers without invalidating
+previous snapshots.
+Header equality compares normalized names by membership and preserves value order
+within each header name; <code>Headers.hash()</code> mirrors that contract by folding
+normalized header names order-independently while keeping each header's value
+sequence order-sensitive. Request/response equality and hashing
+compares method and version by their rendered protocol strings, then compares
+URL/status, headers, and body by value. Request/response accessors snapshot
+mutable sub-values such as headers and body, so mutating a returned value does
+not mutate the request/response. Request/response constructors and replacement
+<code>with_*</code> helpers snapshot caller-provided methods, URLs, statuses, headers,
+bodies, and versions; they also clone unchanged sub-values when returning the
+updated value. <code>with_header</code>
+appends a header value, <code>with_set_header</code> replaces that normalized header
+name, <code>without_header</code> removes it, and <code>clear_headers</code>
+returns a value with an empty header map. Canonical wire rendering/parsing and
+HTTP client/server implementations remain planned follow-up work.</p>
+
+<p><code>Status</code> includes constructors and default reason phrases for common
+informational, success, redirection, client-error, and server-error codes
+(including <code>100</code>, <code>101</code>, <code>200</code>, <code>201</code>,
+<code>202</code>, <code>204</code>, <code>301</code>, <code>302</code>,
+<code>303</code>, <code>304</code>, <code>307</code>, <code>308</code>,
+<code>400</code>, <code>401</code>, <code>403</code>, <code>404</code>,
+<code>405</code>, <code>409</code>, <code>418</code>, <code>422</code>,
+<code>429</code>, and <code>500</code> through <code>504</code>). Unknown
+codes render as the numeric code unless an explicit reason is supplied.
+<code>with_reason(reason)</code> and <code>without_reason()</code> rebuild the value
+with or without an explicit reason phrase.</p>
+
+<p><code>Method</code> and <code>HttpVersion</code> implement equality over their
+rendered protocol strings, matching the comparison behavior used by request and
+response values.</p>
 
 <div class="callout good">
   <strong>Composability</strong>
   A middleware function signature like
   <code>function (req: HttpRequest, next: (HttpRequest) =&gt; HttpResponse): HttpResponse</code>
   works across <em>any</em> client and <em>any</em> server in the ecosystem, because the
-  types are pinned in <code>core:http</code>.
+  types are pinned in <code>std:http</code>.
 </div>
 
 <!-- =========================================================== -->
-<h2 id="io-impl">15. <code>std:io</code> — concrete handles <span class="pill spec">spec</span></h2>
+<h2 id="io-impl">16. <code>std:io</code> — concrete handles <span class="pill spec">spec</span></h2>
 
-<p>Chapter 18 already places <code>print</code> / <code>println</code> here. The roadmap
-adds the standard streams and file handle as concrete <code>Reader</code>/<code>Writer</code>
-implementations.</p>
+<p>Chapter 18 already places <code>print</code>, <code>println</code>,
+<code>eprint</code>, and <code>eprintln</code> here as runtime-backed stream
+helpers. The implemented mixed slice also exposes stdin/stdout/stderr handles
+as byte-oriented <code>Reader</code>/<code>Writer</code> implementations. Buffered adapters
+and richer stream options remain planned provider work.</p>
 
 <pre><code>pub function print(s: str): null
 pub function println(s: str): null
@@ -812,56 +1304,245 @@ extend Stdout: Writer { ... }
 extend Stderr: Writer { ... }</code></pre>
 
 <!-- =========================================================== -->
-<h2 id="fs">16. <code>std:fs</code> — files · Path <span class="pill planned">planned</span></h2>
+<h2 id="fs">17. <code>std:fs</code> — files · Path <span class="pill spec">spec</span> + <span class="pill planned">planned</span></h2>
 
-<p><code>Path</code> is a structured string with OS-aware separator handling. Even though
-it could live in <code>core:</code>, it ships in <code>std:fs</code> because canonicalization
-and metadata queries need the OS.</p>
+<p><code>Path</code> is a structured string for filesystem paths. Even the pure value
+operations live in <code>std:fs</code>, not <code>core:</code>, because the full contract
+belongs with canonicalization, metadata queries, and target-specific separator
+handling. The current Otter-authored slice implements slash-separated path
+composition, inspection, relative/absolute checks, file-stem extraction, and
+extension replacement/removal, plus lexical normalization of <code>.</code>,
+<code>..</code>, repeated slash components, component inspection, normalized
+prefix/suffix checks, normalized prefix stripping, normalized component counts,
+and empty/root predicates. It also handles
+single-leading-dot filenames such as <code>.env</code> as basenames with no
+extension, while multi-dot hidden filenames such as <code>.profile.bak</code> still
+have a final extension. The implemented value slice provides the portable
+<code>DirEntry</code> / <code>FileKind</code> value shape yielded by snapshot directory
+iteration, plus <code>Permissions</code> and
+<code>Metadata</code> value shapes returned by metadata queries. These values expose
+immutable-style replacement builders and snapshot nested inputs/results so
+future provider-backed handles can return ordinary comparable values without
+aliasing caller-owned state. The implemented mixed slice adds target-backed
+native separator conversion, path existence/type/metadata queries, filesystem
+canonicalization, binary byte reads/writes, UTF-8 text reads/writes,
+non-recursive remove/rename/directory creation operations, snapshot-backed
+directory reads, and descriptor-backed <code>File</code> values over Rust runtime
+hooks. <code>OpenOptions</code> provides explicit read/write/append/truncate/create/
+create_new open configuration plus portable validation for descriptor-backed
+files. <code>File</code> implements <code>std:io.Reader</code>,
+<code>std:io.Writer</code>, and <code>std:io.Seeker</code>;
+errors surface as ordinary
+<code>std:io.IoError</code> values.</p>
 
 <pre><code>pub struct Path {
-  pub raw: str,    // platform-native separator
+  pub raw: str,    // slash-separated in the portable value layer
 }
 
 extend Path {
   function new(s: str): Path
+  function from_native(s: str): Path
+  function as_str(self): str
+  function to_native_str(self): str
   function join(self, segment: str): Path
+  function join_path(self, other: Path): Path
+  function normalize(self): Path
+  function components(self): List&lt;str&gt;
+  function starts_with(self, base: Path): bool
+  function ends_with(self, suffix: Path): bool
+  function strip_prefix(self, base: Path): Path | null
   function parent(self): Path | null
   function file_name(self): str | null
+  function file_stem(self): str | null
   function extension(self): str | null
+  function with_extension(self, ext: str): Path
   function is_absolute(self): bool
+  function is_relative(self): bool
+  function is_empty(self): bool
+  function is_root(self): bool
+  function component_count(self): i64
+  function to_str(self): str
+  function clone(self): Path
+  function eq(self, other: Path): bool
+  function hash(self): u64
+
   function exists(self): bool | IoError
   function is_file(self): bool | IoError
   function is_dir(self): bool | IoError
+  function file_kind(self): FileKind | IoError
+  function byte_len(self): u64 | IoError
+  function permissions(self): Permissions | IoError
+  function metadata(self): Metadata | IoError
+  function canonicalize(self): Path | IoError
 }
-
-pub struct File { ... }
-extend File: Reader + Writer + Seeker { ... }
 
 extend File {
   function open(path: Path):   File | IoError
   function create(path: Path): File | IoError
   function append(path: Path): File | IoError
+  function open_with(path: Path, options: OpenOptions): File | IoError
+  function path(self): Path
+  function is_append_mode(self): bool
+  function handle_id(self): i64
+  function read_to_string(self): str | IoError
+  function write_string(self, contents: str): null | IoError
+  function append_string(self, contents: str): null | IoError
   function close(self): null | IoError
 }
 
-pub function read(path: Path):  Bytes | IoError
-pub function write(path: Path, data: Bytes): null | IoError
+extend File: Reader + Writer + Seeker { ... }
+
+pub struct OpenOptions {
+  pub read: bool,
+  pub write: bool,
+  pub append: bool,
+  pub truncate: bool,
+  pub create: bool,
+  pub create_new: bool,
+}
+
+pub function open_options(): OpenOptions
+
+extend OpenOptions {
+  function new(): OpenOptions
+  function read(self): bool
+  function write(self): bool
+  function append(self): bool
+  function truncate(self): bool
+  function create(self): bool
+  function create_new(self): bool
+  function with_read(self, value: bool): OpenOptions
+  function with_write(self, value: bool): OpenOptions
+  function with_append(self, value: bool): OpenOptions
+  function with_truncate(self, value: bool): OpenOptions
+  function with_create(self, value: bool): OpenOptions
+  function with_create_new(self, value: bool): OpenOptions
+  function validation_error(self): IoError | null
+  function validate(self): null | IoError
+  function is_valid(self): bool
+}
+
 pub function read_to_string(path: Path): str | IoError
+pub function write_string(path: Path, contents: str): null | IoError
+pub function append_string(path: Path, contents: str): null | IoError
+pub function read(path: Path): Bytes | IoError
+pub function write(path: Path, data: Bytes): null | IoError
 pub function remove(path: Path): null | IoError
 pub function rename(from: Path, to: Path): null | IoError
 pub function create_dir(path: Path):     null | IoError
 pub function create_dir_all(path: Path): null | IoError
-pub function read_dir(path: Path): Iterator&lt;DirEntry | IoError&gt;
+pub function canonicalize(path: Path): Path | IoError
+pub function native_separator(): str
+pub function path_from_native(s: str): Path
+
+pub function read_dir(path: Path): DirEntries | IoError
 
 pub struct DirEntry {
   pub path: Path,
   pub kind: FileKind,
 }
 
-pub union FileKind = RegularFile | Directory | Symlink | OtherKind</code></pre>
+pub struct DirEntries {
+  entries: List&lt;DirEntry&gt;,
+  index: i64,
+}
+
+extend DirEntry {
+  function new(path: Path, kind: FileKind): DirEntry
+  function path(self): Path
+  function kind(self): FileKind
+  function with_path(self, path: Path): DirEntry
+  function with_kind(self, kind: FileKind): DirEntry
+}
+
+extend DirEntries: Iterator&lt;DirEntry | IoError&gt; { ... }
+
+pub union FileKind = RegularFile | Directory | Symlink | OtherKind
+
+pub function regular_file(): FileKind
+pub function directory(): FileKind
+pub function symlink(): FileKind
+pub function other_kind(): FileKind
+pub function dir_entry(path: Path, kind: FileKind): DirEntry
+
+pub struct Permissions {
+  pub read_only: bool,
+  pub executable: bool,
+}
+
+extend Permissions {
+  function new(read_only: bool, executable: bool): Permissions
+  function is_read_only(self): bool
+  function is_executable(self): bool
+  function with_read_only(self, read_only: bool): Permissions
+  function with_executable(self, executable: bool): Permissions
+}
+
+pub struct Metadata {
+  pub kind: FileKind,
+  pub byte_len: u64,
+  pub permissions: Permissions,
+}
+
+extend Metadata {
+  function new(kind: FileKind, byte_len: u64, permissions: Permissions): Metadata
+  function file_kind(self): FileKind
+  function len(self): u64
+  function permissions(self): Permissions
+  function is_file(self): bool
+  function is_dir(self): bool
+  function is_symlink(self): bool
+  function with_file_kind(self, kind: FileKind): Metadata
+  function with_len(self, byte_len: u64): Metadata
+  function with_permissions(self, permissions: Permissions): Metadata
+}
+
+pub function permissions(read_only: bool, executable: bool): Permissions
+pub function metadata(kind: FileKind, byte_len: u64, permissions: Permissions): Metadata</code></pre>
+
+<p><code>DirEntry</code> implements equality, clone, hash, stringification, and
+<code>std:fmt.Debug</code>; constructors, accessors, and replacement builders clone the
+path and kind so callers receive snapshots. <code>FileKind</code> implements equality,
+clone, hash, stringification, and diagnostic debug rendering.
+<code>Permissions</code> and
+<code>Metadata</code> implement equality, clone, hash, stringification, and
+diagnostic debug rendering; <code>Metadata</code> constructors, accessors, and
+replacement builders clone nested values so callers receive snapshots. The
+path query and text helpers touch the target filesystem now. <code>Path.metadata()</code>
+builds a snapshot <code>Metadata</code> value from the selected target: file kind uses
+symlink-aware metadata, length and permissions use regular metadata, missing
+paths return <code>IoError</code>, and executable permissions are provider-specific
+(Unix providers read execute bits; non-Unix providers currently report
+<code>false</code>). <code>Path.canonicalize()</code> and
+<code>canonicalize(path)</code> ask the selected provider for the canonical
+filesystem path, resolving symlinks and requiring the target path to exist.
+<code>read(path)</code> and <code>write(path, data)</code> operate on
+<code>std:bytes.Bytes</code> and preserve arbitrary byte values; the current runtime
+boundary encodes bytes as private hexadecimal payloads so the Rust hooks do not
+depend on the Otter-authored <code>Bytes</code> struct layout.
+<code>Path.from_native(s)</code>, <code>path_from_native(s)</code>, and
+<code>Path.to_native_str()</code> translate between the portable slash-separated
+<code>Path</code> representation and the selected provider's native separator;
+<code>native_separator()</code> exposes that separator for tooling and diagnostics.
+<code>File.open_with(path, options)</code> opens descriptor-backed files with explicit
+read/write/append/truncate/create/create_new flags. <code>OpenOptions</code> is an
+ordinary immutable-style value with validation, equality, clone, hash,
+stringification, and diagnostic debug rendering. <code>validation_error</code>,
+<code>validate</code>, and <code>is_valid</code> enforce provider-independent open rules:
+an open must request at least one of read/write/append, and truncate/create/
+create_new require write or append access. <code>File.open_with</code> returns those
+validation failures as <code>IoError</code> before calling the selected provider hook.
+Existing <code>File.open</code>, <code>File.create</code>, and <code>File.append</code>
+remain convenience constructors over the same provider hook.
+<code>remove(path)</code> removes regular files, symlinks, and empty directories but
+is intentionally non-recursive. <code>read_dir(path)</code> snapshots the selected
+directory into provider-backed <code>DirEntry</code> values and returns a
+<code>DirEntries</code> iterator; construction reports directory-open or per-entry
+provider errors as <code>IoError</code>, and iteration over the completed snapshot is
+deterministic for that snapshot but follows provider directory ordering.</p>
 
 <!-- =========================================================== -->
-<h2 id="net">17. <code>std:net</code> — TCP · UDP · DNS <span class="pill planned">planned</span></h2>
+<h2 id="net">18. <code>std:net</code> — TCP · UDP · DNS <span class="pill planned">planned</span></h2>
 
 <pre><code>pub struct TcpStream { ... }
 extend TcpStream: Reader + Writer { ... }
@@ -889,53 +1570,30 @@ extend UdpSocket {
 
 pub function resolve(host: str): List&lt;IpAddr&gt; | IoError</code></pre>
 
-<p>Async equivalents live in <code>std:async</code>'s adapters (<code>AsyncTcpStream</code>,
-<code>AsyncTcpListener</code>) — they implement the same <code>AsyncRead</code> /
-<code>AsyncWrite</code> shapes, which themselves live in <code>core:async</code>.</p>
+<p>Async equivalents are planned as <code>std:async</code> adapters
+(<code>AsyncTcpStream</code>, <code>AsyncTcpListener</code>). Their shared
+<code>AsyncRead</code> / <code>AsyncWrite</code> protocols are planned companion contracts;
+they are not part of today's <code>core:async</code> catalog export.</p>
 
 <!-- =========================================================== -->
-<h2 id="time-std">18. <code>std:time</code> — Instant · DateTime · TimeZone <span class="pill planned">planned</span></h2>
+<h2 id="time-std">19. <code>std:time</code> — conversions · local time <span class="pill planned">planned</span></h2>
 
-<pre><code>pub struct Instant     { ... }    // monotonic, opaque
-pub struct SystemTime  { ... }    // wall-clock, opaque
-
-extend Instant {
-  function now(): Instant
-  function elapsed(self): Duration
-  function since(self, earlier: Instant): Duration
-}
-
-extend SystemTime {
-  function now(): SystemTime
-  function unix_epoch(): SystemTime
-  function duration_since(self, earlier: SystemTime): Duration | TimeError
-}
-
-pub function sleep(d: Duration): null
-
-pub struct DateTime {
-  pub year: i32, pub month: u8, pub day: u8,
-  pub hour: u8, pub minute: u8, pub second: u8, pub nanos: u32,
-  pub tz: TimeZone,
-}
-
-pub union TimeZone = Utc
-                   | FixedOffset { seconds: i32 }
-                   | Named       { name: str }    // IANA name; resolution OS-dependent
-
-extend DateTime {
+<pre><code>extend DateTime {
   function now_utc(): DateTime
   function now_local(): DateTime
-  function from_system_time(t: SystemTime, tz: TimeZone): DateTime
-  function to_system_time(self): SystemTime
-  function format_iso8601(self): str
-  function parse_iso8601(s: str): DateTime | ParseError
-}
+  function from_system_time_local(t: SystemTime): DateTime | TimeError
+}</code></pre>
 
-pub struct TimeError { pub message: str }</code></pre>
+<p><code>Duration</code>, <code>Instant</code>, <code>SystemTime</code>,
+<code>TimeZone</code>, <code>DateTime</code>, <code>TimeError</code>, and
+<code>sleep(Duration)</code> are implemented in the current <code>std:time</code> slice,
+including UTC/fixed-offset <code>SystemTime.to_datetime(tz)</code> and
+<code>DateTime.to_system_time()</code>.
+This planned section is now limited to local timezone lookup, timezone
+databases, named-zone conversion, and leap-second policy.</p>
 
 <!-- =========================================================== -->
-<h2 id="sync-extra">19. <code>std:sync</code> — additions <span class="pill spec">spec</span></h2>
+<h2 id="sync-extra">20. <code>std:sync</code> — additions <span class="pill planned">planned</span></h2>
 
 <p>Chapter 20 covers <code>Shared&lt;T&gt;</code>, channels, and <code>LockBusy</code>.
 Additions:</p>
@@ -960,7 +1618,7 @@ extend&lt;T&gt; Lazy&lt;T&gt; {
 }</code></pre>
 
 <!-- =========================================================== -->
-<h2 id="atomic">20. <code>std:sync:atomic</code></h2>
+<h2 id="atomic">21. <code>core:sync:atomic</code> <span class="pill spec">spec</span> + <span class="pill planned">planned</span></h2>
 
 <pre><code>pub struct AtomicI32  { ... }
 pub struct AtomicI64  { ... }
@@ -970,6 +1628,12 @@ pub struct AtomicBool { ... }
 pub struct AtomicPtr&lt;T&gt; { ... }
 
 pub union Ordering = Relaxed | Acquire | Release | AcqRel | SeqCst
+
+pub function ordering_relaxed(): Ordering
+pub function ordering_acquire(): Ordering
+pub function ordering_release(): Ordering
+pub function ordering_acq_rel(): Ordering
+pub function ordering_seq_cst(): Ordering
 
 extend AtomicI64 {
   function new(v: i64): AtomicI64
@@ -984,8 +1648,17 @@ extend AtomicI64 {
 
 // Other Atomic* types mirror this shape.</code></pre>
 
+<p>Atomics live in <code>core:</code> under the revised tier rule: load/store,
+compare-exchange, and fetch operations require compiler/runtime primitive
+semantics and cannot be faithfully implemented as ordinary user-space library
+code. The implemented slice is the portable <code>Ordering</code> value contract.
+<code>Ordering</code> implements equality, clone, hash, stringification, and
+<code>std:fmt.Debug</code>, with constructor helpers for each memory ordering. The
+atomic handle types and all load/store/swap/compare-exchange/fetch operations
+remain target/runtime work.</p>
+
 <!-- =========================================================== -->
-<h2 id="process">21. <code>std:process</code></h2>
+<h2 id="process">22. <code>std:process</code> <span class="pill spec">spec</span> + <span class="pill planned">planned</span></h2>
 
 <pre><code>pub function args(): List&lt;str&gt;
 pub function env(name: str): str | null
@@ -1003,11 +1676,32 @@ pub struct Command {
 
 extend Command {
   function new(program: str): Command
-  function arg(self, a: str): Command           // builder; returns self
+  function program(self): str
+  function args(self): List&lt;str&gt;
+  function arg_count(self): i64
+  function env(self): Map&lt;str, str&gt; | null
+  function env_var_value(self, key: str): str | null
+  function has_env_var(self, key: str): bool
+  function env_count(self): i64
+  function cwd(self): Path | null
+  function with_program(self, program: str): Command
+  function with_args(self, args: List&lt;str&gt;): Command
+  function arg(self, a: str): Command           // builder; returns a new value
+  function with_env(self, env: Map&lt;str, str&gt;): Command
   function env_var(self, k: str, v: str): Command
-  function spawn(self):  Child  | IoError
-  function output(self): Output | IoError       // run to completion, capture
+  function inherit_env(self): Command
+  function clear_env(self): Command
+  function with_cwd(self, cwd: Path): Command
+  function clear_cwd(self): Command
+  function validation_error(self): IoError | null
+  function validate(self): null | IoError
+  function is_valid(self): bool
+
   function status(self): ExitStatus | IoError   // run to completion, no capture
+  function output(self): Output | IoError       // run to completion, capture
+
+  // Planned live-child method:
+  function spawn(self):  Child  | IoError
 }
 
 pub struct Child {
@@ -1023,10 +1717,55 @@ extend Child {
 }
 
 pub struct ExitStatus { pub code: i32 | null, pub signal: i32 | null }
-pub struct Output     { pub status: ExitStatus, pub stdout: Bytes, pub stderr: Bytes }</code></pre>
+pub struct Output     { pub status: ExitStatus, pub stdout: Bytes, pub stderr: Bytes }
+
+pub function command(program: str): Command
+pub function exit_status(code: i32 | null, signal: i32 | null): ExitStatus
+pub function output(status: ExitStatus, stdout: Bytes, stderr: Bytes): Output</code></pre>
+
+<p>The implemented slice includes the portable value layer, host
+environment access, process termination hooks, and run-to-completion process
+execution. <code>Command</code>, <code>ExitStatus</code>, and captured
+<code>Output</code> are ordinary values. Builders and accessors
+snapshot owned lists, maps, paths, and byte buffers so mutating a returned value
+or a builder input does not mutate the original command or output record.
+<code>arg_count</code>, <code>env_var_value</code>, <code>has_env_var</code>, and
+<code>env_count</code> provide direct read-only inspection without cloning the
+whole argument list or environment map; inherited environments report no
+explicit command environment entries.
+<code>with_program</code>, <code>with_args</code>, <code>arg</code>,
+<code>with_env</code>, <code>env_var</code>, <code>inherit_env</code>,
+<code>clear_env</code>, <code>with_cwd</code>, and <code>clear_cwd</code>
+are immutable-style value builders; <code>env == null</code> means inherit the
+provider environment and an empty map means run with an explicitly empty
+environment. <code>validation_error</code>, <code>validate</code>, and
+<code>is_valid</code> check the portable command invariants before a command crosses
+into the provider runtime: the program name must be non-empty, and explicit
+environment keys must be non-empty and must not contain <code>=</code>.
+<code>status()</code> and <code>output()</code> return those validation failures as
+<code>IoError</code> before calling the target-backed execution hooks. These values
+implement equality, clone, hash, stringification where appropriate, and
+<code>std:fmt.Debug</code>. <code>Command.hash()</code> is structural:
+argument order is significant, explicit environment maps hash by key/value
+membership to match command equality rather than insertion order, and inherited
+environment / missing cwd states are tagged distinctly from explicit empty
+values. <code>Output.hash()</code> folds status, stdout, and stderr in field order.
+Rust-backed hooks implement <code>args()</code>,
+<code>env(name)</code>, <code>env_all()</code>, and <code>set_env(name, value)</code>
+as snapshotting process-state helpers; <code>env</code> returns <code>null</code> for a
+missing variable, and <code>set_env</code> validates names/values before mutating the
+host environment. <code>exit(code)</code> and <code>abort()</code> are importable
+<code>std:process</code> marker functions that lower to runtime process-control
+intrinsics. <code>Command.status()</code> runs a command to completion while inheriting
+the current stdout/stderr streams, and <code>Command.output()</code> runs a command to
+completion while capturing stdout/stderr as <code>Bytes</code>. Both methods decode
+provider launch failures into <code>IoError</code> and preserve the command's
+snapshotting args/env/cwd semantics. Live process spawning, child handles,
+streamed child stdio, and richer target-specific status details remain
+target/provider-backed work.</p>
 
 <!-- =========================================================== -->
-<h2 id="rand">22. <code>std:rand</code></h2>
+<h2 id="rand">23. <code>std:rand</code> <span class="pill spec">spec</span> + <span class="pill planned">planned</span></h2>
 
 <pre><code>pub interface Rng {
   function next_u32(self): u32
@@ -1034,14 +1773,23 @@ pub struct Output     { pub status: ExitStatus, pub stdout: Bytes, pub stderr: B
   function fill_bytes(self, buf: Bytes): null
 }
 
-// Per-thread default generator. Seeded from OsRng on first use.
-pub function thread_rng(): ThreadRng
+pub struct RandomError { ... }
+
+// Per-handle default generator. Seeded from OsRng on construction.
+pub function thread_rng(): ThreadRng | RandomError
 pub struct ThreadRng { ... }
 extend ThreadRng: Rng { ... }
 
-// OS-provided cryptographically secure RNG.
+// OS-provided target entropy.
+pub function os_rng(): OsRng
 pub struct OsRng;
 extend OsRng: Rng { ... }
+extend OsRng {
+  function try_next_u32(self): u32 | RandomError
+  function try_next_u64(self): u64 | RandomError
+  function try_fill_bytes(self, buf: Bytes): null | RandomError
+  function try_fill_bytes_n(self, buf: Bytes, count: i64): null | RandomError
+}
 
 // Deterministic PRNG for reproducibility (tests, simulations).
 pub struct SeededRng { ... }
@@ -1052,17 +1800,59 @@ extend SeededRng {
 
 // Distribution helpers on top of Rng.
 pub function gen_range_i64(rng: Rng, low: i64, high: i64): i64    // half-open
-pub function gen_range_f64(rng: Rng, low: f64, high: f64): f64
+pub function gen_range_u64(rng: Rng, low: u64, high: u64): u64    // half-open
+pub function gen_f64(rng: Rng): f64                               // [0, 1)
+pub function gen_range_f64(rng: Rng, low: f64, high: f64): f64    // half-open
+pub function gen_bool(rng: Rng, numerator: i64, denominator: i64): bool
+pub function gen_index(rng: Rng, len: i64): i64 | null
+pub function fill_bytes_n(rng: Rng, buf: Bytes, count: i64): null
+pub function gen_bytes(rng: Rng, count: i64): Bytes
+pub function choose_index&lt;T&gt;(rng: Rng, list: List&lt;T&gt;): i64 | null
 pub function shuffle&lt;T&gt;(rng: Rng, list: List&lt;T&gt;): null
 pub function choose&lt;T&gt;(rng: Rng, list: List&lt;T&gt;): T | null</code></pre>
 
+<p>The implemented slice has both reproducible and target-backed pieces:
+<code>SeededRng</code> is a pure Otter-authored PRNG, while
+<code>OsRng</code> draws <code>u32</code> values from the selected provider's
+OS entropy hook and <code>ThreadRng</code> is a per-value generator seeded from
+<code>OsRng</code>. <code>OsRng</code> exposes fallible <code>try_next_u32</code>,
+<code>try_next_u64</code>, <code>try_fill_bytes</code>, and
+<code>try_fill_bytes_n</code> methods returning
+<code>RandomError</code> when the target entropy source is unavailable; its
+<code>Rng</code> implementation panics on that exceptional failure so generic
+helpers can keep the non-fallible <code>Rng</code> contract.</p>
+
+<p><code>fill_bytes</code> appends eight generated bytes to a
+<code>Bytes</code> buffer, <code>gen_range_i64</code> and
+<code>gen_range_u64</code> return <code>low</code> when <code>high &lt;= low</code>,
+<code>gen_f64</code> samples a <code>[0, 1)</code> value from the
+next 53 random bits, <code>gen_range_f64</code> scales that value across a
+half-open range and returns <code>low</code> when <code>high &lt;= low</code>,
+<code>fill_bytes_n</code> and <code>gen_bytes</code> generate exact-length byte
+buffers from any <code>Rng</code>, and <code>gen_bool</code> samples a numerator/denominator ratio
+with clamped always-false and always-true edge cases. <code>gen_index</code> and
+<code>choose_index</code> sample uniform zero-based indexes and return
+<code>null</code> for non-positive lengths or empty lists. <code>choose</code> returns
+<code>null</code> for an empty list, and <code>shuffle</code> mutates the provided list
+in place using the supplied RNG stream. <code>SeededRng</code> remains the
+recommended API for tests, simulations, and repeatable tooling behavior.
+<code>SeededRng</code> implements equality, clone, hash,
+diagnostic stringification, and <code>std:fmt.Debug</code> over its current state;
+cloning snapshots the stream. <code>RandomError</code> implements
+<code>std:error.Error</code>, equality, clone, hash, stringification, and
+<code>std:fmt.Debug</code>.</p>
+
+<p>Cryptographic-strength API guarantees and richer statistical distributions
+remain planned provider/runtime work.</p>
+
 <!-- =========================================================== -->
-<h2 id="log">23. <code>std:log</code></h2>
+<h2 id="log">24. <code>std:log</code> <span class="pill spec">spec</span> + <span class="pill planned">planned</span></h2>
 
-<p>One interface, one global logger, replaceable backend. Prevents Rust's <code>log</code>
-/ <code>tracing</code> ecosystem rift.</p>
+<p>The implemented slice provides portable log levels, records, marker value
+semantics, and default line logging helpers. Replaceable global logger backends
+remain planned provider/runtime work.</p>
 
-<pre><code>pub union Level = Trace | Debug | Info | Warn | Error
+<pre><code>pub union Level = LogTrace | LogDebug | Info | Warn | LogError
 
 pub struct Record {
   pub level:   Level,
@@ -1072,30 +1862,70 @@ pub struct Record {
   pub time:    SystemTime,
 }
 
-pub interface Logger {
+pub struct LoggerAlreadySet
+
+pub function level_trace(): Level
+pub function level_debug(): Level
+pub function level_info():  Level
+pub function level_warn():  Level
+pub function level_error(): Level
+
+extend Level {
+  function rank(self): i64
+  function is_at_least(self, min: Level): bool
+}
+
+pub function record(level: Level, message: str,
+                    module: str, fields: Map&lt;str, str&gt;): Record
+pub function empty_fields(): Map&lt;str, str&gt;
+pub function log_record(r: Record): null
+
+// Default line logging helpers.
+pub function trace(message: str): null
+pub function debug(message: str): null
+pub function info(message: str):  null
+pub function warn(message: str):  null
+pub function error(message: str): null
+pub function trace_with(message: str, fields: Map&lt;str, str&gt;): null
+pub function debug_with(message: str, fields: Map&lt;str, str&gt;): null
+pub function info_with(message: str, fields: Map&lt;str, str&gt;): null
+pub function warn_with(message: str, fields: Map&lt;str, str&gt;): null
+pub function error_with(message: str, fields: Map&lt;str, str&gt;): null</code></pre>
+
+<p><code>Level</code>, <code>Record</code>, and <code>LoggerAlreadySet</code> implement
+equality, clone, hash, stringification, and <code>std:fmt.Debug</code>. The concrete
+variant names use the <code>Log*</code> prefix where needed for clarity while the public
+constructor helpers provide the conventional level names. <code>log_record</code> and the
+convenience functions write a compact line through <code>std:io.println</code>.
+<code>Level.rank()</code> orders levels from trace (<code>0</code>) through error
+(<code>4</code>), and <code>Level.is_at_least(min)</code> provides the portable
+filtering predicate used by logger implementations.
+<code>Record</code> also provides value-layer accessors
+(<code>level</code>, <code>message</code>, <code>module</code>, <code>fields</code>,
+<code>field</code>, <code>has_field</code>, <code>field_count</code>,
+<code>time</code>) and <code>with_*</code> builder helpers for level, message,
+module, fields, individual field, field removal, field clearing, and time.
+The <code>record</code> constructor, structured <code>*_with</code> helpers,
+field-map accessors, and field builders clone the field map so callers can
+compose records without aliasing the original structured fields. Direct
+<code>field</code>, <code>has_field</code>, and <code>field_count</code> inspection
+does not require cloning the whole field map. Record equality and hashing
+compare structured fields by key/value membership rather than rendered field
+order. Level/time accessors and builders snapshot nested values as well.</p>
+
+<p>The planned follow-up is the replaceable global logger contract:</p>
+
+<pre><code>pub interface Logger {
   function log(self, r: Record): null
   function enabled(self, level: Level, module: str): bool
 }
 
 // Global logger. Set once at program start; default is a stderr line logger.
 pub function set_logger(l: Logger): null | LoggerAlreadySet
-pub function logger(): Logger
-
-pub struct LoggerAlreadySet;
-
-// Convenience entry points.
-pub function trace(message: str): null
-pub function debug(message: str): null
-pub function info(message: str):  null
-pub function warn(message: str):  null
-pub function error(message: str): null
-
-// Structured variants.
-pub function info_with(message: str, fields: Map&lt;str, str&gt;): null
-// ... etc.</code></pre>
+pub function logger(): Logger</code></pre>
 
 <!-- =========================================================== -->
-<h2 id="summary">24. Full module index</h2>
+<h2 id="summary">25. Full module index</h2>
 
 <div class="legend">
   <span><i style="background:#eef6f1;border:1px solid #c2dccf"></i>spec — defined in chapter 18 or another existing chapter</span>
@@ -1107,54 +1937,54 @@ pub function info_with(message: str, fields: Map&lt;str, str&gt;): null
     <tr><th>Module</th><th>Tier</th><th>Status</th><th>What it provides</th></tr>
   </thead>
   <tbody>
-    <tr><td><code>core:prelude</code></td><td>core</td><td></td>
-        <td><code>str</code>, <code>Iterator</code>, <code>Item</code>/<code>Done</code>, <code>Buffer</code>, <code>Deque</code>, <code>Bytes</code>, numeric helpers</td></tr>
-    <tr><td><code>core:collections</code></td><td>core</td><td></td>
-        <td><code>List</code>, <code>Map</code>, <code>Set</code> — explicit import; deterministic default hasher, keyed hasher opt-in</td></tr>
-    <tr><td><code>core:ffi</code></td><td>core</td><td><span class="pill spec">spec</span></td>
-        <td>Pinning, C-width aliases, <code>Foreign</code> allocator</td></tr>
-    <tr><td><code>core:io</code></td><td>core</td><td></td>
-        <td><code>Reader</code>, <code>Writer</code>, <code>Seeker</code>, <code>BufReader</code>, <code>BufWriter</code>, <code>IoError</code></td></tr>
-    <tr><td><code>core:fmt</code></td><td>core</td><td></td>
-        <td><code>Display</code>, <code>Debug</code>, <code>FmtSink</code></td></tr>
-    <tr><td><code>core:error</code></td><td>core</td><td><span class="pill spec">spec</span></td>
-        <td><code>Error</code> interface, <code>Annotated</code> wrapper, <code>with_context</code></td></tr>
-    <tr><td><code>core:time</code></td><td>core</td><td></td>
-        <td><code>Duration</code> only (no clock)</td></tr>
-    <tr><td><code>core:hash</code></td><td>core</td><td></td>
-        <td><code>Hasher</code>, <code>Hash</code>, deterministic <code>DefaultHasher</code> (keyed hasher opt-in)</td></tr>
-    <tr><td><code>core:async</code></td><td>core</td><td><span class="pill spec">spec (re-export)</span></td>
+    <tr><td><code>core:prelude</code></td><td>core</td><td><span class="pill spec">spec</span></td>
+        <td>syntax protocols and compiler-resolved primitives: <code>Iterator</code>, <code>Item</code>/<code>Done</code>, <code>Future</code>, <code>Ready</code>/<code>Pending</code>, <code>Try</code>/<code>FromResidual</code>, <code>Clone</code>, <code>Drop</code>, <code>Eq</code>/<code>Ord</code>/<code>Hash</code>/<code>ToStr</code>, and panic hooks</td></tr>
+    <tr><td><code>core:collections</code></td><td>core</td><td><span class="pill spec">spec</span></td>
+        <td><code>List</code>, <code>Map</code>, <code>Set</code>, <code>Entry</code> — explicit import; <code>Set</code> value semantics, compact stringification, snapshots, bulk insertion, and subset/superset/disjoint predicates; deterministic default hasher; keyed collection construction planned</td></tr>
+    <tr><td><code>std:collections</code></td><td>std</td><td><span class="pill spec">spec</span></td>
+        <td><code>Deque</code>, <code>deque&lt;T&gt;()</code>, and <code>deque_from_list&lt;T&gt;(List&lt;T&gt;)</code>; ordinary Otter-authored collection with bulk front/back extension, indexed reads/writes/removals, membership testing, equality, clone, hash, stringification, debug rendering, list snapshots, and iterator support</td></tr>
+    <tr><td><code>core:ffi</code></td><td>core</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>
+        <td><code>Foreign</code>, <code>CString</code>, <code>CStr</code>, <code>Buffer</code>, C-width aliases, <code>c_void</code>, <code>c_va_list</code>; planned pinning/callback/thread-attach helpers</td></tr>
+    <tr><td><code>std:bytes</code></td><td>std</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>
+        <td><code>Bytes</code>, <code>BytesCursor</code>, <code>from_str</code> UTF-8 encoding, <code>decode_utf8</code> strict UTF-8 decoding, direct set/pop/remove/append/truncate/clear helpers, <code>Utf8Error</code> error/value semantics, byte/cursor clone/equality/hash/diagnostic stringification/debug, in-memory <code>Writer</code>, cursor-backed <code>Reader</code>/<code>Seeker</code>; planned pinned <code>Buffer</code> view</td></tr>
+    <tr><td><code>std:io</code></td><td>std</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>
+        <td><code>print</code>, <code>println</code>, <code>eprint</code>, <code>eprintln</code>, <code>Reader</code>, <code>Writer</code>, <code>Seeker</code>, <code>SeekFrom</code>, <code>IoError</code>, IO value semantics, stdin <code>Reader</code>, stdout/stderr <code>Writer</code> handles, <code>BufReader</code>/<code>BufWriter</code> interface-object adapters</td></tr>
+    <tr><td><code>std:fmt</code></td><td>std</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>
+        <td><code>Display</code>, <code>Debug</code>, <code>FmtSink</code>, <code>FmtError</code>; <code>FmtError</code> error/value semantics; <code>Debug</code> impls for pure stdlib values and renderable collections; primitive impls planned</td></tr>
+    <tr><td><code>std:error</code></td><td>std</td><td><span class="pill spec">spec</span></td>
+        <td><code>Error</code> interface, <code>Annotated</code> wrapper, <code>with_context</code>; <code>Annotated</code> debug rendering</td></tr>
+    <tr><td><code>std:time</code></td><td>std</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>
+        <td><code>Duration</code>, monotonic <code>Instant</code>, wall-clock <code>SystemTime</code>, <code>TimeZone</code>, <code>DateTime</code>, <code>TimeError</code>, value semantics, ISO-like formatting/parsing, timezone replacement, UTC/fixed-offset system-time conversion, and <code>sleep(Duration)</code>; planned local timezone lookup and timezone databases</td></tr>
+    <tr><td><code>std:hash</code></td><td>std</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>
+        <td><code>Hasher</code>, deterministic <code>DefaultHasher</code>, explicit <code>KeyedHasher</code>, byte-stream writes, interface-level <code>Hash</code> writes, state value semantics, <code>hash_value</code>, <code>write_hash</code>, <code>combine_hash</code>, <code>keyed_hasher</code>; planned keyed collection integration</td></tr>
+    <tr><td><code>core:async</code></td><td>core</td><td><span class="pill spec">spec</span></td>
         <td><code>Future</code>, <code>Ready</code>, <code>Pending</code>, <code>Context</code>, <code>AsyncIterator</code></td></tr>
-    <tr><td><code>core:json</code></td><td>core</td><td></td>
-        <td><code>Json</code> value union (no parser)</td></tr>
-    <tr><td><code>core:net:types</code></td><td>core</td><td></td>
-        <td><code>IpAddr</code>, <code>SocketAddr</code>, <code>Uri</code>, <code>Url</code></td></tr>
-    <tr><td><code>core:http</code></td><td>core</td><td></td>
-        <td><code>Method</code>, <code>Status</code>, <code>Headers</code>, <code>HttpRequest</code>, <code>HttpResponse</code>, <code>HttpVersion</code></td></tr>
-    <tr><td><code>std:io</code></td><td>std</td><td><span class="pill spec">spec</span></td>
-        <td><code>print</code>, <code>println</code>, <code>stdin</code>/<code>stdout</code>/<code>stderr</code></td></tr>
-    <tr><td><code>std:fs</code></td><td>std</td><td><span class="pill planned">planned</span></td>
-        <td><code>Path</code>, <code>File</code>, <code>DirEntry</code>, dir ops</td></tr>
+    <tr><td><code>std:json</code></td><td>std</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>
+        <td><code>Json</code> opaque value tree, scalar/container shape predicates, typed extractors, immutable array/object builders, deep clone/equality/structural hash with order-insensitive object entries, escaped compact and pretty rendering, debug formatting; planned stricter canonicalization; no parser</td></tr>
+    <tr><td><code>std:net:types</code></td><td>std</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>
+        <td><code>IpAddr</code>, <code>SocketAddr</code>, <code>Uri</code>, <code>Url</code>, <code>ParseError</code>, constructors, IPv4 / IPv6 including dotted IPv4 tails and scoped zone IDs / socket / URI / URL parsers including bracketed IPv6 URL hosts, URI/URL accessors, immutable URL builders with query-map snapshots, order-insensitive URL query hashing, UTF-8 percent component helpers, lowercase hex IPv6 rendering, equality, hashing, cloning, debug formatting; <code>ParseError</code> error/value semantics; planned stricter URI/URL canonicalization</td></tr>
+    <tr><td><code>std:http</code></td><td>std</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>
+        <td>Comparable <code>Method</code>/<code>HttpVersion</code>, standard <code>Status</code> helpers/reason phrases and reason builders, case-insensitive normalized <code>Headers</code> with order-insensitive header-name hashing, <code>HeaderEntry</code>, <code>HttpRequest</code>, <code>HttpResponse</code>, value equality/clone/hash, flattened header entries, request/response snapshot accessors and header builders, diagnostic debug rendering; planned parsing/client/server work</td></tr>
+    <tr><td><code>std:fs</code></td><td>std</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>
+        <td><code>Path</code> value operations including lexical normalization, native separator conversion, and target-backed existence/type/metadata/canonicalization queries; <code>DirEntry</code>/<code>DirEntries</code>/<code>FileKind</code>, <code>Metadata</code>/<code>Permissions</code>, and <code>OpenOptions</code> value semantics with snapshot constructors/accessors/builders and open-option validation; target-backed binary <code>read</code>/<code>write</code>, text <code>File</code>/<code>read_to_string</code>/<code>write_string</code>/<code>append_string</code>, descriptor-backed <code>File</code> handles implementing <code>Reader</code>/<code>Writer</code>/<code>Seeker</code>, explicit open options, snapshot-backed <code>read_dir</code>, plus non-recursive <code>remove</code>, <code>rename</code>, <code>create_dir</code>, and <code>create_dir_all</code></td></tr>
     <tr><td><code>std:net</code></td><td>std</td><td><span class="pill planned">planned</span></td>
         <td><code>TcpStream</code>, <code>TcpListener</code>, <code>UdpSocket</code>, <code>resolve</code></td></tr>
-    <tr><td><code>std:time</code></td><td>std</td><td><span class="pill planned">planned</span></td>
-        <td><code>Instant</code>, <code>SystemTime</code>, <code>DateTime</code>, <code>TimeZone</code>, <code>sleep</code></td></tr>
     <tr><td><code>std:thread</code></td><td>std</td><td><span class="pill spec">spec</span></td>
-        <td><code>Thread.spawn</code>, <code>JoinHandle</code>, <code>Joined</code>, <code>Panicked</code></td></tr>
+        <td><code>Thread.spawn</code>, <code>JoinHandle</code>, <code>Joined</code>, <code>Panicked</code>; <code>Panicked</code> value semantics</td></tr>
+    <tr><td><code>std:sync</code></td><td>std</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>
+        <td><code>Shared</code> and channels are exported today; <code>ChannelClosed</code>/<code>LockBusy</code> value semantics; <code>RwLock</code>, <code>Once</code>, and <code>Lazy</code> are planned</td></tr>
     <tr><td><code>std:task</code></td><td>std</td><td><span class="pill spec">spec</span></td>
-        <td><code>Task.spawn</code>, <code>JoinHandle</code>, <code>Joined</code>, <code>Panicked</code>, <code>Cancelled</code></td></tr>
-    <tr><td><code>std:sync</code></td><td>std</td><td><span class="pill spec">spec</span></td>
-        <td><code>Shared</code>, channels, <code>RwLock</code>, <code>Once</code>, <code>Lazy</code></td></tr>
-    <tr><td><code>std:sync:atomic</code></td><td>std</td><td></td>
-        <td><code>AtomicI32/I64/U32/U64/Bool/Ptr</code>, <code>Ordering</code></td></tr>
+        <td><code>Task.spawn</code> on the M:N executor, executor <code>JoinHandle&lt;R&gt;</code> with <code>join</code>/<code>detach</code>/<code>cancel</code>/<code>abort</code>, <code>Joined&lt;R&gt;</code>, <code>Panicked</code>, and <code>Cancelled</code> value semantics</td></tr>
+    <tr><td><code>core:sync:atomic</code></td><td>core</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>
+        <td><code>Ordering</code> value semantics and constructor helpers; planned <code>AtomicI32/I64/U32/U64/Bool/Ptr</code> operations</td></tr>
     <tr><td><code>std:async</code></td><td>std</td><td><span class="pill spec">spec</span></td>
-        <td>Executor, <code>yield_now</code>, <code>sleep</code>, <code>timeout</code></td></tr>
-    <tr><td><code>std:process</code></td><td>std</td><td></td>
-        <td><code>args</code>, <code>env</code>, <code>exit</code>, <code>Command</code>, <code>Child</code></td></tr>
-    <tr><td><code>std:rand</code></td><td>std</td><td></td>
-        <td><code>Rng</code>, <code>ThreadRng</code>, <code>OsRng</code>, <code>SeededRng</code></td></tr>
-    <tr><td><code>std:log</code></td><td>std</td><td></td>
-        <td><code>Logger</code>, <code>Level</code>, <code>Record</code>, global logger</td></tr>
+        <td><code>yield_now</code>, <code>sleep</code>, <code>timeout</code>, <code>TimedOut</code> value semantics, executor/runtime adapters</td></tr>
+    <tr><td><code>std:process</code></td><td>std</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>
+        <td><code>Command</code>, <code>ExitStatus</code>, captured <code>Output</code>, snapshotting value builders/accessors including args/env/cwd replacement and clearing, direct command validation, structural equality/hash value semantics, host <code>args</code>/<code>env</code>/<code>env_all</code>/<code>set_env</code>, process <code>exit</code>/<code>abort</code>, and run-to-completion <code>Command.status()</code>/<code>output()</code>; planned live process spawning and <code>Child</code></td></tr>
+    <tr><td><code>std:rand</code></td><td>std</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>
+        <td><code>Rng</code>, deterministic <code>SeededRng</code> with state value semantics, OS-backed <code>OsRng</code>, per-value <code>ThreadRng</code>, <code>RandomError</code>, integer/f64 range helpers, exact byte-buffer helpers, <code>gen_bool</code>, uniform index helpers, <code>choose</code>, <code>shuffle</code>; planned cryptographic-strength guarantees and richer distributions</td></tr>
+    <tr><td><code>std:log</code></td><td>std</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>
+        <td><code>Level</code>, <code>Record</code>, <code>LoggerAlreadySet</code>, level ranking/filter helpers, record accessors/builders including field add/remove/clear, field-map snapshots, and field-order-independent equality/hash, default line logging helpers; planned replaceable global logger</td></tr>
   </tbody>
 </table>
 
@@ -1163,11 +1993,11 @@ pub function info_with(message: str, fields: Map&lt;str, str&gt;): null
 <ul>
   <li><strong>Regex</strong> — community responsibility. A pkg: crate is expected to ship a <code>Regex</code> type built on <code>str</code>.</li>
   <li><strong>JSON parser / serializer</strong> — community responsibility. The <em>value type</em> is standardized; the parser is not.</li>
-  <li><strong>HTTP client / server</strong> — community responsibility. The <em>types</em> are standardized in <code>core:http</code>; the wire implementation is not.</li>
+  <li><strong>HTTP client / server</strong> — community responsibility. The <em>types</em> are standardized in <code>std:http</code>; the wire implementation is not.</li>
   <li><strong>Crypto primitives</strong> — community responsibility (SHA-256, AES, HMAC, …).</li>
   <li><strong>TLS</strong> — community responsibility, layered on <code>std:net</code>.</li>
   <li><strong>Compression</strong> — community responsibility (gzip, zstd, …).</li>
-  <li><strong>UUID</strong> — likely a small pkg: crate; could be promoted to <code>core:</code> later if usage warrants.</li>
+  <li><strong>UUID</strong> — likely a small <code>pkg:</code> crate; if standardized later it belongs in <code>std:uuid</code>, not <code>core:</code>, unless the compiler gains a privileged UUID contract.</li>
   <li><strong>BigInt / Decimal</strong> — community responsibility; revisit if scientific / finance usage emerges.</li>
   <li><strong>Format strings</strong> (<code>format!</code>) — string interpolation (§1) covers the common case.</li>
 </ul>

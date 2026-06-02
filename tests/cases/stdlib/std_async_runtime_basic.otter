@@ -1,0 +1,36 @@
+//@ kind: run
+//@ description: std:async exposes runtime helpers separately from core:async protocol shapes
+//@ stdout:
+//~ yielded
+//~ slept
+//~ timeout=7
+//~ true true timed out TimedOut
+import { println } from "std:io";
+import { Future } from "core:async";
+import { Clone, Eq, Hash, ToStr } from "core:prelude";
+import { Debug } from "std:fmt";
+import { TimedOut, yield_now, sleep, timeout } from "std:async";
+
+function fast(): Future<i64> async { 7 }
+
+function render_debug(value: Debug): str {
+  value.debug()
+}
+
+function main(): Future<null> async {
+  await yield_now();
+  println("yielded");
+
+  await sleep(1);
+  println("slept");
+
+  var result: i64 | TimedOut = await timeout(fast(), 100);
+  match result {
+    i64 value => println("timeout=${value}"),
+    TimedOut => println("timeout=timed-out"),
+  }
+
+  var timed_out = TimedOut {};
+  var timed_out_copy = timed_out.clone();
+  println("${timed_out == timed_out_copy} ${timed_out.hash() == timed_out_copy.hash()} ${timed_out.to_str()} ${render_debug(timed_out)}");
+}

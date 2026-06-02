@@ -1,0 +1,7 @@
+//@ kind: compile-error
+//@ description: Path is stdlib filesystem API, not compiler substrate; the old core:fs path is rejected
+//@ stderr: no built-in module `core:fs`
+
+import { Path } from "core:fs";
+
+function main() {}

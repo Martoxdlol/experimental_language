@@ -14,7 +14,8 @@
 // lock body unwinds to the worker's boundary and RELEASES the lock (no
 // poisoning), so the cell stays usable afterwards.
 import { println } from "std:io";
-import { Future, panic } from "core:prelude";
+import { panic } from "core:prelude";
+import { Future } from "core:async";
 import { Shared, LockBusy } from "std:sync";
 import { Thread, JoinHandle, Joined, Panicked } from "std:thread";
 

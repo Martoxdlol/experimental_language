@@ -1,0 +1,9 @@
+//@ kind: compile-error
+//@ description: process values belong to std:process, not core:process
+//@ stderr: no built-in module `core:process`
+
+import { Command } from "core:process";
+
+function main() {
+  var cmd = Command.new("otter_fusion");
+}

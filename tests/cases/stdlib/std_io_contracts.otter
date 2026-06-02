@@ -1,0 +1,73 @@
+//@ kind: run
+//@ description: std:io exposes Reader, Writer, Seeker, IoError, and SeekFrom contracts
+//@ stdout:
+//~ read=0 write=2 seek=5
+//~ err=missing
+//~ true true true true Start { offset: 12 }
+//~ Current { offset: -2 }
+//~ true true true other OtherIo
+//~ true true IoError { kind: OtherIo, message: "boom" }
+import { println } from "std:io";
+import { Bytes } from "std:bytes";
+import { Clone, Eq, Hash, ToStr } from "core:prelude";
+import { Error } from "std:error";
+import { Debug } from "std:fmt";
+import { Reader, Writer, Seeker, SeekFrom, IoError, IoErrorKind, NotFound, OtherIo, Start, Current } from "std:io";
+
+struct Mem {
+  pos: i64,
+}
+
+extend Mem: Reader {
+  function read(self, buf: Bytes): i64 | IoError { 0 }
+  function read_to_end(self, buf: Bytes): i64 | IoError { 0 }
+}
+
+extend Mem: Writer {
+  function write(self, buf: Bytes): i64 | IoError { buf.size() }
+  function write_all(self, buf: Bytes): null | IoError { null }
+  function flush(self): null | IoError { null }
+}
+
+extend Mem: Seeker {
+  function seek(self, pos: SeekFrom): i64 | IoError { self.pos }
+}
+
+function render_debug(value: Debug): str {
+  value.debug()
+}
+
+function main() {
+  var m = Mem { pos: 5 };
+  var buf = Bytes.new();
+  buf.push(10u8);
+  buf.push(20u8);
+
+  var read = m.read(buf);
+  var wrote = m.write(buf);
+  var seeked = m.seek(Start { offset: 0u64 });
+  if read is i64 {
+    if wrote is i64 {
+      if seeked is i64 {
+        println("read=${read as i64} write=${wrote as i64} seek=${seeked as i64}");
+      }
+    }
+  }
+
+  var e: Error = IoError { kind: NotFound {}, message: "missing" };
+  println("err=${e.message()}");
+
+  var start: SeekFrom = Start { offset: 12u64 };
+  var start_copy = start.clone();
+  println("${start.equals(start_copy)} ${start.eq(start_copy)} ${start == start_copy} ${start.hash() == start_copy.hash()} ${start.to_str()}");
+  var current: SeekFrom = Current { offset: -2 };
+  println(current.debug());
+
+  var kind: IoErrorKind = OtherIo {};
+  var kind_copy = kind.clone();
+  println("${kind.equals(kind_copy)} ${kind.eq(kind_copy)} ${kind == kind_copy} ${kind.to_str()} ${kind.debug()}");
+
+  var io_error = IoError { kind: OtherIo {}, message: "boom" };
+  var io_error_copy = io_error.clone();
+  println("${io_error == io_error_copy} ${io_error.hash() == io_error_copy.hash()} ${render_debug(io_error)}");
+}

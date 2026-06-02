@@ -1,0 +1,9 @@
+//@ kind: compile-error
+//@ project: no-std
+//@ description: project manifest no-std rejects std imports at the CLI/e2e layer
+//@ stderr: this package is `no-std`, so `std:` is unavailable
+import { println } from "std:io";
+
+function main() {
+  println("nope");
+}

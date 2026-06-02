@@ -715,7 +715,12 @@ fn emit(input: &Input, ir: EmitIr) -> ExitCode {
             }
             print!(
                 "{}",
-                compiler::hir::print_program(&analysis.hir, &analysis.tcx, &analysis.program)
+                compiler::hir::print_program_for_files(
+                    &analysis.hir,
+                    &analysis.tcx,
+                    &analysis.program,
+                    map.file_count()
+                )
             );
         }
         EmitIr::Clif => {
@@ -725,7 +730,7 @@ fn emit(input: &Input, ir: EmitIr) -> ExitCode {
             }
             // Cranelift IR is only well-formed for an error-free program.
             if analysis.errors.is_empty() {
-                match backend::compile_clif(&analysis) {
+                match backend::compile_clif_for_files(&analysis, map.file_count()) {
                     Ok(text) => print!("{text}"),
                     Err(e) => render(map, e.span, "error", &format!("codegen: {}", e.message)),
                 }

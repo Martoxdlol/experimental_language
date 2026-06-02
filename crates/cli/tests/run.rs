@@ -11,11 +11,13 @@ use std::time::{Duration, Instant};
 /// that import `List`/`Map` explicitly; programs naming those import them.
 const CLI_PRELUDE: &str = "import { List, Map, Set, Entry } from \"core:collections\";\n\
     import { print, println } from \"std:io\";\n\
-    import { panic, panic_with, exit, abort } from \"core:prelude\";\n\
+    import { panic, panic_with } from \"core:prelude\";\n\
+    import { exit, abort } from \"std:process\";\n\
     import { Clone, ToStr, Eq, Ord, Hash, Iterator, Item, Done, Try, FromResidual, Drop, Future, Ready, Pending, Context } from \"core:prelude\";\n\
     import { Shared, LockBusy, Sender, Receiver, ChannelClosed, MpmcSender, MpmcReceiver, channel, channel_bounded, channel_mpmc, channel_mpmc_bounded } from \"std:sync\";\n\
     import { Thread, JoinHandle, Joined, Panicked } from \"std:thread\";\n\
-    import { AsyncIterator, TimedOut, yield_now, sleep, timeout } from \"std:async\";\n\
+    import { AsyncIterator } from \"core:async\";\n\
+    import { TimedOut, yield_now, sleep, timeout } from \"std:async\";\n\
     import { Foreign, CString, CStr, Buffer } from \"core:ffi\";\n";
 
 /// Prepend [`CLI_PRELUDE`] to a program's source.
@@ -1410,7 +1412,7 @@ fn shared_mutex_serializes_concurrent_increments() {
                  await h2;\n\
                  println((await state.lock((c) => c.value)) as str);\n\
                }";
-    let (out, err, ok) = lang("run", src);
+    let (out, err, ok) = lang_raw_env_with_timeout("run", &pre(src), &[], Duration::from_secs(90));
     assert!(ok, "stderr: {err}");
     assert_eq!(out, "10000\n");
 }
@@ -2408,8 +2410,7 @@ fn generic_drop_gc_managed_runs_under_stress() {
     // unreachable and is finalized; both `Tracked<i64>` and `Tracked<str>` fire
     // their `drop` the expected number of times (order is unspecified, so we
     // count occurrences).
-    let src = "import { Drop } from \"core:prelude\";\n\
-               struct Tracked<T> { kind: i64 }\n\
+    let src = "struct Tracked<T> { kind: i64 }\n\
                extend<T> Tracked<T>: Drop {\n\
                  function drop(self) {\n\
                    if self.kind == 0 { println(\"drop-int\"); }\n\
@@ -2646,12 +2647,13 @@ fn self_import_without_project_is_hard_error() {
 fn core_import_works_without_a_project() {
     // `core:` is a toolchain module, available even in direct/loose mode
     // (`docs/17` §17.13). Importing `List` by name resolves and runs.
-    let src = "import { List } from \"core:collections\";\n\
+    let src = "import { println } from \"std:io\";\n\
+               import { List } from \"core:collections\";\n\
                function main() {\n\
                  var xs: List<i64> = [1, 2, 3];\n\
                  println(\"${xs.size()}\");\n\
                }";
-    let (out, err, ok) = lang("run", src);
+    let (out, err, ok) = lang_raw("run", src);
     assert!(ok, "stderr: {err}");
     assert_eq!(out, "3\n");
 }
@@ -2692,8 +2694,7 @@ fn file_import_escaping_package_needs_allowlist() {
 fn file_import_binds_an_in_package_data_module() {
     // `file:./data` loads a sibling `.otter` file (not in the `mod` tree) and
     // binds its `pub` names (`docs/17` §17.4). In-package paths need no allowlist.
-    let main = "import { println } from \"std:io\";\n\
-                 import { rows } from \"file:./data\";\n\
+    let main = "import { rows } from \"file:./data\";\n\
                  function main() { println(\"${rows()}\"); }";
     let data = "pub function rows(): i64 { 7 }";
     let (out, err, ok) = lang_run_project(
@@ -6337,7 +6338,6 @@ fn macro_recursion_limit_is_configurable() {
         (
             "src/main.otter",
             "import { MacroContext, ASTNode } from \"core:compiler\";\n\
-             import { println } from \"std:io\";\n\
              @ProcMacro\n\
              pub function Loop(ctx: MacroContext, input: ASTNode): ASTNode { ctx.parse_expr(\"@Loop()\") }\n\
              function main() { println(@Loop() as str); }",

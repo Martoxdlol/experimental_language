@@ -11,8 +11,8 @@
 //!
 //! | Scheme        | Form                              | Meaning                                   |
 //! |---------------|-----------------------------------|-------------------------------------------|
-//! | [`Scheme::Core`] | `core:collections`             | toolchain module, allocator-only          |
-//! | [`Scheme::Std`]  | `std:io`                       | toolchain module, OS-backed               |
+//! | [`Scheme::Core`] | `core:collections`             | compiler/runtime substrate                |
+//! | [`Scheme::Std`]  | `std:io`                       | official toolchain library                |
 //! | [`Scheme::Pkg`]  | `pkg:json`, `pkg:json/parse`   | external dependency (first segment = name)|
 //! | [`Scheme::SelfRoot`] | `self:util/log`            | this package, from the source root        |
 //! | [`Scheme::SelfRel`]  | `self:./sib`, `self:../up` | this package, relative to the importer    |
@@ -27,9 +27,9 @@ use std::fmt;
 /// The scheme family of a classified [`ImportPath`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Scheme {
-    /// `core:…` — toolchain module assuming only an allocator (no OS).
+    /// `core:…` — compiler/runtime substrate with language-privileged semantics.
     Core,
-    /// `std:…` — toolchain module assuming an OS.
+    /// `std:…` — official toolchain library, portable or target-backed.
     Std,
     /// `pkg:<name>[/<sub>…]` — an external dependency. The first segment is the
     /// package name; the rest address into that package's public module tree.

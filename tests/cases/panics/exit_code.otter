@@ -4,7 +4,7 @@
 //@ stdout:
 //~ bye
 import { println } from "std:io";
-import { exit } from "core:prelude";
+import { exit } from "std:process";
 function main() {
   println("bye");
   exit(3);

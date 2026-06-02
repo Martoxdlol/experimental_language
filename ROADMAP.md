@@ -24,6 +24,14 @@ semantics; this file is only the implementation sequencing.
   interface name is used as a value type (fat pointer / header vtable).
 - **Compilation order** (from `docs/22` §4): lex → parse → macro-expand →
   resolve modules → type-check → monomorphize → codegen.
+- **Standard library architecture**: the stdlib is provider/catalog driven, not
+  one blob of compiler magic. `core:*` modules are the small compiler/runtime
+  substrate: desugar targets, runtime-recognized layouts, privileged handles,
+  syntax protocols, and macro/compiler APIs. `std:*` modules are the official
+  toolchain library, whether fully portable or target-backed. Each toolchain
+  module records its path, tier, exports, and implementation kind (`Otter`,
+  `RustBacked`, or `Mixed`) in `compiler::sema::stdlib`, so current built-ins
+  and future target/custom sysroots share one resolution model.
 
 ## Crate layout
 
@@ -77,10 +85,11 @@ The full module/import/package system, end to end.
   `__builtins__` module; only built-in *syntax* resolves (via stored `DefId`s).
   Every named symbol — `List`/`Map`/`print`/`println`/`panic`/`Clone`/… —
   requires an import from `core:prelude`/`core:collections`/`std:io`/`std:*`.
-  `print`/`println`/`panic`/`panic_with`/`exit`/`abort` are importable marker
-  functions dispatched by `DefId`. The concurrency/FFI intrinsics
-  (`channel`/`sleep`/`yield_now`/`timeout`/`Thread.spawn`/`Task.spawn`/
-  `Shared.new`/`Foreign.*`) also require their import — recognized only when
+  `print`/`println`/`panic`/`panic_with` are importable marker functions
+  dispatched by `DefId`; process-control markers `exit`/`abort` now live under
+  `std:process` while using the same lowering path. The concurrency/FFI intrinsics
+  (`channel`/`sleep`/`yield_now`/`timeout`/`Thread.spawn`/`Shared.new`/
+  `Foreign.*`) also require their import — recognized only when
   the name resolves to a built-in (`intr_fn`/`intr_ns`). (`CString`/`CStr`/
   `Buffer` are now ordinary imported prelude types with real `extend` methods,
   not callee-shape intrinsics.) Only `str` methods +
@@ -107,6 +116,400 @@ The full module/import/package system, end to end.
   registry/resolve/commands/credentials/package), `cli` e2e (every scheme,
   run modes, escape rule, file: gating, dep commands, `pkg:` run e2e). All
   green; every example runs (JIT + native).
+
+### Standard Library Foundation  🔧 IN PROGRESS (`docs/18`, `docs/24`, `docs/29`)
+
+- [x] **`std:error` implemented**: explicit imports expose `Error`,
+      `Annotated`, and `with_context<T, E: Error>(T | E, str): T | Annotated`.
+      `Annotated` implements diagnostic debug rendering; clone/equality/hash
+      are intentionally not generic because the wrapped source is only an
+      `Error` object.
+      This also hardened the compiler paths std relies on: super-interface
+      method lookup, transitive interface impl recording for vtables, bounded
+      generic inference through union templates (`T | E`), preserving
+      `Unbox -> Widen/WidenDyn` HIR chains, and monomorphized generic unbox
+      codegen. Covered by compiler unit tests plus e2e stdlib/interface cases.
+- [x] **Stdlib catalog/provider foundation**: `compiler::sema::stdlib` records
+      each built-in `core:*`/`std:*` module path, tier, exports, and
+      implementation kind (`Otter`, `RustBacked`, or `Mixed`). Name resolution
+      now builds curated import views from the active provider, leaving room for
+      future target/custom sysroots to replace, omit, or extend `std:*` modules
+      without changing source-level import syntax. Semantic collection also has
+      an explicit-provider entry point, with unit coverage proving a custom
+      provider can add custom `std:*` module views, omit unsupported `std:*`
+      modules, and keep listed `core:*` substrate modules available; diagnostics
+      for omitted known modules now name the selected provider. Provider exports
+      are also validated against the collected toolchain source so a catalog
+      cannot silently advertise missing symbols or duplicate names, and provider
+      module paths/tier roots are checked for root-only paths, duplicates, and
+      `core:`/`std:` mismatches. The e2e suite now has a project fixture
+      directive for manifest-driven stdlib behavior, with `no-std` cases proving
+      that `std:*` imports are rejected while `core:*` substrate imports remain
+      available. The catalog unit tests also scan the stdlib require-import
+      e2e diagnostics and assert every exported name is represented, so future
+      catalog additions must preserve the near-empty-prelude import-gating
+      coverage.
+- [x] **Stdlib extension guide**: `docs/29-extending-stdlib.html` defines the
+      contributor workflow for adding `core:*`/`std:*` modules, choosing
+      `Otter`/`RustBacked`/`Mixed`, wiring catalog exports, adding Rust runtime
+      hooks, preserving the near-empty prelude, planning custom providers, and
+      covering each module with unit, integration, e2e, docs, examples, and LSP
+      updates.
+- [x] **`core:ffi` catalog surface tightened**: C-width aliases
+      (`c_int`, `c_size_t`, etc.) plus `c_void` and `c_va_list` are real
+      `core:ffi` exports now, not just documentation examples. The symbol-table
+      tests verify every catalog export materializes in its builtin view so
+      future `StdModuleSpec` drift is caught by CI.
+- [x] **Toolchain library organization**: the old monolithic embedded
+      `PRELUDE_SRC` has been replaced by `crates/compiler/src/sema/stdlib_src/`
+      with module-shaped Otter Fusion files under `core/` and `std/`. The
+      compiler now collects them through the explicit `TOOLCHAIN_SOURCES`
+      manifest into hidden module-local owners under the private `__builtins__`
+      root, then builds curated catalog views, preserving the near-empty prelude
+      rule while making future sysroot/provider work a real source-layout step.
+- [x] **`std:bytes` + `std:io` contracts**: added explicit `std:bytes`
+      (`Bytes`, `Utf8Error`) and expanded `std:io` from print intrinsics to the
+      shared `Reader`/`Writer`/`Seeker` contracts, `SeekFrom`, and `IoError` /
+      `IoErrorKind` catalog exports. Covered by stdlib e2e cases and catalog
+      tests. `Bytes` now also has deep `Clone`, bytewise `Eq`, deterministic
+      `Hash`, compact diagnostic `ToStr` rendering, and an in-memory
+      `std:io.Writer` implementation for appending bytes. Direct
+      `Bytes.set(index, byte)` returns `false` for out-of-range writes,
+      `Bytes.pop()` removes and returns the last byte, `Bytes.remove_at(index)`
+      removes and returns one indexed byte, `Bytes.append(other)`
+      snapshots the input before appending, `Bytes.truncate(len)` shrinks the
+      buffer in place, `Bytes.clear()` empties the buffer, and
+      `Bytes.starts_with` / `Bytes.ends_with` provide raw bytewise affix
+      checks. `Bytes.from_str`
+      encodes a `str` into
+      UTF-8 bytes using the existing string byte iterator, and
+      `Bytes.decode_utf8()` validates strict UTF-8 back to `str | Utf8Error`
+      (rejecting invalid leading bytes, malformed continuations, truncation,
+      overlong sequences, surrogates, and code points above U+10FFFF).
+      `BytesCursor` snapshots `Bytes` and implements in-memory
+      `std:io.Reader`/`Seeker` behavior with byte reads, chunk reads,
+      `read_to_end`, and `SeekFrom` support.
+      `Utf8Error` implements `std:error.Error`, equality, clone, hash,
+      diagnostic stringification, and debug rendering. `BytesCursor` implements
+      equality and hashing over both the snapshot and current cursor position,
+      plus clone, diagnostic stringification, and debug rendering.
+      `print`/`println` write to stdout and `eprint`/`eprintln` write to stderr
+      through runtime-backed marker functions; `stdin()`, `stdout()`, and
+      `stderr()` now expose byte-oriented `Reader`/`Writer` handles with raw
+      reads, writes, and flushes. `BufReader` and `BufWriter` provide
+      interface-object buffered adapters with chunked reads, `read_line`,
+      line iteration, buffered writes, and explicit flushing.
+      `std:fs.File` provides target-backed `Reader`/`Writer`/`Seeker` handles;
+      generic-specialized buffered wrappers and pinned `Buffer` views remain
+      future provider/library work.
+      `SeekFrom` and `IoErrorKind`
+      provide direct equality helpers, `Eq.eq`, overloaded `==`, clone/hash/string/debug
+      methods; `IoError` implements `Error`, equality, clone, hash, and debug
+      rendering.
+- [x] **`std:time::Duration`**: added the portable value type as an
+      Otter-authored `std:time` export with constructors, unit conversions,
+      absolute subsecond component helpers, predicates, `abs`,
+      equality/ordering/hash/clone/stringification, and overloaded `+`/`-`.
+      Covered by explicit-import and runtime e2e cases.
+- [x] **`std:time` monotonic/system clocks**: added mixed stdlib value types
+      `Instant` and `SystemTime` over Rust-backed runtime clock hooks. The
+      Otter-authored surface covers `now`, fixed nanosecond constructors,
+      duration arithmetic, Unix-epoch helpers, equality/ordering/hash/clone,
+      stringification, and debug rendering. Calendar/timezone conversions
+      remain future provider/runtime work.
+- [x] **`std:time` calendar/timezone value contracts**: added portable
+      Otter-authored `TimeZone`, `DateTime`, and `TimeError` values plus
+      constructor helpers. `DateTime.new` validates calendar ranges, leap years,
+      time-of-day fields, and nanosecond precision; `TimeZone` models UTC,
+      fixed offsets, and named zone identifiers as ordinary values; `TimeError`
+      implements `std:error.Error`. The value layer implements equality, clone,
+      hash, stringification/ISO-like rendering, immutable timezone replacement,
+      and diagnostic debug rendering.
+      UTC/fixed-offset system-time conversion is implemented; local timezone
+      lookup, timezone databases, named-zone conversion, and leap-second policy
+      remain planned provider/library work.
+- [x] **`std:time` ISO-like DateTime parsing**: added pure Otter Fusion
+      `parse_iso8601(s): DateTime | TimeError` plus
+      `DateTime.parse_iso8601`. The parser accepts the same portable shapes
+      produced by `format_iso8601`: UTC `Z`, fixed `+HH:MM` / `-HH:MM` offsets,
+      optional fractional seconds up to nanosecond precision, and bracketed
+      named timezone identifiers. It reuses `DateTime.new` validation and
+      returns `TimeError` for malformed fields. Full timezone database
+      resolution, local-time lookup, named-zone conversion, and leap-second
+      policy remain planned provider/library work.
+- [x] **`std:fs.Path` value surface**: added the pure Otter-authored
+      `std:fs` module exporting `Path` with construction, `as_str`, `join`,
+      `join_path`, `normalize`, `components`, `starts_with`, `ends_with`,
+      `strip_prefix`, `parent`, `file_name`, `file_stem`, `extension`,
+      `with_extension`, `is_absolute`, `is_relative`, `is_empty`, `is_root`,
+      `component_count`, equality, hash, clone, and stringification.
+      `normalize` is purely lexical: it collapses repeated
+      slashes and `.`, resolves `..` where possible, clamps absolute paths at
+      `/`, and preserves leading relative `..`; component/prefix helpers compare
+      normalized slash-separated components without touching the filesystem.
+      Stem/extension helpers treat a single leading dot as part of the basename,
+      so `.env` has no extension while `.profile.bak` has extension `bak`.
+      `DirEntry` and `FileKind` provide the portable value shape for snapshot
+      directory iteration, while `Metadata` and `Permissions` provide the
+      portable value shape for metadata queries; these values implement
+      equality, clone, hash, stringification, diagnostic debug rendering, and
+      immutable-style replacement builders that snapshot nested path/kind and
+      permissions values.
+      Covered by explicit-import and runtime e2e cases. `std:fs` is now mixed:
+      Rust-backed runtime hooks provide `Path.exists`, `Path.is_file`, and
+      `Path.is_dir`, `Path.file_kind`, `Path.byte_len`, `Path.permissions`, and
+      `Path.metadata`, `Path.canonicalize`, module-level `canonicalize`,
+      `native_separator`, `Path.from_native`, module-level `path_from_native`,
+      `Path.to_native_str`, binary `read`/`write` over `std:bytes.Bytes`,
+      UTF-8 text `read_to_string`, `write_string`, and `append_string`,
+      snapshot-backed `read_dir` returning `DirEntries`, plus
+      path-backed `File.open`, `File.create`,
+      `File.append`, `File.open_with`, `File.path`, descriptor-backed `Reader`/`Writer`/`Seeker`
+      operations, text read/write/append, close,
+      explicit `OpenOptions` values for read/write/append/truncate/create/
+      create_new modes with provider-independent validation before runtime
+      opens, non-recursive `remove`, `rename`, `create_dir`, and
+      `create_dir_all`. Async filesystem adapters remain future
+      provider/runtime work.
+- [x] **`std:fmt` contracts**: added the Otter-authored `std:fmt` module
+      exporting `Display: ToStr`, `Debug`, `FmtSink`, and `FmtError`.
+      `FmtError` implements `std:error.Error`, equality, clone, hash, and
+      diagnostic debug rendering.
+      Interpolation and `value as str` still lower through `ToStr`; this module
+      gives libraries explicit user-facing and developer-facing rendering
+      contracts without adding format strings. Pure stdlib values (`Bytes`,
+      `Utf8Error`, `Duration`, `Path`, `Json`, and `std:net:types` identifier
+      values, plus struct-shaped `std:http` values) now implement `Debug`;
+      `Bytes` also implements `FmtSink` as the standard in-memory UTF-8
+      formatting sink.
+      renderable collections now implement `Debug` as
+      `List<T: Debug>`, `Set<T: Eq + Debug>`, and
+      `Map<K: Eq + Hash + ToStr, V: Debug>`. Primitive `Debug` remains planned
+      because primitive-to-`std:fmt.Debug` interface objects need compiler/backend
+      intrinsic vtable support.
+- [x] **Runtime marker value semantics**: `std:async.TimedOut`,
+      `std:thread.Panicked`, `std:sync.ChannelClosed`, and
+      `std:sync.LockBusy` now implement equality, clone, hash, stringification,
+      and diagnostic debug rendering. Runtime handles (`JoinHandle`, channel
+      endpoints, `Shared`) remain handle types rather than plain value records.
+- [x] **`core:async` protocol surface**: moved `AsyncIterator` out of
+      `std:async` and into the core catalog alongside `Future`, `Ready`,
+      `Pending`, and `Context`; those protocol definitions now live in
+      `stdlib_src/core/async.otter`, with the `core:prelude` catalog view
+      remaining as a compatibility/ergonomics re-export for compiler-recognized
+      shapes. `for await` is syntax lowered by the compiler, so its protocol is
+      core substrate; `std:async` now keeps only runtime helpers such as
+      `yield_now`, `sleep`, and `timeout`. `await` and `spawn` now bake an
+      explicit dynamic widening when given a concrete type implementing
+      `Future<Out>`, so the backend/executor always receive the interface
+      object representation they poll or schedule.
+- [x] **`core:collections.Set` method surface**: replaced the exported-but-empty
+      `Set<T>` stub with an Otter-authored unique-list implementation gated by
+      `T: Eq`. `Set<T>()` / `Set.new<T>()`, `size`, `is_empty`,
+      `contains`, `insert`,
+      `remove`, `insert_all`, `is_subset`, `is_superset`, `is_disjoint`,
+      `clear`, `to_list`,
+      `iter`, `union`, `intersect`, and `difference` are
+      covered by stdlib e2e tests. `Set<T>` now also has value semantics:
+      `Eq` when `T: Eq`, `Clone` when `T: Eq + Clone`, and deterministic
+      order-insensitive `Hash` when `T: Eq + Hash`, plus compact `ToStr`
+      rendering when `T: Eq + ToStr`. Hash-backed storage, set
+      literal syntax, and custom keyed hashers remain planned work rather than
+      documented-as-implemented behavior.
+- [x] **`std:collections.Deque` value collection**: added an ordinary
+      Otter-authored `std:collections` module exporting `Deque<T>` and
+      `deque<T>()`, later expanded with `deque_from_list<T>(List<T>)`,
+      `extend_front`, `extend_back`, and `contains` when `T: Eq`. `Deque` is
+      deliberately `std:`, not `core:`, because no syntax or compiler lowering
+      depends on its layout. The implementation uses two internal lists for
+      front/back operations, exposes push/pop/front/back, direct `get(index)`
+      reads, `set(index, value)` writes, `remove_at(index)` removals,
+      size/empty, `to_list`, `iter`, and `clear`, and implements
+      equality, clone, ordered deterministic hashing, stringification, and an
+      explicit diagnostic debug implementation with the appropriate bounds.
+      Covered by explicit-import and runtime e2e cases.
+- [x] **`std:hash` deterministic and keyed hasher bridge**: added the pure Otter-authored
+      `std:hash` module exporting `Hasher`, `DefaultHasher`, `hash_value`, and
+      `write_hash`, `combine_hash`, plus explicit `KeyedHasher` and
+      `keyed_hasher(seed)`.
+      This keeps the compiler-recognized `Hash` interface in `core:prelude`
+      while giving user code ordinary stdlib hasher values and deterministic
+      helper functions. The mixer avoids wrapping arithmetic because Otter
+      Fusion integer overflow is checked. Byte-stream writes are implemented
+      through `write_u8` and `write_bytes(Bytes)`, with convenience writes for
+      signed integers, booleans, strings, and `Hash` values; the top-level
+      `write_hash(hasher, value)` helper feeds any `T: Hash` through a
+      `Hasher` interface object. `DefaultHasher` and `KeyedHasher` implement
+      state equality, clone, hash,
+      stringification, and debug rendering so hasher streams can be snapshotted
+      and compared. Keyed map/set construction, OS-seeded HashDoS-safe hashers,
+      and fast/cryptographic variants remain future work.
+- [x] **`std:http` value types**: added the pure Otter-authored `std:http`
+      module exporting HTTP method/version unions, `Status`,
+      multi-value `Headers`, flattened `HeaderEntry`, `HttpRequest`,
+      `HttpResponse`, and constructor
+      helpers. This standardizes ecosystem request/response shapes without
+      adding clients, servers, sockets, or wire parsing. Request/response
+      constructors, accessors, and `with_*` builder helpers snapshot mutable
+      sub-values such as headers and body, and builders clone unchanged
+      sub-values, with append/replace/remove/clear helpers for normalized
+      headers.
+      `Method` and `HttpVersion` implement direct `Eq` over their rendered
+      protocol strings, matching request/response equality semantics.
+      `Status` exposes constructors, explicit reason replacement builders,
+      and default reason phrases across common
+      informational, success, redirection, client-error, and server-error codes,
+      plus all five class predicates.
+      Headers normalize names with ASCII case-insensitive lowercase keys on
+      insertion, lookup, removal, snapshots, equality, hashing, and debug
+      rendering; equality and hashing compare normalized header names by
+      membership while preserving value order within each name. They expose
+      flattened entry and header-name snapshots for
+      ordinary iteration over repeated values. `Headers.size()` counts
+      normalized names, `value_count()` counts flattened values, `is_empty()`
+      checks whether any names are present, and `clear()` removes all entries
+      while preserving prior snapshots. Canonical parsing/rendering and
+      HTTP client/server implementations remain future/pkg work.
+      `Headers`, `HttpRequest`, and `HttpResponse` now implement value
+      equality, clone, structural hash, and diagnostic debug rendering.
+- [x] **`std:json` value tree**: added the pure Otter-authored `std:json`
+      module exporting an opaque `Json` value plus `json_null`, `json_bool`,
+      `json_number`, `json_string`, `json_array`, `json_object`, and typed
+      object/array extractors. The public type is intentionally not a union so
+      JSON values remain stable inside `List<Json>` and `Map<str, Json>` across
+      module boundaries. `Json` now implements deep `Clone`, deep `Eq`,
+      structural deterministic `Hash` with order-insensitive object entries,
+      compact escaped `ToStr` rendering, and diagnostic
+      `Debug`. Array/object constructors and extractors deep-snapshot mutable
+      `List<Json>` / `Map<str, Json>` containers and nested JSON values, so
+      caller mutations cannot alias an existing JSON tree. Rendering escapes
+      JSON string values and object keys for quotes,
+      backslashes, common control escapes, and remaining U+0000..U+001F control
+      characters. `Json.pretty(indent)` emits multi-line escaped arrays/objects
+      with caller-selected spacing. `append`, `set_at`, `with_key`, and
+      `without_key` provide immutable array/object replacement builders with the
+      same deep snapshot semantics. Scalar/container shape predicates, array/object `len()`,
+      object `contains_key`, and object `keys()`/`values()` snapshots cover
+      ordinary inspection without exposing the internal union or aliasing
+      nested values.
+      Parsers and stricter canonicalization remain package/follow-up library
+      work.
+- [x] **`std:net:types` value identifiers**: added the pure Otter-authored
+      `std:net:types` module exporting `IpAddr`, `SocketAddr`, `Uri`, `Url`,
+      `ParseError`, and constructor functions (`ip_v4`, `ip_v6`, `ip_v6_scoped`,
+      `socket_addr`, `uri`, `url`). The implemented slice covers portable
+      network identifier values, rendering, equality, hashing, cloning, debug
+      formatting, `Url` query-map snapshots and order-insensitive query
+      membership hashing, `ParseError` error/value semantics, dotted decimal IPv4
+      parsing, eight-group and `::`-compressed IPv6 parsing including final
+      dotted IPv4 tails and scoped zone identifiers, lowercase hex IPv6
+      rendering, IPv4 and bracketed IPv6 socket address parsing,
+      structural URI parsing, structural URL parsing including bracketed IPv6
+      URL hosts, URI/URL accessors, immutable URL replacement builders with
+      query-map snapshots and query-entry lookup/set/remove/clear helpers,
+      UTF-8 percent component encode/decode helpers, and
+      explicit-import/old-core-path e2e coverage. It intentionally does not open
+      sockets, perform DNS, normalize URLs, perform IDNA handling, or implement
+      target-backed networking;
+      those remain future `std:net`/parser work.
+- [x] **`std:rand` deterministic + OS-backed RNG slice**: added the mixed
+      `std:rand` module exporting `Rng`, `RandomError`, `SeededRng`,
+      `OsRng`, `ThreadRng`, `random_error`, `os_rng`, `thread_rng`,
+      `gen_range_i64`, `gen_range_u64`, `gen_f64`, `gen_range_f64`,
+      `gen_bool`, `gen_index`, `fill_bytes_n`, `gen_bytes`,
+      `choose_index`, `choose`, and `shuffle`.
+      `SeededRng` is deterministic and
+      reproducible, with `fill_bytes` appending generated bytes into
+      `std:bytes.Bytes`; it is suitable for tests/simulations but not
+      cryptographic use. `OsRng` is provider-backed through the runtime entropy
+      hook and exposes fallible `try_next_u32`, `try_next_u64`, and
+      `try_fill_bytes` and `try_fill_bytes_n` methods returning `RandomError`;
+      its `Rng` impl panics on provider entropy failure to preserve the
+      non-fallible generic `Rng` contract. `ThreadRng` is a per-value generator
+      seeded from `OsRng`.
+      Range helpers are half-open
+      and return `low` for empty/reversed ranges, including deterministic
+      `gen_f64` and `gen_range_f64` helpers built from the next 53 random bits;
+      `gen_bool` samples a numerator/denominator ratio with clamped
+      always-false/always-true edge cases, `fill_bytes_n` / `gen_bytes`
+      generate exact-length byte buffers from any `Rng`, `gen_index` and
+      `choose_index` sample uniform zero-based indexes and return `null` for
+      non-positive lengths or empty lists, `choose` returns `null` for empty
+      lists, and `shuffle` mutates the provided list in place.
+      `SeededRng` implements state equality,
+      clone, hash, stringification, and debug rendering so PRNG streams can be
+      snapshotted and compared. `RandomError` implements `std:error.Error`,
+      equality, clone, hash, stringification, and debug rendering.
+      Cryptographic-strength API guarantees and richer statistical
+      distributions remain planned work.
+- [x] **`std:log` portable value/default line slice**: added the pure
+      Otter-authored `std:log` module exporting `Level`, prefixed concrete level
+      variants (`LogTrace`, `LogDebug`, `Info`, `Warn`, `LogError`), level
+      constructor helpers, `Record`, `LoggerAlreadySet`, `log_record`, and
+      default line helpers (`trace`, `debug`, `info`, `warn`, `error`) plus
+      structured helpers (`trace_with`, `debug_with`, `info_with`,
+      `warn_with`, `error_with`). The implemented slice gives levels, records,
+      and the marker type equality/clone/hash/stringification/debug semantics
+      and prints compact lines through `std:io.println`. `Level.rank()` and
+      `Level.is_at_least(min)` provide portable severity ordering for filtering.
+      `Record` also provides
+      value-layer accessors and immutable-style `with_*` builders that clone
+      field maps to avoid aliasing, including direct field lookup/presence/count,
+      field addition, removal, and clearing helpers; `record(...)` and structured `*_with` helpers snapshot
+      caller-provided field maps too. Record equality and hashing compare
+      fields by key/value membership rather than rendered field order.
+      Replaceable global logger backends remain planned provider/runtime work.
+- [x] **`std:process` portable value layer + host environment/execution slice**: added the mixed
+      `std:process` module exporting `Command`, `ExitStatus`, captured
+      `Output`, constructor helpers, `args`, `env`, `env_all`, and `set_env`.
+      `Command` builders/accessors snapshot
+      argument lists, environment maps, and cwd paths, including immutable-style
+      program replacement, whole-args/env replacement, env inheritance/clearing,
+      cwd clearing, direct argument counts, and explicit environment
+      lookup/presence/count helpers, plus command validation for empty program
+      names and invalid explicit environment keys before provider execution;
+      `Output` snapshots byte buffers; all three values
+      implement equality, clone, structural hashing, and
+      diagnostic debug rendering, with stringification for `Command` and
+      `ExitStatus`. `Command` hashing keeps argument order significant while
+      matching explicit environment-map equality by key/value membership rather
+      than insertion order. `Output` hashing folds status/stdout/stderr in field
+      order. Rust-backed hooks snapshot process argv and environment
+      into ordinary `List<str>` / `Map<str, str>` values, read one variable as
+      `str | null`, mutate one environment variable with validation, and run
+      commands to completion through `Command.status()` / `Command.output()`,
+      returning validation/provider failures as `IoError` or successful
+      `ExitStatus` / captured `Output` values.
+      `exit` and `abort` are imported from `std:process` and lower to the
+      existing runtime process-control intrinsics. Live process spawning,
+      `Child`, streamed child stdio, and richer target-specific status details
+      remain future provider/runtime work.
+- [x] **`core:sync:atomic.Ordering` value contract**: added the pure
+      Otter-authored `core:sync:atomic` module exporting `Ordering`, its five
+      memory-ordering variants, and constructor helpers. `Ordering` implements
+      equality, clone, hash, stringification, and diagnostic debug rendering;
+      atomic handle types and load/store/swap/compare-exchange/fetch operations
+      remain target/runtime work. This moved from the earlier `std:sync:atomic`
+      path because atomic operations are compiler/runtime substrate under the
+      revised core/std split.
+- [x] **Stdlib provider invariants**: explicit provider catalogs are validated
+      before public `core:*`/`std:*` views are materialized. Duplicate modules,
+      root-only paths, unaddressable path segments, tier/root mismatches,
+      duplicate exports, and exports missing from bundled toolchain source are
+      diagnosed and skipped instead of becoming importable partial or
+      wrongly-tiered views. Custom providers can also add valid `std:*` module
+      views, and `no-std` still blocks those provider-added `std:*` imports.
+      The built-in module and source manifests also have unit coverage for the
+      same scheme-plus-addressable-segment path shape required of custom
+      providers, plus catalog-to-require-import coverage that catches exported
+      names missing near-empty-prelude negative diagnostics.
+- [ ] **Next stdlib slices**:
+      async filesystem adapters, system-time
+      local timezone database/conversion extensions for `std:time`,
+      `std:net`, live process spawning and child management for
+      `std:process`, cryptographic/distribution work for `std:rand`, and
+      remaining collections/bytes/atomic-handle work. Each slice needs
+      unit + e2e tests, docs, examples, and LSP support.
 
 ### Phase 2 — Type checking & inference  ✅ DONE
 - [x] `sema/check.rs`: bidirectional checker over the imperative core —
@@ -1088,8 +1491,10 @@ The tracing GC is functionally complete for single-threaded programs.
       pattern binding per element, with `break`/`continue` (via the loop stack).
       `for await` rejected; general `Iterator` protocol is a follow-up. 4 tests.
 - [x] **Operator overloading** for user nominal types: `a + b`/`==`/`!=`/`<`/…
-      dispatch to the operand's `extend` method (`Add.add`, `Eq.eq`, `Ord.lt`,
-      …) resolved by name; `!=` negates `eq`. Checker records the method in
+      dispatch to the operand's visible `extend` method (`add`, `eq`, `lt`,
+      …) resolved by name; importable `Eq`/`Ord` remain real `core:prelude`
+      contracts, while arithmetic/bitwise protocol labels such as `Add` are not
+      catalog exports today. `!=` negates `eq`. Checker records the method in
       `results.operator_methods[op_span]`; codegen emits a method call. 4 tests.
 - [x] **`str` methods + content comparison**: `size`/`byte_size`/`is_empty`/
       `contains`/`starts_with`/`ends_with`/`substring`/`to_upper`/`to_lower`/
@@ -1120,9 +1525,14 @@ The tracing GC is functionally complete for single-threaded programs.
         rooted interpolation/concat temporaries (`gen_str_literal` now marks each
         part + accumulator `needs_stack_map`) — string interpolation previously
         corrupted under stress GC.
-- [x] **Real language prelude** (`PRELUDE_SRC` in `symbols.rs`): lexed/parsed/
-      collected into ROOT before user items, with a dedicated `FileId`. Holds
-      `struct Item<T>`, `struct Done`, `interface Iterator<T>` — not magic.
+- [x] **Real toolchain source** (`stdlib_src/core/*.otter`,
+      `stdlib_src/std/*.otter`): lexed/parsed/collected through the
+      `TOOLCHAIN_SOURCES` manifest into hidden module-local owners under the
+      private `__builtins__` root before user items, with separate synthetic
+      `FileId`s per bundled source file. Holds
+      `struct Item<T>`, `struct Done`, `interface Iterator<T>`, and the rest of
+      the catalog-backed std/core surface — not magic and not in user scope
+      without imports.
 - [x] **Record-struct generic inference**: `Item { value: v }` infers `Item<U>`
       from field values (seeded by the expected type), mirroring generic-call
       inference (`infer_struct_args` + `unify`).
@@ -1411,9 +1821,9 @@ The tracing GC is functionally complete for single-threaded programs.
       **`JoinHandle<R>.join()` is async + non-blocking**: it
       yields a `Future<Joined<R> | Panicked>` so the joining task *suspends*
       (`lang_thread_join_future` registers a waker; the worker wakes it on
-      publish) instead of parking the OS thread. Callers join from an async
-      context and `await` the join future; async `main` is driven by the runtime
-      launcher, with no user-visible `block_on`.
+      publish) instead of parking the OS thread. From sync code the implicit-async
+      driver runs it to completion; user surface is just `var r = h.join()` (see
+      the Async note below — async is implicit, with the `spawn` keyword).
       The checker recognises `Thread.spawn`, records the result type, and rejects
       mutable-managed captures (deep-clone of mutable managed captures via
       `Clone` is the follow-up); codegen builds the handle/union.
@@ -1452,8 +1862,8 @@ The tracing GC is functionally complete for single-threaded programs.
       so a `JoinHandle.join()` surfaces it recoverably, while a `spawn EXPR`
       awaiter has the panic *re-propagated* at its own `await` (`spawn_poll`) —
       the promise-rejection model (`docs/21` §11). Sibling workers are unaffected.
-      Covers `Thread.spawn` (sync + async closures) and the pre-M:N `spawn`
-      keyword path. JIT + native parity; the C shim is bundled
+      Covers `Thread.spawn` (sync + async closures) and the `spawn` keyword
+      (one-OS-thread-per-task today). JIT + native parity; the C shim is bundled
       into both the `rlib` (JIT) and `libruntime.a` (native). Tests: 5 runtime
       unit/integration (panic_boundary + a real worker-panic), 4 CLI integration
       (isolated join, lock-release, `spawn` propagation, GC-stress parity), and
@@ -1461,7 +1871,7 @@ The tracing GC is functionally complete for single-threaded programs.
       spawn_panic_propagates,lock_released_on_panic}` (the last graduated from
       XFAIL). The **executor-multiplexed** case (many `Task.spawn` tasks sharing
       one work-stealing worker thread, where the boundary must sit at the poll
-      call site and prove sibling survival) remains the separate follow-on.
+      call site) is a separate follow-on after the M:N executor lands.
 - [x] **Channels (`docs/20` §2): `channel<T>()`, `send`, `recv`, `try_recv`, and
       deterministic close-on-last-sender-drop + `Receiver: Iterator`.**
       `channel<T>()` (a recognised builtin, like `Thread.spawn`) allocates a
@@ -1520,19 +1930,25 @@ The tracing GC is functionally complete for single-threaded programs.
       concurrent increments (2×5000 → 10000, deterministic under stress). JIT +
       native parity; `examples/shared.otter`; 2 CLI tests. TODO: lock release on a
       panicking body (needs unwinding); reentrancy is undefined (per spec).
-- [x] **Async (`docs/21`) — COMPLETE, with an explicit-async surface.**
-      > **SURFACE NOTE (current design, `docs/21`):** async is explicit:
-      > `async` functions/closures and `await` are user-visible, `Future<T>` is a
-      > real type programmers can name, and there is **no user-visible
-      > `block_on`**. An async `main` is driven by the runtime launcher. The
-      > **`spawn EXPR` keyword schedules a future on the shared executor and
-      > itself returns `Future<T>`**; `await`ing that future yields the spawned
-      > task's result and propagates task panics at the awaiter. Thread-like
-      > handles are reserved for `Thread.spawn` (dedicated OS thread) and
-      > `Task.spawn` (executor-backed `std:task::JoinHandle<R>` with
-      > `join`/`detach`/`cancel`/`abort`). The internal
-      > `runtime::async_rt::lang_block_on` machinery still drives root futures,
-      > but user code never calls it.
+- [x] **Async (`docs/21`) — COMPLETE, with an implicit-async surface.**
+      > **SURFACE NOTE (current design, `docs/21` rewritten):** async is now
+      > **implicit**. There is **no** user-visible `async` modifier, `await`
+      > expression, `block_on` builtin, `async { … }` block, or `for await` —
+      > those were removed from the language surface. A single keyword **`spawn
+      > call_expr`** evaluates to a `JoinHandle<T>` (like Go's `go`). User code
+      > never spells `Future<T>`: `sleep` returns `null`, `Receiver.recv()`
+      > returns `T`, `JoinHandle.join()` returns `Joined<T> | Panicked`,
+      > `Shared.lock(fn)` returns the closure's result. The compiler decides which
+      > functions need state-machine codegen by a fix-point pass
+      > (`propagate_async_calls`): a function is "async" iff its body reaches a
+      > suspending op (`sleep`/`yield_now`/`recv`/`join`) or calls another async
+      > function; non-suspending functions keep straight-line codegen with zero
+      > executor overhead. `main` is driven by `lang_block_on` automatically if it
+      > is async. **The `Future`/`Pending`/`Ready`/state-machine/`block_on`
+      > machinery described below all still exists internally** — it is exactly
+      > what the implicit surface lowers to; the user just never names it. The
+      > `[x]` sub-bullets that mention `await`/`async {}`/`for await` describe the
+      > internal lowering, reachable from the implicit surface.
 
       Prelude:
       `interface Future<Output> { poll(self, ctx: *Context): Ready<Output> |
@@ -1547,11 +1963,11 @@ The tracing GC is functionally complete for single-threaded programs.
       the body (returning `Ready<Output>`), and the public symbol becomes a
       *constructor* that allocates the state struct (holding the captured
       arguments / locals) and wraps it in a `Future<Output>` interface-object
-      box whose single vtable slot is `poll`. The internal runtime entry
-      `runtime::async_rt::lang_block_on` drives the program root future to
-      completion; it is not a user-visible builtin. It parks on a condvar waker
-      between `Pending` polls, in GC-native state, pinning the future as a GC
-      root across polls. **`await` is fully lowered**: an async function
+      box whose single vtable slot is `poll`. `block_on(fut): Out` (a recognised
+      builtin) drives the future to completion via the runtime executor
+      (`runtime::async_rt::lang_block_on`: a poll loop that parks on a condvar
+      waker between `Pending` polls, in GC-native state, pinning the future as a
+      GC root across polls). **`await` is fully lowered**: an async function
       whose body contains `await` becomes a real suspendable state machine — the
       state struct holds every body local, `poll` dispatches on a saved state
       word to resume at the right `await`, each `await` saves the live locals +
@@ -1559,13 +1975,13 @@ The tracing GC is functionally complete for single-threaded programs.
       `yield_now()` (a `Future<null>` that suspends once, self-waking) exercises
       genuine park/resume cycles. `await`s in `if`/`while`/`match` bodies work.
       JIT + native parity; GC-stress clean. **`await` inside `async { … }`
-      blocks** works when awaited or spawned by surrounding async code.
-      **`spawn fut_expr: Future<T>`** schedules a future on the shared worker
-      executor and returns a future handle whose `await` yields `T`.
-      `yield_now()` provides genuine suspension; **`sleep(ms)`** is driven
-      by the shared timer driver; **`.cancel()`** is a safe no-op for plain
-      compute-only futures and has real executor cancellation for spawned
-      futures. `examples/async.otter` exercises the whole
+      blocks** works (`block_on(async { await … })`, the doc's main launcher).
+      **`spawn(fut): JoinHandle<T>`** drives a future on a worker thread (reusing
+      the `JoinHandle`/`join` machinery → `Joined<T> | Panicked`). **`for await x
+      in stream`** drives an `AsyncIterator<T>` (`next_async()` is awaited each
+      step). `yield_now()` provides genuine suspension; **`sleep(ms)`** is a
+      timer-thread-backed future; **`.cancel()`** is a (no-op) abort for the
+      compute-only futures we build. `examples/async.otter` exercises the whole
       surface; 14 CLI tests + 2 runtime tests; JIT + native + GC-stress parity.
 - [x] **`await` ANF hoisting** (`docs/21`): `await` may appear nested in a
       larger expression — function arguments, operands of `+`/`-`/comparisons,
@@ -2194,7 +2610,7 @@ feature, JIT≡native byte-identical and GC-stress clean.
 - **Phase 5 (system features):** structs, unions, generics, interfaces (static +
   dynamic + default methods), error handling (`?`/`Try`/`FromResidual`), pattern
   matching (complete), closures (by-ref cells), threads/channels/`Shared<T>`,
-  **explicit async/await (`spawn` keyword)** incl. `sleep`/`timeout`/for-await/async
+  **async (implicit, `spawn` keyword)** incl. `sleep`/`timeout`/for-await/async
   closures, FFI (extern fns/structs/vars/arrays/opaque types/NPO/`Foreign.*`/
   CString/CStr/`@Packed`/`@Align`/`@Union`/`@Transparent`/`@Link`), all `@Derive`s
   (Eq/Ord/ToStr/Clone/Hash), `Drop`, full stdlib collection/string/numeric APIs.

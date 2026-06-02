@@ -23,6 +23,8 @@
 //!   * `exit: <int>`                          — expected process exit code.
 //!   * `stderr: <substring>`                  — a substring required in stderr
 //!                                              (repeatable; for errors/panics).
+//!   * `stdin: <text>`                         — append exact stdin text for the
+//!                                              child process (repeatable).
 //!   * `release`                              — run under `--release`.
 //!   * `serial`                                — run alone (after the parallel
 //!                                              batch); for OS-thread-spawning
@@ -31,6 +33,8 @@
 //!   * `env: KEY=VALUE`                        — set an environment variable for
 //!                                              the run (repeatable; e.g.
 //!                                              `OTTER_FUSION_GC=stress` to hammer the GC).
+//!   * `project: no-std`                       — synthesize a temporary project
+//!                                              manifest for project-mode cases.
 //!   * `known-bug: <note>`                     — this case states the *desired*
 //!                                              (spec-correct) behaviour, which
 //!                                              the implementation does NOT yet
@@ -68,6 +72,7 @@
 //! stdout — the standard "update expectations" workflow. Always review the
 //! resulting diff.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
@@ -96,6 +101,8 @@ pub struct Case {
     pub exit: Option<i32>,
     /// Substrings required in stderr.
     pub stderr_contains: Vec<String>,
+    /// Exact stdin bytes to feed to the process.
+    pub stdin: String,
     /// Exact expected stdout lines (from `//~` directives).
     pub stdout_lines: Vec<String>,
     pub release: bool,
@@ -108,6 +115,9 @@ pub struct Case {
     pub serial: bool,
     /// Environment variables to set for the run (e.g. `OTTER_FUSION_GC=stress`).
     pub env: Vec<(String, String)>,
+    /// Optional project fixture kind. Most cases run as direct files; project
+    /// cases exercise manifest-driven behavior such as `no-std`.
+    pub project: Option<ProjectFixture>,
     /// If set, this case documents *desired* (spec-correct) behaviour that the
     /// implementation does **not** yet satisfy — a known bug or unimplemented
     /// feature. It is expected to currently FAIL its stated expectations; the
@@ -132,10 +142,12 @@ impl Case {
         let mut kind = Kind::Run;
         let mut exit = None;
         let mut stderr_contains = Vec::new();
+        let mut stdin = String::new();
         let mut stdout_lines = Vec::new();
         let mut release = false;
         let mut serial = false;
         let mut env = Vec::new();
+        let mut project = None;
         let mut known_bug = None;
         let mut description = None;
 
@@ -160,8 +172,15 @@ impl Case {
                         exit = Some(val.parse().map_err(|_| format!("bad exit code `{val}`"))?)
                     }
                     "stderr" => stderr_contains.push(val),
+                    "stdin" => stdin.push_str(&val),
                     "release" => release = true,
                     "serial" => serial = true,
+                    "project" => {
+                        project = Some(match val.as_str() {
+                            "no-std" => ProjectFixture::NoStd,
+                            other => return Err(format!("unknown project fixture `{other}`")),
+                        });
+                    }
                     "env" => {
                         let (k, v) = val
                             .split_once('=')
@@ -188,10 +207,12 @@ impl Case {
             kind,
             exit,
             stderr_contains,
+            stdin,
             stdout_lines,
             release,
             serial,
             env,
+            project,
             known_bug,
             description,
         })
@@ -204,6 +225,13 @@ impl Case {
     fn program(&self) -> String {
         self.source.clone()
     }
+}
+
+/// Built-in project fixture variants the suite can synthesize.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectFixture {
+    /// A normal executable project whose manifest sets `[package] no-std = true`.
+    NoStd,
 }
 
 /// How a case turned out, relative to its expectations (and any `known-bug`).
@@ -244,14 +272,41 @@ impl Outcome {
 /// declared expectations.
 pub fn run_case(otter: &Path, case: &Case) -> Outcome {
     let nonce = unique_nonce();
-    let dir = std::env::temp_dir();
-    let file = dir.join(format!("otter_suite_{nonce}.otter"));
-    if let Err(e) = std::fs::write(&file, case.program()) {
-        return fail(case, format!("could not write temp file: {e}"));
-    }
+    let temp = std::env::temp_dir();
+    let mut cleanup_dir = None;
+    let mut cleanup_file = None;
+    let input = match case.project {
+        None => {
+            let file = temp.join(format!("otter_suite_{nonce}.otter"));
+            if let Err(e) = std::fs::write(&file, case.program()) {
+                return fail(case, format!("could not write temp file: {e}"));
+            }
+            cleanup_file = Some(file.clone());
+            file
+        }
+        Some(ProjectFixture::NoStd) => {
+            let dir = temp.join(format!("otter_suite_project_{nonce}"));
+            let src = dir.join("src");
+            if let Err(e) = std::fs::create_dir_all(&src) {
+                return fail(case, format!("could not create temp project: {e}"));
+            }
+            let manifest =
+                "[package]\nname = \"suite_no_std\"\nno-std = true\nentry = \"src/main.otter\"\n";
+            if let Err(e) = std::fs::write(dir.join("project.toml"), manifest) {
+                let _ = std::fs::remove_dir_all(&dir);
+                return fail(case, format!("could not write temp project manifest: {e}"));
+            }
+            if let Err(e) = std::fs::write(src.join("main.otter"), case.program()) {
+                let _ = std::fs::remove_dir_all(&dir);
+                return fail(case, format!("could not write temp project source: {e}"));
+            }
+            cleanup_dir = Some(dir.clone());
+            dir
+        }
+    };
 
     let mut cmd = Command::new(otter);
-    cmd.arg("run").arg(&file);
+    cmd.arg("run").arg(&input);
     if case.release {
         cmd.arg("--release");
     }
@@ -263,8 +318,14 @@ pub fn run_case(otter: &Path, case: &Case) -> Outcome {
     if matches!(case.kind, Kind::Run | Kind::Panic) {
         cmd.arg("--time");
     }
-    let out = output_with_timeout(&mut cmd, case_timeout());
-    let _ = std::fs::remove_file(&file);
+    let stdin = (!case.stdin.is_empty()).then_some(case.stdin.as_str());
+    let out = output_with_timeout(&mut cmd, case_timeout(), stdin);
+    if let Some(file) = cleanup_file {
+        let _ = std::fs::remove_file(file);
+    }
+    if let Some(dir) = cleanup_dir {
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     let out = match out {
         Ok(o) => o,
@@ -405,10 +466,24 @@ fn case_timeout() -> Duration {
         .unwrap_or_else(|| Duration::from_secs(60))
 }
 
-fn output_with_timeout(cmd: &mut Command, timeout: Duration) -> Result<Output, CaseRunError> {
+fn output_with_timeout(
+    cmd: &mut Command,
+    timeout: Duration,
+    stdin_data: Option<&str>,
+) -> Result<Output, CaseRunError> {
     let start = Instant::now();
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    if stdin_data.is_some() {
+        cmd.stdin(Stdio::piped());
+    }
     let mut child = cmd.spawn().map_err(CaseRunError::Spawn)?;
+    if let Some(input) = stdin_data {
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin
+                .write_all(input.as_bytes())
+                .map_err(CaseRunError::Spawn)?;
+        }
+    }
     loop {
         match child.try_wait().map_err(CaseRunError::Spawn)? {
             Some(_) => return child.wait_with_output().map_err(CaseRunError::Spawn),

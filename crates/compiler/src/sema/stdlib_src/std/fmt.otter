@@ -1,0 +1,100 @@
+interface Display: ToStr {
+  function display(self): str;
+  function to_str(self): str;
+}
+interface Debug {
+  function debug(self): str;
+}
+struct FmtError {
+  message: str,
+}
+
+extend FmtError: Error {
+  function message(self): str { self.message }
+  function cause(self): Error | null { null }
+  function to_str(self): str { self.message }
+}
+
+extend FmtError: Eq {
+  function eq(self, other: FmtError): bool { self.message == other.message }
+}
+
+extend FmtError: Clone {
+  function clone(self): FmtError { FmtError { message: self.message } }
+}
+
+extend FmtError: Hash {
+  function hash(self): u64 { self.message.hash() }
+}
+
+extend FmtError: Debug {
+  function debug(self): str { "FmtError { message: \"" + self.message + "\" }" }
+}
+
+interface FmtSink {
+  function write_str(self, s: str): null | FmtError;
+}
+
+extend<T: Debug> List<T>: Debug {
+  function debug(self): str {
+    var out = "List[";
+    var first = true;
+    for value in self.iter() {
+      if first {
+        first = false;
+      } else {
+        out = out + ", ";
+      }
+      out = out + value.debug();
+    }
+    out + "]"
+  }
+}
+
+extend<K: Eq + Hash + ToStr, V: Debug> Map<K, V>: Debug {
+  function debug(self): str {
+    var out = "Map{";
+    var first = true;
+    for entry in self.entries() {
+      if first {
+        first = false;
+      } else {
+        out = out + ", ";
+      }
+      out = out + entry.key.to_str() + ": " + entry.value.debug();
+    }
+    out + "}"
+  }
+}
+
+extend<T: Eq + Debug> Set<T>: Debug {
+  function debug(self): str {
+    var out = "Set{";
+    var first = true;
+    for value in self.iter() {
+      if first {
+        first = false;
+      } else {
+        out = out + ", ";
+      }
+      out = out + value.debug();
+    }
+    out + "}"
+  }
+}
+
+extend<T: Debug> Deque<T>: Debug {
+  function debug(self): str {
+    var out = "Deque[";
+    var first = true;
+    for value in self.iter() {
+      if first {
+        first = false;
+      } else {
+        out = out + ", ";
+      }
+      out = out + value.debug();
+    }
+    out + "]"
+  }
+}

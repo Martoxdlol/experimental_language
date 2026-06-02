@@ -1,0 +1,24 @@
+//@ kind: run
+//@ description: std:io exposes stdin as a target-backed Reader handle
+//@ stdin: abcdef
+//@ stdout:
+//~ stdin=2 bytes[97,98] 4 bytes[99,100,101,102] 0 bytes[]
+import { Bytes } from "std:bytes";
+import { Reader, println, stdin } from "std:io";
+
+function main() {
+  var input = stdin();
+  var first = Bytes.new();
+  first.push(0u8);
+  first.push(0u8);
+  var first_count = input.read(first);
+  var first_payload = first.slice(2, first.size());
+
+  var rest = Bytes.new();
+  var rest_count = input.read_to_end(rest);
+
+  var eof = Bytes.new();
+  var eof_count = input.read_to_end(eof);
+
+  println("stdin=${first_count as i64} ${first_payload.to_str()} ${rest_count as i64} ${rest.to_str()} ${eof_count as i64} ${eof.to_str()}");
+}

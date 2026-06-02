@@ -47,8 +47,10 @@ Directives:
 | `kind: panic`         | runs then aborts (exit 101 by default).                              |
 | `exit: <n>`           | expected exit code (overrides the kind default).                     |
 | `stderr: <substr>`    | substring required in stderr (repeatable).                           |
+| `stdin: <text>`       | exact stdin text to feed the process (repeatable; concatenated).      |
 | `release`             | run under `--release` (overflow wraps instead of panicking).         |
 | `serial`              | run alone, after the parallel batch (for OS-thread-spawning cases).  |
+| `project: no-std`     | run as a temporary project whose manifest sets `no-std = true`.      |
 | `env: KEY=VALUE`      | set an env var for the run (repeatable; e.g. `LANG_GC=stress`).       |
 | `known-bug: <note>`   | states *desired* behaviour the impl does NOT yet meet — see below.   |
 | `description: <text>` | free-form note.                                                      |

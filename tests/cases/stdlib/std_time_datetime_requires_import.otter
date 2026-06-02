@@ -1,0 +1,56 @@
+//@ kind: compile-error
+//@ description: std:time DateTime/SystemTime conversion values are not available without an explicit import
+//@ stderr: cannot find type `SystemTime`
+//@ stderr: cannot find type `TimeZone`
+//@ stderr: cannot find type `Utc`
+//@ stderr: cannot find type `FixedOffset`
+//@ stderr: cannot find type `NamedTimeZone`
+//@ stderr: cannot find type `DateTime`
+//@ stderr: cannot find type `TimeError`
+//@ stderr: cannot find value `DateTime`
+//@ stderr: cannot find value `utc` in scope
+//@ stderr: cannot find value `fixed_offset` in scope
+//@ stderr: cannot find value `named_timezone` in scope
+//@ stderr: cannot find value `time_error` in scope
+//@ stderr: cannot find value `date_time` in scope
+//@ stderr: cannot find value `parse_iso8601` in scope
+//@ stderr: cannot find value `SystemTime`
+
+function make_system_time(): SystemTime {
+  SystemTime.unix_epoch()
+}
+
+function make_timezone(): TimeZone {
+  utc()
+}
+
+function make_utc_variant(): Utc {
+  Utc {}
+}
+
+function make_fixed_variant(): FixedOffset {
+  FixedOffset { seconds: 0i32 }
+}
+
+function make_named_variant(): NamedTimeZone {
+  NamedTimeZone { name: "UTC" }
+}
+
+function make_datetime(): DateTime {
+  DateTime.new(2024i32, 1u8, 1u8, 0u8, 0u8, 0u8, 0u32, utc()) as DateTime
+}
+
+function make_error(): TimeError {
+  time_error("bad")
+}
+
+function main() {
+  var utc_zone = utc();
+  var fixed = fixed_offset(3600i32);
+  var named = named_timezone("Europe/Prague");
+  var dt = DateTime.new(2024i32, 1u8, 1u8, 0u8, 0u8, 0u8, 0u32, utc_zone);
+  var dt2 = date_time(2024i32, 1u8, 1u8, 0u8, 0u8, 0u8, 0u32, fixed);
+  var parsed = parse_iso8601("2024-01-01T00:00:00Z");
+  var err = time_error("bad");
+  var epoch = SystemTime.unix_epoch();
+}

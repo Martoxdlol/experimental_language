@@ -1,0 +1,1254 @@
+struct IpAddr {
+  version: i64,
+  zone: str | null,
+  a: u16,
+  b: u16,
+  c: u16,
+  d: u16,
+  e: u16,
+  f: u16,
+  g: u16,
+  h: u16,
+}
+
+struct SocketAddr {
+  ip: IpAddr,
+  port: u16,
+}
+
+struct Uri {
+  scheme: str,
+  authority: str | null,
+  path: str,
+  query: str | null,
+  fragment: str | null,
+}
+
+struct Url {
+  scheme: str,
+  user: str | null,
+  host: str,
+  port: u16 | null,
+  path: str,
+  query: Map<str, str>,
+  fragment: str | null,
+}
+
+struct ParseError {
+  message: str,
+  position: i64,
+}
+
+function ip_v4(a: u8, b: u8, c: u8, d: u8): IpAddr {
+  IpAddr {
+    version: 4,
+    zone: null,
+    a: a as u16,
+    b: b as u16,
+    c: c as u16,
+    d: d as u16,
+    e: 0u16,
+    f: 0u16,
+    g: 0u16,
+    h: 0u16,
+  }
+}
+
+function ip_v6(a: u16, b: u16, c: u16, d: u16, e: u16, f: u16, g: u16, h: u16): IpAddr {
+  IpAddr { version: 6, zone: null, a: a, b: b, c: c, d: d, e: e, f: f, g: g, h: h }
+}
+
+function ip_v6_scoped(
+  a: u16,
+  b: u16,
+  c: u16,
+  d: u16,
+  e: u16,
+  f: u16,
+  g: u16,
+  h: u16,
+  zone: str,
+): IpAddr {
+  IpAddr { version: 6, zone: zone, a: a, b: b, c: c, d: d, e: e, f: f, g: g, h: h }
+}
+
+function socket_addr(ip: IpAddr, port: u16): SocketAddr {
+  SocketAddr { ip: ip, port: port }
+}
+
+function uri(
+  scheme: str,
+  authority: str | null,
+  path: str,
+  query: str | null,
+  fragment: str | null,
+): Uri {
+  Uri { scheme: scheme, authority: authority, path: path, query: query, fragment: fragment }
+}
+
+function url(
+  scheme: str,
+  user: str | null,
+  host: str,
+  port: u16 | null,
+  path: str,
+  query: Map<str, str>,
+  fragment: str | null,
+): Url {
+  Url {
+    scheme: scheme,
+    user: user,
+    host: host,
+    port: port,
+    path: path,
+    query: __net_clone_query(query),
+    fragment: fragment,
+  }
+}
+
+function __net_clone_query(query: Map<str, str>): Map<str, str> {
+  var out = Map.new<str, str>();
+  for entry in query {
+    out.set(entry.key, entry.value);
+  }
+  out
+}
+
+function __net_hash_add(left: u64, right: u64): u64 {
+  ((left % 4294967291u64) + (right % 4294967291u64)) % 4294967291u64
+}
+
+function __net_str_option_eq(left: str | null, right: str | null): bool {
+  if left is str {
+    if right is str {
+      (left as str) == (right as str)
+    } else {
+      false
+    }
+  } else {
+    right is null
+  }
+}
+
+function __net_u16_option_eq(left: u16 | null, right: u16 | null): bool {
+  if left is u16 {
+    if right is u16 {
+      (left as u16) == (right as u16)
+    } else {
+      false
+    }
+  } else {
+    right is null
+  }
+}
+
+function __net_parse_error(message: str, position: i64): ParseError {
+  ParseError { message: message, position: position }
+}
+
+function __net_hex_digit(value: i64): str {
+  if value < 10 {
+    value as str
+  } else if value == 10 {
+    "A"
+  } else if value == 11 {
+    "B"
+  } else if value == 12 {
+    "C"
+  } else if value == 13 {
+    "D"
+  } else if value == 14 {
+    "E"
+  } else {
+    "F"
+  }
+}
+
+function __net_percent_byte(value: u8): str {
+  var n = value as i64;
+  "%" + __net_hex_digit(n / 16) + __net_hex_digit(n % 16)
+}
+
+function __net_hex_value(ch: char): i64 {
+  var cp = ch as i64;
+  if cp >= 48 && cp <= 57 {
+    cp - 48
+  } else if cp >= 65 && cp <= 70 {
+    cp - 55
+  } else if cp >= 97 && cp <= 102 {
+    cp - 87
+  } else {
+    -1
+  }
+}
+
+function __net_is_unreserved(cp: i64): bool {
+  (cp >= 48 && cp <= 57)
+    || (cp >= 65 && cp <= 90)
+    || (cp >= 97 && cp <= 122)
+    || cp == 45
+    || cp == 46
+    || cp == 95
+    || cp == 126
+}
+
+function __net_encode_codepoint(cp: i64): str {
+  if cp <= 0x7f {
+    __net_percent_byte(cp as u8)
+  } else if cp <= 0x7ff {
+    __net_percent_byte((0xc0 + (cp / 64)) as u8)
+      + __net_percent_byte((0x80 + (cp % 64)) as u8)
+  } else if cp <= 0xffff {
+    __net_percent_byte((0xe0 + (cp / 4096)) as u8)
+      + __net_percent_byte((0x80 + ((cp / 64) % 64)) as u8)
+      + __net_percent_byte((0x80 + (cp % 64)) as u8)
+  } else {
+    __net_percent_byte((0xf0 + (cp / 262144)) as u8)
+      + __net_percent_byte((0x80 + ((cp / 4096) % 64)) as u8)
+      + __net_percent_byte((0x80 + ((cp / 64) % 64)) as u8)
+      + __net_percent_byte((0x80 + (cp % 64)) as u8)
+  }
+}
+
+function percent_encode_component(text: str): str {
+  var out = "";
+  for ch in text.chars() {
+    var cp = ch as i64;
+    if __net_is_unreserved(cp) {
+      out = out + ch as str;
+    } else {
+      out = out + __net_encode_codepoint(cp);
+    }
+  }
+  out
+}
+
+function __net_decode_percent_bytes(bytes: List<u8>, position: i64): str | ParseError {
+  var out = "";
+  var i = 0;
+  while i < bytes.size() {
+    var first = bytes[i] as i64;
+    if first < 0x80 {
+      out = out + (first as char) as str;
+      i = i + 1;
+    } else {
+      var needed = 0;
+      var value = 0;
+      var min = 0;
+      if first >= 0xc2 && first <= 0xdf {
+        needed = 1;
+        value = first % 0x20;
+        min = 0x80;
+      } else if first >= 0xe0 && first <= 0xef {
+        needed = 2;
+        value = first % 0x10;
+        min = 0x800;
+      } else if first >= 0xf0 && first <= 0xf4 {
+        needed = 3;
+        value = first % 0x08;
+        min = 0x10000;
+      } else {
+        return __net_parse_error("invalid UTF-8 percent byte", position + i);
+      }
+
+      if i + needed >= bytes.size() {
+        return __net_parse_error("truncated UTF-8 percent sequence", position + i);
+      }
+
+      var j = 1;
+      while j <= needed {
+        var next = bytes[i + j] as i64;
+        if next < 0x80 || next > 0xbf {
+          return __net_parse_error("invalid UTF-8 continuation byte", position + i + j);
+        }
+        value = value * 64 + (next % 64);
+        j = j + 1;
+      }
+
+      if value < min || value > 0x10ffff || (value >= 0xd800 && value <= 0xdfff) {
+        return __net_parse_error("invalid UTF-8 percent scalar", position + i);
+      }
+      out = out + (value as char) as str;
+      i = i + needed + 1;
+    }
+  }
+  out
+}
+
+function percent_decode_component(text: str): str | ParseError {
+  var out = "";
+  var bytes = List<u8>();
+  var byte_start = 0;
+  var i = 0;
+  while i < text.size() {
+    var ch = ' ';
+    for c in text.substring(i, i + 1).chars() {
+      ch = c;
+    }
+
+    if ch == '%' {
+      if bytes.is_empty() {
+        byte_start = i;
+      }
+      if i + 2 >= text.size() {
+        return __net_parse_error("truncated percent escape", i);
+      }
+      var hi = ' ';
+      for c in text.substring(i + 1, i + 2).chars() {
+        hi = c;
+      }
+      var lo = ' ';
+      for c in text.substring(i + 2, i + 3).chars() {
+        lo = c;
+      }
+      var high = __net_hex_value(hi);
+      var low = __net_hex_value(lo);
+      if high < 0 || low < 0 {
+        return __net_parse_error("expected percent hex digit", i);
+      }
+      bytes.push((high * 16 + low) as u8);
+      i = i + 3;
+    } else {
+      if !bytes.is_empty() {
+        var decoded = __net_decode_percent_bytes(bytes, byte_start);
+        if decoded is ParseError {
+          return decoded as ParseError;
+        }
+        out = out + (decoded as str);
+        bytes.clear();
+      }
+      out = out + ch as str;
+      i = i + 1;
+    }
+  }
+
+  if !bytes.is_empty() {
+    var decoded_tail = __net_decode_percent_bytes(bytes, byte_start);
+    if decoded_tail is ParseError {
+      return decoded_tail as ParseError;
+    }
+    out = out + (decoded_tail as str);
+  }
+  out
+}
+
+function __net_parse_decimal(text: str, position: i64, max: i64): i64 | ParseError {
+  if text.size() == 0 {
+    __net_parse_error("expected decimal digits", position)
+  } else {
+    var value = 0;
+    var i = 0;
+    for ch in text.chars() {
+      var cp = ch as i64;
+      if cp < 48 || cp > 57 {
+        return __net_parse_error("expected decimal digit", position + i);
+      }
+      value = value * 10 + (cp - 48);
+      if value > max {
+        return __net_parse_error("decimal value out of range", position + i);
+      }
+      i = i + 1;
+    }
+    value
+  }
+}
+
+function __net_parse_hex_group(text: str, position: i64): i64 | ParseError {
+  if text.size() == 0 {
+    __net_parse_error("expected IPv6 group", position)
+  } else if text.size() > 4 {
+    __net_parse_error("IPv6 group too long", position + 4)
+  } else {
+    var value = 0;
+    var i = 0;
+    for ch in text.chars() {
+      var cp = ch as i64;
+      var digit = -1;
+      if cp >= 48 && cp <= 57 {
+        digit = cp - 48;
+      } else if cp >= 65 && cp <= 70 {
+        digit = cp - 55;
+      } else if cp >= 97 && cp <= 102 {
+        digit = cp - 87;
+      } else {
+        return __net_parse_error("expected IPv6 hex digit", position + i);
+      }
+      value = value * 16 + digit;
+      i = i + 1;
+    }
+    value
+  }
+}
+
+function __net_valid_zone_id(text: str, position: i64): null | ParseError {
+  if text == "" {
+    __net_parse_error("expected IPv6 zone id", position)
+  } else {
+    var i = 0;
+    for ch in text.chars() {
+      var cp = ch as i64;
+      var ok = (cp >= 48 && cp <= 57)
+        || (cp >= 65 && cp <= 90)
+        || (cp >= 97 && cp <= 122)
+        || cp == 45
+        || cp == 46
+        || cp == 95;
+      if !ok {
+        return __net_parse_error("expected IPv6 zone id character", position + i);
+      }
+      i = i + 1;
+    }
+    null
+  }
+}
+
+function __net_parse_ipv6_side(text: str, position: i64): List<u16> | ParseError {
+  var groups = List<u16>();
+  if text == "" {
+    groups
+  } else {
+    var parts = text.split(":");
+    var offset = position;
+    var i = 0;
+    while i < parts.size() {
+      var part = parts[i];
+      var dot = part.index_of(".");
+      if dot is i64 {
+        if i != parts.size() - 1 {
+          return __net_parse_error("IPv4 tail must be final IPv6 group", offset + (dot as i64));
+        }
+        var parsed_v4 = parse_ip_v4(part);
+        if parsed_v4 is ParseError {
+          return __net_shift_parse_error(parsed_v4 as ParseError, offset);
+        }
+        var ip = parsed_v4 as IpAddr;
+        groups.push(ip.a * 256u16 + ip.b);
+        groups.push(ip.c * 256u16 + ip.d);
+      } else {
+        var parsed = __net_parse_hex_group(part, offset);
+        if parsed is ParseError {
+          return parsed as ParseError;
+        }
+        groups.push((parsed as i64) as u16);
+      }
+      offset = offset + part.size() + 1;
+      i = i + 1;
+    }
+    groups
+  }
+}
+
+function parse_ip_v4(text: str): IpAddr | ParseError {
+  var parts = text.split(".");
+  if parts.size() != 4 {
+    __net_parse_error("expected IPv4 address", 0)
+  } else {
+    var pos = 0;
+    var a = __net_parse_decimal(parts[0], pos, 255);
+    if a is ParseError { return a as ParseError; }
+    pos = pos + parts[0].size() + 1;
+
+    var b = __net_parse_decimal(parts[1], pos, 255);
+    if b is ParseError { return b as ParseError; }
+    pos = pos + parts[1].size() + 1;
+
+    var c = __net_parse_decimal(parts[2], pos, 255);
+    if c is ParseError { return c as ParseError; }
+    pos = pos + parts[2].size() + 1;
+
+    var d = __net_parse_decimal(parts[3], pos, 255);
+    if d is ParseError { return d as ParseError; }
+
+    ip_v4((a as i64) as u8, (b as i64) as u8, (c as i64) as u8, (d as i64) as u8)
+  }
+}
+
+function parse_ip_v6(text: str): IpAddr | ParseError {
+  if text.size() == 0 {
+    __net_parse_error("expected IPv6 address", 0)
+  } else {
+    var zone: str | null = null;
+    var zone_marker = text.index_of("%");
+    if zone_marker is i64 {
+      var z = zone_marker as i64;
+      var zone_text = text.substring(z + 1, text.size());
+      var zone_valid = __net_valid_zone_id(zone_text, z + 1);
+      if zone_valid is ParseError {
+        return zone_valid as ParseError;
+      }
+      zone = zone_text;
+      text = text.substring(0, z);
+      if text.size() == 0 {
+        return __net_parse_error("expected IPv6 address", 0);
+      }
+    }
+
+    var groups = List<u16>();
+    var double = text.index_of("::");
+    if double is i64 {
+      var split = double as i64;
+      var tail = text.substring(split + 2, text.size());
+      var next_double = tail.index_of("::");
+      if next_double is i64 {
+        return __net_parse_error("multiple IPv6 compression markers", split + 2 + (next_double as i64));
+      }
+
+      var left = __net_parse_ipv6_side(text.substring(0, split), 0);
+      if left is ParseError { return left as ParseError; }
+      var right = __net_parse_ipv6_side(tail, split + 2);
+      if right is ParseError { return right as ParseError; }
+
+      var left_groups = left as List<u16>;
+      var right_groups = right as List<u16>;
+      var zeros = 8 - left_groups.size() - right_groups.size();
+      if zeros <= 0 {
+        return __net_parse_error("IPv6 compression must replace at least one group", split);
+      }
+
+      for group in left_groups { groups.push(group); }
+      while zeros > 0 {
+        groups.push(0u16);
+        zeros = zeros - 1;
+      }
+      for group in right_groups { groups.push(group); }
+    } else {
+      var parsed = __net_parse_ipv6_side(text, 0);
+      if parsed is ParseError { return parsed as ParseError; }
+      groups = parsed as List<u16>;
+      if groups.size() != 8 {
+        return __net_parse_error("expected 8 IPv6 groups", text.size());
+      }
+    }
+
+    if zone is str {
+      ip_v6_scoped(groups[0], groups[1], groups[2], groups[3], groups[4], groups[5], groups[6], groups[7], zone as str)
+    } else {
+      ip_v6(groups[0], groups[1], groups[2], groups[3], groups[4], groups[5], groups[6], groups[7])
+    }
+  }
+}
+
+function parse_ipv4_socket_addr(text: str): SocketAddr | ParseError {
+  var colon = text.index_of(":");
+  if colon is null {
+    __net_parse_error("expected host:port", text.size())
+  } else {
+    var split = colon as i64;
+    var host = text.substring(0, split);
+    var port_text = text.substring(split + 1, text.size());
+    var parsed_ip = parse_ip_v4(host);
+    if parsed_ip is ParseError {
+      parsed_ip as ParseError
+    } else {
+      var parsed_port = __net_parse_decimal(port_text, split + 1, 65535);
+      if parsed_port is ParseError {
+        parsed_port as ParseError
+      } else {
+        socket_addr(parsed_ip as IpAddr, (parsed_port as i64) as u16)
+      }
+    }
+  }
+}
+
+function __net_shift_parse_error(error: ParseError, offset: i64): ParseError {
+  ParseError { message: error.message, position: error.position + offset }
+}
+
+function parse_socket_addr(text: str): SocketAddr | ParseError {
+  if text.starts_with("[") {
+    var close = text.index_of("]");
+    if close is null {
+      __net_parse_error("expected closing IPv6 bracket", text.size())
+    } else {
+      var end = close as i64;
+      var host = text.substring(1, end);
+      var rest = text.substring(end + 1, text.size());
+      if !rest.starts_with(":") {
+        return __net_parse_error("expected host:port", end + 1);
+      }
+
+      var parsed_ip = parse_ip_v6(host);
+      if parsed_ip is ParseError {
+        return __net_shift_parse_error(parsed_ip as ParseError, 1);
+      }
+
+      var parsed_port = __net_parse_decimal(rest.substring(1, rest.size()), end + 2, 65535);
+      if parsed_port is ParseError {
+        parsed_port as ParseError
+      } else {
+        socket_addr(parsed_ip as IpAddr, (parsed_port as i64) as u16)
+      }
+    }
+  } else {
+    parse_ipv4_socket_addr(text)
+  }
+}
+
+function parse_uri(text: str): Uri | ParseError {
+  var colon = text.index_of(":");
+  if colon is null {
+    __net_parse_error("expected URI scheme delimiter", text.size())
+  } else {
+    var split = colon as i64;
+    if split == 0 {
+      return __net_parse_error("expected URI scheme", 0);
+    }
+
+    var scheme = text.substring(0, split);
+    var rest = text.substring(split + 1, text.size());
+    var fragment: str | null = null;
+    var query: str | null = null;
+
+    var hash = rest.index_of("#");
+    if hash is i64 {
+      var h = hash as i64;
+      fragment = rest.substring(h + 1, rest.size());
+      rest = rest.substring(0, h);
+    }
+
+    var question = rest.index_of("?");
+    if question is i64 {
+      var q = question as i64;
+      query = rest.substring(q + 1, rest.size());
+      rest = rest.substring(0, q);
+    }
+
+    var authority: str | null = null;
+    var path = rest;
+    if rest.starts_with("//") {
+      var after_slashes = rest.substring(2, rest.size());
+      var slash = after_slashes.index_of("/");
+      if slash is i64 {
+        var s = slash as i64;
+        authority = after_slashes.substring(0, s);
+        path = after_slashes.substring(s, after_slashes.size());
+      } else {
+        authority = after_slashes;
+        path = "";
+      }
+      if authority is str && (authority as str) == "" {
+        return __net_parse_error("expected URI authority", split + 3);
+      }
+    }
+
+    uri(scheme, authority, path, query, fragment)
+  }
+}
+
+function __net_parse_query(text: str, position: i64): Map<str, str> | ParseError {
+  var query = Map.new<str, str>();
+  if text.size() == 0 {
+    query
+  } else {
+    var pairs = text.split("&");
+    var offset = position;
+    for pair in pairs {
+      var eq = pair.index_of("=");
+      if eq is null {
+        return __net_parse_error("expected query key/value delimiter", offset + pair.size());
+      }
+      var split = eq as i64;
+      var key = pair.substring(0, split);
+      if key == "" {
+        return __net_parse_error("expected query key", offset);
+      }
+      var value = pair.substring(split + 1, pair.size());
+      query.set(key, value);
+      offset = offset + pair.size() + 1;
+    }
+    query
+  }
+}
+
+function parse_url(text: str): Url | ParseError {
+  var scheme_delim = text.index_of("://");
+  if scheme_delim is null {
+    __net_parse_error("expected URL scheme delimiter", text.size())
+  } else {
+    var scheme_end = scheme_delim as i64;
+    if scheme_end == 0 {
+      return __net_parse_error("expected URL scheme", 0);
+    }
+
+    var scheme = text.substring(0, scheme_end);
+    var rest = text.substring(scheme_end + 3, text.size());
+    var rest_start = scheme_end + 3;
+    var fragment: str | null = null;
+
+    var hash = rest.index_of("#");
+    if hash is i64 {
+      var h = hash as i64;
+      fragment = rest.substring(h + 1, rest.size());
+      rest = rest.substring(0, h);
+    }
+
+    var query = Map.new<str, str>();
+    var question = rest.index_of("?");
+    if question is i64 {
+      var q = question as i64;
+      var parsed_query = __net_parse_query(rest.substring(q + 1, rest.size()), rest_start + q + 1);
+      if parsed_query is ParseError {
+        return parsed_query as ParseError;
+      }
+      query = parsed_query as Map<str, str>;
+      rest = rest.substring(0, q);
+    }
+
+    var slash = rest.index_of("/");
+    var authority = rest;
+    var path = "";
+    if slash is i64 {
+      var s = slash as i64;
+      authority = rest.substring(0, s);
+      path = rest.substring(s, rest.size());
+    }
+    if authority == "" {
+      return __net_parse_error("expected URL authority", rest_start);
+    }
+
+    var user: str | null = null;
+    var host_port = authority;
+    var at = authority.index_of("@");
+    if at is i64 {
+      var a = at as i64;
+      user = authority.substring(0, a);
+      host_port = authority.substring(a + 1, authority.size());
+    }
+
+    var host = host_port;
+    var port: u16 | null = null;
+    var host_offset = rest_start + authority.size() - host_port.size();
+    if host_port.starts_with("[") {
+      var close = host_port.index_of("]");
+      if close is null {
+        return __net_parse_error("expected closing IPv6 bracket", host_offset + host_port.size());
+      }
+
+      var end = close as i64;
+      var parsed_ip = parse_ip_v6(host_port.substring(1, end));
+      if parsed_ip is ParseError {
+        return __net_shift_parse_error(parsed_ip as ParseError, host_offset + 1);
+      }
+      host = "[" + (parsed_ip as IpAddr).render() + "]";
+
+      var rest_host = host_port.substring(end + 1, host_port.size());
+      if rest_host != "" {
+        if !rest_host.starts_with(":") {
+          return __net_parse_error("expected URL host/port delimiter", host_offset + end + 1);
+        }
+        var port_text = rest_host.substring(1, rest_host.size());
+        var port_value = __net_parse_decimal(port_text, host_offset + end + 2, 65535);
+        if port_value is ParseError {
+          return port_value as ParseError;
+        }
+        port = (port_value as i64) as u16;
+      }
+    } else {
+      var colon = host_port.index_of(":");
+      if colon is i64 {
+        var c = colon as i64;
+        host = host_port.substring(0, c);
+        var port_text = host_port.substring(c + 1, host_port.size());
+        var port_value = __net_parse_decimal(port_text, host_offset + c + 1, 65535);
+        if port_value is ParseError {
+          return port_value as ParseError;
+        }
+        port = (port_value as i64) as u16;
+      }
+    }
+    if host == "" {
+      return __net_parse_error("expected URL host", host_offset);
+    }
+
+    url(scheme, user, host, port, path, query, fragment)
+  }
+}
+
+extend IpAddr {
+  function is_v4(self): bool { self.version == 4 }
+  function is_v6(self): bool { self.version == 6 }
+  function zone_id(self): str | null { self.zone }
+
+  function render_hex_group(self, group: u16): str {
+    var value = group as i64;
+    if value == 0 {
+      "0"
+    } else {
+      var out = "";
+      var divisor = 4096;
+      var started = false;
+      while divisor > 0 {
+        var digit = value / divisor;
+        if digit != 0 || started {
+          started = true;
+          if digit < 10 {
+            out = out + ((digit as i64) as str);
+          } else if digit == 10 {
+            out = out + "a";
+          } else if digit == 11 {
+            out = out + "b";
+          } else if digit == 12 {
+            out = out + "c";
+          } else if digit == 13 {
+            out = out + "d";
+          } else if digit == 14 {
+            out = out + "e";
+          } else {
+            out = out + "f";
+          }
+        }
+        value = value % divisor;
+        divisor = divisor / 16;
+      }
+      out
+    }
+  }
+
+  function render(self): str {
+    if self.is_v4() {
+      "${self.a as u8}.${self.b as u8}.${self.c as u8}.${self.d as u8}"
+    } else {
+      var out = self.render_hex_group(self.a)
+        + ":"
+        + self.render_hex_group(self.b)
+        + ":"
+        + self.render_hex_group(self.c)
+        + ":"
+        + self.render_hex_group(self.d)
+        + ":"
+        + self.render_hex_group(self.e)
+        + ":"
+        + self.render_hex_group(self.f)
+        + ":"
+        + self.render_hex_group(self.g)
+        + ":"
+        + self.render_hex_group(self.h);
+      if self.zone is str {
+        out = out + "%" + (self.zone as str);
+      }
+      out
+    }
+  }
+}
+
+extend IpAddr: Eq {
+  function eq(self, other: IpAddr): bool {
+    self.version == other.version
+      && __net_str_option_eq(self.zone, other.zone)
+      && self.a == other.a
+      && self.b == other.b
+      && self.c == other.c
+      && self.d == other.d
+      && self.e == other.e
+      && self.f == other.f
+      && self.g == other.g
+      && self.h == other.h
+  }
+}
+
+extend IpAddr: Clone {
+  function clone(self): IpAddr {
+    IpAddr {
+      version: self.version,
+      zone: self.zone,
+      a: self.a,
+      b: self.b,
+      c: self.c,
+      d: self.d,
+      e: self.e,
+      f: self.f,
+      g: self.g,
+      h: self.h,
+    }
+  }
+}
+
+extend IpAddr: Hash {
+  function hash(self): u64 {
+    var h = self.version as u64;
+    if self.zone is str {
+      h = h * 16777619u64 + (self.zone as str).hash();
+    }
+    h = h * 16777619u64 + self.a as u64;
+    h = h * 16777619u64 + self.b as u64;
+    h = h * 16777619u64 + self.c as u64;
+    h = h * 16777619u64 + self.d as u64;
+    h = h * 16777619u64 + self.e as u64;
+    h = h * 16777619u64 + self.f as u64;
+    h = h * 16777619u64 + self.g as u64;
+    h * 16777619u64 + self.h as u64
+  }
+}
+
+extend IpAddr: ToStr {
+  function to_str(self): str { self.render() }
+}
+
+extend IpAddr: Debug {
+  function debug(self): str { "IpAddr(\"" + self.render() + "\")" }
+}
+
+extend SocketAddr {
+  function ip(self): IpAddr { self.ip }
+  function port(self): u16 { self.port }
+
+  function render(self): str {
+    if self.ip.is_v6() {
+      "[" + self.ip.render() + "]:" + (self.port as str)
+    } else {
+      self.ip.render() + ":" + (self.port as str)
+    }
+  }
+}
+
+extend SocketAddr: Eq {
+  function eq(self, other: SocketAddr): bool {
+    self.ip == other.ip && self.port == other.port
+  }
+}
+
+extend SocketAddr: Clone {
+  function clone(self): SocketAddr {
+    SocketAddr { ip: self.ip.clone(), port: self.port }
+  }
+}
+
+extend SocketAddr: Hash {
+  function hash(self): u64 { self.ip.hash() * 16777619u64 + self.port as u64 }
+}
+
+extend SocketAddr: ToStr {
+  function to_str(self): str { self.render() }
+}
+
+extend SocketAddr: Debug {
+  function debug(self): str { "SocketAddr(\"" + self.render() + "\")" }
+}
+
+extend Uri {
+  function scheme(self): str { self.scheme }
+  function authority(self): str | null { self.authority }
+  function path(self): str { self.path }
+  function query(self): str | null { self.query }
+  function fragment(self): str | null { self.fragment }
+
+  function render(self): str {
+    var out = self.scheme + ":";
+    if self.authority is str {
+      out = out + "//" + (self.authority as str);
+    }
+    out = out + self.path;
+    if self.query is str {
+      out = out + "?" + (self.query as str);
+    }
+    if self.fragment is str {
+      out = out + "#" + (self.fragment as str);
+    }
+    out
+  }
+}
+
+extend Uri: Eq {
+  function eq(self, other: Uri): bool {
+    self.scheme == other.scheme
+      && __net_str_option_eq(self.authority, other.authority)
+      && self.path == other.path
+      && __net_str_option_eq(self.query, other.query)
+      && __net_str_option_eq(self.fragment, other.fragment)
+  }
+}
+
+extend Uri: Clone {
+  function clone(self): Uri {
+    Uri {
+      scheme: self.scheme,
+      authority: self.authority,
+      path: self.path,
+      query: self.query,
+      fragment: self.fragment,
+    }
+  }
+}
+
+extend Uri: Hash {
+  function hash(self): u64 { self.render().hash() }
+}
+
+extend Uri: ToStr {
+  function to_str(self): str { self.render() }
+}
+
+extend Uri: Debug {
+  function debug(self): str { "Uri(\"" + self.render() + "\")" }
+}
+
+extend Url {
+  function scheme(self): str { self.scheme }
+  function user(self): str | null { self.user }
+  function host(self): str { self.host }
+  function port(self): u16 | null { self.port }
+  function path(self): str { self.path }
+  function fragment(self): str | null { self.fragment }
+
+  function query(self): Map<str, str> {
+    __net_clone_query(self.query)
+  }
+
+  function query_get(self, key: str): str | null {
+    self.query.get(key)
+  }
+
+  function with_scheme(self, scheme: str): Url {
+    Url {
+      scheme: scheme,
+      user: self.user,
+      host: self.host,
+      port: self.port,
+      path: self.path,
+      query: __net_clone_query(self.query),
+      fragment: self.fragment,
+    }
+  }
+
+  function with_user(self, user: str | null): Url {
+    Url {
+      scheme: self.scheme,
+      user: user,
+      host: self.host,
+      port: self.port,
+      path: self.path,
+      query: __net_clone_query(self.query),
+      fragment: self.fragment,
+    }
+  }
+
+  function with_host(self, host: str): Url {
+    Url {
+      scheme: self.scheme,
+      user: self.user,
+      host: host,
+      port: self.port,
+      path: self.path,
+      query: __net_clone_query(self.query),
+      fragment: self.fragment,
+    }
+  }
+
+  function with_port(self, port: u16 | null): Url {
+    Url {
+      scheme: self.scheme,
+      user: self.user,
+      host: self.host,
+      port: port,
+      path: self.path,
+      query: __net_clone_query(self.query),
+      fragment: self.fragment,
+    }
+  }
+
+  function with_path(self, path: str): Url {
+    Url {
+      scheme: self.scheme,
+      user: self.user,
+      host: self.host,
+      port: self.port,
+      path: path,
+      query: __net_clone_query(self.query),
+      fragment: self.fragment,
+    }
+  }
+
+  function with_query(self, query: Map<str, str>): Url {
+    Url {
+      scheme: self.scheme,
+      user: self.user,
+      host: self.host,
+      port: self.port,
+      path: self.path,
+      query: __net_clone_query(query),
+      fragment: self.fragment,
+    }
+  }
+
+  function with_query_param(self, key: str, value: str): Url {
+    var query = __net_clone_query(self.query);
+    query.set(key, value);
+    self.with_query(query)
+  }
+
+  function without_query_param(self, key: str): Url {
+    var query = __net_clone_query(self.query);
+    query.remove(key);
+    self.with_query(query)
+  }
+
+  function clear_query(self): Url {
+    self.with_query(Map.new<str, str>())
+  }
+
+  function with_fragment(self, fragment: str | null): Url {
+    Url {
+      scheme: self.scheme,
+      user: self.user,
+      host: self.host,
+      port: self.port,
+      path: self.path,
+      query: __net_clone_query(self.query),
+      fragment: fragment,
+    }
+  }
+
+  function query_string(self): str {
+    var out = "";
+    var first = true;
+    for entry in self.query {
+      if first {
+        first = false;
+      } else {
+        out = out + "&";
+      }
+      out = out + entry.key + "=" + entry.value;
+    }
+    out
+  }
+
+  function render(self): str {
+    var out = self.scheme + "://";
+    if self.user is str {
+      out = out + (self.user as str) + "@";
+    }
+    out = out + self.host;
+    if self.port is u16 {
+      out = out + ":" + ((self.port as u16) as str);
+    }
+    out = out + self.path;
+    if !self.query.is_empty() {
+      out = out + "?" + self.query_string();
+    }
+    if self.fragment is str {
+      out = out + "#" + (self.fragment as str);
+    }
+    out
+  }
+
+  function hash_fields(self): u64 {
+    var out = ("scheme:" + self.scheme).hash() % 4294967291u64;
+    if self.user is str {
+      out = __net_hash_add(out, ("user:" + (self.user as str)).hash());
+    } else {
+      out = __net_hash_add(out, "user:null".hash());
+    }
+    out = __net_hash_add(out, ("host:" + self.host).hash());
+    if self.port is u16 {
+      out = __net_hash_add(out, ("port:" + ((self.port as u16) as str)).hash());
+    } else {
+      out = __net_hash_add(out, "port:null".hash());
+    }
+    out = __net_hash_add(out, ("path:" + self.path).hash());
+    if self.fragment is str {
+      out = __net_hash_add(out, ("fragment:" + (self.fragment as str)).hash());
+    } else {
+      out = __net_hash_add(out, "fragment:null".hash());
+    }
+    out
+  }
+
+  function query_hash(self): u64 {
+    var out = 0u64;
+    for entry in self.query {
+      out = __net_hash_add(out, ("query:" + entry.key + "=" + entry.value).hash());
+    }
+    out
+  }
+}
+
+extend Url: Eq {
+  function eq(self, other: Url): bool {
+    if self.scheme != other.scheme
+      || !__net_str_option_eq(self.user, other.user)
+      || self.host != other.host
+      || !__net_u16_option_eq(self.port, other.port)
+      || self.path != other.path
+      || !__net_str_option_eq(self.fragment, other.fragment)
+      || self.query.size() != other.query.size() {
+      false
+    } else {
+      var same = true;
+      for entry in self.query {
+        if same {
+          var other_value = other.query.get(entry.key);
+          if other_value is str {
+            same = entry.value == (other_value as str);
+          } else {
+            same = false;
+          }
+        }
+      }
+      same
+    }
+  }
+}
+
+extend Url: Clone {
+  function clone(self): Url {
+    var query = Map.new<str, str>();
+    for entry in self.query {
+      query.set(entry.key, entry.value);
+    }
+    Url {
+      scheme: self.scheme,
+      user: self.user,
+      host: self.host,
+      port: self.port,
+      path: self.path,
+      query: query,
+      fragment: self.fragment,
+    }
+  }
+}
+
+extend Url: Hash {
+  function hash(self): u64 {
+    __net_hash_add(self.hash_fields(), self.query_hash())
+  }
+}
+
+extend Url: ToStr {
+  function to_str(self): str { self.render() }
+}
+
+extend Url: Debug {
+  function debug(self): str { "Url(\"" + self.render() + "\")" }
+}
+
+extend ParseError: Debug {
+  function debug(self): str {
+    "ParseError { message: \"" + self.message + "\", position: ${self.position} }"
+  }
+}
+
+extend ParseError: Error {
+  function message(self): str { self.message }
+  function cause(self): Error | null { null }
+  function to_str(self): str {
+    self.message + " at " + (self.position as str)
+  }
+}
+
+extend ParseError: Eq {
+  function eq(self, other: ParseError): bool {
+    self.message == other.message && self.position == other.position
+  }
+}
+
+extend ParseError: Clone {
+  function clone(self): ParseError {
+    ParseError { message: self.message, position: self.position }
+  }
+}
+
+extend ParseError: Hash {
+  function hash(self): u64 {
+    (self.message + ":" + (self.position as str)).hash()
+  }
+}

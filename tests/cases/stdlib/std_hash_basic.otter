@@ -1,0 +1,122 @@
+//@ kind: run
+//@ description: std:hash exposes deterministic hasher helpers over the core Hash contract
+//@ stdout:
+//~ 125712745
+//~ true
+//~ 1781581849
+//~ false
+//~ 127004725
+//~ write-hash=true true 252717461
+//~ true
+//~ true
+//~ false
+//~ hasher-state=true true DefaultHasher { state: 2166136261 }
+//~ hasher-next=false false DefaultHasher(state=127004758)
+//~ keyed=true false true 42
+//~ keyed-state=true true false KeyedHasher { seed: 42, state: 127004758 }
+//~ keyed-next=false false KeyedHasher(seed=42, state=1088631160)
+
+import { Hash } from "core:prelude";
+import { Clone, Eq, ToStr } from "core:prelude";
+import { println } from "std:io";
+import { Bytes } from "std:bytes";
+import { Debug } from "std:fmt";
+import { DefaultHasher, Hasher, KeyedHasher, combine_hash, hash_value, keyed_hasher, write_hash } from "std:hash";
+
+struct Point {
+  x: i64,
+  y: i64,
+}
+
+extend Point: Hash {
+  function hash(self): u64 {
+    combine_hash(self.x.hash(), self.y.hash())
+  }
+}
+
+function finish_with_interface(h: Hasher): u64 {
+  h.write_u64(9u64);
+  h.finish()
+}
+
+function write_bytes_with_interface(h: Hasher, bytes: Bytes): u64 {
+  h.write_bytes(bytes);
+  h.finish()
+}
+
+function render_debug(value: Debug): str {
+  value.debug()
+}
+
+function main() {
+  var p = Point { x: 2, y: 5 };
+  println("${hash_value(p)}");
+
+  var a = DefaultHasher.new();
+  a.write_i64(2);
+  a.write_bool(true);
+  a.write_str("otter");
+  a.write_hash(p);
+
+  var b = DefaultHasher.new();
+  b.write_i64(2);
+  b.write_bool(true);
+  b.write_str("otter");
+  b.write_hash(p);
+  println("${a.finish() == b.finish()}");
+  println("${a.finish()}");
+
+  var seeded = DefaultHasher.with_seed(42u64);
+  seeded.write_hash(p);
+  println("${seeded.finish() == a.finish()}");
+  println("${finish_with_interface(DefaultHasher.new())}");
+
+  var generic_default = DefaultHasher.new();
+  write_hash(generic_default, p);
+  var method_default = DefaultHasher.new();
+  method_default.write_hash(p);
+  var generic_keyed = KeyedHasher.new(42u64);
+  write_hash(generic_keyed, p);
+  var method_keyed = keyed_hasher(42u64);
+  method_keyed.write_hash(p);
+  println("write-hash=${generic_default.finish() == method_default.finish()} ${generic_keyed.finish() == method_keyed.finish()} ${generic_default.finish()}");
+
+  var bytes = Bytes.new();
+  bytes.push(1u8);
+  bytes.push(2u8);
+
+  var direct = DefaultHasher.new();
+  direct.write_bytes(bytes);
+
+  var manual = DefaultHasher.new();
+  manual.write_u8(1u8);
+  manual.write_u8(2u8);
+
+  var reversed = Bytes.new();
+  reversed.push(2u8);
+  reversed.push(1u8);
+
+  println("${direct.finish() == manual.finish()}");
+  println("${write_bytes_with_interface(DefaultHasher.new(), bytes) == direct.finish()}");
+  println("${write_bytes_with_interface(DefaultHasher.new(), reversed) == direct.finish()}");
+
+  var state = DefaultHasher.new();
+  var state_copy = state.clone();
+  println("hasher-state=${state == state_copy} ${state.hash() == state_copy.hash()} ${render_debug(state)}");
+  state.write_u64(42u64);
+  println("hasher-next=${state == state_copy} ${state.hash() == state_copy.hash()} ${state.to_str()}");
+
+  var keyed_a = keyed_hasher(42u64);
+  keyed_a.write_hash(p);
+  var keyed_b = KeyedHasher.new(42u64);
+  keyed_b.write_hash(p);
+  var keyed_c = KeyedHasher.new(7u64);
+  keyed_c.write_hash(p);
+  println("keyed=${keyed_a.finish() == keyed_b.finish()} ${keyed_a.finish() == keyed_c.finish()} ${finish_with_interface(KeyedHasher.new(42u64)) != finish_with_interface(KeyedHasher.new(7u64))} ${keyed_a.seed()}");
+
+  var keyed_state = KeyedHasher.new(42u64);
+  var keyed_state_copy = keyed_state.clone();
+  println("keyed-state=${keyed_state == keyed_state_copy} ${keyed_state.hash() == keyed_state_copy.hash()} ${keyed_state == KeyedHasher.new(7u64)} ${render_debug(keyed_state)}");
+  keyed_state.write_u64(42u64);
+  println("keyed-next=${keyed_state == keyed_state_copy} ${keyed_state.hash() == keyed_state_copy.hash()} ${keyed_state.to_str()}");
+}
