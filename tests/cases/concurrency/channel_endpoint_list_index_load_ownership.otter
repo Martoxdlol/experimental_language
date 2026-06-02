@@ -1,0 +1,40 @@
+//@ kind: run
+//@ serial
+//@ env: OTTER_FUSION_GC=stress
+//@ description: indexing a List<Sender<T>> produces an owned endpoint snapshot, so rebinding it cannot release the list-owned sender
+//@ stdout:
+//~ before_clear=open
+//~ after_clear=closed
+
+import { println } from "std:io";
+import { Future } from "core:prelude";
+import { List } from "core:collections";
+import { Sender, Receiver, ChannelClosed, channel } from "std:sync";
+import { timeout, TimedOut } from "std:async";
+
+function main(): Future<null> async {
+  var ends = channel<i64>();
+  var tx: Sender<i64> = ends.0;
+  var rx: Receiver<i64> = ends.1;
+  var senders: List<Sender<i64>> = [];
+  senders.push(tx);
+
+  var other = channel<i64>();
+  tx = other.0;
+
+  var indexed: Sender<i64> = senders[0];
+  indexed = tx.clone();
+
+  match await timeout(rx.recv(), 0) {
+    i64 n => println("before_clear=value"),
+    ChannelClosed c => println("before_clear=closed"),
+    TimedOut t => println("before_clear=open"),
+  };
+
+  senders.clear();
+
+  match await rx.recv() {
+    i64 n => println("after_clear=value"),
+    ChannelClosed c => println("after_clear=closed"),
+  };
+}

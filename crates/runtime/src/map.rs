@@ -351,7 +351,7 @@ pub unsafe extern "C" fn lang_map_entries(h: *mut u8, want_keys: i64) -> *mut u8
     } else {
         unsafe { lfield(h, M_VALPTR) }
     };
-    let list = unsafe { lang_list_new(elem_is_ptr as i64) };
+    let list = unsafe { lang_list_new(elem_is_ptr as i64, 0) };
     for i in 0..cap {
         if unsafe { slot_state(buf, i) } != 1 {
             continue;

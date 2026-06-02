@@ -257,7 +257,7 @@ pub unsafe extern "C" fn lang_str_split(s: *const LangStr, sep: *const LangStr) 
         hay.split(pat.as_str()).map(|p| p.to_string()).collect()
     };
     gc::pause();
-    let list = unsafe { crate::list::lang_list_new(1) }; // elements are managed `str`s
+    let list = unsafe { crate::list::lang_list_new(1, 0) }; // elements are managed `str`s
     for p in &parts {
         let item = make_str(p.as_bytes()) as i64;
         unsafe { crate::list::lang_list_push(list, item) };
@@ -277,7 +277,7 @@ pub unsafe extern "C" fn lang_str_split(s: *const LangStr, sep: *const LangStr) 
 pub unsafe extern "C" fn lang_str_to_chars(s: *const LangStr) -> *mut u8 {
     let chars: Vec<char> = unsafe { s_str(s) }.chars().collect();
     gc::pause();
-    let list = unsafe { crate::list::lang_list_new(0) }; // codepoints are plain values
+    let list = unsafe { crate::list::lang_list_new(0, 0) }; // codepoints are plain values
     for c in &chars {
         unsafe { crate::list::lang_list_push(list, *c as i64) };
     }
@@ -295,7 +295,7 @@ pub unsafe extern "C" fn lang_str_to_chars(s: *const LangStr) -> *mut u8 {
 pub unsafe extern "C" fn lang_str_to_bytes(s: *const LangStr) -> *mut u8 {
     let bytes: Vec<u8> = unsafe { str_bytes(s) }.to_vec();
     gc::pause();
-    let list = unsafe { crate::list::lang_list_new(0) }; // bytes are plain values
+    let list = unsafe { crate::list::lang_list_new(0, 0) }; // bytes are plain values
     for b in &bytes {
         unsafe { crate::list::lang_list_push(list, i64::from(*b)) };
     }

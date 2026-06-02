@@ -1,0 +1,53 @@
+//@ kind: run
+//@ serial
+//@ env: OTTER_FUSION_GC=stress
+//@ description: List-owned channel endpoints remain valid when loaded under stress GC
+//@ stdout:
+//~ sent=64 sum=2016
+
+import { println } from "std:io";
+import { Future } from "core:prelude";
+import { List } from "core:collections";
+import { Sender, Receiver, ChannelClosed, channel } from "std:sync";
+
+function add_pair(senders: List<Sender<i64>>, receivers: List<Receiver<i64>>): null {
+  var ends = channel<i64>();
+  var tx = ends.0;
+  var rx = ends.1;
+  senders.push(tx);
+  receivers.push(rx);
+  null
+}
+
+function main(): Future<null> async {
+  var senders: List<Sender<i64>> = [];
+  var receivers: List<Receiver<i64>> = [];
+
+  var i: i64 = 0;
+  while i < 64 {
+    add_pair(senders, receivers);
+    i = i + 1;
+  }
+
+  var sent: i64 = 0;
+  var j: i64 = 0;
+  while j < senders.size() {
+    senders[j].send(j);
+    sent = sent + 1;
+    j = j + 1;
+  }
+
+  var sum: i64 = 0;
+  var k: i64 = 0;
+  while k < receivers.size() {
+    match await receivers[k].recv() {
+      i64 n => { sum = sum + n; },
+      ChannelClosed c => {},
+    };
+    k = k + 1;
+  }
+
+  senders.clear();
+  receivers.clear();
+  println("sent=${sent} sum=${sum}");
+}

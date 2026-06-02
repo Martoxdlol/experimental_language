@@ -1119,7 +1119,18 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 &[list, idx],
             )
             .expect("list_get returns a value");
-        self.i64_to_elem(raw, elem, receiver.span)
+        let value = self.i64_to_elem(raw, elem, receiver.span)?;
+        if let Some(v) = value {
+            if self.channel_endpoint_kind(elem).is_some() {
+                let owned = self.endpoint_value_for_list_store(elem, v, receiver.span)?;
+                return Ok(Some(owned));
+            }
+            let resolved = resolve_shallow(self.cx.analysis, elem, &self.subst);
+            if is_managed_ptr(self.cx.analysis, resolved) {
+                self.mark_root(v);
+            }
+        }
+        Ok(value)
     }
 
     /// `list[i] = v` / `map[k] = v` index store (mirrors the AST `gen_index_store`).
@@ -1170,7 +1181,24 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         let idx = self
             .h_expr(index)?
             .ok_or_else(|| CodegenError::new(index.span, "index has no value"))?;
-        let raw = self.elem_to_i64(val, elem, receiver.span)?;
+        if self.channel_endpoint_kind(elem).is_some() {
+            let old = self
+                .call_intrinsic(
+                    "lang_list_get",
+                    &[PTR, types::I64],
+                    Some(types::I64),
+                    &[list, idx],
+                )
+                .expect("list_get returns a value");
+            if let Some(old_value) = self.i64_to_elem(old, elem, receiver.span)? {
+                self.emit_endpoint_release_value(elem, old_value, receiver.span)?;
+            }
+        }
+        let stored = match val {
+            Some(v) => Some(self.endpoint_value_for_list_store(elem, v, receiver.span)?),
+            None => None,
+        };
+        let raw = self.elem_to_i64(stored, elem, receiver.span)?;
         self.call_intrinsic(
             "lang_list_set",
             &[PTR, types::I64, types::I64],
@@ -1189,7 +1217,11 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         self.mark_root(list);
         for el in elems {
             let v = self.h_expr(el)?;
-            let raw = self.elem_to_i64(v, elem, el.span)?;
+            let stored = match v {
+                Some(v) => Some(self.endpoint_value_for_list_store(elem, v, el.span)?),
+                None => None,
+            };
+            let raw = self.elem_to_i64(stored, elem, el.span)?;
             self.call_intrinsic("lang_list_push", &[PTR, types::I64], None, &[list, raw]);
         }
         Ok(Some(list))
@@ -1624,6 +1656,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         };
         let layout = tuple_layout(self.cx.analysis, &elem_tys);
         let ptr = self.alloc_struct(&layout);
+        let ptr = self.mark_root(ptr);
         for (i, e) in elems.iter().enumerate() {
             let elem_owned = Self::is_owned_rc_expr(e);
             let v = self.h_expr(e)?;

@@ -176,10 +176,11 @@ pub static STR_DESC: StaticDesc = StaticDesc {
     n_ptrs: 0,
     rc_trailer: 0,
 };
-/// Shared descriptor for a `List` handle: `[len][cap][buf][elem_is_ptr]`.
+/// Shared descriptor for a `List` handle:
+/// `[len][cap][buf][elem_is_ptr][endpoint_kind]`.
 /// The collector special-cases `kind == LIST` to trace the buffer's elements.
 pub static LIST_HANDLE_DESC: StaticDesc = StaticDesc {
-    size: 32,
+    size: 40,
     kind: KIND_LIST,
     type_id: 0,
     n_ptrs: 0,
@@ -392,6 +393,16 @@ pub unsafe fn collect(roots: &[usize]) -> usize {
             }
         }
     }
+    let mut endpoint_releases = Vec::new();
+    for &(base, _) in &to_free {
+        let desc = unsafe { (base as *const *const u8).read() };
+        if unsafe { desc_kind(desc) } == KIND_LIST {
+            endpoint_releases.extend(unsafe {
+                crate::list::endpoint_releases_for_list((base + HEADER) as *mut u8)
+            });
+        }
+    }
+
     let mut freed = 0usize;
     for (base, total) in &to_free {
         crate::gc_alloc::free(*base, *total);
@@ -404,6 +415,7 @@ pub unsafe fn collect(roots: &[usize]) -> usize {
     if !new_pending.is_empty() {
         FINALIZE_PENDING.lock().unwrap().extend(new_pending);
     }
+    crate::list::release_endpoint_refs(endpoint_releases);
     if gc_debug() {
         eprintln!("[gc] collected: freed {freed} bytes, {kept} object(s) kept");
     }
@@ -439,7 +451,7 @@ unsafe fn mark_reachable(bases: &HashSet<usize>, mut work: Vec<usize>) {
                 }
             }
             KIND_LIST => {
-                // handle layout: [len][cap][buf][elem_is_ptr]
+                // handle layout: [len][cap][buf][elem_is_ptr][endpoint_kind]
                 let len = unsafe { (fb as *const u64).read() } as usize;
                 let buf = unsafe { ((fb + 16) as *const usize).read() };
                 let elem_is_ptr = unsafe { ((fb + 24) as *const u64).read() } != 0;
@@ -1367,10 +1379,21 @@ pub unsafe fn free_all() {
     let mut heap = heap().lock().unwrap();
     // Include objects still in per-thread alloc logs, so nothing leaks.
     drain_alloc_logs_into(&mut heap.objects);
+    let mut endpoint_releases = Vec::new();
+    for (&base, _) in &heap.objects {
+        let desc = unsafe { (base as *const *const u8).read() };
+        if unsafe { desc_kind(desc) } == KIND_LIST {
+            endpoint_releases.extend(unsafe {
+                crate::list::endpoint_releases_for_list((base + HEADER) as *mut u8)
+            });
+        }
+    }
     for (base, total) in heap.objects.drain() {
         crate::gc_alloc::free(base, total);
     }
     BYTES_SINCE_GC.store(0, Ordering::Relaxed);
+    drop(heap);
+    crate::list::release_endpoint_refs(endpoint_releases);
 }
 
 /// Serializes tests that mutate the process-global heap. The collector, the

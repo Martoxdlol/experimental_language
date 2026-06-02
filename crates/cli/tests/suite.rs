@@ -73,10 +73,11 @@ fn end_to_end_suite() {
     let parallel_idx: Vec<usize> = (0..cases.len()).filter(|&i| !cases[i].serial).collect();
     let serial_idx: Vec<usize> = (0..cases.len()).filter(|&i| cases[i].serial).collect();
 
-    let workers = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4)
-        .min(8);
+    let workers = std::env::var("OTTER_SUITE_WORKERS")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(1);
     let (tx, rx) = mpsc::channel();
     let cases = std::sync::Arc::new(cases);
     let pidx = std::sync::Arc::new(parallel_idx);

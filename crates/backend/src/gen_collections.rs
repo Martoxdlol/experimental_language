@@ -19,13 +19,25 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     }
 
     /// Create an empty list, telling the runtime whether elements are managed
-    /// pointers (so the collector traces them).
+    /// pointers (so the collector traces them) and whether they are channel
+    /// endpoints that need GC backstop releases.
     pub(crate) fn gen_list_new(&mut self, elem: Ty) -> Value {
         let resolved = resolve_shallow(self.cx.analysis, elem, &self.subst);
         let is_ptr = i64::from(is_managed_ptr(self.cx.analysis, resolved));
         let flag = self.b.ins().iconst(types::I64, is_ptr);
+        let endpoint_kind = match self.channel_endpoint_kind(resolved) {
+            Some(true) => 1,
+            Some(false) => 2,
+            None => 0,
+        };
+        let endpoint_flag = self.b.ins().iconst(types::I64, endpoint_kind);
         let list = self
-            .call_intrinsic("lang_list_new", &[types::I64], Some(PTR), &[flag])
+            .call_intrinsic(
+                "lang_list_new",
+                &[types::I64, types::I64],
+                Some(PTR),
+                &[flag, endpoint_flag],
+            )
             .expect("list_new returns a pointer");
         self.mark_root(list)
     }
@@ -77,6 +89,107 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         }
     }
 
+    pub(crate) fn emit_endpoint_acquire_value(
+        &mut self,
+        elem: Ty,
+        value: Value,
+        span: Span,
+    ) -> CgResult<()> {
+        let Some(is_sender) = self.channel_endpoint_kind(elem) else {
+            return Ok(());
+        };
+        let chan = self.emit_channel_id(value, elem, span)?;
+        let name = if is_sender {
+            "lang_chan_sender_acquire"
+        } else {
+            "lang_chan_receiver_acquire"
+        };
+        self.call_intrinsic(name, &[types::I64], None, &[chan]);
+        Ok(())
+    }
+
+    pub(crate) fn endpoint_value_for_list_store(
+        &mut self,
+        elem: Ty,
+        value: Value,
+        span: Span,
+    ) -> CgResult<Value> {
+        if self.channel_endpoint_kind(elem).is_none() {
+            return Ok(value);
+        }
+        let chan = self.emit_channel_id(value, elem, span)?;
+        let cloned = self.build_channel_end(elem, chan, span)?;
+        self.mark_root(cloned);
+        self.emit_endpoint_acquire_value(elem, cloned, span)?;
+        Ok(cloned)
+    }
+
+    pub(crate) fn emit_endpoint_release_value(
+        &mut self,
+        elem: Ty,
+        value: Value,
+        span: Span,
+    ) -> CgResult<()> {
+        let Some(is_sender) = self.channel_endpoint_kind(elem) else {
+            return Ok(());
+        };
+        let chan = self.emit_channel_id(value, elem, span)?;
+        let name = if is_sender {
+            "lang_chan_sender_release"
+        } else {
+            "lang_chan_receiver_release"
+        };
+        self.call_intrinsic(name, &[types::I64], None, &[chan]);
+        Ok(())
+    }
+
+    fn emit_list_release_endpoint_range(
+        &mut self,
+        list: Value,
+        elem: Ty,
+        start: Value,
+        end: Value,
+        span: Span,
+    ) -> CgResult<()> {
+        if self.channel_endpoint_kind(elem).is_none() {
+            return Ok(());
+        }
+
+        let loop_bb = self.b.create_block();
+        let body_bb = self.b.create_block();
+        let done_bb = self.b.create_block();
+        self.b.append_block_param(loop_bb, types::I64);
+
+        self.b.ins().jump(loop_bb, &[start.into()]);
+        self.term = true;
+
+        self.switch(loop_bb);
+        let idx = self.b.block_params(loop_bb)[0];
+        let more = self.b.ins().icmp(IntCC::SignedLessThan, idx, end);
+        self.b.ins().brif(more, body_bb, &[], done_bb, &[]);
+        self.term = true;
+
+        self.switch(body_bb);
+        let raw = self
+            .call_intrinsic(
+                "lang_list_get",
+                &[PTR, types::I64],
+                Some(types::I64),
+                &[list, idx],
+            )
+            .expect("list_get returns a value");
+        if let Some(value) = self.i64_to_elem(raw, elem, span)? {
+            self.emit_endpoint_release_value(elem, value, span)?;
+        }
+        let one = self.b.ins().iconst(types::I64, 1);
+        let next = self.b.ins().iadd(idx, one);
+        self.b.ins().jump(loop_bb, &[next.into()]);
+        self.term = true;
+
+        self.switch(done_bb);
+        Ok(())
+    }
+
     /// The element Cranelift type and size of a fixed-array type `[T; N]`.
     pub(crate) fn array_elem_clty(&self, arr_ty: Ty) -> Option<ClType> {
         if let TyKind::Array { elem, .. } = self.cx.analysis.tcx.kind(arr_ty).clone() {
@@ -102,7 +215,10 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         let arg = |i: usize| args.get(i).copied().flatten();
         match name {
             "push" => {
-                let raw = self.elem_to_i64(arg(0), elem, recv_span)?;
+                let value =
+                    arg(0).ok_or_else(|| CodegenError::new(recv_span, "argument has no value"))?;
+                let stored = self.endpoint_value_for_list_store(elem, value, recv_span)?;
+                let raw = self.elem_to_i64(Some(stored), elem, recv_span)?;
                 self.call_intrinsic("lang_list_push", &[PTR, types::I64], None, &[list, raw]);
                 Ok(None)
             }
@@ -117,7 +233,23 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             "set" => {
                 let idx =
                     arg(0).ok_or_else(|| CodegenError::new(recv_span, "index has no value"))?;
-                let raw = self.elem_to_i64(arg(1), elem, recv_span)?;
+                if self.channel_endpoint_kind(elem).is_some() {
+                    let old = self
+                        .call_intrinsic(
+                            "lang_list_get",
+                            &[PTR, types::I64],
+                            Some(types::I64),
+                            &[list, idx],
+                        )
+                        .expect("list_get returns a value");
+                    if let Some(old_value) = self.i64_to_elem(old, elem, recv_span)? {
+                        self.emit_endpoint_release_value(elem, old_value, recv_span)?;
+                    }
+                }
+                let value =
+                    arg(1).ok_or_else(|| CodegenError::new(recv_span, "argument has no value"))?;
+                let stored = self.endpoint_value_for_list_store(elem, value, recv_span)?;
+                let raw = self.elem_to_i64(Some(stored), elem, recv_span)?;
                 self.call_intrinsic(
                     "lang_list_set",
                     &[PTR, types::I64, types::I64],
@@ -127,6 +259,11 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 Ok(None)
             }
             "clear" => {
+                let size = self
+                    .call_intrinsic("lang_list_size", &[PTR], Some(types::I64), &[list])
+                    .expect("size");
+                let zero = self.b.ins().iconst(types::I64, 0);
+                self.emit_list_release_endpoint_range(list, elem, zero, size, recv_span)?;
                 self.call_intrinsic("lang_list_clear", &[PTR], None, &[list]);
                 Ok(None)
             }
@@ -165,7 +302,10 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             "insert" => {
                 let idx =
                     arg(0).ok_or_else(|| CodegenError::new(recv_span, "index has no value"))?;
-                let raw = self.elem_to_i64(arg(1), elem, recv_span)?;
+                let value =
+                    arg(1).ok_or_else(|| CodegenError::new(recv_span, "argument has no value"))?;
+                let stored = self.endpoint_value_for_list_store(elem, value, recv_span)?;
+                let raw = self.elem_to_i64(Some(stored), elem, recv_span)?;
                 self.call_intrinsic(
                     "lang_list_insert",
                     &[PTR, types::I64, types::I64],
@@ -250,6 +390,9 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                     )
                     .expect("get");
                 let ev = self.i64_to_elem(raw, elem, recv_span)?;
+                if let Some(v) = ev {
+                    self.emit_endpoint_acquire_value(elem, v, recv_span)?;
+                }
                 let boxed = self.box_value(ev, elem);
                 self.b.ins().jump(merge, &[boxed.into()]);
                 self.term = true;
@@ -264,6 +407,24 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             }
             "truncate" => {
                 let n = arg(0).ok_or_else(|| CodegenError::new(recv_span, "count has no value"))?;
+                let size = self
+                    .call_intrinsic("lang_list_size", &[PTR], Some(types::I64), &[list])
+                    .expect("size");
+                let zero = self.b.ins().iconst(types::I64, 0);
+                let n_nonnegative = self.b.ins().icmp(IntCC::SignedGreaterThan, n, zero);
+                let release_start = self.b.ins().select(n_nonnegative, n, zero);
+                let n_less_than_size =
+                    self.b
+                        .ins()
+                        .icmp(IntCC::SignedLessThan, release_start, size);
+                let release_end = self.b.ins().select(n_less_than_size, size, release_start);
+                self.emit_list_release_endpoint_range(
+                    list,
+                    elem,
+                    release_start,
+                    release_end,
+                    recv_span,
+                )?;
                 self.call_intrinsic("lang_list_truncate", &[PTR, types::I64], None, &[list, n]);
                 Ok(None)
             }
@@ -368,7 +529,11 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         let u_clty = self.cx_clty(u);
         self.list_for_each(list, elem, span, |this, ev| {
             let out = this.emit_closure_call(f, &[ev], u_clty);
-            let raw = this.elem_to_i64(out, u, span)?;
+            let stored = match out {
+                Some(v) => Some(this.endpoint_value_for_list_store(u, v, span)?),
+                None => None,
+            };
+            let raw = this.elem_to_i64(stored, u, span)?;
             this.call_intrinsic("lang_list_push", &[PTR, types::I64], None, &[result, raw]);
             Ok(())
         })?;
@@ -396,7 +561,8 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             this.b.ins().brif(keep, then_bb, &[], cont, &[]);
             this.term = true;
             this.switch(then_bb);
-            let raw = this.elem_to_i64(Some(ev), elem, span)?;
+            let stored = this.endpoint_value_for_list_store(elem, ev, span)?;
+            let raw = this.elem_to_i64(Some(stored), elem, span)?;
             this.call_intrinsic("lang_list_push", &[PTR, types::I64], None, &[result, raw]);
             this.b.ins().jump(cont, &[]);
             this.term = true;

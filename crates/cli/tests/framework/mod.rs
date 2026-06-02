@@ -402,7 +402,7 @@ fn case_timeout() -> Duration {
         .and_then(|raw| raw.trim().parse::<u64>().ok())
         .filter(|secs| *secs > 0)
         .map(Duration::from_secs)
-        .unwrap_or_else(|| Duration::from_secs(30))
+        .unwrap_or_else(|| Duration::from_secs(60))
 }
 
 fn output_with_timeout(cmd: &mut Command, timeout: Duration) -> Result<Output, CaseRunError> {

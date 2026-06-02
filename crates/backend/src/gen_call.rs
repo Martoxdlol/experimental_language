@@ -522,8 +522,19 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             0
         };
         let flag = self.b.ins().iconst(types::I64, elem_is_ptr);
+        let endpoint_kind = match self.channel_endpoint_kind(elem) {
+            Some(true) => 1,
+            Some(false) => 2,
+            None => 0,
+        };
+        let endpoint_flag = self.b.ins().iconst(types::I64, endpoint_kind);
         let new_list = self
-            .call_intrinsic("lang_list_new", &[types::I64], Some(PTR), &[flag])
+            .call_intrinsic(
+                "lang_list_new",
+                &[types::I64, types::I64],
+                Some(PTR),
+                &[flag, endpoint_flag],
+            )
             .expect("list_new returns");
         // Pin the source AND the destination across the per-element clone
         // (each may itself allocate).
@@ -965,6 +976,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         self.mark_root(receiver);
         let layout = tuple_layout(self.cx.analysis, &elem_tys);
         let tup = self.alloc_struct(&layout);
+        let tup = self.mark_root(tup);
         self.b
             .ins()
             .store(MemFlags::trusted(), sender, tup, layout.offsets[0] as i32);

@@ -2414,7 +2414,22 @@ feature, JIT≡native byte-identical and GC-stress clean.
   2048-, 4096-, and 8192-task `Task.spawn` channel fan-in cases, repeated 32-wave
   256-task `spawn` keyword and `Task.spawn` fanout/channel/join reuse cases, and
   the one-worker panic/lock-release case multiple times to catch scheduler
-  wake/fairness flakes and stale registry cleanup issues; the CLI native/JIT
+  wake/fairness flakes and stale registry cleanup issues; a dedicated one-worker
+  512-waiter `Task.spawn` cancellation fanout now proves many spawned join waiters
+  can all register, be woken as `Cancelled`, and complete without depending on a
+  second worker to rescue progress, with a 256-waiter stress-GC sibling proving
+  the same path while every allocation can trigger STW collection (e2e +
+  native/JIT parity); aggregate construction and managed `List` index loads now
+  mark their managed temporaries as stack-map roots immediately, tightening GC
+  visibility around returned tuples and endpoint handles loaded from collections;
+  `List<Sender<T>>` / `List<Receiver<T>>` now store a fresh container-owned
+  endpoint handle plus a matching runtime endpoint reference, release old
+  endpoint references on `set`/`clear`/`truncate`, move references out through
+  `pop`/`remove`, and acquire borrowed `get` plus `list[i]` index-load results,
+  closing the stale-endpoint races exposed by one-worker stress-GC timeout
+  cancellation and by rebinding an indexed `List<Sender<T>>` snapshot while the
+  list still owns the sender (e2e + native/JIT);
+  the CLI native/JIT
   parity harness now recovers a poisoned native-build lock, caps concurrent
   helper subprocesses to avoid oversubscribing high-concurrency executor stress
   runs, and watchdogs helper subprocesses plus native build/run steps so hung
@@ -2423,7 +2438,8 @@ feature, JIT≡native byte-identical and GC-stress clean.
   than a stale un-hashed `libruntime.a`, preventing native builds from silently
   running older runtime/GC scheduler code after runtime-only rebuilds.
   Remaining before this
-  goal is complete: attaching real std I/O futures to the reactor and the
+  goal is complete: attaching real
+  std I/O futures to the reactor, and the
   separate executor-multiplexed panic goal's full sibling-survival matrix.
   Target shape:
   `Task.spawn` has the same

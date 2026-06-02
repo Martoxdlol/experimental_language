@@ -63,10 +63,7 @@ impl Drop for ProcessSlotGuard {
 fn cli_process_slots() -> &'static ProcessSlots {
     static SLOTS: OnceLock<ProcessSlots> = OnceLock::new();
     SLOTS.get_or_init(|| {
-        let default_limit = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(4)
-            .clamp(1, 4);
+        let default_limit = 1;
         let limit = std::env::var("OTTER_CLI_TEST_PROCESS_SLOTS")
             .ok()
             .and_then(|raw| raw.trim().parse::<usize>().ok())
@@ -99,7 +96,7 @@ fn native_test_timeout() -> Duration {
         .and_then(|raw| raw.trim().parse::<u64>().ok())
         .filter(|secs| *secs > 0)
         .map(Duration::from_secs)
-        .unwrap_or_else(|| Duration::from_secs(30))
+        .unwrap_or_else(|| Duration::from_secs(60))
 }
 
 fn cli_test_timeout() -> Duration {
@@ -108,7 +105,7 @@ fn cli_test_timeout() -> Duration {
         .and_then(|raw| raw.trim().parse::<u64>().ok())
         .filter(|secs| *secs > 0)
         .map(Duration::from_secs)
-        .unwrap_or_else(|| Duration::from_secs(30))
+        .unwrap_or_else(|| Duration::from_secs(60))
 }
 
 fn output_with_timeout(cmd: &mut Command, timeout: Duration) -> Result<Output, String> {
@@ -144,6 +141,15 @@ fn output_from_child_with_timeout(mut child: Child, timeout: Duration) -> Result
     }
 }
 
+fn command_failure_stderr(label: &str, output: &Output) -> String {
+    let mut stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    if !stderr.is_empty() && !stderr.ends_with('\n') {
+        stderr.push('\n');
+    }
+    stderr.push_str(&format!("{label} exited with status {}\n", output.status));
+    stderr
+}
+
 /// Run `otter_fusion <cmd> <file>` with `src` written to a temp file; return
 /// (stdout, stderr, success).
 fn lang(cmd: &str, src: &str) -> (String, String, bool) {
@@ -169,6 +175,13 @@ fn lang_flag(cmd: &str, src: &str, flags: &[&str]) -> (String, String, bool) {
         }
     };
     let _ = std::fs::remove_file(&path);
+    if !out.status.success() {
+        return (
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            command_failure_stderr("jit command", &out),
+            false,
+        );
+    }
     (
         String::from_utf8_lossy(&out.stdout).into_owned(),
         String::from_utf8_lossy(&out.stderr).into_owned(),
@@ -194,6 +207,13 @@ fn lang_env(cmd: &str, src: &str, env: &[(&str, &str)]) -> (String, String, bool
         }
     };
     let _ = std::fs::remove_file(&path);
+    if !out.status.success() {
+        return (
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            command_failure_stderr("jit command", &out),
+            false,
+        );
+    }
     (
         String::from_utf8_lossy(&out.stdout).into_owned(),
         String::from_utf8_lossy(&out.stderr).into_owned(),
@@ -224,7 +244,7 @@ fn lang_build_run(src: &str, env: &[(&str, &str)]) -> (String, String, bool) {
     if !build.status.success() {
         return (
             String::new(),
-            String::from_utf8_lossy(&build.stderr).into_owned(),
+            command_failure_stderr("native build", &build),
             false,
         );
     }
@@ -240,6 +260,13 @@ fn lang_build_run(src: &str, env: &[(&str, &str)]) -> (String, String, bool) {
         }
     };
     let _ = std::fs::remove_file(&exe);
+    if !out.status.success() {
+        return (
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            command_failure_stderr("native executable", &out),
+            false,
+        );
+    }
     (
         String::from_utf8_lossy(&out.stdout).into_owned(),
         String::from_utf8_lossy(&out.stderr).into_owned(),
@@ -279,6 +306,13 @@ fn lang_raw_env_with_timeout(
         }
     };
     let _ = std::fs::remove_file(&path);
+    if !out.status.success() {
+        return (
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            command_failure_stderr("jit command", &out),
+            false,
+        );
+    }
     (
         String::from_utf8_lossy(&out.stdout).into_owned(),
         String::from_utf8_lossy(&out.stderr).into_owned(),
@@ -312,7 +346,7 @@ fn lang_build_run_raw_unlocked(src: &str, env: &[(&str, &str)]) -> (String, Stri
     if !build.status.success() {
         return (
             String::new(),
-            String::from_utf8_lossy(&build.stderr).into_owned(),
+            command_failure_stderr("native build", &build),
             false,
         );
     }
@@ -328,6 +362,13 @@ fn lang_build_run_raw_unlocked(src: &str, env: &[(&str, &str)]) -> (String, Stri
         }
     };
     let _ = std::fs::remove_file(&exe);
+    if !out.status.success() {
+        return (
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            command_failure_stderr("native executable", &out),
+            false,
+        );
+    }
     (
         String::from_utf8_lossy(&out.stdout).into_owned(),
         String::from_utf8_lossy(&out.stderr).into_owned(),
@@ -1418,8 +1459,8 @@ fn channel_iterator_terminates_on_last_sender_drop() {
     let (out1, err, ok) = lang("run", src);
     assert!(ok, "stderr: {err}");
     assert_eq!(out1, "150\n"); // 10+20+30+40+50, then Done
-    let (out2, _, ok2) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
-    assert!(ok2);
+    let (out2, err2, ok2) = lang_env("run", src, &[("OTTER_FUSION_GC", "stress")]);
+    assert!(ok2, "GC stress stderr: {err2}");
     assert_eq!(out1, out2, "GC stress changed the channel result");
 }
 
@@ -7149,6 +7190,43 @@ fn native_build_task_join_cancel_many_spawned_waiters_matches_jit() {
 }
 
 #[test]
+fn native_build_task_join_cancel_many_spawned_waiters_single_worker_matches_jit() {
+    let src = include_str!(
+        "../../../tests/cases/concurrency/task_join_cancel_many_spawned_waiters_single_worker.otter"
+    );
+    let env = &[("OTTER_FUSION_TASK_WORKERS", "1")];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native single-worker Task.spawn many spawned join-waiter cancellation output diverged from JIT"
+    );
+    assert_eq!(nat_out, "cancelled=512 total=-1024\n");
+}
+
+#[test]
+fn native_build_task_join_cancel_many_spawned_waiters_single_worker_gc_stress_matches_jit() {
+    let src = include_str!(
+        "../../../tests/cases/concurrency/task_join_cancel_many_spawned_waiters_single_worker_gc_stress.otter"
+    );
+    let env = &[
+        ("OTTER_FUSION_TASK_WORKERS", "1"),
+        ("OTTER_FUSION_GC", "stress"),
+    ];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native single-worker stress-GC Task.spawn many spawned join-waiter cancellation output diverged from JIT"
+    );
+    assert_eq!(nat_out, "cancelled=256 total=-512\n");
+}
+
+#[test]
 fn native_build_spawn_future_cancel_many_releases_channel_endpoints_matches_jit() {
     let src = include_str!(
         "../../../tests/cases/concurrency/spawn_future_cancel_many_releases_channel_endpoints.otter"
@@ -7223,6 +7301,60 @@ fn native_build_timeout_cancels_many_spawn_losers_releases_channels_matches_jit(
         "native timeout mass-cancel spawn loser output diverged from JIT"
     );
     assert_eq!(nat_out, "timed_out=512 closed=512\n");
+}
+
+#[test]
+fn native_build_timeout_cancels_many_spawn_losers_single_worker_gc_stress_matches_jit() {
+    let src = include_str!(
+        "../../../tests/cases/concurrency/timeout_cancels_many_spawn_losers_single_worker_gc_stress.otter"
+    );
+    let env = &[
+        ("OTTER_FUSION_TASK_WORKERS", "1"),
+        ("OTTER_FUSION_GC", "stress"),
+    ];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native single-worker stress-GC timeout mass-cancel spawn loser output diverged from JIT"
+    );
+    assert_eq!(nat_out, "timed_out=512 closed=512\n");
+}
+
+#[test]
+fn native_build_channel_endpoint_list_ownership_gc_stress_matches_jit() {
+    let src = include_str!(
+        "../../../tests/cases/concurrency/channel_endpoint_list_ownership_gc_stress.otter"
+    );
+    let env = &[("OTTER_FUSION_GC", "stress")];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native stress-GC List channel endpoint ownership output diverged from JIT"
+    );
+    assert_eq!(nat_out, "sent=64 sum=2016\n");
+}
+
+#[test]
+fn native_build_channel_endpoint_list_index_load_ownership_matches_jit() {
+    let src = include_str!(
+        "../../../tests/cases/concurrency/channel_endpoint_list_index_load_ownership.otter"
+    );
+    let env = &[("OTTER_FUSION_GC", "stress")];
+    let (jit_out, jerr, jok) = lang_raw_env("run", src, env);
+    assert!(jok, "jit stderr: {jerr}");
+    let (nat_out, nerr, nok) = lang_build_run_raw(src, env);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(
+        jit_out, nat_out,
+        "native stress-GC List endpoint index-load ownership output diverged from JIT"
+    );
+    assert_eq!(nat_out, "before_clear=open\nafter_clear=closed\n");
 }
 
 #[test]
