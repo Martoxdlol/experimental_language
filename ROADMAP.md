@@ -1862,16 +1862,19 @@ The tracing GC is functionally complete for single-threaded programs.
       so a `JoinHandle.join()` surfaces it recoverably, while a `spawn EXPR`
       awaiter has the panic *re-propagated* at its own `await` (`spawn_poll`) —
       the promise-rejection model (`docs/21` §11). Sibling workers are unaffected.
-      Covers `Thread.spawn` (sync + async closures) and the `spawn` keyword
-      (one-OS-thread-per-task today). JIT + native parity; the C shim is bundled
-      into both the `rlib` (JIT) and `libruntime.a` (native). Tests: 5 runtime
-      unit/integration (panic_boundary + a real worker-panic), 4 CLI integration
-      (isolated join, lock-release, `spawn` propagation, GC-stress parity), and
-      e2e `concurrency/{worker_panic_sibling_survives,worker_panic_gc_stress,
-      spawn_panic_propagates,lock_released_on_panic}` (the last graduated from
-      XFAIL). The **executor-multiplexed** case (many `Task.spawn` tasks sharing
-      one work-stealing worker thread, where the boundary must sit at the poll
-      call site) is a separate follow-on after the M:N executor lands.
+      Covers `Thread.spawn` (sync + async closures), the `spawn` keyword, and
+      executor-multiplexed `Task.spawn`/`spawn` futures. Dedicated OS-thread
+      workers install the boundary at worker entry; executor tasks install it at
+      the poll call site so a panicking task unwinds only its own state machine
+      and the shared worker returns to its run queue. JIT + native parity; the C
+      shim is bundled into both the `rlib` (JIT) and `libruntime.a` (native).
+      Tests: 5 runtime unit/integration (panic_boundary + a real worker-panic), 4
+      CLI integration (isolated join, lock-release, `spawn` propagation,
+      GC-stress parity), and e2e `concurrency/{worker_panic_sibling_survives,
+      worker_panic_gc_stress,spawn_panic_propagates,lock_released_on_panic,
+      task_spawn_panic_many_siblings_single_worker_gc_stress,
+      task_spawn_panic_steal_contention_gc_stress,
+      spawn_future_panic_sibling_survives_single_worker}`.
 - [x] **Channels (`docs/20` §2): `channel<T>()`, `send`, `recv`, `try_recv`, and
       deterministic close-on-last-sender-drop + `Receiver: Iterator`.**
       `channel<T>()` (a recognised builtin, like `Thread.spawn`) allocates a
@@ -2673,15 +2676,15 @@ feature, JIT≡native byte-identical and GC-stress clean.
   privileged build-script macros (§future).
 - **Channel close on last-`Sender` drop** + `Receiver: Iterator` termination —
   needs *deterministic* `Drop` (tension with GC-timed best-effort `Drop`).
-- **Worker-panic isolation** — **done** (`Thread.spawn` + `spawn` keyword): a
-  panicking worker fails only itself (surfaces as `Panicked` on `join`, or
-  re-propagates at a `spawn` awaiter) via a `setjmp`/`longjmp` panic boundary at
-  the worker entry — host unwinding can't cross Cranelift frames. Locks released,
-  roots dropped. See the Phase-5 concurrency entry. *Follow-on after the M:N
-  executor:* the executor-multiplexed case (boundary at the poll call site so a
-  panicking `Task` unwinds only its own state machine, leaving sibling tasks on
-  the same worker thread alive).
-- **M:N work-stealing executor + `Task.spawn` (`std:task`)** — **in progress.**
+- **Worker-panic isolation** — **done** (`Thread.spawn`, `spawn` keyword, and
+  executor-multiplexed `Task.spawn`): a panicking worker/task fails only itself
+  (surfaces as `Panicked` on `join`, or re-propagates at a `spawn` awaiter).
+  Dedicated OS-thread workers install a `setjmp`/`longjmp` panic boundary at
+  worker entry because host unwinding can't cross Cranelift frames; executor
+  tasks install the same boundary at the poll call site so a panicking task
+  unwinds only its own state machine and leaves sibling tasks on the same worker
+  thread alive. Locks released, roots dropped. See the Phase-5 concurrency entry.
+- **M:N work-stealing executor + `Task.spawn` (`std:task`)** — **done.**
   Landed the first executor-backed slice: `spawn EXPR` now schedules onto a
   lazily-started M:N worker pool with per-worker queues, stealing, a global
   injector, task-local held-`Shared` lock tracking, poll-site panic boundaries,
@@ -2719,6 +2722,12 @@ feature, JIT≡native byte-identical and GC-stress clean.
   panics joining as `Panicked` while a sibling task completes (JIT + native),
   one-worker `Task.spawn` panic-after-await while holding `Shared` releasing the
   lock and allowing a sibling executor task to complete (JIT + native),
+  one-worker stress-GC `Task.spawn` panic storms proving many sibling tasks
+  still join and no task reports false cancellation, four-worker stress-GC
+  steal-contention panic storms proving poll-site boundaries do not tear down
+  shared executor workers, and a `spawn EXPR` panic-sibling case proving a
+  panicking spawned future does not stop unrelated spawned futures on the same
+  one-worker executor,
   `timeout(h.join(), ms)` cancelling only the join waiter while the
   `Task.spawn` worker continues and can be joined later (JIT + native),
   multiple concurrent `JoinHandle.join()` waiters on the same executor task
@@ -2813,10 +2822,18 @@ feature, JIT≡native byte-identical and GC-stress clean.
   JIT/native coverage; stress coverage for `Map` locals held by async
   main before its first await and by executor workers across repeated
   await suspensions; poison-tolerant executor/reactor/channel/`Shared` locks so
-  task queues, task poll/cancellation locks, join/cancel/detach state, reactor registrations,
-  timer-driver waits, channel registries, channel queues, shared registries, and
-  shared lock-state queues recover from poisoned runtime mutexes instead of
-  stranding high-concurrency work; async channel receive waiters now prune dead
+  task queues, task registry/waker-shard locks, task poll/cancellation locks,
+  join/cancel/detach state, reactor registrations,
+  timer-driver waits, channel registries, channel queues, shared registries,
+  shared lock-state queues, and filesystem handle registries recover from
+  poisoned runtime mutexes instead of stranding high-concurrency work; the GC
+  allocator's global free-list lock also recovers after poison so stress-GC
+  executor workers can keep allocating/recycling managed objects, and GC
+  collector-turn/world-barrier/resume-generation locks recover instead of
+  suppressing future collections or stranding stopped workers; null managed
+  task results no longer occupy extra-root slots during join/detach handoff,
+  avoiding bogus root churn in high-volume null-returning task workloads; async
+  channel receive waiters now prune dead
   executor-task wakers and coalesce duplicate registrations before send/close
   wakeups so repeated polls and cancelled receiver tasks do not amplify
   high-fanout channel traffic; and
@@ -2838,6 +2855,10 @@ feature, JIT≡native byte-identical and GC-stress clean.
   native/JIT parity); aggregate construction and managed `List` index loads now
   mark their managed temporaries as stack-map roots immediately, tightening GC
   visibility around returned tuples and endpoint handles loaded from collections;
+  tuple/struct stores of channel endpoints now clone the tiny managed endpoint
+  handle object without acquiring an additional endpoint count, preserving
+  deterministic channel close while keeping returned-tuple `Receiver` handles
+  valid under stress GC;
   `List<Sender<T>>` / `List<Receiver<T>>` now store a fresh container-owned
   endpoint handle plus a matching runtime endpoint reference, release old
   endpoint references on `set`/`clear`/`truncate`, move references out through
@@ -2848,15 +2869,17 @@ feature, JIT≡native byte-identical and GC-stress clean.
   the CLI native/JIT
   parity harness now recovers a poisoned native-build lock, caps concurrent
   helper subprocesses to avoid oversubscribing high-concurrency executor stress
-  runs, and watchdogs helper subprocesses plus native build/run steps so hung
-  concurrency programs fail with captured diagnostics instead of stranding the
-  suite; native linking now chooses the freshest `libruntime*.a` archive rather
-  than a stale un-hashed `libruntime.a`, preventing native builds from silently
-  running older runtime/GC scheduler code after runtime-only rebuilds.
-  Remaining before this
-  goal is complete: attaching real
-  std I/O futures to the reactor, and the
-  separate executor-multiplexed panic goal's full sibling-survival matrix.
+  runs, and watchdogs helper subprocesses plus native build/run steps with
+  process-group cleanup so hung concurrency programs fail with captured
+  diagnostics instead of stranding the suite or leaving background helper
+  processes alive; native linking now chooses the freshest `libruntime*.a`
+  archive rather than a stale un-hashed `libruntime.a`, preventing native builds
+  from silently running older runtime/GC scheduler code after runtime-only
+  rebuilds; concrete `std:io` stdin/stdout/stderr async methods now lower to
+  runtime futures that park executor tasks, run the target stdio operation on a
+  helper, and wake through the shared cancellable reactor, with cancellation
+  draining reactor waiters and managed result roots plus JIT/native stdout/stderr
+  parity and stdin e2e coverage.
   Target shape:
   `Task.spawn` has the same
   surface as `Thread.spawn` (sync or async closure → `JoinHandle<R>` with

@@ -151,6 +151,21 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         Ok(cloned)
     }
 
+    pub(crate) fn endpoint_value_for_aggregate_store(
+        &mut self,
+        elem: Ty,
+        value: Value,
+        span: Span,
+    ) -> CgResult<Value> {
+        if self.channel_endpoint_kind(elem).is_none() {
+            return Ok(value);
+        }
+        let chan = self.emit_channel_id(value, elem, span)?;
+        let cloned = self.build_channel_end(elem, chan, span)?;
+        self.mark_root(cloned);
+        Ok(cloned)
+    }
+
     pub(crate) fn emit_endpoint_release_value(
         &mut self,
         elem: Ty,

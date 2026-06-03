@@ -13,11 +13,13 @@ use crate::span::{FileId, Span};
 /// `docs/17` §17.8). Unused imports are harmless; local defs shadow imports.
 const PRELUDE: &str = "import { List, Map, Set, Entry } from \"core:collections\";\n\
     import { print, println } from \"std:io\";\n\
-    import { panic, panic_with, exit, abort } from \"core:prelude\";\n\
+    import { panic, panic_with } from \"core:prelude\";\n\
+    import { exit, abort } from \"std:process\";\n\
     import { Clone, ToStr, Eq, Ord, Hash, Iterator, Item, Done, Try, FromResidual, Drop, Future, Ready, Pending, Context } from \"core:prelude\";\n\
+    import { AsyncIterator } from \"core:async\";\n\
     import { Shared, LockBusy, Sender, Receiver, ChannelClosed, MpmcSender, MpmcReceiver, channel, channel_bounded, channel_mpmc, channel_mpmc_bounded } from \"std:sync\";\n\
-    import { Thread, JoinHandle, Joined, Panicked } from \"std:thread\";\n\
-    import { AsyncIterator, TimedOut, yield_now, sleep, timeout } from \"std:async\";\n\
+    import { Thread, JoinHandle as ThreadJoinHandle, Joined as ThreadJoined, Panicked as ThreadPanicked } from \"std:thread\";\n\
+    import { TimedOut, yield_now, sleep, timeout } from \"std:async\";\n\
     import { Foreign, CString, CStr, Buffer } from \"core:ffi\";\n";
 
 /// Parse + run the full semantic pipeline, asserting a clean program.
@@ -53,9 +55,22 @@ fn any_in<'h>(a: &Analysis, hir: &'h Hir, name: &str, pred: impl FnMut(&Expr) ->
 fn body_named<'h>(a: &Analysis, hir: &'h Hir, name: &str) -> &'h Body {
     hir.bodies
         .iter()
-        .find(|(def, _)| a.program.def(**def).name == name)
+        .find(|(def, _)| {
+            let d = a.program.def(**def);
+            d.name == name && d.span.file == FileId(0)
+        })
         .map(|(_, b)| b)
         .unwrap_or_else(|| panic!("no lowered body named `{name}`"))
+}
+
+fn user_def_named(a: &Analysis, name: &str) -> crate::ids::DefId {
+    a.program
+        .defs
+        .iter()
+        .enumerate()
+        .find(|(_, d)| d.name == name && d.span.file == FileId(0))
+        .map(|(i, _)| crate::ids::DefId(i as u32))
+        .unwrap_or_else(|| panic!("no user definition named `{name}`"))
 }
 
 // ---------------------------------------------------------------------------
@@ -484,8 +499,8 @@ function main() {
 }
 ";
     let (a, hir) = lower(src);
-    let body = body_named(&a, &hir, "main");
     let mut seen: Vec<std::mem::Discriminant<Intrinsic>> = Vec::new();
+    let body = body_named(&a, &hir, "main");
     for stmt in &body.block.stmts {
         if let StmtKind::Let { init, .. } = &stmt.kind {
             walk_expr(init, &mut |e| {
@@ -507,6 +522,25 @@ function main() {
             seen.len()
         );
     }
+}
+
+#[test]
+fn std_io_async_methods_typecheck_from_public_surface() {
+    let src = "\
+import { Bytes } from \"std:bytes\";
+import { stdin, stdout, stderr } from \"std:io\";
+function main(): Future<null> async {
+  var input = Bytes.new();
+  var output = Bytes.from_str(\"ok\");
+  var a = await stdin().read_async(input);
+  var b = await stdin().read_to_end_async(input);
+  var c = await stdout().write_async(output);
+  var d = await stderr().write_async(output);
+  var e = await stdout().flush_async();
+  var f = await stderr().flush_async();
+}
+";
+    let (_a, _hir) = lower(src);
 }
 
 #[test]
@@ -622,7 +656,6 @@ fn thread_spawn_lowers_with_output_from_join_handle_type() {
 #[test]
 fn task_spawn_lowers_to_task_intrinsic() {
     let src = "import { Task, JoinHandle, Joined, Panicked, Cancelled } from \"std:task\";\n\
-        import { Future } from \"core:prelude\";\n\
         function main(): Future<null> async {\n\
           var h: JoinHandle<i64> = Task.spawn(() => 7);\n\
           h.cancel();\n\
@@ -1174,13 +1207,7 @@ function f(n: i64): i64 { var t = 0; for i in [1, 2, 3] { t = t + i; } t + n }
 function g(): i64 { f(10) }
 ";
     let (a, hir) = lower(src);
-    let f = a
-        .program
-        .defs
-        .iter()
-        .position(|d| d.name == "f")
-        .map(|i| crate::ids::DefId(i as u32))
-        .unwrap();
+    let f = user_def_named(&a, "f");
     let hir_body = hir.body(f).expect("f has an HIR body");
     // `var t = 0;` and the `for` loop are the two statements; `t + n` trails.
     assert_eq!(hir_body.block.stmts.len(), 2, "f's body has two statements");
@@ -1210,13 +1237,7 @@ function spin(): Future<null> async { }
     let (a, hir) = lower(src);
     // The checker populated `fn_sigs`; lowering carried it onto the HIR verbatim.
     assert_eq!(hir.fn_sigs.len(), a.hir.fn_sigs.len());
-    let add = a
-        .program
-        .defs
-        .iter()
-        .position(|d| d.name == "add")
-        .map(|i| crate::ids::DefId(i as u32))
-        .unwrap();
+    let add = user_def_named(&a, "add");
     let sig = &hir.fn_sigs[&add];
     assert_eq!(sig.params.len(), 2, "add has two params");
     assert_eq!(
@@ -1224,13 +1245,7 @@ function spin(): Future<null> async { }
         "i64"
     );
     assert!(sig.async_output.is_none(), "add is not async");
-    let spin = a
-        .program
-        .defs
-        .iter()
-        .position(|d| d.name == "spin")
-        .map(|i| crate::ids::DefId(i as u32))
-        .unwrap();
+    let spin = user_def_named(&a, "spin");
     assert!(
         hir.fn_sigs[&spin].async_output.is_some(),
         "spin is async — has an output type"
@@ -1681,7 +1696,7 @@ fn match_arms_carry_patterns_and_test_types() {
     let mut arm_count = 0;
     let mut type_binds = 0;
     let mut unit_paths = 0;
-    for_each_expr(&hir, &mut |e| {
+    walk_block(&body_named(&a, &hir, "f").block, &mut |e| {
         if let ExprKind::Match { arms, .. } = &e.kind {
             arm_count = arms.len();
             for arm in arms {
@@ -1780,9 +1795,9 @@ function f(): i64 { var a = P { x: 1, y: 2 }; var b = P { x: 9, ..a }; b.x + b.y
 #[test]
 fn for_over_map_uses_map_driver() {
     let src = "function f(): i64 { var m = { \"a\": 1, \"b\": 2 }; var s = 0; for e in m { s = s + e.value; } s }";
-    let (_a, hir) = lower(src);
+    let (a, hir) = lower(src);
     let mut map_drivers = 0;
-    for_each_expr(&hir, &mut |e| {
+    walk_block(&body_named(&a, &hir, "f").block, &mut |e| {
         if matches!(
             &e.kind,
             ExprKind::For {
@@ -1810,9 +1825,9 @@ extend Count: Iterator<i64> {
 }
 function f(): i64 { var s = 0; for v in (Count { n: 0, max: 3 }) { s = s + v; } s }
 "#;
-    let (_a, hir) = lower(src);
+    let (a, hir) = lower(src);
     let mut iter_drivers = 0;
-    for_each_expr(&hir, &mut |e| {
+    walk_block(&body_named(&a, &hir, "f").block, &mut |e| {
         if matches!(
             &e.kind,
             ExprKind::For {
@@ -1835,7 +1850,7 @@ function f(): Future<i64> async { var h = spawn work(); await h }
 "#;
     let (a, hir) = lower(src);
     let (mut awaits, mut spawns) = (0, 0);
-    for_each_expr(&hir, &mut |e| match &e.kind {
+    walk_block(&body_named(&a, &hir, "f").block, &mut |e| match &e.kind {
         ExprKind::Await { output, .. } => {
             assert!(!a.tcx.is_error(*output));
             awaits += 1;

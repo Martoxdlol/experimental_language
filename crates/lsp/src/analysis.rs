@@ -1760,16 +1760,25 @@ function main(): Future<null> async {
         let (_, abort_ty) = c.expr_ty_at(abort).expect("expr type at h.abort");
         assert_eq!(c.display_ty(abort_ty), "null");
 
+        fn assert_join_union(display: &str) {
+            let parts: std::collections::BTreeSet<_> = display.split(" | ").collect();
+            let expected =
+                std::collections::BTreeSet::from(["Cancelled", "Joined<i64>", "Panicked"]);
+            assert_eq!(parts, expected, "unexpected join union `{display}`");
+        }
+
         let join = find_at(src, "h.join()") + "h.join(".len();
         let (_, join_ty) = c.expr_ty_at(join).expect("expr type at h.join");
-        assert_eq!(
-            c.display_ty(join_ty),
-            "Future<Joined<i64> | Panicked | Cancelled>"
-        );
+        let join_display = c.display_ty(join_ty);
+        let join_inner = join_display
+            .strip_prefix("Future<")
+            .and_then(|s| s.strip_suffix('>'))
+            .unwrap_or_else(|| panic!("expected Future<...>, got `{join_display}`"));
+        assert_join_union(join_inner);
 
         let await_join = find_at(src, "await h.join()");
         let (_, await_ty) = c.expr_ty_at(await_join).expect("expr type at await h.join");
-        assert_eq!(c.display_ty(await_ty), "Joined<i64> | Panicked | Cancelled");
+        assert_join_union(&c.display_ty(await_ty));
     }
 
     #[test]

@@ -36,8 +36,9 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             hir::StmtKind::Let { pattern, init } => {
                 let init_ty = init.ty;
                 let init_owned = Self::is_owned_rc_expr(init);
+                let endpoint_init_owned = Self::is_owned_endpoint_expr(init);
                 let val = self.h_expr(init)?;
-                self.h_bind_pattern(pattern, val, init_ty, init_owned)
+                self.h_bind_pattern(pattern, val, init_ty, init_owned, endpoint_init_owned)
             }
             hir::StmtKind::Assign { target, value } => {
                 let owned = Self::is_owned_rc_expr(value);
@@ -66,6 +67,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         val: Option<Value>,
         ty: Ty,
         init_owned: bool,
+        endpoint_init_owned: bool,
     ) -> CgResult<()> {
         match &pattern.kind {
             hir::PatternKind::Bind(local) => {
@@ -74,7 +76,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                     if self.is_rc_local(*local) {
                         self.rc_manage_bind(*local, v, init_owned);
                     }
-                    self.endpoint_manage_bind(*local, ty, v, pattern.span)?;
+                    self.endpoint_manage_bind(*local, ty, v, endpoint_init_owned, pattern.span)?;
                     self.bind_local(*local, ct, v);
                 }
                 Ok(())
@@ -107,7 +109,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                         )),
                         _ => None,
                     };
-                    self.h_bind_pattern(sub, elem_val, elem_tys[i], false)?;
+                    self.h_bind_pattern(sub, elem_val, elem_tys[i], false, false)?;
                 }
                 Ok(())
             }
@@ -127,7 +129,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                         .get(i)
                         .copied()
                         .unwrap_or(self.cx.analysis.tcx.error);
-                    self.h_bind_pattern(sub, fv, fty, false)?;
+                    self.h_bind_pattern(sub, fv, fty, false, false)?;
                 }
                 Ok(())
             }
@@ -148,7 +150,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                         .get(i)
                         .copied()
                         .unwrap_or(self.cx.analysis.tcx.error);
-                    self.h_bind_pattern(&fp.pattern, fv, fty, false)?;
+                    self.h_bind_pattern(&fp.pattern, fv, fty, false, false)?;
                 }
                 Ok(())
             }
@@ -280,7 +282,12 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 }
                 self.emit_rc_release(old);
             }
-            self.b.ins().store(MemFlags::trusted(), v, ptr, off);
+            let stored = if self.channel_endpoint_kind(layout.tys[idx]).is_some() {
+                self.endpoint_value_for_aggregate_store(layout.tys[idx], v, receiver.span)?
+            } else {
+                v
+            };
+            self.b.ins().store(MemFlags::trusted(), stored, ptr, off);
         }
         Ok(())
     }
@@ -1279,13 +1286,15 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         let ptr = if self.is_extern_struct_def(def) {
             self.alloc_extern(&layout)
         } else {
-            self.alloc_struct(&layout)
+            let ptr = self.alloc_struct(&layout);
+            self.mark_root(ptr)
         };
         for (i, a) in args.iter().enumerate() {
             let off = *layout.offsets.get(i).unwrap_or(&0) as i32;
             let v = self.h_expr(a)?;
             if let (Some(v), Some(Some(_))) = (v, layout.cltys.get(i)) {
-                self.b.ins().store(MemFlags::trusted(), v, ptr, off);
+                let stored = self.endpoint_value_for_aggregate_store(layout.tys[i], v, a.span)?;
+                self.b.ins().store(MemFlags::trusted(), stored, ptr, off);
             }
         }
         let _ = span;
@@ -1306,7 +1315,8 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         let ptr = if self.is_extern_struct_def(def) {
             self.alloc_extern(&layout)
         } else {
-            self.alloc_struct_typed(&layout, sty)?
+            let ptr = self.alloc_struct_typed(&layout, sty)?;
+            self.mark_root(ptr)
         };
         // A spread base fills every field first; explicit fields override.
         if let Some(base) = spread {
@@ -1322,7 +1332,9 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                     if self.is_rc_ty(layout.tys[i]) {
                         self.emit_rc_retain(v);
                     }
-                    self.b.ins().store(MemFlags::trusted(), v, ptr, off);
+                    let stored =
+                        self.endpoint_value_for_aggregate_store(layout.tys[i], v, base.span)?;
+                    self.b.ins().store(MemFlags::trusted(), stored, ptr, off);
                 }
             }
         }
@@ -1356,7 +1368,12 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                         self.emit_rc_release(old);
                     }
                 }
-                self.b.ins().store(MemFlags::trusted(), v, ptr, off);
+                let stored = if self.channel_endpoint_kind(layout.tys[idx]).is_some() {
+                    self.endpoint_value_for_aggregate_store(layout.tys[idx], v, fi.span)?
+                } else {
+                    v
+                };
+                self.b.ins().store(MemFlags::trusted(), stored, ptr, off);
             }
         }
         let _ = span;
@@ -1670,6 +1687,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 if self.is_rc_ty(elem_tys[i]) && !elem_owned {
                     self.emit_rc_retain(v);
                 }
+                let v = self.endpoint_value_for_aggregate_store(elem_tys[i], v, e.span)?;
                 self.b
                     .ins()
                     .store(MemFlags::trusted(), v, ptr, layout.offsets[i] as i32);
@@ -2008,7 +2026,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                         for (i, sub) in elems.iter().enumerate() {
                             let idx = self.b.ins().iconst(types::I64, i as i64);
                             let v = load_at(self, idx)?;
-                            self.h_bind_pattern(sub, v, elem, false)?;
+                            self.h_bind_pattern(sub, v, elem, false, false)?;
                         }
                     }
                     Some((rp, r)) => {
@@ -2021,14 +2039,14 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                         for (i, sub) in elems.iter().take(rp).enumerate() {
                             let idx = self.b.ins().iconst(types::I64, i as i64);
                             let v = load_at(self, idx)?;
-                            self.h_bind_pattern(sub, v, elem, false)?;
+                            self.h_bind_pattern(sub, v, elem, false, false)?;
                         }
                         // Trailing fixed elements at n - trailing + j.
                         let base = self.b.ins().iadd_imm(n, -(trailing as i64));
                         for (j, sub) in elems.iter().skip(rp).enumerate() {
                             let idx = self.b.ins().iadd_imm(base, j as i64);
                             let v = load_at(self, idx)?;
-                            self.h_bind_pattern(sub, v, elem, false)?;
+                            self.h_bind_pattern(sub, v, elem, false, false)?;
                         }
                         // `..rest` binds the middle slice [rp, n - trailing).
                         if let Some(local) = r.bind {
@@ -2061,7 +2079,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 } else {
                     scrut
                 };
-                self.h_bind_pattern(pattern, payload, vt, false)
+                self.h_bind_pattern(pattern, payload, vt, false, false)
             }
             _ => Err(CodegenError::new(
                 pattern.span,
@@ -2148,7 +2166,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 self.mark_root(v);
             }
         }
-        self.h_bind_pattern(pattern, elem_val, elem, false)?;
+        self.h_bind_pattern(pattern, elem_val, elem, false, false)?;
         self.loops.push(LoopCg {
             continue_block: header,
             break_block: exit,
@@ -2220,7 +2238,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             )
             .expect("get");
         let elem_val = self.i64_to_elem(raw, elem, iter.span)?;
-        self.h_bind_pattern(pattern, elem_val, elem, false)?;
+        self.h_bind_pattern(pattern, elem_val, elem, false, false)?;
         self.loops.push(LoopCg {
             continue_block: latch,
             break_block: exit,
@@ -2332,7 +2350,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             }
             None => None,
         };
-        self.h_bind_pattern(pattern, value, info.elem, false)?;
+        self.h_bind_pattern(pattern, value, info.elem, false, false)?;
         self.loops.push(LoopCg {
             continue_block: header,
             break_block: exit,
@@ -2456,7 +2474,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             )
             .expect("get");
         let elem_val = self.i64_to_elem(raw, elem, iter.span)?;
-        self.h_bind_pattern(pattern, elem_val, elem, false)?;
+        self.h_bind_pattern(pattern, elem_val, elem, false, false)?;
         self.loops.push(LoopCg {
             continue_block: latch,
             break_block: exit,
@@ -2557,7 +2575,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             }
             None => None,
         };
-        self.h_bind_pattern(pattern, value, info.elem, false)?;
+        self.h_bind_pattern(pattern, value, info.elem, false, false)?;
         self.loops.push(LoopCg {
             continue_block: header,
             break_block: exit,
@@ -2675,7 +2693,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                     .store(MemFlags::trusted(), vv, entry, layout.offsets[vo] as i32);
             }
         }
-        self.h_bind_pattern(pattern, Some(entry), entry_ty, false)?;
+        self.h_bind_pattern(pattern, Some(entry), entry_ty, false, false)?;
         self.loops.push(LoopCg {
             continue_block: latch,
             break_block: exit,
@@ -3268,6 +3286,65 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                     Some(PTR),
                     &[fut, ms, t_id, tp, tu, to, rt, pt],
                 ))
+            }
+            hir::Intrinsic::IoStdinReadAsync => {
+                let count = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "stdin read_async count has no value")
+                })?;
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                Ok(self.call_intrinsic(
+                    "lang_io_stdin_read_async",
+                    &[types::I64, types::I64, types::I64],
+                    Some(PTR),
+                    &[count, rt, pt],
+                ))
+            }
+            hir::Intrinsic::IoStdinReadToEndAsync => {
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                Ok(self.call_intrinsic(
+                    "lang_io_stdin_read_to_end_async",
+                    &[types::I64, types::I64],
+                    Some(PTR),
+                    &[rt, pt],
+                ))
+            }
+            hir::Intrinsic::IoStdoutWriteAsync | hir::Intrinsic::IoStderrWriteAsync => {
+                let contents = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "stdio write_async payload has no value")
+                })?;
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                let symbol = match intrinsic {
+                    hir::Intrinsic::IoStdoutWriteAsync => "lang_io_stdout_write_async",
+                    hir::Intrinsic::IoStderrWriteAsync => "lang_io_stderr_write_async",
+                    _ => unreachable!(),
+                };
+                Ok(self.call_intrinsic(
+                    symbol,
+                    &[PTR, types::I64, types::I64],
+                    Some(PTR),
+                    &[contents, rt, pt],
+                ))
+            }
+            hir::Intrinsic::IoStdoutFlushAsync | hir::Intrinsic::IoStderrFlushAsync => {
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                let symbol = match intrinsic {
+                    hir::Intrinsic::IoStdoutFlushAsync => "lang_io_stdout_flush_async",
+                    hir::Intrinsic::IoStderrFlushAsync => "lang_io_stderr_flush_async",
+                    _ => unreachable!(),
+                };
+                Ok(self.call_intrinsic(symbol, &[types::I64, types::I64], Some(PTR), &[rt, pt]))
             }
             hir::Intrinsic::TimeMonotonicNanos => {
                 Ok(self.call_intrinsic("lang_time_monotonic_nanos", &[], Some(types::I64), &[]))

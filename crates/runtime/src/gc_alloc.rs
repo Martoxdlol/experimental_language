@@ -57,7 +57,7 @@
 
 use std::alloc::{Layout, alloc_zeroed};
 use std::cell::RefCell;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 /// Default slab size carved into bump chunks: 1 MiB.
 const SLAB: usize = 1024 * 1024;
@@ -145,6 +145,10 @@ fn global() -> &'static Mutex<GlobalAlloc> {
     })
 }
 
+fn global_lock() -> MutexGuard<'static, GlobalAlloc> {
+    global().lock().unwrap_or_else(|err| err.into_inner())
+}
+
 impl GlobalAlloc {
     /// Carve `size` bytes from the global bump region (replacing the slab when
     /// it cannot fit). Returns the base; the region is zeroed.
@@ -208,7 +212,7 @@ impl Drop for LocalCache {
         if self.free.iter().all(|l| l.is_empty()) {
             return;
         }
-        let mut g = global().lock().unwrap();
+        let mut g = global_lock();
         for (idx, list) in self.free.iter_mut().enumerate() {
             if !list.is_empty() {
                 g.free[idx].append(list);
@@ -262,7 +266,7 @@ pub fn alloc(total: usize) -> *mut u8 {
 /// moving a batch of recycled blocks into the local free list; otherwise carve a
 /// fresh bump chunk. After this returns, step 1 or 2 of [`alloc`] succeeds.
 fn refill(c: &mut LocalCache, class: usize, idx: usize) {
-    let mut g = global().lock().unwrap();
+    let mut g = global_lock();
     let gfree = &mut g.free[idx];
     if !gfree.is_empty() {
         // Move up to a batch of recycled blocks into the local list.
@@ -285,7 +289,7 @@ fn refill(c: &mut LocalCache, class: usize, idx: usize) {
 /// bypassing the per-thread cache. Re-zeroes a recycled block; fresh bump memory
 /// is already zero.
 fn alloc_large(class: usize) -> *mut u8 {
-    let mut g = global().lock().unwrap();
+    let mut g = global_lock();
     if let Some(list) = g.large_free.get_mut(&class) {
         if let Some(base) = list.pop() {
             drop(g);
@@ -306,7 +310,7 @@ fn alloc_large(class: usize) -> *mut u8 {
 /// stop-the-world sweep calling this never touches the system-malloc lock.
 pub fn free(base: usize, total: usize) {
     let class = size_class(total);
-    let mut g = global().lock().unwrap();
+    let mut g = global_lock();
     match class_index(class) {
         Some(idx) => g.free[idx].push(base),
         None => g.large_free.entry(class).or_default().push(base),
@@ -319,7 +323,7 @@ pub fn free(base: usize, total: usize) {
 /// the system). Excludes blocks parked in threads' local caches.
 /// Observability/testing only.
 pub fn free_list_bytes() -> usize {
-    let g = global().lock().unwrap();
+    let g = global_lock();
     let small: usize = g
         .free
         .iter()
@@ -346,7 +350,7 @@ fn class_size_of_index(idx: usize) -> usize {
 /// Total bytes acquired from the system across all slabs (high-water mark of
 /// managed-heap reservation). Observability/testing only.
 pub fn reserved_bytes() -> usize {
-    let g = global().lock().unwrap();
+    let g = global_lock();
     g.slabs.iter().map(|&(_, s)| s).sum()
 }
 
@@ -416,6 +420,35 @@ mod tests {
         }
         free(a as usize, 64);
         free(b as usize, 64);
+    }
+
+    #[test]
+    fn global_allocator_lock_recovers_after_poison() {
+        let _g = GLOBAL_TEST_LOCK.lock().unwrap();
+        let poisoner = std::thread::spawn(|| {
+            let _guard = global().lock().unwrap();
+            panic!("poison global allocator");
+        });
+        assert!(poisoner.join().is_err());
+        assert!(
+            global().lock().is_err(),
+            "test setup must leave the global allocator lock poisoned"
+        );
+
+        let p = alloc(128);
+        assert_eq!(p as usize % ALIGN, 0);
+        for i in 0..128 {
+            assert_eq!(unsafe { *p.add(i) }, 0);
+        }
+        free(p as usize, 128);
+        assert!(
+            free_list_bytes() >= size_class(128),
+            "allocator observability should also recover after poison"
+        );
+        assert!(
+            reserved_bytes() >= SLAB,
+            "reserved-byte accounting should remain readable after poison"
+        );
     }
 
     #[test]

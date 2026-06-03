@@ -347,6 +347,30 @@ fn register_runtime_symbols(b: &mut JITBuilder) {
         runtime::lang_io_stderr_flush as *const u8,
     );
     b.symbol(
+        "lang_io_stdin_read_async",
+        runtime::async_rt::lang_io_stdin_read_async as *const u8,
+    );
+    b.symbol(
+        "lang_io_stdin_read_to_end_async",
+        runtime::async_rt::lang_io_stdin_read_to_end_async as *const u8,
+    );
+    b.symbol(
+        "lang_io_stdout_write_async",
+        runtime::async_rt::lang_io_stdout_write_async as *const u8,
+    );
+    b.symbol(
+        "lang_io_stderr_write_async",
+        runtime::async_rt::lang_io_stderr_write_async as *const u8,
+    );
+    b.symbol(
+        "lang_io_stdout_flush_async",
+        runtime::async_rt::lang_io_stdout_flush_async as *const u8,
+    );
+    b.symbol(
+        "lang_io_stderr_flush_async",
+        runtime::async_rt::lang_io_stderr_flush_async as *const u8,
+    );
+    b.symbol(
         "lang_fs_read_text",
         runtime::fs::lang_fs_read_text as *const u8,
     );

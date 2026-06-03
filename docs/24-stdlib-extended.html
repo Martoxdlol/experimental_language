@@ -1301,7 +1301,25 @@ pub struct Stderr { ... }
 
 extend Stdin:  Reader { ... }
 extend Stdout: Writer { ... }
-extend Stderr: Writer { ... }</code></pre>
+extend Stderr: Writer { ... }
+
+extend Stdin {
+  function read_async(self, buf: Bytes): Future&lt;i64 | IoError&gt;
+  function read_to_end_async(self, buf: Bytes): Future&lt;i64 | IoError&gt;
+}
+
+extend Stdout {
+  function write_async(self, buf: Bytes): Future&lt;i64 | IoError&gt;
+  function write_all_async(self, buf: Bytes): Future&lt;null | IoError&gt;
+  function flush_async(self): Future&lt;null | IoError&gt;
+}
+
+extend Stderr { ... same async writer methods ... }</code></pre>
+
+<p>The async concrete-handle methods are backed by runtime futures that park the
+executor task, perform the target's blocking stdio operation on a helper, and
+wake the task through the shared one-shot reactor. They are for stdio handles;
+the portable <code>Reader</code>/<code>Writer</code> traits remain synchronous contracts.</p>
 
 <!-- =========================================================== -->
 <h2 id="fs">17. <code>std:fs</code> — files · Path <span class="pill spec">spec</span> + <span class="pill planned">planned</span></h2>
@@ -1570,7 +1588,7 @@ extend UdpSocket {
 
 pub function resolve(host: str): List&lt;IpAddr&gt; | IoError</code></pre>
 
-<p>Async equivalents are planned as <code>std:async</code> adapters
+<p>Async network equivalents are planned as <code>std:async</code> adapters
 (<code>AsyncTcpStream</code>, <code>AsyncTcpListener</code>). Their shared
 <code>AsyncRead</code> / <code>AsyncWrite</code> protocols are planned companion contracts;
 they are not part of today's <code>core:async</code> catalog export.</p>

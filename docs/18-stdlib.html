@@ -681,7 +681,10 @@ eprintln("warning")   // stderr, appends '\n'
 
 stdout().write(Bytes.from_str("raw bytes"))
 stdin().read_to_end(Bytes.new())
-stderr().flush()</code></pre>
+stderr().flush()
+
+await stdout().write_all_async(Bytes.from_str("async bytes\n"))
+await stdin().read_async(Bytes.new())</code></pre>
 
 <p>Both take <code>str</code>. To print non-strings, convert first via <code>as str</code> for
 numeric primitives or implement a project-local stringification interface.</p>
@@ -697,8 +700,17 @@ interface Writer {
   function write(self, buf: Bytes): i64 | IoError
   function write_all(self, buf: Bytes): null | IoError
   function flush(self): null | IoError
-}
+}</code></pre>
 
+<p>The concrete <code>Stdin</code>, <code>Stdout</code>, and
+<code>Stderr</code> handles also expose async methods for executor code:
+<code>Stdin.read_async(buf)</code>, <code>Stdin.read_to_end_async(buf)</code>,
+<code>Stdout.write_async(buf)</code>, <code>Stdout.write_all_async(buf)</code>,
+<code>Stdout.flush_async()</code>, and the matching <code>Stderr</code> writer
+methods. These return <code>Future</code>s and wake through the async reactor, so
+polling them does not block an executor worker.</p>
+
+<pre><code>
 interface Seeker {
   function seek(self, pos: SeekFrom): i64 | IoError
 }</code></pre>
@@ -708,7 +720,8 @@ interface Seeker {
 <code>println</code>, <code>eprint</code>, and <code>eprintln</code> lower to runtime
 intrinsics. <code>stdin()</code>, <code>stdout()</code>, and <code>stderr()</code>
 return target-backed stream handles for byte-oriented reads, writes, and
-flushes. <code>SeekFrom</code> and
+flushes, including reactor-backed async methods on the concrete stdio handles.
+<code>SeekFrom</code> and
 <code>IoErrorKind</code> provide direct <code>equals</code> / <code>eq</code>, overloaded
 <code>==</code>, clone, hash, stringification, and debug helpers; <code>IoError</code> implements
 <code>Error</code>, equality, clone, hash, and debug rendering. <code>BufReader</code> and

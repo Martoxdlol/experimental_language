@@ -23,6 +23,7 @@
 //! waking is a forever-hung task, exactly as the spec warns.
 
 use crate::gc;
+use crate::strings::{LangStr, lang_str_from_utf8, str_bytes};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, WaitTimeoutResult};
 
 /// The waker context handed to `poll` (`docs/21` §2). Layout matches the
@@ -170,6 +171,7 @@ fn make_desc(size: u64, ptr_offsets: &[u32]) -> *const u8 {
         bytes.extend_from_slice(&o.to_le_bytes());
     }
     bytes.extend_from_slice(&0u32.to_le_bytes()); // n_rc = 0 (no refcounted fields)
+    bytes.extend_from_slice(&0u32.to_le_bytes()); // n_ep = 0 (no endpoint fields)
     Box::leak(bytes.into_boxed_slice()).as_ptr()
 }
 
@@ -515,6 +517,7 @@ fn sleep_vtable() -> *const u8 {
 
 const SLEEP_FUTURE_KIND: i64 = -0x5150_534c_4545_5001i64;
 const TIMEOUT_FUTURE_KIND: i64 = -0x5150_5449_4d45_4f01i64;
+const IO_FUTURE_KIND: i64 = -0x5150_494f_4655_5401i64;
 
 extern "C" fn sleep_poll(data: *mut u8, ctx: *mut Context) -> *mut u8 {
     let ready_tid = unsafe { (data as *const i64).read() };
@@ -637,6 +640,17 @@ fn value_desc_ptr() -> *const u8 {
     // A `Ready<Out>` struct holding one managed pointer field.
     static D: OnceLock<usize> = OnceLock::new();
     *D.get_or_init(|| make_desc(8, &[0]) as usize) as *const u8
+}
+
+unsafe fn ready_managed_value_box(value: usize, ready_tid: i64) -> *mut u8 {
+    let ready = unsafe { gc::alloc(value_desc_ptr()) };
+    unsafe { (ready as *mut usize).write(value) };
+    let outer = unsafe { gc::alloc(union_managed_desc()) };
+    unsafe {
+        (outer as *mut i64).write(ready_tid);
+        ((outer as usize + 8) as *mut usize).write(ready as usize);
+    }
+    outer
 }
 
 extern "C" fn timeout_poll(data: *mut u8, ctx: *mut Context) -> *mut u8 {
@@ -773,6 +787,230 @@ pub unsafe extern "C" fn lang_async_timeout(
     bx
 }
 
+// -- std:io async futures ---------------------------------------------------
+//
+// Portable stdio is not readiness-based on every target. The executor-facing
+// contract still must not block a worker poll, so these futures hand the
+// blocking stream operation to a helper thread and use the same cancellable
+// reactor registration as timers/I/O readiness to wake the parked task.
+
+#[derive(Clone)]
+enum IoOp {
+    StdinRead { count: i64 },
+    StdinReadToEnd,
+    StdoutWrite { contents_hex: String },
+    StderrWrite { contents_hex: String },
+    StdoutFlush,
+    StderrFlush,
+}
+
+struct IoCell {
+    op: IoOp,
+    started: AtomicBool,
+    cancelled: AtomicBool,
+    result: Mutex<Option<usize>>,
+    registration: Mutex<Option<ReactorRegistration>>,
+}
+
+fn io_registry() -> &'static Mutex<HashMap<u64, std::sync::Arc<IoCell>>> {
+    static R: OnceLock<Mutex<HashMap<u64, std::sync::Arc<IoCell>>>> = OnceLock::new();
+    R.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+static IO_NEXT: AtomicU64 = AtomicU64::new(1);
+
+fn io_data_desc() -> *const u8 {
+    // [ready_tid][pending_tid][id] — the blocking payload is copied into the
+    // Rust-side cell so no managed field needs tracing here.
+    static D: OnceLock<usize> = OnceLock::new();
+    *D.get_or_init(|| make_desc(24, &[]) as usize) as *const u8
+}
+
+fn io_vtable() -> *const u8 {
+    static V: OnceLock<usize> = OnceLock::new();
+    *V.get_or_init(|| {
+        let f: extern "C" fn(*mut u8, *mut Context) -> *mut u8 = io_poll;
+        Box::leak(Box::new([f as usize])) as *const [usize; 1] as usize
+    }) as *const u8
+}
+
+fn io_run(op: &IoOp) -> String {
+    match op {
+        IoOp::StdinRead { count } => crate::strings::io_read_stdin_count_encoded(*count),
+        IoOp::StdinReadToEnd => crate::strings::io_read_stdin_to_end_encoded(),
+        IoOp::StdoutWrite { contents_hex } => {
+            crate::strings::io_write_stream_bytes_encoded(contents_hex, false)
+        }
+        IoOp::StderrWrite { contents_hex } => {
+            crate::strings::io_write_stream_bytes_encoded(contents_hex, true)
+        }
+        IoOp::StdoutFlush => crate::strings::io_flush_stream_encoded(false),
+        IoOp::StderrFlush => crate::strings::io_flush_stream_encoded(true),
+    }
+}
+
+fn io_complete(cell: std::sync::Arc<IoCell>, encoded: String) {
+    gc::leave_native();
+    let ptr = unsafe { lang_str_from_utf8(encoded.as_ptr(), encoded.len()) } as usize;
+    gc::add_extra_root(ptr);
+    let reg = {
+        let mut result = lock_unpoison(&cell.result);
+        if cell.cancelled.load(Ordering::SeqCst) {
+            gc::remove_extra_root(ptr);
+            return;
+        }
+        *result = Some(ptr);
+        lock_unpoison(&cell.registration).take()
+    };
+    if let Some(reg) = reg {
+        reactor_wake_ready(reg.id());
+    }
+}
+
+fn io_spawn_worker(cell: std::sync::Arc<IoCell>) {
+    std::thread::spawn(move || {
+        gc::thread_start();
+        gc::enter_runtime_native_no_roots();
+        let encoded = io_run(&cell.op);
+        io_complete(cell, encoded);
+    });
+}
+
+fn io_cancel_id(id: u64) {
+    if let Some(cell) = lock_unpoison(io_registry()).remove(&id) {
+        cell.cancelled.store(true, Ordering::SeqCst);
+        if let Some(reg) = lock_unpoison(&cell.registration).take() {
+            reactor_cancel(&reg);
+        }
+        if let Some(ptr) = lock_unpoison(&cell.result).take() {
+            gc::remove_extra_root(ptr);
+        }
+    }
+}
+
+extern "C" fn io_poll(data: *mut u8, ctx: *mut Context) -> *mut u8 {
+    let ready_tid = unsafe { (data as *const i64).read() };
+    let pending_tid = unsafe { ((data as usize + 8) as *const i64).read() };
+    let id = unsafe { ((data as usize + 16) as *const i64).read() } as u64;
+    let cell = lock_unpoison(io_registry()).get(&id).cloned();
+    let Some(cell) = cell else {
+        gc::pause();
+        let r = unsafe { ready_managed_value_box(0, ready_tid) };
+        gc::resume_with_return_root(r as usize);
+        return r;
+    };
+
+    if let Some(ptr) = lock_unpoison(&cell.result).take() {
+        lock_unpoison(io_registry()).remove(&id);
+        gc::pause();
+        let r = unsafe { ready_managed_value_box(ptr, ready_tid) };
+        gc::remove_extra_root(ptr);
+        gc::resume_with_return_root(r as usize);
+        return r;
+    }
+
+    if !cell.started.swap(true, Ordering::SeqCst) {
+        let c = unsafe { &*ctx };
+        let reg = reactor_register(c.waker_data as usize, c.wake_fn);
+        if cell.cancelled.load(Ordering::SeqCst) {
+            reactor_cancel(&reg);
+        } else {
+            *lock_unpoison(&cell.registration) = Some(reg);
+            io_spawn_worker(cell.clone());
+        }
+    }
+
+    gc::pause();
+    let p = unsafe { pending_box(pending_tid) };
+    gc::resume_with_return_root(p as usize);
+    p
+}
+
+fn lang_io_future(op: IoOp, ready_tid: i64, pending_tid: i64) -> *mut u8 {
+    let id = IO_NEXT.fetch_add(1, Ordering::Relaxed);
+    lock_unpoison(io_registry()).insert(
+        id,
+        std::sync::Arc::new(IoCell {
+            op,
+            started: AtomicBool::new(false),
+            cancelled: AtomicBool::new(false),
+            result: Mutex::new(None),
+            registration: Mutex::new(None),
+        }),
+    );
+    gc::pause();
+    let data = unsafe { gc::alloc(io_data_desc()) };
+    unsafe {
+        (data as *mut i64).write(ready_tid);
+        ((data as usize + 8) as *mut i64).write(pending_tid);
+        ((data as usize + 16) as *mut i64).write(id as i64);
+    }
+    let bx = unsafe { gc::alloc(yield_box_desc()) };
+    unsafe {
+        (bx as *mut usize).write(io_vtable() as usize);
+        ((bx as usize + 8) as *mut usize).write(data as usize);
+        ((bx as usize + 16) as *mut i64).write(IO_FUTURE_KIND);
+    }
+    gc::resume_with_return_root(bx as usize);
+    bx
+}
+
+/// Build a reactor-backed future for reading up to `count` stdin bytes.
+#[unsafe(no_mangle)]
+pub extern "C" fn lang_io_stdin_read_async(
+    count: i64,
+    ready_tid: i64,
+    pending_tid: i64,
+) -> *mut u8 {
+    lang_io_future(IoOp::StdinRead { count }, ready_tid, pending_tid)
+}
+
+/// Build a reactor-backed future for reading all remaining stdin bytes.
+#[unsafe(no_mangle)]
+pub extern "C" fn lang_io_stdin_read_to_end_async(ready_tid: i64, pending_tid: i64) -> *mut u8 {
+    lang_io_future(IoOp::StdinReadToEnd, ready_tid, pending_tid)
+}
+
+/// Build a reactor-backed future for writing a hex byte payload to stdout.
+///
+/// # Safety
+/// `contents_hex` must be a valid runtime `str` pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lang_io_stdout_write_async(
+    contents_hex: *const LangStr,
+    ready_tid: i64,
+    pending_tid: i64,
+) -> *mut u8 {
+    let contents_hex = String::from_utf8_lossy(unsafe { str_bytes(contents_hex) }).into_owned();
+    lang_io_future(IoOp::StdoutWrite { contents_hex }, ready_tid, pending_tid)
+}
+
+/// Build a reactor-backed future for writing a hex byte payload to stderr.
+///
+/// # Safety
+/// `contents_hex` must be a valid runtime `str` pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lang_io_stderr_write_async(
+    contents_hex: *const LangStr,
+    ready_tid: i64,
+    pending_tid: i64,
+) -> *mut u8 {
+    let contents_hex = String::from_utf8_lossy(unsafe { str_bytes(contents_hex) }).into_owned();
+    lang_io_future(IoOp::StderrWrite { contents_hex }, ready_tid, pending_tid)
+}
+
+/// Build a reactor-backed future for flushing stdout.
+#[unsafe(no_mangle)]
+pub extern "C" fn lang_io_stdout_flush_async(ready_tid: i64, pending_tid: i64) -> *mut u8 {
+    lang_io_future(IoOp::StdoutFlush, ready_tid, pending_tid)
+}
+
+/// Build a reactor-backed future for flushing stderr.
+#[unsafe(no_mangle)]
+pub extern "C" fn lang_io_stderr_flush_async(ready_tid: i64, pending_tid: i64) -> *mut u8 {
+    lang_io_future(IoOp::StderrFlush, ready_tid, pending_tid)
+}
+
 /// Cancel runtime-built async futures that own reactor registrations.
 ///
 /// Generated async state machines use their own cleanup hook at the future-box
@@ -802,6 +1040,11 @@ pub(crate) unsafe fn cancel_runtime_future(fut: *mut u8) -> bool {
                     unsafe { crate::threads::lang_future_cancel(inner_fut) };
                 }
             }
+            true
+        }
+        IO_FUTURE_KIND => {
+            let id = unsafe { ((data + 16) as *const i64).read() } as u64;
+            io_cancel_id(id);
             true
         }
         crate::channels::CHAN_RECV_FUTURE_KIND => unsafe {
@@ -1181,6 +1424,38 @@ mod tests {
         assert!(!sleep_registry().lock().unwrap().contains_key(&id));
         assert!(!cell.token.active.load(AtomicOrdering::SeqCst));
         assert!(cell.token.registration.lock().unwrap().is_none());
+        assert_eq!(*waker.count.lock().unwrap(), 0);
+    }
+
+    #[test]
+    fn cancelling_io_future_drains_reactor_waiter_and_result_root() {
+        let _g = crate::gc::TEST_LOCK.lock().unwrap();
+        let waker = Box::leak(Box::new(CountWaker {
+            count: Mutex::new(0),
+            cv: Condvar::new(),
+        }));
+        let reg = reactor_register(waker as *const CountWaker as usize, count_wake);
+        let reg_id = reg.id();
+        let result = unsafe { lang_str_from_utf8("0".as_ptr(), 1) } as usize;
+        gc::add_extra_root(result);
+        assert_eq!(gc::extra_root_count_for(result), 1);
+
+        let id = IO_NEXT.fetch_add(1, Ordering::Relaxed);
+        let cell = std::sync::Arc::new(IoCell {
+            op: IoOp::StdoutFlush,
+            started: AtomicBool::new(true),
+            cancelled: AtomicBool::new(false),
+            result: Mutex::new(Some(result)),
+            registration: Mutex::new(Some(reg)),
+        });
+        lock_unpoison(io_registry()).insert(id, cell.clone());
+
+        io_cancel_id(id);
+
+        assert!(!lock_unpoison(io_registry()).contains_key(&id));
+        assert!(cell.cancelled.load(Ordering::SeqCst));
+        assert!(!reactor_has_waiter(reg_id));
+        assert_eq!(gc::extra_root_count_for(result), 0);
         assert_eq!(*waker.count.lock().unwrap(), 0);
     }
 

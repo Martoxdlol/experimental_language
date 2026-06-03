@@ -5,6 +5,9 @@ use std::process::{Child, Command, Output, Stdio};
 use std::sync::{Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
+
 /// Toolchain imports prepended to single-file test programs (near-empty prelude,
 /// `docs/17` §17.8): the former magic builtins plus common interfaces/std types.
 /// `core:collections` is intentionally omitted so it never collides with tests
@@ -112,9 +115,45 @@ fn cli_test_timeout() -> Duration {
 
 fn output_with_timeout(cmd: &mut Command, timeout: Duration) -> Result<Output, String> {
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    configure_watchdog_process_group(cmd);
     let _slot = cli_process_slot();
     let child = cmd.spawn().map_err(|e| format!("spawn command: {e}"))?;
     output_from_child_with_timeout(child, timeout)
+}
+
+#[cfg(unix)]
+unsafe extern "C" {
+    fn setpgid(pid: i32, pgid: i32) -> i32;
+    fn kill(pid: i32, sig: i32) -> i32;
+}
+
+#[cfg(unix)]
+fn configure_watchdog_process_group(cmd: &mut Command) {
+    unsafe {
+        cmd.pre_exec(|| {
+            if setpgid(0, 0) == 0 {
+                Ok(())
+            } else {
+                Err(std::io::Error::last_os_error())
+            }
+        });
+    }
+}
+
+#[cfg(not(unix))]
+fn configure_watchdog_process_group(_cmd: &mut Command) {}
+
+fn kill_timed_out_child(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        let pgid = child.id() as i32;
+        if pgid > 0 {
+            unsafe {
+                let _ = kill(-pgid, 9);
+            }
+        }
+    }
+    let _ = child.kill();
 }
 
 fn output_from_child_with_timeout(mut child: Child, timeout: Duration) -> Result<Output, String> {
@@ -127,7 +166,7 @@ fn output_from_child_with_timeout(mut child: Child, timeout: Duration) -> Result
                     .map_err(|e| format!("collect command output: {e}"));
             }
             None if start.elapsed() >= timeout => {
-                let _ = child.kill();
+                kill_timed_out_child(&mut child);
                 let output = child
                     .wait_with_output()
                     .map_err(|e| format!("collect timed-out command output: {e}"))?;
@@ -150,6 +189,28 @@ fn command_failure_stderr(label: &str, output: &Output) -> String {
     }
     stderr.push_str(&format!("{label} exited with status {}\n", output.status));
     stderr
+}
+
+#[test]
+#[cfg(unix)]
+fn command_timeout_kills_process_group_descendants() {
+    let marker = std::env::temp_dir().join(format!("otter_timeout_marker_{}", nonce()));
+    let _ = std::fs::remove_file(&marker);
+    let mut command = Command::new("sh");
+    command
+        .arg("-c")
+        .arg("(sleep 1; echo leaked > \"$OTTER_TIMEOUT_MARKER\") & wait")
+        .env("OTTER_TIMEOUT_MARKER", &marker);
+
+    let err = output_with_timeout(&mut command, Duration::from_millis(50))
+        .expect_err("background child should be killed by the timeout watchdog");
+    assert!(err.contains("command timed out"), "stderr: {err}");
+
+    std::thread::sleep(Duration::from_millis(1200));
+    assert!(
+        !marker.exists(),
+        "timeout watchdog killed the shell but left its background child alive"
+    );
 }
 
 /// Run `otter_fusion <cmd> <file>` with `src` written to a temp file; return
@@ -5376,6 +5437,40 @@ fn async_sleep_completes_after_delay() {
     let (out, err, ok) = lang("run", src);
     assert!(ok, "stderr: {err}");
     assert_eq!(out, "42\n");
+}
+
+#[test]
+fn native_build_async_stdio_write_matches_jit() {
+    // Async stdio writes are runtime-built futures: poll registers a reactor
+    // waiter, a helper performs the blocking stream operation, and readiness
+    // wakes the executor task. Cover both JIT symbol registration and native
+    // linking.
+    let src = "import { Bytes } from \"std:bytes\";\n\
+               import { stdout, stderr } from \"std:io\";\n\
+               function main(): Future<null> async {\n\
+                 var out = stdout();\n\
+                 var err = stderr();\n\
+                 var a = await out.write_all_async(Bytes.from_str(\"async-out\\n\"));\n\
+                 var b = await out.flush_async();\n\
+                 var c = await err.write_all_async(Bytes.from_str(\"async-err\\n\"));\n\
+                 var d = await err.flush_async();\n\
+                 println(\"${a is null} ${b is null} ${c is null} ${d is null}\");\n\
+               }";
+    let (jit_out, jit_err, jit_ok) = lang("run", src);
+    assert!(jit_ok, "stderr: {jit_err}");
+    assert_eq!(jit_out, "async-out\ntrue true true true\n");
+    assert_eq!(jit_err, "async-err\n");
+
+    let (native_out, native_err, native_ok) = lang_build_run(src, &[]);
+    assert!(native_ok, "stderr: {native_err}");
+    assert_eq!(
+        native_out, jit_out,
+        "native async stdio stdout diverged from JIT"
+    );
+    assert_eq!(
+        native_err, jit_err,
+        "native async stdio stderr diverged from JIT"
+    );
 }
 
 #[test]

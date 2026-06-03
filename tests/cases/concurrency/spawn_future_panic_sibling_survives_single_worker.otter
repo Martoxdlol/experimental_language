@@ -1,0 +1,54 @@
+//@ kind: run
+//@ serial
+//@ env: OTTER_FUSION_TASK_WORKERS=1
+//@ description: a panicking `spawn EXPR` future does not kill the shared executor worker, so sibling spawned futures still complete
+//@ stdout:
+//~ count=64 sum=2016
+
+import { println } from "std:io";
+import { Future, panic } from "core:prelude";
+import { Sender, ChannelClosed, channel } from "std:sync";
+import { yield_now } from "std:async";
+
+function fail_after_yield(): Future<i64> async {
+  var _ = await yield_now();
+  panic("spawn sibling boom");
+  0
+}
+
+function send_after_yields(tx: Sender<i64>, n: i64): Future<i64> async {
+  var a = await yield_now();
+  var b = await yield_now();
+  tx.send(n);
+  n
+}
+
+function main(): Future<null> async {
+  var ends = channel<i64>();
+  var tx: Sender<i64> = ends.0;
+  var rx = ends.1;
+
+  var bad: Future<i64> = spawn fail_after_yield();
+
+  var i: i64 = 0;
+  while i < 64 {
+    var tx_i = tx.clone();
+    var n = i;
+    var sibling: Future<i64> = spawn send_after_yields(tx_i, n);
+    i = i + 1;
+  }
+
+  var count: i64 = 0;
+  var sum: i64 = 0;
+  while count < 64 {
+    match await rx.recv() {
+      i64 n => {
+        sum = sum + n;
+        count = count + 1;
+      },
+      ChannelClosed c => {},
+    }
+  }
+
+  println("count=${count} sum=${sum}");
+}

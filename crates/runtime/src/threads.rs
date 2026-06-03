@@ -197,7 +197,7 @@ fn new_ctl_with_result_is_ptr(result_is_ptr: bool) -> Arc<ThreadCtl> {
 fn publish_done(ctl: &ThreadCtl, result: i64) {
     let wakers = {
         let mut g = ctl_lock(ctl);
-        if !g.detached && g.result_is_ptr {
+        if !g.detached && g.result_is_ptr && result != 0 {
             gc::add_extra_root(result as usize);
             g.result_pinned = true;
         }
@@ -451,8 +451,10 @@ fn runtime_try_lock<T>(mutex: &Mutex<T>) -> Option<MutexGuard<'_, T>> {
 
 fn runtime_read_lock<T>(lock: &RwLock<T>) -> RwLockReadGuard<'_, T> {
     loop {
-        if let Ok(guard) = lock.try_read() {
-            return guard;
+        match lock.try_read() {
+            Ok(guard) => return guard,
+            Err(TryLockError::Poisoned(err)) => return err.into_inner(),
+            Err(TryLockError::WouldBlock) => {}
         }
         gc::runtime_safepoint();
         std::thread::yield_now();
@@ -461,8 +463,10 @@ fn runtime_read_lock<T>(lock: &RwLock<T>) -> RwLockReadGuard<'_, T> {
 
 fn runtime_write_lock<T>(lock: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
     loop {
-        if let Ok(guard) = lock.try_write() {
-            return guard;
+        match lock.try_write() {
+            Ok(guard) => return guard,
+            Err(TryLockError::Poisoned(err)) => return err.into_inner(),
+            Err(TryLockError::WouldBlock) => {}
         }
         gc::runtime_safepoint();
         std::thread::yield_now();
@@ -1016,6 +1020,7 @@ fn make_desc(size: u64, ptr_offsets: &[u32]) -> *const u8 {
         bytes.extend_from_slice(&o.to_le_bytes());
     }
     bytes.extend_from_slice(&0u32.to_le_bytes()); // n_rc = 0 (no refcounted fields)
+    bytes.extend_from_slice(&0u32.to_le_bytes()); // n_ep = 0 (no endpoint fields)
     Box::leak(bytes.into_boxed_slice()).as_ptr()
 }
 
@@ -1784,6 +1789,21 @@ mod tests {
     }
 
     #[test]
+    fn managed_null_task_result_is_not_pinned_for_join_handoff() {
+        let _g = crate::gc::TEST_LOCK.lock().unwrap();
+        let ctl = new_ctl_with_result_is_ptr(true);
+
+        publish_done(&ctl, 0);
+
+        assert_eq!(
+            gc::extra_root_count_for(0),
+            0,
+            "null Task.spawn results must not hit the global extra-root list"
+        );
+        assert!(!ctl.inner.lock().unwrap().result_pinned);
+    }
+
+    #[test]
     fn detach_before_completion_discards_result_without_pinning() {
         let _g = crate::gc::TEST_LOCK.lock().unwrap();
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
@@ -2082,6 +2102,44 @@ mod tests {
         assert_eq!(parse_worker_count_override("512"), Some(256));
         assert_eq!(parse_worker_count_override("0"), None);
         assert_eq!(parse_worker_count_override("nope"), None);
+    }
+
+    #[test]
+    fn runtime_read_lock_recovers_poisoned_rwlock() {
+        let _g = crate::gc::TEST_LOCK.lock().unwrap();
+        let lock = Arc::new(RwLock::new(41_i64));
+        let poisoned = lock.clone();
+        let poisoner = std::thread::spawn(move || {
+            let _guard = poisoned.write().unwrap();
+            panic!("poison runtime read lock test");
+        });
+        assert!(poisoner.join().is_err());
+        assert!(
+            lock.read().is_err(),
+            "test setup must leave the RwLock poisoned"
+        );
+
+        assert_eq!(*runtime_read_lock(&lock), 41);
+    }
+
+    #[test]
+    fn runtime_write_lock_recovers_poisoned_rwlock() {
+        let _g = crate::gc::TEST_LOCK.lock().unwrap();
+        let lock = Arc::new(RwLock::new(41_i64));
+        let poisoned = lock.clone();
+        let poisoner = std::thread::spawn(move || {
+            let mut guard = poisoned.write().unwrap();
+            *guard += 1;
+            panic!("poison runtime write lock test");
+        });
+        assert!(poisoner.join().is_err());
+        assert!(
+            lock.write().is_err(),
+            "test setup must leave the RwLock poisoned"
+        );
+
+        *runtime_write_lock(&lock) += 1;
+        assert_eq!(*runtime_read_lock(&lock), 43);
     }
 
     /// Build a `Future<i64>` interface-object box (vtable slot 0 = `poll`).

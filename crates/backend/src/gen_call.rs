@@ -1170,19 +1170,8 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     /// emit deterministic acquire/release of the channel's endpoint reference
     /// counts (`docs/16` §8 / `docs/20` §2).
     pub(crate) fn channel_endpoint_kind(&self, ty: Ty) -> Option<bool> {
-        let prog = &self.cx.analysis.program;
         let resolved = resolve_shallow(self.cx.analysis, ty, &self.subst);
-        match self.cx.analysis.tcx.kind(resolved) {
-            TyKind::Named { def, .. } if *def == prog.sender_def && prog.sender_def != DefId(0) => {
-                Some(true)
-            }
-            TyKind::Named { def, .. }
-                if *def == prog.receiver_def && prog.receiver_def != DefId(0) =>
-            {
-                Some(false)
-            }
-            _ => None,
-        }
+        channel_endpoint_kind_ty(self.cx.analysis, resolved)
     }
 
     /// Read the `chan` id field from an already-evaluated `Sender`/`Receiver`

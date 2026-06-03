@@ -344,29 +344,29 @@ fn make_io_result(payload: &str) -> *const LangStr {
     unsafe { lang_str_from_utf8(payload.as_ptr(), payload.len()) }
 }
 
-fn encode_io_success(payload: &str) -> *const LangStr {
+fn encode_io_success_string(payload: &str) -> String {
     let mut out = String::with_capacity(payload.len() + 1);
     out.push('0');
     out.push_str(payload);
-    make_io_result(&out)
+    out
 }
 
-fn encode_io_error(error: impl std::fmt::Display) -> *const LangStr {
+fn encode_io_error_string(error: impl std::fmt::Display) -> String {
     let message = error.to_string();
     let mut out = String::with_capacity(message.len() + 1);
     out.push('1');
     out.push_str(&message);
-    make_io_result(&out)
+    out
 }
 
-fn encode_io_bytes_hex(bytes: &[u8]) -> *const LangStr {
+fn encode_io_bytes_hex_string(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut payload = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
         payload.push(HEX[(byte >> 4) as usize] as char);
         payload.push(HEX[(byte & 0x0f) as usize] as char);
     }
-    encode_io_success(&payload)
+    encode_io_success_string(&payload)
 }
 
 fn decode_hex_digit(byte: u8) -> Option<u8> {
@@ -401,11 +401,10 @@ fn decode_io_hex_bytes(hex: &str) -> std::io::Result<Vec<u8>> {
     Ok(out)
 }
 
-fn write_stream_bytes(contents_hex: *const LangStr, stderr: bool) -> *const LangStr {
-    let hex = String::from_utf8_lossy(unsafe { str_bytes(contents_hex) });
+pub(crate) fn io_write_stream_bytes_encoded(hex: &str, stderr: bool) -> String {
     let bytes = match decode_io_hex_bytes(&hex) {
         Ok(bytes) => bytes,
-        Err(error) => return encode_io_error(error),
+        Err(error) => return encode_io_error_string(error),
     };
     let result = if stderr {
         let stream = std::io::stderr();
@@ -417,44 +416,65 @@ fn write_stream_bytes(contents_hex: *const LangStr, stderr: bool) -> *const Lang
         lock.write_all(&bytes)
     };
     match result {
-        Ok(()) => encode_io_success(&bytes.len().to_string()),
-        Err(error) => encode_io_error(error),
+        Ok(()) => encode_io_success_string(&bytes.len().to_string()),
+        Err(error) => encode_io_error_string(error),
     }
 }
 
-fn flush_stream(stderr: bool) -> *const LangStr {
+fn write_stream_bytes(contents_hex: *const LangStr, stderr: bool) -> *const LangStr {
+    let hex = String::from_utf8_lossy(unsafe { str_bytes(contents_hex) });
+    let out = io_write_stream_bytes_encoded(&hex, stderr);
+    make_io_result(&out)
+}
+
+pub(crate) fn io_flush_stream_encoded(stderr: bool) -> String {
     let result = if stderr {
         std::io::stderr().lock().flush()
     } else {
         std::io::stdout().lock().flush()
     };
     match result {
-        Ok(()) => encode_io_success(""),
-        Err(error) => encode_io_error(error),
+        Ok(()) => encode_io_success_string(""),
+        Err(error) => encode_io_error_string(error),
     }
 }
 
-fn read_stdin_count(count: i64) -> *const LangStr {
+fn flush_stream(stderr: bool) -> *const LangStr {
+    let out = io_flush_stream_encoded(stderr);
+    make_io_result(&out)
+}
+
+pub(crate) fn io_read_stdin_count_encoded(count: i64) -> String {
     if count < 0 {
-        return encode_io_error("negative stdin read size");
+        return encode_io_error_string("negative stdin read size");
     }
     let mut buf = vec![0u8; count as usize];
     let result = std::io::stdin().lock().read(&mut buf);
     match result {
         Ok(n) => {
             buf.truncate(n);
-            encode_io_bytes_hex(&buf)
+            encode_io_bytes_hex_string(&buf)
         }
-        Err(error) => encode_io_error(error),
+        Err(error) => encode_io_error_string(error),
+    }
+}
+
+fn read_stdin_count(count: i64) -> *const LangStr {
+    let out = io_read_stdin_count_encoded(count);
+    make_io_result(&out)
+}
+
+pub(crate) fn io_read_stdin_to_end_encoded() -> String {
+    let mut buf = Vec::new();
+    match std::io::stdin().lock().read_to_end(&mut buf) {
+        Ok(_) => encode_io_bytes_hex_string(&buf),
+        Err(error) => encode_io_error_string(error),
     }
 }
 
 fn read_stdin_to_end() -> *const LangStr {
-    let mut buf = Vec::new();
-    match std::io::stdin().lock().read_to_end(&mut buf) {
-        Ok(_) => encode_io_bytes_hex(&buf),
-        Err(error) => encode_io_error(error),
-    }
+    let out = io_read_stdin_to_end_encoded();
+    make_io_result(&out)
 }
 
 /// Write a `str` to stdout with no trailing newline.

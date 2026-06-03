@@ -8,11 +8,13 @@ use compiler::span::FileId;
 /// `docs/17` §17.8). Unused imports are harmless; local defs shadow imports.
 const PRELUDE: &str = "import { List, Map, Set, Entry } from \"core:collections\";\n\
         import { print, println } from \"std:io\";\n\
-        import { panic, panic_with, exit, abort } from \"core:prelude\";\n\
+        import { panic, panic_with } from \"core:prelude\";\n\
+        import { exit, abort } from \"std:process\";\n\
         import { Clone, ToStr, Eq, Ord, Hash, Iterator, Item, Done, Try, FromResidual, Drop, Future, Ready, Pending, Context } from \"core:prelude\";\n\
+        import { AsyncIterator } from \"core:async\";\n\
         import { Shared, LockBusy, Sender, Receiver, ChannelClosed, MpmcSender, MpmcReceiver, channel, channel_bounded, channel_mpmc, channel_mpmc_bounded } from \"std:sync\";\n\
         import { Thread, JoinHandle, Joined, Panicked } from \"std:thread\";\n\
-        import { AsyncIterator, TimedOut, yield_now, sleep, timeout } from \"std:async\";\n\
+        import { TimedOut, yield_now, sleep, timeout } from \"std:async\";\n\
         import { Foreign, CString, CStr, Buffer } from \"core:ffi\";\n";
 
 fn with_prelude(src: &str) -> String {
@@ -2552,7 +2554,10 @@ fn async_closure_desugars_to_sync_closure_over_async_block() {
         .hir
         .bodies
         .iter()
-        .find(|(d, _)| analysis.program.def(**d).name == "host")
+        .find(|(d, _)| {
+            let def = analysis.program.def(**d);
+            def.name == "host" && def.span.file == FileId(0)
+        })
         .map(|(_, b)| b)
         .expect("host body");
     let closure = first_closure(&host.block);
@@ -2617,7 +2622,10 @@ fn async_closure_state_layout_holds_captures_and_saves_them() {
         .hir
         .bodies
         .iter()
-        .find(|(d, _)| analysis.program.def(**d).name == "host")
+        .find(|(d, _)| {
+            let def = analysis.program.def(**d);
+            def.name == "host" && def.span.file == FileId(0)
+        })
         .map(|(_, b)| b)
         .expect("host body");
     let closure = first_closure(&host.block);

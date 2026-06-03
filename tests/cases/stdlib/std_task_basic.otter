@@ -40,5 +40,5 @@ function main(): Future<null> async {
 
   var cancelled = Cancelled {};
   var cancelled_copy = cancelled.clone();
-  println("${cancelled == cancelled_copy} ${cancelled.hash() == cancelled_copy.hash()} ${cancelled.to_str()} ${render_debug(cancelled)}");
+  println("cancelled=${cancelled == cancelled_copy} ${cancelled.hash() == cancelled_copy.hash()} ${cancelled.to_str()} ${render_debug(cancelled)}");
 }

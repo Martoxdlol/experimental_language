@@ -14,7 +14,8 @@
 //!
 //! ```text
 //!   [ size: u64 ][ kind: u64 ][ type_id: u64 ][ n_ptrs: u64 ][ off_0: u32 ] … [ off_{n-1}: u32 ]
-//!   [ n_rc: u32 ][ rcoff_0: u32 ] … [ rcoff_{m-1}: u32 ]            ← optional trailer
+//!   [ n_rc: u32 ][ rcoff_0: u32 ] … [ rcoff_{m-1}: u32 ]
+//!   [ n_ep: u32 ][ epoff_0: u32 ][ epkind_0: u32 ] …                ← trailer
 //! ```
 //!
 //! * `size`    — field-block size in bytes.
@@ -28,7 +29,11 @@
 //!   destroyed — by `lang_rc_release` reaching zero, or swept by the GC — these
 //!   stored strong references are released so the count cascade reaches the whole
 //!   owned graph. The GC mark reader stops after the `off_i` block, so the
-//!   trailer is invisible to it (older descriptors simply omit it).
+//!   trailer is invisible to it.
+//! * `n_ep` / `(epoff_j, epkind_j)` — offsets of aggregate-owned channel
+//!   endpoint handle fields. `epkind` is `1` for sender and `0` for receiver;
+//!   the collector releases these endpoint counts before reclaiming the owning
+//!   aggregate.
 //!
 //! This module currently owns allocation and a registry of live objects; the
 //! mark-sweep collector and precise-root scan build on it (see `ROADMAP.md`).
@@ -37,7 +42,7 @@
 // not the system allocator — see that module for the rationale.
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, TryLockError};
 
 /// Size of the object header in bytes: `[desc ptr][mark word]`.
 pub const HEADER: usize = 16;
@@ -119,6 +124,47 @@ unsafe fn desc_rc_offsets(desc: *const u8) -> Vec<usize> {
         .collect()
 }
 
+/// The byte offset where the channel-endpoint trailer begins.
+#[inline]
+unsafe fn desc_endpoint_trailer_off(desc: *const u8) -> usize {
+    let base = unsafe { desc_rc_trailer_off(desc) };
+    let n_rc = unsafe { (desc.add(base) as *const u32).read_unaligned() as usize };
+    base + 4 + n_rc * 4
+}
+
+/// Aggregate-owned channel endpoint fields recorded in the descriptor trailer.
+/// The boolean is `true` for sender and `false` for receiver.
+#[inline]
+unsafe fn desc_endpoint_offsets(desc: *const u8) -> Vec<(usize, bool)> {
+    let base = unsafe { desc_endpoint_trailer_off(desc) };
+    let n = unsafe { (desc.add(base) as *const u32).read_unaligned() as usize };
+    (0..n)
+        .map(|j| {
+            let entry = base + 4 + j * 8;
+            let off = unsafe { (desc.add(entry) as *const u32).read_unaligned() as usize };
+            let kind = unsafe { (desc.add(entry + 4) as *const u32).read_unaligned() != 0 };
+            (off, kind)
+        })
+        .collect()
+}
+
+unsafe fn endpoint_releases_for_object(base: usize, desc: *const u8) -> Vec<(u64, u64)> {
+    let obj = base + HEADER;
+    let mut releases = Vec::new();
+    for (off, is_sender) in unsafe { desc_endpoint_offsets(desc) } {
+        let endpoint = unsafe { ((obj + off) as *const usize).read() };
+        if endpoint == 0 {
+            continue;
+        }
+        let id = unsafe { (endpoint as *const u64).read() };
+        if id != 0 {
+            let kind = if is_sender { 1 } else { 2 };
+            releases.push((kind, id));
+        }
+    }
+    releases
+}
+
 /// The registry of *globally-tracked* managed objects (base address + total
 /// byte size, including the header).
 ///
@@ -147,6 +193,22 @@ fn heap() -> &'static Mutex<Heap> {
     })
 }
 
+fn lock_unpoison<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|err| err.into_inner())
+}
+
+fn wait_unpoison<'a, T>(cv: &Condvar, guard: MutexGuard<'a, T>) -> MutexGuard<'a, T> {
+    cv.wait(guard).unwrap_or_else(|err| err.into_inner())
+}
+
+fn try_lock_unpoison<T>(mutex: &Mutex<T>) -> Option<MutexGuard<'_, T>> {
+    match mutex.try_lock() {
+        Ok(guard) => Some(guard),
+        Err(TryLockError::Poisoned(err)) => Some(err.into_inner()),
+        Err(TryLockError::WouldBlock) => None,
+    }
+}
+
 /// Bytes allocated since the last collection — the GC trigger. A lock-free
 /// global counter bumped by every allocation (on the hot path, instead of a
 /// field updated under the heap lock) and reset to `0` by each collection.
@@ -161,10 +223,9 @@ pub struct StaticDesc {
     pub kind: u64,
     pub type_id: u64,
     pub n_ptrs: u64,
-    /// The `n_rc` trailer word (always `0` for builtins — they own no
-    /// `@RefCounted` fields directly). Sits at byte offset `32` = `32 + 0*4`
-    /// since every builtin has `n_ptrs == 0`, so [`desc_rc_offsets`] reads it
-    /// in-bounds and returns an empty list. See the module-level descriptor doc.
+    /// Zeroed `n_rc` and `n_ep` trailer words (builtins own neither refcounted
+    /// fields nor endpoint fields directly). Sits at byte offset `32` =
+    /// `32 + 0*4`; both trailer readers stay in-bounds.
     pub rc_trailer: u64,
 }
 
@@ -261,9 +322,9 @@ unsafe fn alloc_raw(desc: *const u8, size: usize) -> *mut u8 {
     //    this thread's own and is read by the collector only while this thread is
     //    stopped, so it is effectively uncontended.
     if unsafe { desc_kind(desc) } == KIND_REFCOUNTED {
-        heap().lock().unwrap().objects.insert(base as usize, total);
+        lock_unpoison(heap()).objects.insert(base as usize, total);
     } else {
-        ME.with(|h| h.0.alloc_log.lock().unwrap().push((base as usize, total)));
+        ME.with(|h| lock_unpoison(&h.0.alloc_log).push((base as usize, total)));
     }
     BYTES_SINCE_GC.fetch_add(total, Ordering::Relaxed);
 
@@ -300,7 +361,7 @@ pub unsafe fn alloc_var(desc: *const u8, size: usize) -> *mut u8 {
 /// (the caller — the stack-map root scan — guarantees this). Stray non-pointer
 /// values are tolerated: only addresses of registered objects are followed.
 pub unsafe fn collect(roots: &[usize]) -> usize {
-    let mut heap = heap().lock().unwrap();
+    let mut heap = lock_unpoison(heap());
 
     // Merge every mutator's private alloc log into the global registry first, so
     // `heap.objects` enumerates *every* live object (the precise-root scan and the
@@ -309,7 +370,7 @@ pub unsafe fn collect(roots: &[usize]) -> usize {
 
     // Objects awaiting finalization are kept alive (and their referents kept
     // alive) until their `drop` runs — include them so marking traverses them.
-    let pending: Vec<(usize, usize, u64)> = FINALIZE_PENDING.lock().unwrap().clone();
+    let pending: Vec<(usize, usize, u64)> = lock_unpoison(&FINALIZE_PENDING).clone();
     let mut bases: HashSet<usize> = heap.objects.keys().copied().collect();
     for &(b, _, _) in &pending {
         bases.insert(b);
@@ -321,9 +382,7 @@ pub unsafe fn collect(roots: &[usize]) -> usize {
     let is_obj = |fb: usize| fb != 0 && fb >= HEADER && bases.contains(&(fb - HEADER));
     let mut work: Vec<usize> = roots.iter().copied().filter(|&p| is_obj(p)).collect();
     work.extend(
-        extra_roots()
-            .lock()
-            .unwrap()
+        lock_unpoison(extra_roots())
             .keys()
             .copied()
             .filter(|&p| is_obj(p)),
@@ -338,7 +397,7 @@ pub unsafe fn collect(roots: &[usize]) -> usize {
     // `drop(self)` can run after the collection, then they are freed.
     let mut newly: Vec<(usize, usize, u64)> = Vec::new();
     if any_finalizers() {
-        let dfs = drop_fns().lock().unwrap();
+        let dfs = lock_unpoison(drop_fns());
         for (&base, &total) in &heap.objects {
             if unsafe { *((base + 8) as *const u64) } == 0 {
                 let desc = unsafe { (base as *const *const u8).read() };
@@ -396,6 +455,7 @@ pub unsafe fn collect(roots: &[usize]) -> usize {
     let mut endpoint_releases = Vec::new();
     for &(base, _) in &to_free {
         let desc = unsafe { (base as *const *const u8).read() };
+        endpoint_releases.extend(unsafe { endpoint_releases_for_object(base, desc) });
         if unsafe { desc_kind(desc) } == KIND_LIST {
             endpoint_releases.extend(unsafe {
                 crate::list::endpoint_releases_for_list((base + HEADER) as *mut u8)
@@ -413,7 +473,7 @@ pub unsafe fn collect(roots: &[usize]) -> usize {
     BYTES_SINCE_GC.store(0, Ordering::Relaxed);
     drop(heap);
     if !new_pending.is_empty() {
-        FINALIZE_PENDING.lock().unwrap().extend(new_pending);
+        lock_unpoison(&FINALIZE_PENDING).extend(new_pending);
     }
     crate::list::release_endpoint_refs(endpoint_releases);
     if gc_debug() {
@@ -510,11 +570,11 @@ unsafe fn mark_reachable(bases: &HashSet<usize>, mut work: Vec<usize>) {
 /// The collector still holds the GC turn, so no nested collection runs here.
 fn run_finalizers() {
     loop {
-        let item = FINALIZE_PENDING.lock().unwrap().pop();
+        let item = lock_unpoison(&FINALIZE_PENDING).pop();
         let Some((base, total, tid)) = item else {
             break;
         };
-        let f = drop_fns().lock().unwrap().get(&tid).copied();
+        let f = lock_unpoison(drop_fns()).get(&tid).copied();
         if let Some(f) = f {
             f((base + HEADER) as *mut u8); // user `drop(self)`
         }
@@ -527,9 +587,7 @@ fn run_finalizers() {
             let child = unsafe { ((base + HEADER + off) as *const usize).read() };
             if child >= HEADER {
                 let live = {
-                    heap()
-                        .lock()
-                        .unwrap()
+                    lock_unpoison(heap())
                         .objects
                         .contains_key(&(child - HEADER))
                 };
@@ -538,6 +596,8 @@ fn run_finalizers() {
                 }
             }
         }
+        let endpoint_releases = unsafe { endpoint_releases_for_object(base, desc) };
+        crate::list::release_endpoint_refs(endpoint_releases);
         crate::gc_alloc::free(base, total);
     }
 }
@@ -547,12 +607,10 @@ fn run_finalizers() {
 /// log (which are equally live — they just haven't been merged into the global
 /// registry by a collection yet).
 pub fn live_count() -> usize {
-    let global = heap().lock().unwrap().objects.len();
-    let logged: usize = MUTATORS
-        .lock()
-        .unwrap()
+    let global = lock_unpoison(heap()).objects.len();
+    let logged: usize = lock_unpoison(&MUTATORS)
         .iter()
-        .map(|m| m.alloc_log.lock().unwrap().len())
+        .map(|m| lock_unpoison(&m.alloc_log).len())
         .sum();
     global + logged
 }
@@ -589,7 +647,7 @@ pub unsafe extern "C" fn lang_gc_register_safepoint(
     if gc_debug() {
         eprintln!("[gc] register safepoint pc={pc:#x} frame_to_fp={frame_to_fp} offs={offs:?}");
     }
-    safepoints().lock().unwrap().insert(pc, (frame_to_fp, offs));
+    lock_unpoison(safepoints()).insert(pc, (frame_to_fp, offs));
 }
 
 fn gc_debug() -> bool {
@@ -644,7 +702,7 @@ fn current_fp() -> usize {
 /// will stay live for the duration of the walk (the current thread's own frame,
 /// or a stopped thread's recorded frame during stop-the-world).
 unsafe fn scan_stack_roots_from(mut fp: usize) -> Vec<usize> {
-    let maps = safepoints().lock().unwrap();
+    let maps = lock_unpoison(safepoints());
     let mut roots = Vec::new();
     // Bound the walk defensively against a corrupt chain.
     for _ in 0..1_000_000 {
@@ -719,9 +777,9 @@ struct Mutator {
 /// object: survivors, `@RefCounted` objects, and everything allocated since the
 /// previous collection.
 fn drain_alloc_logs_into(objects: &mut HashMap<usize, usize>) {
-    let muts = MUTATORS.lock().unwrap();
+    let muts = lock_unpoison(&MUTATORS);
     for m in muts.iter() {
-        for (base, total) in m.alloc_log.lock().unwrap().drain(..) {
+        for (base, total) in lock_unpoison(&m.alloc_log).drain(..) {
             objects.insert(base, total);
         }
     }
@@ -777,12 +835,12 @@ static FINALIZE_PENDING: Mutex<Vec<(usize, usize, u64)>> = Mutex::new(Vec::new()
 /// `f` must be the type's compiled `drop(self)` with a field-block pointer arg.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lang_gc_register_drop(type_id: u64, f: DropFn) {
-    drop_fns().lock().unwrap().insert(type_id, f);
+    lock_unpoison(drop_fns()).insert(type_id, f);
 }
 
 /// Whether any finalizers are registered (fast path: skip finalization work).
 fn any_finalizers() -> bool {
-    !drop_fns().lock().unwrap().is_empty()
+    !lock_unpoison(drop_fns()).is_empty()
 }
 
 // --- `@RefCounted` deterministic ARC (`docs/16` §8.1) ----------------------
@@ -879,7 +937,7 @@ unsafe fn rc_finalize(obj: usize) {
     add_extra_root(obj);
     let tid = unsafe { desc_type_id(desc) };
     if tid != 0 {
-        let f = drop_fns().lock().unwrap().get(&tid).copied();
+        let f = lock_unpoison(drop_fns()).get(&tid).copied();
         if let Some(f) = f {
             f(obj as *mut u8); // user `drop(self)`, run synchronously
         }
@@ -891,9 +949,11 @@ unsafe fn rc_finalize(obj: usize) {
             unsafe { lang_rc_release(child as *mut u8) };
         }
     }
+    let endpoint_releases = unsafe { endpoint_releases_for_object(base, desc) };
+    crate::list::release_endpoint_refs(endpoint_releases);
     // Reclaim. Remove from the live set first so a (now impossible) concurrent
     // sweep never double-frees; then unpin and free.
-    let total = heap().lock().unwrap().objects.remove(&base);
+    let total = lock_unpoison(heap()).objects.remove(&base);
     remove_extra_root(obj);
     if let Some(total) = total {
         crate::gc_alloc::free(base, total);
@@ -902,13 +962,19 @@ unsafe fn rc_finalize(obj: usize) {
 
 /// Pin `p` as a global root until [`remove_extra_root`].
 pub fn add_extra_root(p: usize) {
-    let mut roots = extra_roots().lock().unwrap();
+    if p == 0 {
+        return;
+    }
+    let mut roots = lock_unpoison(extra_roots());
     *roots.entry(p).or_insert(0) += 1;
 }
 
 /// Unpin one occurrence of `p` from the global roots.
 pub fn remove_extra_root(p: usize) {
-    let mut roots = extra_roots().lock().unwrap();
+    if p == 0 {
+        return;
+    }
+    let mut roots = lock_unpoison(extra_roots());
     if let Some(count) = roots.get_mut(&p) {
         *count -= 1;
         if *count == 0 {
@@ -920,7 +986,7 @@ pub fn remove_extra_root(p: usize) {
 #[cfg(test)]
 #[allow(dead_code)]
 pub(crate) fn extra_root_count_for(p: usize) -> usize {
-    extra_roots().lock().unwrap().get(&p).copied().unwrap_or(0)
+    lock_unpoison(extra_roots()).get(&p).copied().unwrap_or(0)
 }
 
 /// C entry point: pin a managed field-block pointer as a global GC root. Used by
@@ -992,12 +1058,12 @@ impl Drop for MutatorHandle {
         // reclaimed (a leak, and unsound for anything reachable only through
         // them). A pinned worker result and its graph live exactly here.
         {
-            let mut heap = heap().lock().unwrap();
-            for (base, total) in self.0.alloc_log.lock().unwrap().drain(..) {
+            let mut heap = lock_unpoison(heap());
+            for (base, total) in lock_unpoison(&self.0.alloc_log).drain(..) {
                 heap.objects.insert(base, total);
             }
         }
-        let mut muts = MUTATORS.lock().unwrap();
+        let mut muts = lock_unpoison(&MUTATORS);
         muts.retain(|m| !Arc::ptr_eq(m, &self.0));
     }
 }
@@ -1011,16 +1077,16 @@ thread_local! {
             roots: Mutex::new(Vec::new()),
             alloc_log: Mutex::new(Vec::new()),
         });
-        MUTATORS.lock().unwrap().push(m.clone());
+        lock_unpoison(&MUTATORS).push(m.clone());
         MutatorHandle(m)
     };
 }
 
 /// Block until the in-progress collection releases the world.
 fn wait_for_resume() {
-    let mut g = RESUME_GEN.lock().unwrap();
+    let mut g = lock_unpoison(&RESUME_GEN);
     while STOP.load(Ordering::Acquire) {
-        g = RESUME_CV.wait(g).unwrap();
+        g = wait_unpoison(&RESUME_CV, g);
     }
 }
 
@@ -1035,7 +1101,7 @@ fn park_self(fp: usize) {
     let roots = unsafe { scan_stack_roots_from(fp) };
     ME.with(|h| {
         h.0.fp.store(fp, Ordering::SeqCst);
-        *h.0.roots.lock().unwrap() = roots;
+        *lock_unpoison(&h.0.roots) = roots;
         h.0.state.store(M_PARKED, Ordering::SeqCst);
         wait_for_resume();
         // Resume only through the world barrier: take `WORLD` and re-check
@@ -1043,7 +1109,7 @@ fn park_self(fp: usize) {
         // the barrier. Parking itself never takes `WORLD`, so this cannot
         // deadlock the collector's quiescence wait.
         loop {
-            let _world = WORLD.lock().unwrap();
+            let _world = lock_unpoison(&WORLD);
             if STOP.load(Ordering::SeqCst) {
                 drop(_world);
                 wait_for_resume();
@@ -1063,16 +1129,13 @@ fn park_self(fp: usize) {
 /// reaches a registered safepoint (a generated loop back-edge, or the generated
 /// caller of `lang_alloc`) so the collector's own roots are scannable.
 fn run_collection() {
-    let _turn = match GC_TURN.try_lock() {
-        Ok(turn) => turn,
-        Err(_) => {
-            // Another collector is active; cooperate by parking if it has begun
-            // stopping the world, else just return.
-            if STOP.load(Ordering::Acquire) {
-                park_self(current_fp());
-            }
-            return;
+    let Some(_turn) = try_lock_unpoison(&GC_TURN) else {
+        // Another collector is active; cooperate by parking if it has begun
+        // stopping the world, else just return.
+        if STOP.load(Ordering::Acquire) {
+            park_self(current_fp());
         }
+        return;
     };
     let still_over = BYTES_SINCE_GC.load(Ordering::Relaxed) >= gc_threshold();
     if !still_over {
@@ -1083,7 +1146,7 @@ fn run_collection() {
         // can enter `RUNNING` (and run program code) until we clear `STOP` and
         // release this. Combined with the quiescence wait, this guarantees the
         // collector marks/sweeps with the world truly stopped.
-        let _world = WORLD.lock().unwrap();
+        let _world = lock_unpoison(&WORLD);
         let roots = stop_the_world();
         unsafe { collect(&roots) };
         resume_the_world();
@@ -1137,7 +1200,7 @@ pub fn thread_start() {
             if STOP.load(Ordering::SeqCst) {
                 wait_for_resume();
             }
-            let _world = WORLD.lock().unwrap();
+            let _world = lock_unpoison(&WORLD);
             if STOP.load(Ordering::SeqCst) {
                 drop(_world);
                 continue;
@@ -1168,7 +1231,7 @@ pub fn enter_native() {
     let roots = unsafe { scan_stack_roots_from(caller_fp) };
     ME.with(|h| {
         h.0.fp.store(caller_fp, Ordering::SeqCst);
-        *h.0.roots.lock().unwrap() = roots;
+        *lock_unpoison(&h.0.roots) = roots;
         h.0.state.store(M_NATIVE, Ordering::SeqCst);
     });
 }
@@ -1180,7 +1243,7 @@ pub fn enter_native() {
 pub fn enter_runtime_native_no_roots() {
     ME.with(|h| {
         h.0.fp.store(0, Ordering::SeqCst);
-        h.0.roots.lock().unwrap().clear();
+        lock_unpoison(&h.0.roots).clear();
         h.0.state.store(M_NATIVE, Ordering::SeqCst);
     });
 }
@@ -1197,7 +1260,7 @@ pub fn leave_native() {
             if STOP.load(Ordering::SeqCst) {
                 wait_for_resume();
             }
-            let _world = WORLD.lock().unwrap();
+            let _world = lock_unpoison(&WORLD);
             if STOP.load(Ordering::SeqCst) {
                 drop(_world);
                 continue;
@@ -1220,7 +1283,7 @@ fn stop_the_world() -> Vec<usize> {
     let mut spins = 0usize;
     loop {
         let pending = {
-            let muts = MUTATORS.lock().unwrap();
+            let muts = lock_unpoison(&MUTATORS);
             muts.iter()
                 .any(|m| Arc::as_ptr(m) != me_ptr && m.state.load(Ordering::SeqCst) == M_RUNNING)
         };
@@ -1231,7 +1294,7 @@ fn stop_the_world() -> Vec<usize> {
             spins = spins.wrapping_add(1);
             if spins == 1 || spins % 1_000_000 == 0 {
                 let (states, detail) = {
-                    let muts = MUTATORS.lock().unwrap();
+                    let muts = lock_unpoison(&MUTATORS);
                     let mut running = 0usize;
                     let mut parked = 0usize;
                     let mut native = 0usize;
@@ -1266,12 +1329,12 @@ fn stop_the_world() -> Vec<usize> {
     // This thread's own roots (scanned here, from its own live frames), plus the
     // roots every other thread published when it parked or went native.
     let mut roots = unsafe { scan_stack_roots_from(current_fp()) };
-    let muts = MUTATORS.lock().unwrap();
+    let muts = lock_unpoison(&MUTATORS);
     for m in muts.iter() {
         if Arc::as_ptr(m) == me_ptr {
             continue;
         }
-        roots.extend(m.roots.lock().unwrap().iter().copied());
+        roots.extend(lock_unpoison(&m.roots).iter().copied());
     }
     roots
 }
@@ -1279,7 +1342,7 @@ fn stop_the_world() -> Vec<usize> {
 /// Release all parked threads after a collection.
 fn resume_the_world() {
     STOP.store(false, Ordering::Release);
-    let mut g = RESUME_GEN.lock().unwrap();
+    let mut g = lock_unpoison(&RESUME_GEN);
     *g = g.wrapping_add(1);
     RESUME_CV.notify_all();
 }
@@ -1376,12 +1439,13 @@ fn maybe_collect() {
 /// # Safety
 /// No managed pointers may be used after this call.
 pub unsafe fn free_all() {
-    let mut heap = heap().lock().unwrap();
+    let mut heap = lock_unpoison(heap());
     // Include objects still in per-thread alloc logs, so nothing leaks.
     drain_alloc_logs_into(&mut heap.objects);
     let mut endpoint_releases = Vec::new();
     for (&base, _) in &heap.objects {
         let desc = unsafe { (base as *const *const u8).read() };
+        endpoint_releases.extend(unsafe { endpoint_releases_for_object(base, desc) });
         if unsafe { desc_kind(desc) } == KIND_LIST {
             endpoint_releases.extend(unsafe {
                 crate::list::endpoint_releases_for_list((base + HEADER) as *mut u8)
@@ -1420,6 +1484,7 @@ mod tests {
             b.extend_from_slice(&o.to_le_bytes());
         }
         b.extend_from_slice(&0u32.to_le_bytes()); // n_rc trailer (no refcounted fields)
+        b.extend_from_slice(&0u32.to_le_bytes()); // n_ep trailer (no endpoint fields)
         b
     }
 
@@ -1440,6 +1505,7 @@ mod tests {
         for o in rc_offs {
             b.extend_from_slice(&o.to_le_bytes());
         }
+        b.extend_from_slice(&0u32.to_le_bytes()); // n_ep trailer (no endpoint fields)
         b
     }
 
@@ -1641,6 +1707,50 @@ mod tests {
     }
 
     #[test]
+    fn gc_sync_locks_recover_after_poison() {
+        let _g = TEST_LOCK.lock().unwrap();
+
+        let turn_poisoner = std::thread::spawn(|| {
+            let _guard = GC_TURN.lock().unwrap();
+            panic!("poison gc turn");
+        });
+        assert!(turn_poisoner.join().is_err());
+        assert!(
+            GC_TURN.lock().is_err(),
+            "test setup must leave the GC turn lock poisoned"
+        );
+        assert!(
+            try_lock_unpoison(&GC_TURN).is_some(),
+            "collector turn should still be acquirable after poison"
+        );
+
+        let resume_poisoner = std::thread::spawn(|| {
+            let _guard = RESUME_GEN.lock().unwrap();
+            panic!("poison resume generation");
+        });
+        assert!(resume_poisoner.join().is_err());
+        assert!(
+            RESUME_GEN.lock().is_err(),
+            "test setup must leave the resume generation lock poisoned"
+        );
+        {
+            let mut resume_gen = lock_unpoison(&RESUME_GEN);
+            *resume_gen = resume_gen.wrapping_add(1);
+        }
+
+        let world_poisoner = std::thread::spawn(|| {
+            let _guard = WORLD.lock().unwrap();
+            panic!("poison world barrier");
+        });
+        assert!(world_poisoner.join().is_err());
+        assert!(
+            WORLD.lock().is_err(),
+            "test setup must leave the world barrier lock poisoned"
+        );
+        drop(lock_unpoison(&WORLD));
+    }
+
+    #[test]
     fn stop_the_world_coordinates_mutator_threads() {
         // Exercises the multi-thread paths: worker threads poll safepoints while
         // the main thread runs several stop-the-world cycles. Each cycle must
@@ -1667,12 +1777,12 @@ mod tests {
         // Let the workers start and register as mutators.
         std::thread::sleep(std::time::Duration::from_millis(20));
         for _ in 0..5 {
-            let turn = GC_TURN.lock().unwrap();
+            let turn = lock_unpoison(&GC_TURN);
             let _roots = stop_the_world();
             // While stopped, every other mutator must be parked or native.
             let me_ptr = ME.with(|h| StdArc::as_ptr(&h.0));
             {
-                let muts = MUTATORS.lock().unwrap();
+                let muts = lock_unpoison(&MUTATORS);
                 for m in muts.iter() {
                     if StdArc::as_ptr(m) == me_ptr {
                         continue;
@@ -1711,11 +1821,11 @@ mod tests {
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
         for _ in 0..5 {
-            let turn = GC_TURN.lock().unwrap();
+            let turn = lock_unpoison(&GC_TURN);
             let _roots = stop_the_world();
             let me_ptr = ME.with(|h| StdArc::as_ptr(&h.0));
             {
-                let muts = MUTATORS.lock().unwrap();
+                let muts = lock_unpoison(&MUTATORS);
                 for m in muts.iter() {
                     if StdArc::as_ptr(m) == me_ptr {
                         continue;
@@ -1754,11 +1864,11 @@ mod tests {
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
         for _ in 0..5 {
-            let turn = GC_TURN.lock().unwrap();
+            let turn = lock_unpoison(&GC_TURN);
             let _roots = stop_the_world();
             let me_ptr = ME.with(|h| StdArc::as_ptr(&h.0));
             {
-                let muts = MUTATORS.lock().unwrap();
+                let muts = lock_unpoison(&MUTATORS);
                 for m in muts.iter() {
                     if StdArc::as_ptr(m) == me_ptr {
                         continue;
@@ -1824,5 +1934,21 @@ mod tests {
 
         remove_extra_root(p);
         assert_eq!(extra_root_count_for(p), 0);
+    }
+
+    #[test]
+    fn null_extra_roots_are_ignored() {
+        let _g = TEST_LOCK.lock().unwrap();
+
+        add_extra_root(0);
+        add_extra_root(0);
+        assert_eq!(
+            extra_root_count_for(0),
+            0,
+            "null is not a managed object and must not occupy an extra-root slot"
+        );
+
+        remove_extra_root(0);
+        assert_eq!(extra_root_count_for(0), 0);
     }
 }

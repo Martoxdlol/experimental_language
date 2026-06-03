@@ -16,7 +16,8 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     /// (possibly with `n_rc == 0`) so the runtime can read it unconditionally —
     /// `desc_rc_offsets` reads at `32 + n_ptrs*4` for every object it reclaims.
     /// `rc_offsets` lists the byte offsets of fields holding refcounted strong
-    /// references (a subset of `ptr_offsets`); they are released on destruction.
+    /// references (a subset of `ptr_offsets`); they are released on destruction
+    /// by the runtime descriptor trailer.
     pub(crate) fn emit_descriptor_full(
         &mut self,
         size: u32,
@@ -25,7 +26,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         ptr_offsets: &[u32],
         rc_offsets: &[u32],
     ) -> Value {
-        let mut bytes = Vec::with_capacity(36 + (ptr_offsets.len() + rc_offsets.len()) * 4);
+        let mut bytes = Vec::with_capacity(40 + (ptr_offsets.len() + rc_offsets.len()) * 4);
         bytes.extend_from_slice(&(size as u64).to_le_bytes());
         bytes.extend_from_slice(&kind.to_le_bytes());
         bytes.extend_from_slice(&(type_id as u64).to_le_bytes());
@@ -37,6 +38,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         for o in rc_offsets {
             bytes.extend_from_slice(&o.to_le_bytes());
         }
+        bytes.extend_from_slice(&0u32.to_le_bytes()); // n_ep = 0 (endpoint counts are not aggregate-owned)
         let name = format!("desc.{}", DATA_CTR.fetch_add(1, Ordering::Relaxed));
         let data_id = self
             .module
@@ -273,6 +275,17 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         )
     }
 
+    /// Whether HIR expression `e` produces an owned channel endpoint handle.
+    /// Calls follow the function-return convention, `.clone()` is a call, and
+    /// list indexing clones the list-owned endpoint before yielding it. Names
+    /// and aggregate fields are borrowed handles and must acquire at bind.
+    pub(crate) fn is_owned_endpoint_expr(e: &compiler::hir::Expr) -> bool {
+        matches!(
+            e.kind,
+            compiler::hir::ExprKind::Call { .. } | compiler::hir::ExprKind::Index { .. }
+        )
+    }
+
     /// Manage a `@RefCounted` local at a `let`/destructure bind. `init_owned` is
     /// whether the bound value carried a fresh `+1` (a move) or was borrowed (so
     /// this binding needs its own retained `+1`). Re-binding a local that was
@@ -330,6 +343,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         local: LocalId,
         ty: Ty,
         init: Value,
+        _init_owned: bool,
         span: Span,
     ) -> CgResult<()> {
         let Some(is_sender) = self.channel_endpoint_kind(ty) else {

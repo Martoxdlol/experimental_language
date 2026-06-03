@@ -13,11 +13,17 @@ use std::fs::OpenOptions;
 use std::io::{Read, Seek, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 fn file_registry() -> &'static Mutex<HashMap<u64, std::fs::File>> {
     static R: OnceLock<Mutex<HashMap<u64, std::fs::File>>> = OnceLock::new();
     R.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn lock_file_registry() -> MutexGuard<'static, HashMap<u64, std::fs::File>> {
+    file_registry()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
 }
 
 static NEXT_FILE_ID: AtomicU64 = AtomicU64::new(1);
@@ -143,7 +149,7 @@ fn with_file_handle<T>(
     let id = u64::try_from(handle).map_err(|_| {
         std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid file handle")
     })?;
-    let mut files = file_registry().lock().expect("file registry poisoned");
+    let mut files = lock_file_registry();
     let file = files.get_mut(&id).ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid file handle")
     })?;
@@ -163,10 +169,7 @@ fn encode_handle_command<T>(
 
 fn register_file(file: std::fs::File) -> *const LangStr {
     let id = NEXT_FILE_ID.fetch_add(1, Ordering::Relaxed);
-    file_registry()
-        .lock()
-        .expect("file registry poisoned")
-        .insert(id, file);
+    lock_file_registry().insert(id, file);
     encode_u64(id)
 }
 
@@ -311,11 +314,7 @@ pub extern "C" fn lang_fs_file_close(handle: i64) -> *const LangStr {
     let Ok(id) = u64::try_from(handle) else {
         return encode_error("invalid file handle");
     };
-    match file_registry()
-        .lock()
-        .expect("file registry poisoned")
-        .remove(&id)
-    {
+    match lock_file_registry().remove(&id) {
         Some(_) => encode_success(""),
         None => encode_error("invalid file handle"),
     }
@@ -750,6 +749,33 @@ mod tests {
             decode(unsafe { lang_fs_file_open(p, lang("010001")) }).starts_with('1'),
             "create_new should fail for an existing path"
         );
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn file_registry_lock_recovers_after_poison() {
+        let path = temp_path();
+        std::fs::write(&path, b"abc").unwrap();
+
+        let poisoner = std::thread::spawn(|| {
+            let _guard = file_registry().lock().unwrap();
+            panic!("poison file registry");
+        });
+        assert!(poisoner.join().is_err());
+        assert!(
+            file_registry().lock().is_err(),
+            "test setup must leave the file registry poisoned"
+        );
+
+        let opened = decode(unsafe { lang_fs_file_open(lang(&path), lang("open")) });
+        assert!(
+            opened.starts_with('0'),
+            "open should recover from registry poison, got {opened:?}"
+        );
+        let handle: i64 = opened[1..].parse().unwrap();
+        assert_eq!(decode(lang_fs_file_read_to_end(handle)), "0616263");
+        assert_eq!(decode(lang_fs_file_close(handle)), "0");
 
         let _ = std::fs::remove_file(path);
     }

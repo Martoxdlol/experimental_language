@@ -270,6 +270,7 @@ fn make_desc(size: u64, ptr_offsets: &[u32]) -> *const u8 {
         bytes.extend_from_slice(&o.to_le_bytes());
     }
     bytes.extend_from_slice(&0u32.to_le_bytes()); // n_rc = 0 (no refcounted fields)
+    bytes.extend_from_slice(&0u32.to_le_bytes()); // n_ep = 0 (no endpoint fields)
     Box::leak(bytes.into_boxed_slice()).as_ptr()
 }
 

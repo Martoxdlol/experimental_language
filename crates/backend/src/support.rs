@@ -568,6 +568,21 @@ pub(crate) fn is_managed_ptr(analysis: &Analysis, ty: Ty) -> bool {
     }
 }
 
+/// Classify a type as a channel endpoint handle: `Some(true)` for `Sender<T>`,
+/// `Some(false)` for `Receiver<T>`, and `None` for every other type.
+pub(crate) fn channel_endpoint_kind_ty(analysis: &Analysis, ty: Ty) -> Option<bool> {
+    let resolved = resolve_shallow(analysis, ty, &HashMap::new());
+    match analysis.tcx.kind(resolved) {
+        TyKind::Named { def, .. } if *def == analysis.program.sender_def && *def != DefId(0) => {
+            Some(true)
+        }
+        TyKind::Named { def, .. } if *def == analysis.program.receiver_def && *def != DefId(0) => {
+            Some(false)
+        }
+        _ => None,
+    }
+}
+
 /// If `ty` is a null-pointer-optimized union — exactly `{ *T, null }` — return
 /// its pointer variant `*T`. Such a union is represented at runtime as a single
 /// raw nullable pointer (`null` == `0x0`), with no `{type_id, data}` box

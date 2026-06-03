@@ -485,9 +485,9 @@ enqueued to the finalizer queue. A dedicated finalizer thread pops the queue and
   <code>Drop</code>: <strong>channel endpoints</strong> (<code>Sender&lt;T&gt;</code> /
   <code>Receiver&lt;T&gt;</code>, see <a href="20-concurrency.html">20-concurrency §2</a>). Each
   channel keeps a reference count of its live senders and receivers; the compiler emits a
-  <em>deterministic, scope-bound release</em> of an endpoint when the worker that owns it
-  returns (a <code>Sender</code> captured into a <code>Thread.spawn</code> worker is released
-  the instant that worker finishes, and <code>Sender.clone()</code> registers another producer).
+  <em>deterministic, scope-bound release</em> for endpoint locals and captured worker
+  endpoints. A <code>Sender</code> captured into a <code>Thread.spawn</code> worker is released
+  the instant that worker finishes, and <code>Sender.clone()</code> registers another producer.
   When the last sender is released the channel <strong>closes</strong> immediately — without
   waiting for a collection — so a drained <code>recv()</code> resolves to <code>ChannelClosed</code>
   and a <code>for x in rx</code> loop terminates. This is a runtime/library mechanism layered on
@@ -581,8 +581,9 @@ carry the two-word object header so type identification and GC tracing work unif
 <h2 id="typeid">10. Type identification</h2>
 
 <p>Every managed object's header holds a pointer to its <strong>type descriptor</strong>: a
-runtime structure with size, field map (for tracing), drop slot, and the vtable. This is what
-<code>is</code>/<code>as</code> and interface dispatch consult.</p>
+runtime structure with size, field map (for tracing), drop slot, refcounted-child trailer,
+and the vtable. This is what <code>is</code>/<code>as</code>, interface dispatch, GC tracing,
+and ownership teardown consult.</p>
 
 <p>Type descriptors are deduplicated across compilation units. Across separate compilations or
 dylib boundaries, a runtime registry maps type identity by structure (nominal types by

@@ -1,0 +1,52 @@
+//@ kind: run
+//@ serial
+//@ env: OTTER_FUSION_TASK_WORKERS=4
+//@ env: OTTER_FUSION_GC=stress
+//@ description: Task.spawn poll-site panic boundaries survive steal contention and stress GC while hundreds of sibling tasks complete
+//@ stdout:
+//~ joined=481 panicked=31 cancelled=0 sum=122911
+
+import { println } from "std:io";
+import { Future, panic } from "core:prelude";
+import { List } from "core:collections";
+import { Task, JoinHandle, Joined, Panicked, Cancelled } from "std:task";
+import { yield_now } from "std:async";
+
+function main(): Future<null> async {
+  var handles: List<JoinHandle<i64>> = [];
+  var i: i64 = 0;
+  while i < 512 {
+    var n = i;
+    handles.push(Task.spawn(() async => {
+      var r: i64 = 0;
+      while r < ((n % 7) + 1) {
+        var junk: List<i64> = [n, r, n * 2, r * 3];
+        var _ = junk[2];
+        var y = await yield_now();
+        r = r + 1;
+      }
+      if n % 17 == 0 {
+        panic("steal boom ${n}");
+      }
+      n
+    }));
+    i = i + 1;
+  }
+
+  var joined: i64 = 0;
+  var panicked: i64 = 0;
+  var cancelled: i64 = 0;
+  var sum: i64 = 0;
+  for h in handles {
+    match await h.join() {
+      Joined<i64> j => {
+        joined = joined + 1;
+        sum = sum + j.value;
+      },
+      Panicked p => { panicked = panicked + 1; },
+      Cancelled c => { cancelled = cancelled + 1; },
+    }
+  }
+
+  println("joined=${joined} panicked=${panicked} cancelled=${cancelled} sum=${sum}");
+}

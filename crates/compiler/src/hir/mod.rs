@@ -833,18 +833,28 @@ pub enum Intrinsic {
     /// closure is **async** (`() => Future<R>`, `is_async` set), the worker drives
     /// the future to completion and the handle joins on the awaited `R` (`docs/20`
     /// §1); `output` is then the awaited `R`, not `Future<R>`. Was `thread_spawns`.
-    ThreadSpawn { output: Ty, is_async: bool },
+    ThreadSpawn {
+        output: Ty,
+        is_async: bool,
+    },
     /// `Task.spawn { … }` — same surface and handle type as `Thread.spawn`, but
     /// scheduled on the async executor instead of a dedicated OS thread.
-    TaskSpawn { output: Ty, is_async: bool },
+    TaskSpawn {
+        output: Ty,
+        is_async: bool,
+    },
     /// `JoinHandle<R>.join()` — `output` is `R`. Was `thread_joins`.
-    ThreadJoin { output: Ty },
+    ThreadJoin {
+        output: Ty,
+    },
     /// `JoinHandle<R>.detach()` — relinquish the worker, fire-and-forget
     /// (`docs/20` §1). Yields `null`.
     ThreadDetach,
     /// `std:task::JoinHandle<R>.join()` — resolves to
     /// `Joined<R> | Panicked | Cancelled`.
-    TaskJoin { output: Ty },
+    TaskJoin {
+        output: Ty,
+    },
     /// `std:task::JoinHandle<R>.detach()` — relinquish the executor task.
     TaskDetach,
     /// `std:task::JoinHandle<R>.cancel()` / `.abort()` — request cooperative
@@ -857,7 +867,17 @@ pub enum Intrinsic {
     AsyncSleep,
     /// `timeout(fut, ms): Future<T | TimedOut>` — `output` is the success type
     /// `T` (so codegen can pass its type id + pointer-ness to the runtime).
-    AsyncTimeout { output: Ty },
+    AsyncTimeout {
+        output: Ty,
+    },
+    /// Private `std:io` marker futures that run blocking stdio on a helper and
+    /// wake through the reactor without blocking executor workers.
+    IoStdinReadAsync,
+    IoStdinReadToEndAsync,
+    IoStdoutWriteAsync,
+    IoStderrWriteAsync,
+    IoStdoutFlushAsync,
+    IoStderrFlushAsync,
     /// `std:time.Instant.now()` runtime hook: monotonic nanoseconds.
     TimeMonotonicNanos,
     /// `std:time.SystemTime.now()` runtime hook: Unix epoch nanoseconds.
@@ -867,13 +887,19 @@ pub enum Intrinsic {
     /// `future_cancels`.
     FutureCancel,
     /// `Foreign.alloc<T>()` / `alloc_zeroed<T>()`. Was `foreign_allocs`.
-    ForeignAlloc { ty: Ty, zeroed: bool },
+    ForeignAlloc {
+        ty: Ty,
+        zeroed: bool,
+    },
     /// `Foreign.free(p)`. Was `foreign_frees`.
     ForeignFree,
     /// `Foreign.realloc<T>(p, n)`. Was `foreign_reallocs`.
     ForeignRealloc,
     /// `Foreign.alloc_flex<T, E>(extra)`. Was `foreign_flex`.
-    ForeignFlex { ty: Ty, elem: Ty },
+    ForeignFlex {
+        ty: Ty,
+        elem: Ty,
+    },
 }
 
 /// How a `for` loop is driven (was `for_iters` / `for_maps` / `for_async_iters`,

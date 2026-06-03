@@ -808,6 +808,36 @@ impl<'a> Checker<'a> {
                     "sleep" if self.intr_fn_in("sleep", &["std", "async"]) => {
                         return intrinsic(Intrinsic::AsyncSleep, head1);
                     }
+                    "__otter_io_stdin_read_async"
+                        if self.intr_fn("__otter_io_stdin_read_async") =>
+                    {
+                        return intrinsic(Intrinsic::IoStdinReadAsync, head1);
+                    }
+                    "__otter_io_stdin_read_to_end_async"
+                        if self.intr_fn("__otter_io_stdin_read_to_end_async") =>
+                    {
+                        return intrinsic(Intrinsic::IoStdinReadToEndAsync, &[]);
+                    }
+                    "__otter_io_stdout_write_async"
+                        if self.intr_fn("__otter_io_stdout_write_async") =>
+                    {
+                        return intrinsic(Intrinsic::IoStdoutWriteAsync, head1);
+                    }
+                    "__otter_io_stderr_write_async"
+                        if self.intr_fn("__otter_io_stderr_write_async") =>
+                    {
+                        return intrinsic(Intrinsic::IoStderrWriteAsync, head1);
+                    }
+                    "__otter_io_stdout_flush_async"
+                        if self.intr_fn("__otter_io_stdout_flush_async") =>
+                    {
+                        return intrinsic(Intrinsic::IoStdoutFlushAsync, &[]);
+                    }
+                    "__otter_io_stderr_flush_async"
+                        if self.intr_fn("__otter_io_stderr_flush_async") =>
+                    {
+                        return intrinsic(Intrinsic::IoStderrFlushAsync, &[]);
+                    }
                     "__otter_time_monotonic_nanos"
                         if self.intr_fn("__otter_time_monotonic_nanos") =>
                     {
@@ -2167,6 +2197,73 @@ impl<'a> Checker<'a> {
                     self.expect(a, i64t, args[0].span);
                 }
                 return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.null]);
+            }
+            if name.name == "__otter_io_stdin_read_async"
+                && self.intr_fn("__otter_io_stdin_read_async")
+            {
+                if args.len() != 1 {
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 1,
+                            found: args.len(),
+                        },
+                    );
+                } else {
+                    let i64t = self.tcx.int(IntTy::I64);
+                    let a = self.check_expr(&args[0], Some(i64t));
+                    self.expect(a, i64t, args[0].span);
+                }
+                return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.str]);
+            }
+            if name.name == "__otter_io_stdin_read_to_end_async"
+                && self.intr_fn("__otter_io_stdin_read_to_end_async")
+            {
+                if !args.is_empty() {
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 0,
+                            found: args.len(),
+                        },
+                    );
+                }
+                return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.str]);
+            }
+            if (name.name == "__otter_io_stdout_write_async"
+                && self.intr_fn("__otter_io_stdout_write_async"))
+                || (name.name == "__otter_io_stderr_write_async"
+                    && self.intr_fn("__otter_io_stderr_write_async"))
+            {
+                if args.len() != 1 {
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 1,
+                            found: args.len(),
+                        },
+                    );
+                } else {
+                    let a = self.check_expr(&args[0], Some(self.tcx.str));
+                    self.expect(a, self.tcx.str, args[0].span);
+                }
+                return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.str]);
+            }
+            if (name.name == "__otter_io_stdout_flush_async"
+                && self.intr_fn("__otter_io_stdout_flush_async"))
+                || (name.name == "__otter_io_stderr_flush_async"
+                    && self.intr_fn("__otter_io_stderr_flush_async"))
+            {
+                if !args.is_empty() {
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 0,
+                            found: args.len(),
+                        },
+                    );
+                }
+                return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.str]);
             }
             // Private `std:time` runtime hooks. Public callers use
             // `Instant.now()` / `SystemTime.now()`; these marker functions are

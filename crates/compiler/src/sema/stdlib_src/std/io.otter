@@ -47,6 +47,12 @@ extern function lang_io_stdout_write(contents_hex: str): str;
 extern function lang_io_stderr_write(contents_hex: str): str;
 extern function lang_io_stdout_flush(): str;
 extern function lang_io_stderr_flush(): str;
+extern function __otter_io_stdin_read_async(count: i64): Future<str>;
+extern function __otter_io_stdin_read_to_end_async(): Future<str>;
+extern function __otter_io_stdout_write_async(contents_hex: str): Future<str>;
+extern function __otter_io_stderr_write_async(contents_hex: str): Future<str>;
+extern function __otter_io_stdout_flush_async(): Future<str>;
+extern function __otter_io_stderr_flush_async(): Future<str>;
 
 function __io_error(message: str): IoError {
   IoError { kind: OtherIo {}, message: message }
@@ -468,6 +474,36 @@ extend Stdin: Reader {
   }
 }
 
+extend Stdin {
+  function read_async(self, buf: Bytes): Future<i64 | IoError> async {
+    var raw = await __otter_io_stdin_read_async(buf.size());
+    var data = __io_decode_bytes(raw);
+    if data is IoError {
+      data as IoError
+    } else {
+      var chunk = data as Bytes;
+      for b in chunk.iter() {
+        buf.push(b);
+      }
+      chunk.size()
+    }
+  }
+
+  function read_to_end_async(self, buf: Bytes): Future<i64 | IoError> async {
+    var raw = await __otter_io_stdin_read_to_end_async();
+    var data = __io_decode_bytes(raw);
+    if data is IoError {
+      data as IoError
+    } else {
+      var chunk = data as Bytes;
+      for b in chunk.iter() {
+        buf.push(b);
+      }
+      chunk.size()
+    }
+  }
+}
+
 extend BufReader {
   function new(inner: Reader): BufReader {
     BufReader.with_capacity(8192, inner)
@@ -638,6 +674,27 @@ extend Stdout: Writer {
   }
 }
 
+extend Stdout {
+  function write_async(self, buf: Bytes): Future<i64 | IoError> async {
+    var raw = await __otter_io_stdout_write_async(__io_bytes_to_hex(buf));
+    __io_decode_i64(raw)
+  }
+
+  function write_all_async(self, buf: Bytes): Future<null | IoError> async {
+    var written = await self.write_async(buf);
+    if written is IoError {
+      written as IoError
+    } else {
+      null
+    }
+  }
+
+  function flush_async(self): Future<null | IoError> async {
+    var raw = await __otter_io_stdout_flush_async();
+    __io_decode_unit(raw)
+  }
+}
+
 extend Stderr: Writer {
   function write(self, buf: Bytes): i64 | IoError {
     __io_decode_i64(lang_io_stderr_write(__io_bytes_to_hex(buf)))
@@ -654,6 +711,27 @@ extend Stderr: Writer {
 
   function flush(self): null | IoError {
     __io_decode_unit(lang_io_stderr_flush())
+  }
+}
+
+extend Stderr {
+  function write_async(self, buf: Bytes): Future<i64 | IoError> async {
+    var raw = await __otter_io_stderr_write_async(__io_bytes_to_hex(buf));
+    __io_decode_i64(raw)
+  }
+
+  function write_all_async(self, buf: Bytes): Future<null | IoError> async {
+    var written = await self.write_async(buf);
+    if written is IoError {
+      written as IoError
+    } else {
+      null
+    }
+  }
+
+  function flush_async(self): Future<null | IoError> async {
+    var raw = await __otter_io_stderr_flush_async();
+    __io_decode_unit(raw)
   }
 }
 

@@ -579,6 +579,12 @@ fn intrinsic_str(i: &Intrinsic) -> &'static str {
         Intrinsic::YieldNow => "yield-now",
         Intrinsic::AsyncSleep => "async-sleep",
         Intrinsic::AsyncTimeout { .. } => "async-timeout",
+        Intrinsic::IoStdinReadAsync => "io-stdin-read-async",
+        Intrinsic::IoStdinReadToEndAsync => "io-stdin-read-to-end-async",
+        Intrinsic::IoStdoutWriteAsync => "io-stdout-write-async",
+        Intrinsic::IoStderrWriteAsync => "io-stderr-write-async",
+        Intrinsic::IoStdoutFlushAsync => "io-stdout-flush-async",
+        Intrinsic::IoStderrFlushAsync => "io-stderr-flush-async",
         Intrinsic::TimeMonotonicNanos => "time-monotonic-nanos",
         Intrinsic::TimeSystemNanos => "time-system-nanos",
         Intrinsic::FutureCancel => "future-cancel",
@@ -591,7 +597,7 @@ fn intrinsic_str(i: &Intrinsic) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::print_program;
+    use super::print_program_for_files;
     use crate::lexer::lex;
     use crate::parser::parse;
     use crate::sema::analyze;
@@ -608,7 +614,7 @@ mod tests {
         assert!(pe.is_empty(), "parse: {pe:?}");
         let a = analyze(&module);
         assert!(a.errors.is_empty(), "analysis: {:?}", a.errors);
-        print_program(&a.hir, &a.tcx, &a.program)
+        print_program_for_files(&a.hir, &a.tcx, &a.program, 1)
     }
 
     #[test]

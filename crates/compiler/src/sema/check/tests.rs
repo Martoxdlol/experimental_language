@@ -10,11 +10,13 @@ use crate::span::FileId;
 /// import (`docs/17` §17.9).
 const PRELUDE: &str = "import { List, Map, Set, Entry } from \"core:collections\";\n\
         import { print, println } from \"std:io\";\n\
-        import { panic, panic_with, exit, abort } from \"core:prelude\";\n\
+        import { panic, panic_with } from \"core:prelude\";\n\
+        import { exit, abort } from \"std:process\";\n\
         import { Clone, ToStr, Eq, Ord, Hash, Iterator, Item, Done, Try, FromResidual, Drop, Future, Ready, Pending, Context } from \"core:prelude\";\n\
+        import { AsyncIterator } from \"core:async\";\n\
         import { Shared, LockBusy, Sender, Receiver, ChannelClosed, MpmcSender, MpmcReceiver, channel, channel_bounded, channel_mpmc, channel_mpmc_bounded } from \"std:sync\";\n\
         import { Thread, JoinHandle, Joined, Panicked } from \"std:thread\";\n\
-        import { AsyncIterator, TimedOut, yield_now, sleep, timeout } from \"std:async\";\n\
+        import { TimedOut, yield_now, sleep, timeout } from \"std:async\";\n\
         import { Foreign, CString, CStr, Buffer } from \"core:ffi\";\n";
 
 fn check(src: &str) -> Vec<SemaError> {
@@ -562,8 +564,7 @@ fn shared_lock_escape_to_outer_var_rejected() {
 fn shared_lock_escape_into_call_arg_rejected() {
     // Passing a live reference to a call that could retain it is an escape.
     let errs = check(
-        "import { List } from \"core:collections\";\n\
-             struct X { v: i64 }\n\
+        "struct X { v: i64 }\n\
              struct C { x: X }\n\
              function f(): Future<null> async {\n\
              \tvar s: Shared<C> = Shared.new(C { x: X { v: 0 } });\n\
@@ -695,10 +696,10 @@ fn task_spawn_sync_and_async_closures_return_joinhandle() {
     // it on the shared executor. Both sync and async worker closures join on
     // the final `R`.
     assert_ok(
-        "import { Task, JoinHandle, Cancelled } from \"std:task\";\n\
+        "import { Task, JoinHandle as TaskJoinHandle, Cancelled } from \"std:task\";\n\
              function f(): Future<null> async {\n\
-             \tvar a: JoinHandle<i64> = Task.spawn(() => 7);\n\
-             \tvar b: JoinHandle<i64> = Task.spawn(() async => { 8 });\n\
+             \tvar a: TaskJoinHandle<i64> = Task.spawn(() => 7);\n\
+             \tvar b: TaskJoinHandle<i64> = Task.spawn(() async => { 8 });\n\
              \ta.cancel();\n\
              \tb.abort();\n\
              \tvar r: Joined<i64> | Panicked | Cancelled = await a.join();\n\
@@ -710,11 +711,11 @@ fn task_spawn_sync_and_async_closures_return_joinhandle() {
 #[test]
 fn task_spawn_rejects_non_shareable_mutable_capture() {
     let errs = check(
-        "import { Task, JoinHandle } from \"std:task\";\n\
+        "import { Task, JoinHandle as TaskJoinHandle } from \"std:task\";\n\
              struct Counter { n: i64 }\n\
              function f() {\n\
              \tvar c: Counter = Counter { n: 0 };\n\
-             \tvar h: JoinHandle<i64> = Task.spawn(() => c.n);\n\
+             \tvar h: TaskJoinHandle<i64> = Task.spawn(() => c.n);\n\
              }",
     );
     assert!(
@@ -729,12 +730,12 @@ fn task_spawn_rejects_non_shareable_mutable_capture() {
 #[test]
 fn task_spawn_accepts_concrete_clone_capture() {
     assert_ok(
-        "import { Task, JoinHandle } from \"std:task\";\n\
+        "import { Task, JoinHandle as TaskJoinHandle } from \"std:task\";\n\
              @Derive(Clone)\n\
              struct Counter { n: i64 }\n\
              function f(): Future<null> async {\n\
              \tvar c: Counter = Counter { n: 1 };\n\
-             \tvar h: JoinHandle<i64> = Task.spawn(() async => c.n);\n\
+             \tvar h: TaskJoinHandle<i64> = Task.spawn(() async => c.n);\n\
              \tvar _ = await h.join();\n\
              }",
     );
@@ -743,10 +744,9 @@ fn task_spawn_accepts_concrete_clone_capture() {
 #[test]
 fn task_spawn_accepts_generic_clone_bound_capture() {
     assert_ok(
-        "import { Clone, Future } from \"core:prelude\";\n\
-             import { Task, JoinHandle } from \"std:task\";\n\
+        "import { Task, JoinHandle as TaskJoinHandle } from \"std:task\";\n\
              function f<T: Clone>(value: T): Future<null> async {\n\
-             \tvar h: JoinHandle<T> = Task.spawn(() async => value);\n\
+             \tvar h: TaskJoinHandle<T> = Task.spawn(() async => value);\n\
              \tvar _ = await h.join();\n\
              }",
     );
