@@ -645,6 +645,15 @@ type Safepoint = (FuncId, u32, u32, Vec<u32>);
 fn make_isa(triple: target_lexicon::Triple, pic: bool) -> cranelift_codegen::isa::OwnedTargetIsa {
     let mut flags = settings::builder();
     flags.set("use_colocated_libcalls", "false").unwrap();
+    // Debug builds keep Cranelift IR close to the source for observability.
+    // Release builds ask Cranelift to run its normal speed-oriented pipeline:
+    // instruction selection/combining, local simplification, CFG cleanup, and
+    // target-specific late optimizations. This is backend policy, not language
+    // semantics; overflow behavior is still governed separately by
+    // `RELEASE_PROFILE`.
+    flags
+        .set("opt_level", if is_release() { "speed" } else { "none" })
+        .unwrap();
     flags
         .set("is_pic", if pic { "true" } else { "false" })
         .unwrap();
@@ -656,12 +665,15 @@ fn make_isa(triple: target_lexicon::Triple, pic: bool) -> cranelift_codegen::isa
         .expect("ISA flags")
 }
 
-/// Drive the monomorphizing code generator over any `Module` (JIT or object),
-/// returning the exported `name → FuncId` map and the captured GC safepoints.
-fn run_codegen<M: Module>(
+/// Drive codegen from a caller-selected seed set. Calls, vtables, finalizers,
+/// closures, async poll/drop functions, and generic instances are still declared
+/// lazily as reachable code demands them; the filter only controls the initial
+/// roots. This is the backend's coarse dead-code elimination boundary.
+fn run_codegen_with_filter<M: Module>(
     analysis: &Analysis,
     hir: &Hir,
     module: &mut M,
+    include_seed: impl Fn(DefId) -> bool,
 ) -> CgResult<(
     HashMap<String, FuncId>,
     Vec<Safepoint>,
@@ -690,7 +702,7 @@ fn run_codegen<M: Module>(
         line_info: Vec::new(),
         func_len: HashMap::new(),
     };
-    cg.seed()?;
+    cg.seed_with(include_seed)?;
     cg.run()?;
     let drops = cg.collect_drops();
     Ok((cg.by_name, cg.safepoints, drops, cg.line_info, cg.func_len))
@@ -798,6 +810,24 @@ pub fn compile_with_symbols(analysis: &Analysis, extra: &[(&str, *const u8)]) ->
     compile_jit(analysis, extra)
 }
 
+/// JIT-compile from only the program's `main` root. Reachable callees are still
+/// discovered through monomorphization while the worklist drains. This is the
+/// path ordinary `run` uses so imported stdlib and unused helpers do not become
+/// executable code just because they exist in the analyzed program.
+pub fn compile_entry(analysis: &Analysis) -> CgResult<Jit> {
+    compile_jit_for_names(analysis, &["main"])
+}
+
+/// JIT-compile from a small set of exported source symbols. Used by isolated
+/// test/bench children, where compiling every sibling body only adds work.
+pub fn compile_jit_for_names(analysis: &Analysis, names: &[&str]) -> CgResult<Jit> {
+    compile_jit_with_filter(analysis, &[], |def| {
+        names
+            .iter()
+            .any(|name| analysis.program.def(def).name == *name)
+    })
+}
+
 /// Alias for [`compile`] retained by the code-generation test suite. Code
 /// generation always lowers from the typed HIR ([`gen_hir`]); the AST is no
 /// longer walked, so this is identical to [`compile`].
@@ -812,6 +842,14 @@ pub fn hir_eligible_fns(analysis: &Analysis) -> usize {
 }
 
 fn compile_jit(analysis: &Analysis, extra_symbols: &[(&str, *const u8)]) -> CgResult<Jit> {
+    compile_jit_with_filter(analysis, extra_symbols, |_| true)
+}
+
+fn compile_jit_with_filter(
+    analysis: &Analysis,
+    extra_symbols: &[(&str, *const u8)],
+    include_seed: impl Fn(DefId) -> bool,
+) -> CgResult<Jit> {
     let hir = &analysis.hir;
     dlopen_link_libs(hir);
     let isa = make_isa(target_lexicon::Triple::host(), false);
@@ -823,7 +861,7 @@ fn compile_jit(analysis: &Analysis, extra_symbols: &[(&str, *const u8)]) -> CgRe
     let mut module = JITModule::new(builder);
 
     let (by_name, safepoints, drops, line_info, _func_len) =
-        run_codegen(analysis, hir, &mut module)?;
+        run_codegen_with_filter(analysis, hir, &mut module, include_seed)?;
 
     module.finalize_definitions().expect("finalize");
 
@@ -910,7 +948,9 @@ pub fn compile_object(analysis: &Analysis, out: &Path, src: &str, src_name: &str
     // runtime names match `libruntime.a`'s exported symbols after linking.
     let hir = &analysis.hir;
     let (by_name, safepoints, drops, line_info, func_len) =
-        run_codegen(analysis, hir, &mut module)?;
+        run_codegen_with_filter(analysis, hir, &mut module, |def| {
+            analysis.program.def(def).name == "main"
+        })?;
 
     let user_main = *by_name
         .get("main")
@@ -1287,10 +1327,6 @@ impl<'a, M: Module> Codegen<'a, M> {
         // unique, so a sort by id is a stable total order for reproducible output.
         out.sort_by_key(|&(tid, _)| tid);
         out
-    }
-
-    fn seed(&mut self) -> CgResult<()> {
-        self.seed_with(|_| true)
     }
 
     fn seed_with(&mut self, include_def: impl Fn(DefId) -> bool) -> CgResult<()> {

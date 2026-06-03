@@ -80,6 +80,68 @@ fn native_object_contains_dwarf_debug_line() {
 }
 
 #[test]
+fn compile_entry_only_exports_main_root() {
+    // CLI-style JIT compilation starts from `main` and discovers callees lazily.
+    // Sibling bodies that are not reachable from `main` are not exported through
+    // the JIT lookup table, but reachable helpers still compile as direct
+    // callees of `main`.
+    crate::set_release_profile(false);
+    let src = "function used(): i64 { 40 }\n\
+               function unused(): i64 { 1 }\n\
+               function main(): i64 { used() + 2 }";
+    let (tokens, le) = lex(src, FileId(0));
+    assert!(le.is_empty(), "lex: {le:?}");
+    let (module, pe) = parse(src, &tokens);
+    assert!(pe.is_empty(), "parse: {pe:?}");
+    let analysis = analyze(&module);
+    assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+    let jit = compile_entry(&analysis).expect("codegen");
+    assert!(jit.func_ptr("main").is_some(), "main should be exported");
+    assert!(
+        jit.func_ptr("unused").is_none(),
+        "unused sibling should not be exported"
+    );
+    let got = unsafe { jit.call_i64("main").expect("main") };
+    assert_eq!(got, 42);
+}
+
+#[test]
+fn native_object_omits_unreachable_function_symbols() {
+    // Native build uses the same root-based backend driver. The object should
+    // contain `main` and the helper it calls, but not an unrelated source body.
+    crate::set_release_profile(false);
+    let src = "function used(): i64 { 40 }\n\
+               function unused(): i64 { 1 }\n\
+               function main(): i64 { used() + 2 }";
+    let (tokens, le) = lex(src, FileId(0));
+    assert!(le.is_empty(), "lex: {le:?}");
+    let (module, pe) = parse(src, &tokens);
+    assert!(pe.is_empty(), "parse: {pe:?}");
+    let analysis = analyze(&module);
+    assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+    let obj = std::env::temp_dir().join(format!("otter_dce_{}.o", std::process::id()));
+    crate::compile_object(&analysis, &obj, src, "dce.otter").expect("compile object");
+    let bytes = std::fs::read(&obj).expect("read object");
+    let _ = std::fs::remove_file(&obj);
+
+    use cranelift_object::object::{Object, ObjectSymbol};
+    let file = cranelift_object::object::File::parse(&*bytes).expect("parse object");
+    let names: Vec<String> = file
+        .symbols()
+        .filter_map(|s| s.name().ok())
+        .map(str::to_owned)
+        .collect();
+    assert!(
+        names.iter().any(|n| n.contains("used$")),
+        "reachable helper missing from object symbols: {names:?}"
+    );
+    assert!(
+        !names.iter().any(|n| n.contains("unused$")),
+        "unreachable function was emitted: {names:?}"
+    );
+}
+
+#[test]
 fn codegen_captures_source_line_provenance() {
     // The HIR codegen tags instructions with their source byte offset
     // (`set_srcloc`), captured per function as the basis for DWARF

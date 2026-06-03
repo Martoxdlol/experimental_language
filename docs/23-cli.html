@@ -150,6 +150,21 @@
   </tbody>
 </table>
 
+<div class="callout">
+  <strong>Build profiles and backend optimization.</strong>
+  The current <code>run --release</code>, <code>exec --release</code>, and
+  <code>build --release</code> flag selects release arithmetic semantics and asks the
+  Cranelift backend for speed-oriented machine-code optimization. Debug remains
+  the default because its generated IR is easier to inspect with
+  <code>otter_fusion emit clif</code>. Normal executable codegen is root-seeded:
+  <code>run</code>/<code>build</code> start from <code>main</code>, and isolated
+  <code>test</code>/<code>bench</code> children start from the exact requested body.
+  Calls, closures, async jobs, vtables, generic instances, and <code>Drop</code>
+  finalizers are still discovered lazily as reachable code demands them, so
+  unused helpers and untouched stdlib functions are not emitted into the final
+  JIT/object artifact.
+</div>
+
 <!-- =========================================================== -->
 <h2 id="subcmds">3. Subcommand map</h2>
 

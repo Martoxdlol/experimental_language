@@ -131,7 +131,32 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             return Ok(0);
         };
         if self.cx.analysis.program.def(ext).generics.is_empty() {
-            // Non-generic `Drop` impl: stable per-`def` id (existing scheme).
+            // Non-generic `Drop` impl: stable per-`def` id. Declare the method
+            // here as well as in whole-program seeds so root-based codegen can
+            // trim unrelated bodies without trimming finalizers used only by an
+            // allocation descriptor.
+            let method = self.drop_method_of(ext).ok_or_else(|| {
+                CodegenError::new(
+                    self.cx.analysis.program.def(ext).span,
+                    "`Drop` impl has no `drop` method",
+                )
+            })?;
+            if !self.funcs.contains_key(&(method, Vec::new())) {
+                declare_instance(
+                    self.module,
+                    self.funcs,
+                    self.worklist,
+                    self.cx.analysis,
+                    method,
+                    Vec::new(),
+                )?
+                .ok_or_else(|| {
+                    CodegenError::new(
+                        self.cx.analysis.program.def(method).span,
+                        "`Drop` method is not lowerable",
+                    )
+                })?;
+            }
             return Ok(1000 + def.index() as i64);
         }
         // Generic `Drop` impl: resolve the `drop` method and instantiate it for

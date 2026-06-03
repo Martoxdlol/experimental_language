@@ -412,6 +412,8 @@
 
 [DONE] /goal Implement executor-multiplexed task-panic isolation for the M:N work-stealing executor + `Task.spawn`. — DONE: executor tasks are polled under the panic boundary at the poll call site, so a panicking `Task.spawn` or `spawn EXPR` future terminates only that task, publishes `Panicked`/re-propagates at the awaiter as appropriate, releases held `Shared` locks and roots through the existing unwind cleanup path, and leaves the shared worker thread alive to keep polling sibling work. Added e2e coverage for one-worker stress-GC `Task.spawn` panic storms with many siblings, four-worker stress-GC steal-contention panic storms, and a one-worker `spawn EXPR` panic-sibling case proving unrelated spawned futures still complete. Verification: direct runs produced `joined=112 panicked=16 cancelled=0 sum=7168`, `joined=481 panicked=31 cancelled=0 sum=122911`, and `count=64 sum=2016`; `cargo test -p runtime threads::tests -- --nocapture` green (31/31); `cargo fmt --check`; `git diff --check`; and the full CLI e2e suite green (`451 cases · 451 pass · 0 fail · 0 XFAIL`).
 
+[DONE] /goal Apply backend optimizations using possible-optimizations.txt as guidance. — DONE: completed the first backend optimization pass without changing language semantics. Release builds now configure Cranelift's speed optimization pipeline while debug keeps CLIF readable. Normal executable codegen is root-seeded (`main` for run/build, exact body for isolated test/bench children) and lazily discovers reachable callees, closures, async jobs, vtables, generic instances, and `Drop` finalizers, so unused helpers and untouched stdlib functions are not emitted into JIT/object artifacts. Allocation descriptors now declare non-generic `Drop` finalizers on demand, making dead-code trimming finalizer-safe. Added backend regressions proving CLI-style JIT roots do not export unused siblings and native objects omit unreachable function symbols while retaining reachable helpers. Updated docs/23 and ROADMAP. Verification: `cargo fmt --check`, `cargo test -p backend compile_entry_only_exports_main_root -- --nocapture`, `cargo test -p backend native_object_omits_unreachable_function_symbols -- --nocapture`, `cargo run -p cli -- run tests/cases/literals/integers.otter`, and `cargo run -p cli -- run --release tests/cases/release/overflow_wraps.otter`.
+
 ---
 
 general:
@@ -422,7 +424,7 @@ general:
 
 optimizations:
 
-/goal apply optimizations to the backend. You can use possible-optimizations.txt as a reference but be smart and apply common logical optimization to the compiler and backend logic.
+/goal Continue deeper backend/compiler optimization work from possible-optimizations.txt: escape-analysis stack allocation for non-escaping final structs, call-graph-guided inlining, devirtualization of statically-known interface-object paths, and thinner type-tag/vtable paths after devirtualization. Keep semantics unchanged, preserve observability (`--emit=tokens|ast|hir|clif`, DWARF, `--time`), and prove JIT/native parity with focused unit/integration/e2e tests plus benchmarks.
 
 tooling:
 

@@ -1060,7 +1060,13 @@ generated code + compiler (see goals.txt), not missing features.
       `INT_MIN / -1` wraps to `INT_MIN` (and `% -1` → `0`) via a `select` that
       sanitizes the divisor so the hardware op never traps. Debug (default) keeps
       the checked-panic semantics. Shifts past the bit width and divide-by-zero
-      panic in *both* profiles. 3 CLI tests.
+      panic in *both* profiles. Release also configures Cranelift's speed
+      optimization pipeline, while debug keeps `--emit=clif` close to source.
+      Normal executable codegen is root-seeded (`main` for run/build, exact body
+      for isolated test/bench children) and discovers callees, vtables, closures,
+      async jobs, generic instances, and `Drop` finalizers lazily, so unused source
+      bodies and untouched stdlib functions are omitted from JIT/object artifacts.
+      3 CLI tests + backend object-symbol DCE regressions.
 - [x] **Numeric helper namespaces** (`docs/18` §10, `docs/14` §5): primitive
       type names act as namespaces. Constants `T.MIN`/`T.MAX` (all int types) and
       `f*.INFINITY`/`NEG_INFINITY`/`NAN`; float predicates `f*.is_nan`/
@@ -2625,15 +2631,26 @@ feature, JIT≡native byte-identical and GC-stress clean.
 ## What's next (drives goals.txt)
 
 **Immediate (active goals):**
-1. **Backend / compiler optimizations** (goals.txt final item; see
-   `possible-optimizations.txt`): apply logical optimizations to codegen and
-   compiler logic while keeping all observability (`--emit=tokens|ast|hir|clif`,
-   DWARF, `--time`) and JIT≡native parity. *No behavior change; benchmark with
-   `bench` + `run --time`.*
+1. **Deeper backend / compiler optimizations** (split from the completed first
+   backend optimization pass; see `possible-optimizations.txt`): escape-analysis
+   stack allocation for non-escaping final structs, call-graph-guided inlining,
+   devirtualization of statically-known interface-object paths, and thinner
+   type-tag/vtable paths after devirtualization. Keep all observability
+   (`--emit=tokens|ast|hir|clif`, DWARF, `--time`) and JIT≡native parity.
+   *No behavior change; benchmark with `bench` + `run --time`.*
 2. **Finish the long tail** (goals.txt "finish end to end"): work the remaining
    items below one by one, test-gated, docs/LSP/examples kept consistent.
 
 **Recently completed:**
+- **Backend optimization pass: DONE.** Release builds now ask Cranelift for its
+  speed-oriented backend optimization pipeline while debug keeps CLIF readable.
+  CLI/native codegen is root-seeded (`main` or exact test/bench body) and lazily
+  pulls reachable callees, closures, async jobs, vtables, generic instances, and
+  finalizers; unused helpers and untouched stdlib functions are not emitted.
+  Allocation descriptors now declare non-generic `Drop` finalizers on demand, so
+  dead-code trimming cannot drop finalizers that are reachable only from object
+  headers. Added backend JIT and native object-symbol regressions plus CLI smoke
+  coverage for debug and release runs.
 - **Async `Shared<T>` lock (`docs/20` §4): DONE.** `lock`/`try_lock` are now
   `lock<R>(self,body):Future<R> async` / `try_lock<R>(self,body):Future<R|LockBusy> async`,
   awaited by callers. The runtime cell (`crates/runtime/src/shared.rs`) is a task-aware

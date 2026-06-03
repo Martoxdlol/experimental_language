@@ -813,8 +813,18 @@ fn drive(input: &Input, stage: Stage, release: bool, time: bool) -> ExitCode {
         return build_executable(map, &analysis, &exe);
     }
 
-    // 4'. Run: JIT-compile in process.
-    let jit = match backend::compile(&analysis) {
+    // 4'. Run/test/bench: JIT-compile in process from the exact executable
+    // root. Callees, vtables, closures, async jobs, and finalizers are still
+    // discovered lazily by backend codegen, but unused sibling bodies and
+    // untouched stdlib functions are not compiled.
+    let jit_result = match &stage {
+        Stage::Test { symbol } | Stage::Bench { symbol } => {
+            backend::compile_jit_for_names(&analysis, &[symbol.as_str()])
+        }
+        Stage::Run => backend::compile_entry(&analysis),
+        Stage::Check | Stage::Build { .. } => unreachable!("handled above"),
+    };
+    let jit = match jit_result {
         Ok(j) => j,
         Err(e) => {
             render(&map, e.span, "error", &format!("codegen: {}", e.message));
