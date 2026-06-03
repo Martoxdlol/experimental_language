@@ -851,6 +851,295 @@ fn dyn_dispatch_heterogeneous_under_gc_stress() {
 }
 
 #[test]
+fn interface_local_devirtualization_matches_native() {
+    // Backend optimization: a straight-line interface local with a known
+    // concrete source can direct-call the impl instead of going through the
+    // vtable. JIT and native must agree, including after a later known
+    // concrete reassignment.
+    let src = "interface Shape { function area(self): i64; }\n\
+               struct Rect { w: i64 }\n\
+               struct Circle { r: i64 }\n\
+               extend Rect: Shape { function area(self): i64 { self.w } }\n\
+               extend Circle: Shape { function area(self): i64 { self.r + 1 } }\n\
+               function main() {\n\
+                 var s: Shape = Rect { w: 1 } as Shape;\n\
+                 s = Circle { r: 41 } as Shape;\n\
+                 println(\"area=${s.area()}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit stderr: {jerr}");
+    let (native, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(jit, native);
+    assert_eq!(jit, "area=42\n");
+}
+
+#[test]
+fn interface_if_initializer_devirtualization_matches_native() {
+    // Backend optimization: when both branches of an interface-valued `if`
+    // initializer produce the same concrete implementor, later local method
+    // calls can direct-call that implementation.
+    let src = "interface Shape { function area(self): i64; }\n\
+               struct Rect { w: i64 }\n\
+               struct Circle { r: i64 }\n\
+               extend Rect: Shape { function area(self): i64 { self.w } }\n\
+               extend Circle: Shape { function area(self): i64 { self.r } }\n\
+               function choose(flag: bool): i64 {\n\
+                 var s: Shape = if flag { Rect { w: 42 } as Shape } else { Rect { w: 7 } as Shape };\n\
+                 s.area()\n\
+               }\n\
+               function main() { println(\"areas=${choose(true) + choose(false)}\"); }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit stderr: {jerr}");
+    let (native, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(jit, native);
+    assert_eq!(jit, "areas=49\n");
+}
+
+#[test]
+fn interface_match_initializer_devirtualization_matches_native() {
+    // Backend optimization: when every match arm produces the same concrete
+    // implementor for an interface-valued initializer, later local calls can
+    // direct-call that implementation.
+    let src = "interface Shape { function area(self): i64; }\n\
+               struct Rect { w: i64 }\n\
+               struct Circle { r: i64 }\n\
+               extend Rect: Shape { function area(self): i64 { self.w } }\n\
+               extend Circle: Shape { function area(self): i64 { self.r } }\n\
+               function choose(n: i64): i64 {\n\
+                 var s: Shape = match n {\n\
+                   0 => Rect { w: 40 } as Shape,\n\
+                   1 => Rect { w: 1 } as Shape,\n\
+                   _ => Rect { w: 2 } as Shape,\n\
+                 };\n\
+                 s.area()\n\
+               }\n\
+               function main() { println(\"areas=${choose(0) + choose(1) + choose(2)}\"); }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit stderr: {jerr}");
+    let (native, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(jit, native);
+    assert_eq!(jit, "areas=43\n");
+}
+
+#[test]
+fn scalar_helper_inlining_matches_native() {
+    // Backend optimization: a single-call scalar expression helper can inline
+    // into its caller. The observable result must stay identical in JIT/native.
+    let src = "function mix(a: i64, b: i64): i64 { ((a & b) ^ (a | b)) ^ (a ^ b) }\n\
+               function main() { println(\"mix=${mix(8, 3)}\"); }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit stderr: {jerr}");
+    let (native, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(jit, native);
+    assert_eq!(jit, "mix=0\n");
+}
+
+#[test]
+fn scalar_let_helper_inlining_matches_native() {
+    // Backend optimization: a single-call scalar helper with simple let-bound
+    // temporaries can inline into its caller.
+    let src = "function adjust(a: i64, b: i64): i64 {\n\
+                 var both = a & b;\n\
+                 var either = a | b;\n\
+                 (both ^ either) ^ (a ^ b)\n\
+               }\n\
+               function main() { println(\"adjust=${adjust(8, 3)}\"); }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit stderr: {jerr}");
+    let (native, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(jit, native);
+    assert_eq!(jit, "adjust=0\n");
+}
+
+#[test]
+fn stack_allocated_scalar_struct_local_matches_native() {
+    // Backend optimization: a non-escaping final struct local with scalar fields
+    // can use a stack field block. JIT and native must preserve the same result.
+    let src = "struct P { x: i64, y: i64 }\n\
+               function main() {\n\
+                 var p = P { x: 40, y: 2 };\n\
+                 p.x = p.x + p.y;\n\
+                 println(\"point=${p.x}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit stderr: {jerr}");
+    let (native, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(jit, native);
+    assert_eq!(jit, "point=42\n");
+}
+
+#[test]
+fn stack_allocated_scalar_tuple_struct_local_matches_native() {
+    // Backend optimization: a non-escaping scalar tuple-struct local can use a
+    // stack field block just like a record struct local.
+    let src = "struct Pair(i64, i64)\n\
+               function main() {\n\
+                 var p = Pair(40, 2);\n\
+                 p.0 = p.0 + p.1;\n\
+                 println(\"pair=${p.0}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit stderr: {jerr}");
+    let (native, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(jit, native);
+    assert_eq!(jit, "pair=42\n");
+}
+
+#[test]
+fn empty_struct_tag_thinning_matches_native() {
+    // Backend optimization: empty final structs use a null payload sentinel.
+    // Union/interface wrappers still carry the semantic tag/vtable.
+    let src = "interface Named { function value(self): i64; }\n\
+               struct Empty {}\n\
+               extend Empty: Named { function value(self): i64 { 41 } }\n\
+               function main() {\n\
+                 var x: Empty | null = Empty {};\n\
+                 var n: Named = Empty {} as Named;\n\
+                 if x is Empty { println(\"empty=${n.value() + 1}\"); }\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit stderr: {jerr}");
+    let (native, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(jit, native);
+    assert_eq!(jit, "empty=42\n");
+}
+
+#[test]
+fn union_if_tag_fast_path_matches_native() {
+    // Backend optimization: a union-valued `if` that is immediately tested or
+    // narrowed can lower branch-by-branch instead of first constructing a
+    // temporary union box. A union that escapes into a local still uses the
+    // ordinary boxed representation.
+    let src = "function immediate(flag: bool): i64 {\n\
+                 if (if flag { 40 } else { null }) is i64 { 20 } else { 1 }\n\
+               }\n\
+               function narrowed(flag: bool): i64 {\n\
+                 ((if flag { 20 } else { null }) as i64) + 2\n\
+               }\n\
+               function boxed(flag: bool): i64 {\n\
+                 var x = if flag { 40 } else { null };\n\
+                 if x is i64 { 20 } else { 1 }\n\
+               }\n\
+               function main() {\n\
+                 println(\"union-fast=${immediate(true) + immediate(false)} ${narrowed(true)} ${boxed(true) + boxed(false)}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit stderr: {jerr}");
+    let (native, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(jit, native);
+    assert_eq!(jit, "union-fast=21 22 21\n");
+}
+
+#[test]
+fn union_match_tag_fast_path_matches_native() {
+    // Backend optimization: a union-valued `match` follows the same rule as
+    // `if`: immediate `is`/concrete `as` consumers can avoid a temporary box,
+    // while values that escape to locals keep the boxed union representation.
+    let src = "function immediate(n: i64): i64 {\n\
+                 if (match n { 0 => 40, _ => null }) is i64 { 20 } else { 1 }\n\
+               }\n\
+               function narrowed(n: i64): i64 {\n\
+                 ((match n { 0 => 20, _ => null }) as i64) + 2\n\
+               }\n\
+               function boxed(n: i64): i64 {\n\
+                 var x = match n { 0 => 40, _ => null };\n\
+                 if x is i64 { 20 } else { 1 }\n\
+               }\n\
+               function main() {\n\
+                 println(\"match-fast=${immediate(0) + immediate(1)} ${narrowed(0)} ${boxed(0) + boxed(1)}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit stderr: {jerr}");
+    let (native, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(jit, native);
+    assert_eq!(jit, "match-fast=21 22 21\n");
+}
+
+#[test]
+fn interface_branch_tag_fast_path_matches_native() {
+    // Backend optimization: an interface-valued `if`/`match` immediately tested
+    // or downcasted can skip the temporary `{vtable,data,type_id}` wrapper.
+    // Interface values that escape into locals still keep that representation.
+    let src = "interface Shape { function area(self): i64; }\n\
+               struct Rect { w: i64 }\n\
+               struct Circle { r: i64 }\n\
+               extend Rect: Shape { function area(self): i64 { self.w } }\n\
+               extend Circle: Shape { function area(self): i64 { self.r } }\n\
+               function immediate_if(flag: bool): i64 {\n\
+                 if (if flag { Rect { w: 40 } as Shape } else { Circle { r: 1 } as Shape }) is Rect { 20 } else { 1 }\n\
+               }\n\
+               function immediate_match(n: i64): i64 {\n\
+                 if (match n { 0 => Rect { w: 40 } as Shape, _ => Circle { r: 1 } as Shape }) is Rect { 20 } else { 1 }\n\
+               }\n\
+               function immediate_direct(): i64 {\n\
+                 if (Rect { w: 40 } as Shape) is Rect { 20 } else { 1 }\n\
+               }\n\
+               function narrowed(): i64 {\n\
+                 ((if true { Rect { w: 20 } as Shape } else { Circle { r: 1 } as Shape }) as Rect).w + 2\n\
+               }\n\
+               function narrowed_match(): i64 {\n\
+                 ((match 0 { 0 => Rect { w: 20 } as Shape, _ => Circle { r: 1 } as Shape }) as Rect).w + 3\n\
+               }\n\
+               function narrowed_direct(): i64 {\n\
+                 ((Rect { w: 20 } as Shape) as Rect).w + 4\n\
+               }\n\
+               function boxed(flag: bool): i64 {\n\
+                 var s: Shape = if flag { Rect { w: 40 } as Shape } else { Circle { r: 1 } as Shape };\n\
+                 if s is Rect { 20 } else { 1 }\n\
+               }\n\
+               function main() {\n\
+                 println(\"iface-fast=${immediate_if(true) + immediate_if(false)} ${immediate_match(0) + immediate_match(1)} ${immediate_direct()} ${narrowed()} ${narrowed_match()} ${narrowed_direct()} ${boxed(true) + boxed(false)}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit stderr: {jerr}");
+    let (native, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(jit, native);
+    assert_eq!(jit, "iface-fast=21 21 20 22 23 24 21\n");
+}
+
+#[test]
+fn interface_branch_receiver_devirtualization_matches_native() {
+    // Backend optimization: an interface-valued `if`/`match` used immediately
+    // as a method receiver can direct-call each branch's concrete impl instead
+    // of building a wrapper and issuing a vtable call.
+    let src = "interface Shape { function area(self): i64; }\n\
+               struct Rect { w: i64 }\n\
+               struct Circle { r: i64 }\n\
+               extend Rect: Shape { function area(self): i64 { self.w } }\n\
+               extend Circle: Shape { function area(self): i64 { self.r + 1 } }\n\
+               function immediate_if(flag: bool): i64 {\n\
+                 (if flag { Rect { w: 40 } as Shape } else { Circle { r: 1 } as Shape }).area()\n\
+               }\n\
+               function immediate_match(n: i64): i64 {\n\
+                 (match n { 0 => Rect { w: 40 } as Shape, _ => Circle { r: 1 } as Shape }).area()\n\
+               }\n\
+               function boxed(flag: bool): i64 {\n\
+                 var s: Shape = if flag { Rect { w: 40 } as Shape } else { Circle { r: 1 } as Shape };\n\
+                 s.area()\n\
+               }\n\
+               function main() {\n\
+                 println(\"iface-recv=${immediate_if(true) + immediate_if(false)} ${immediate_match(0) + immediate_match(1)} ${boxed(true) + boxed(false)}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "jit stderr: {jerr}");
+    let (native, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(jit, native);
+    assert_eq!(jit, "iface-recv=42 42 42\n");
+}
+
+#[test]
 fn check_rejects_unsatisfied_bound() {
     let src = "interface Show { function show(self): str; }\n\
                struct Cat {}\n\

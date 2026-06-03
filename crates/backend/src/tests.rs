@@ -49,6 +49,15 @@ fn run_str(src: &str, func: &str) -> String {
     unsafe { String::from_utf8_lossy(runtime::str_bytes(p)).into_owned() }
 }
 
+fn clif_section<'a>(clif: &'a str, label: &str) -> &'a str {
+    let marker = format!("; {label}\n");
+    let rest = clif
+        .split_once(&marker)
+        .unwrap_or_else(|| panic!("missing CLIF section `{label}`:\n{clif}"))
+        .1;
+    rest.split("\n; ").next().unwrap_or(rest)
+}
+
 #[test]
 fn returns_constant() {
     assert_eq!(run("function answer(): i64 { 42 }", "answer"), 42);
@@ -86,7 +95,8 @@ fn compile_entry_only_exports_main_root() {
     // the JIT lookup table, but reachable helpers still compile as direct
     // callees of `main`.
     crate::set_release_profile(false);
-    let src = "function used(): i64 { 40 }\n\
+    let src = "function opaque(x: i64): i64 { var y: i64 = x; y }\n\
+               function used(): i64 { opaque(40) }\n\
                function unused(): i64 { 1 }\n\
                function main(): i64 { used() + 2 }";
     let (tokens, le) = lex(src, FileId(0));
@@ -108,7 +118,9 @@ fn compile_entry_only_exports_main_root() {
 #[test]
 fn native_object_omits_unreachable_function_symbols() {
     // Native build uses the same root-based backend driver. The object should
-    // contain `main` and the helper it calls, but not an unrelated source body.
+    // contain `main` but not an unrelated source body. Reachable helpers may be
+    // direct-call inlined or hidden as local object details, so do not pin their
+    // symbol spelling here.
     crate::set_release_profile(false);
     let src = "function used(): i64 { 40 }\n\
                function unused(): i64 { 1 }\n\
@@ -132,13 +144,683 @@ fn native_object_omits_unreachable_function_symbols() {
         .map(str::to_owned)
         .collect();
     assert!(
-        names.iter().any(|n| n.contains("used$")),
-        "reachable helper missing from object symbols: {names:?}"
+        names.iter().any(|n| n == "_main" || n == "main"),
+        "entry symbol missing from object symbols: {names:?}"
     );
     assert!(
         !names.iter().any(|n| n.contains("unused$")),
         "unreachable function was emitted: {names:?}"
     );
+}
+
+#[test]
+fn immediate_interface_receiver_devirtualizes_to_direct_call() {
+    // `(concrete as Interface).method()` has a statically-known concrete
+    // receiver. Codegen should skip the temporary interface object and emit a
+    // direct call to the concrete impl instead of a vtable call.
+    crate::set_release_profile(false);
+    let src = "interface Shape { function area(self): i64; }\n\
+               struct Rect { w: i64 }\n\
+               extend Rect: Shape { function area(self): i64 { self.w } }\n\
+               function main(): i64 { (Rect { w: 42 } as Shape).area() }";
+    let (tokens, le) = lex(src, FileId(0));
+    assert!(le.is_empty(), "lex: {le:?}");
+    let (module, pe) = parse(src, &tokens);
+    assert!(pe.is_empty(), "parse: {pe:?}");
+    let analysis = analyze(&module);
+    assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+    let clif = compile_clif_for_files(&analysis, 1).expect("clif");
+    assert!(
+        !clif.contains("call_indirect"),
+        "immediate receiver should devirtualize:\n{clif}"
+    );
+    assert!(
+        clif.contains("call fn"),
+        "expected a direct call to the concrete impl:\n{clif}"
+    );
+    let got = unsafe { compile_entry(&analysis).unwrap().call_i64("main").unwrap() };
+    assert_eq!(got, 42);
+}
+
+#[test]
+fn interface_parameter_still_uses_vtable_dispatch() {
+    // A value that has crossed an interface-typed parameter boundary has no
+    // statically-known concrete receiver at the call site; keep dynamic
+    // dispatch intact.
+    crate::set_release_profile(false);
+    let src = "interface Shape { function area(self): i64; }\n\
+               struct Rect { w: i64 }\n\
+               extend Rect: Shape { function area(self): i64 { self.w } }\n\
+               function call_shape(s: Shape): i64 { s.area() }\n\
+               function main(): i64 { call_shape(Rect { w: 42 } as Shape) }";
+    let (tokens, le) = lex(src, FileId(0));
+    assert!(le.is_empty(), "lex: {le:?}");
+    let (module, pe) = parse(src, &tokens);
+    assert!(pe.is_empty(), "parse: {pe:?}");
+    let analysis = analyze(&module);
+    assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+    let clif = compile_clif_for_files(&analysis, 1).expect("clif");
+    assert!(
+        clif.contains("call_indirect"),
+        "interface parameter should keep vtable dispatch:\n{clif}"
+    );
+    let got = unsafe { compile_entry(&analysis).unwrap().call_i64("main").unwrap() };
+    assert_eq!(got, 42);
+}
+
+#[test]
+fn interface_local_with_known_concrete_value_devirtualizes() {
+    // A straight-line interface local initialized from a concrete value can use
+    // direct dispatch through the concrete impl. The interface box still exists
+    // as the local's representation; the optimization removes the vtable call.
+    crate::set_release_profile(false);
+    let src = "interface Shape { function area(self): i64; }\n\
+               struct Rect { w: i64 }\n\
+               struct Circle { r: i64 }\n\
+               extend Rect: Shape { function area(self): i64 { self.w } }\n\
+               extend Circle: Shape { function area(self): i64 { self.r + 1 } }\n\
+               function main(): i64 {\n\
+                 var s: Shape = Rect { w: 1 } as Shape;\n\
+                 s = Circle { r: 41 } as Shape;\n\
+                 s.area()\n\
+               }";
+    let (tokens, le) = lex(src, FileId(0));
+    assert!(le.is_empty(), "lex: {le:?}");
+    let (module, pe) = parse(src, &tokens);
+    assert!(pe.is_empty(), "parse: {pe:?}");
+    let analysis = analyze(&module);
+    assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+    let clif = compile_clif_for_files(&analysis, 1).expect("clif");
+    assert!(
+        !clif.contains("call_indirect"),
+        "straight-line known interface local should devirtualize:\n{clif}"
+    );
+    let got = unsafe { compile_entry(&analysis).unwrap().call_i64("main").unwrap() };
+    assert_eq!(got, 42);
+}
+
+#[test]
+fn interface_local_same_concrete_if_initializer_devirtualizes_after_join() {
+    // Even though each branch builds an interface object, both branches have the
+    // same concrete implementation type. The local can keep that fact after the
+    // join and direct-call the impl for the later method call.
+    crate::set_release_profile(false);
+    let src = "interface Shape { function area(self): i64; }\n\
+               struct Rect { w: i64 }\n\
+               struct Circle { r: i64 }\n\
+               extend Rect: Shape { function area(self): i64 { self.w } }\n\
+               extend Circle: Shape { function area(self): i64 { self.r } }\n\
+               function choose(flag: bool): i64 {\n\
+                 var s: Shape = if flag { Rect { w: 42 } as Shape } else { Rect { w: 7 } as Shape };\n\
+                 s.area()\n\
+               }\n\
+               function main(): i64 { choose(true) + choose(false) }";
+    let (tokens, le) = lex(src, FileId(0));
+    assert!(le.is_empty(), "lex: {le:?}");
+    let (module, pe) = parse(src, &tokens);
+    assert!(pe.is_empty(), "parse: {pe:?}");
+    let analysis = analyze(&module);
+    assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+    let clif = compile_clif_for_files(&analysis, 1).expect("clif");
+    let choose = clif_section(&clif, "choose");
+    assert!(
+        !choose.contains("call_indirect"),
+        "same-concrete if initializer should devirtualize after join:\n{choose}"
+    );
+    let got = unsafe { compile_entry(&analysis).unwrap().call_i64("main").unwrap() };
+    assert_eq!(got, 49);
+}
+
+#[test]
+fn interface_local_mixed_concrete_if_initializer_keeps_vtable_dispatch() {
+    // If branches can produce different concrete implementors, the post-join
+    // interface local has to remain dynamically dispatched.
+    crate::set_release_profile(false);
+    let src = "interface Shape { function area(self): i64; }\n\
+               struct Rect { w: i64 }\n\
+               struct Circle { r: i64 }\n\
+               extend Rect: Shape { function area(self): i64 { self.w } }\n\
+               extend Circle: Shape { function area(self): i64 { self.r } }\n\
+               function choose(flag: bool): i64 {\n\
+                 var s: Shape = if flag { Rect { w: 42 } as Shape } else { Circle { r: 7 } as Shape };\n\
+                 s.area()\n\
+               }\n\
+               function main(): i64 { choose(true) + choose(false) }";
+    let (tokens, le) = lex(src, FileId(0));
+    assert!(le.is_empty(), "lex: {le:?}");
+    let (module, pe) = parse(src, &tokens);
+    assert!(pe.is_empty(), "parse: {pe:?}");
+    let analysis = analyze(&module);
+    assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+    let clif = compile_clif_for_files(&analysis, 1).expect("clif");
+    let choose = clif_section(&clif, "choose");
+    assert!(
+        choose.contains("call_indirect"),
+        "mixed-concrete if initializer must keep dynamic dispatch:\n{choose}"
+    );
+    let got = unsafe { compile_entry(&analysis).unwrap().call_i64("main").unwrap() };
+    assert_eq!(got, 49);
+}
+
+#[test]
+fn interface_local_same_concrete_match_initializer_devirtualizes_after_join() {
+    // Every match arm produces `Rect as Shape`, so the post-match interface
+    // local still has a known concrete implementor.
+    crate::set_release_profile(false);
+    let src = "interface Shape { function area(self): i64; }\n\
+               struct Rect { w: i64 }\n\
+               struct Circle { r: i64 }\n\
+               extend Rect: Shape { function area(self): i64 { self.w } }\n\
+               extend Circle: Shape { function area(self): i64 { self.r } }\n\
+               function choose(n: i64): i64 {\n\
+                 var s: Shape = match n {\n\
+                   0 => Rect { w: 40 } as Shape,\n\
+                   1 => Rect { w: 1 } as Shape,\n\
+                   _ => Rect { w: 2 } as Shape,\n\
+                 };\n\
+                 s.area()\n\
+               }\n\
+               function main(): i64 { choose(0) + choose(1) + choose(2) }";
+    let (tokens, le) = lex(src, FileId(0));
+    assert!(le.is_empty(), "lex: {le:?}");
+    let (module, pe) = parse(src, &tokens);
+    assert!(pe.is_empty(), "parse: {pe:?}");
+    let analysis = analyze(&module);
+    assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+    let clif = compile_clif_for_files(&analysis, 1).expect("clif");
+    let choose = clif_section(&clif, "choose");
+    assert!(
+        !choose.contains("call_indirect"),
+        "same-concrete match initializer should devirtualize after join:\n{choose}"
+    );
+    let got = unsafe { compile_entry(&analysis).unwrap().call_i64("main").unwrap() };
+    assert_eq!(got, 43);
+}
+
+#[test]
+fn interface_local_mixed_concrete_match_initializer_keeps_vtable_dispatch() {
+    // Mixed concrete arm results mean the interface local remains dynamic.
+    crate::set_release_profile(false);
+    let src = "interface Shape { function area(self): i64; }\n\
+               struct Rect { w: i64 }\n\
+               struct Circle { r: i64 }\n\
+               extend Rect: Shape { function area(self): i64 { self.w } }\n\
+               extend Circle: Shape { function area(self): i64 { self.r } }\n\
+               function choose(n: i64): i64 {\n\
+                 var s: Shape = match n {\n\
+                   0 => Rect { w: 40 } as Shape,\n\
+                   1 => Circle { r: 1 } as Shape,\n\
+                   _ => Rect { w: 2 } as Shape,\n\
+                 };\n\
+                 s.area()\n\
+               }\n\
+               function main(): i64 { choose(0) + choose(1) + choose(2) }";
+    let (tokens, le) = lex(src, FileId(0));
+    assert!(le.is_empty(), "lex: {le:?}");
+    let (module, pe) = parse(src, &tokens);
+    assert!(pe.is_empty(), "parse: {pe:?}");
+    let analysis = analyze(&module);
+    assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+    let clif = compile_clif_for_files(&analysis, 1).expect("clif");
+    let choose = clif_section(&clif, "choose");
+    assert!(
+        choose.contains("call_indirect"),
+        "mixed-concrete match initializer must keep dynamic dispatch:\n{choose}"
+    );
+    let got = unsafe { compile_entry(&analysis).unwrap().call_i64("main").unwrap() };
+    assert_eq!(got, 43);
+}
+
+#[test]
+fn interface_if_immediate_is_avoids_wrapper_type_id_path() {
+    crate::set_release_profile(false);
+    let src = "interface Shape { function area(self): i64; }\n\
+               struct Rect { w: i64 }\n\
+               struct Circle { r: i64 }\n\
+               extend Rect: Shape { function area(self): i64 { self.w } }\n\
+               extend Circle: Shape { function area(self): i64 { self.r } }\n\
+               function yes(): i64 {\n\
+                 if (if true { Rect { w: 40 } as Shape } else { Circle { r: 1 } as Shape }) is Rect { 42 } else { 0 }\n\
+               }\n\
+               function no(): i64 {\n\
+                 if (if false { Rect { w: 40 } as Shape } else { Circle { r: 1 } as Shape }) is Rect { 0 } else { 42 }\n\
+               }";
+    let (tokens, le) = lex(src, FileId(0));
+    assert!(le.is_empty(), "lex: {le:?}");
+    let (module, pe) = parse(src, &tokens);
+    assert!(pe.is_empty(), "parse: {pe:?}");
+    let analysis = analyze(&module);
+    assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+    let clif = compile_clif_for_files(&analysis, 1).expect("clif");
+    let yes = clif_section(&clif, "yes");
+    assert!(
+        !yes.contains("+16"),
+        "immediate interface `is` should not build/load a wrapper type id:\n{yes}"
+    );
+    assert_eq!(run(src, "yes"), 42);
+    assert_eq!(run(src, "no"), 42);
+}
+
+#[test]
+fn interface_direct_immediate_is_avoids_wrapper_type_id_path() {
+    crate::set_release_profile(false);
+    let src = "interface Shape { function area(self): i64; }\n\
+               struct Rect { w: i64 }\n\
+               struct Circle { r: i64 }\n\
+               extend Rect: Shape { function area(self): i64 { self.w } }\n\
+               extend Circle: Shape { function area(self): i64 { self.r } }\n\
+               function yes(): i64 {\n\
+                 if (Rect { w: 40 } as Shape) is Rect { 42 } else { 0 }\n\
+               }\n\
+               function no(): i64 {\n\
+                 if (Rect { w: 40 } as Shape) is Circle { 0 } else { 42 }\n\
+               }";
+    let (tokens, le) = lex(src, FileId(0));
+    assert!(le.is_empty(), "lex: {le:?}");
+    let (module, pe) = parse(src, &tokens);
+    assert!(pe.is_empty(), "parse: {pe:?}");
+    let analysis = analyze(&module);
+    assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+    let clif = compile_clif_for_files(&analysis, 1).expect("clif");
+    let yes = clif_section(&clif, "yes");
+    assert!(
+        !yes.contains("+16"),
+        "direct immediate interface `is` should not build/load a wrapper type id:\n{yes}"
+    );
+    assert_eq!(run(src, "yes"), 42);
+    assert_eq!(run(src, "no"), 42);
+}
+
+#[test]
+fn interface_direct_immediate_as_avoids_wrapper_downcast_path() {
+    crate::set_release_profile(false);
+    let src = "interface Shape { function area(self): i64; }\n\
+               struct Rect { w: i64 }\n\
+               extend Rect: Shape { function area(self): i64 { self.w } }\n\
+               function f(): i64 {\n\
+                 ((Rect { w: 40 } as Shape) as Rect).w + 2\n\
+               }";
+    let (tokens, le) = lex(src, FileId(0));
+    assert!(le.is_empty(), "lex: {le:?}");
+    let (module, pe) = parse(src, &tokens);
+    assert!(pe.is_empty(), "parse: {pe:?}");
+    let analysis = analyze(&module);
+    assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+    let clif = compile_clif_for_files(&analysis, 1).expect("clif");
+    let f = clif_section(&clif, "f");
+    assert!(
+        !f.contains("+16"),
+        "direct immediate interface `as` should not build/load a wrapper type id:\n{f}"
+    );
+    assert_eq!(run(src, "f"), 42);
+}
+
+#[test]
+fn interface_if_immediate_as_avoids_wrapper_downcast_path() {
+    crate::set_release_profile(false);
+    let src = "interface Shape { function area(self): i64; }\n\
+               struct Rect { w: i64 }\n\
+               struct Circle { r: i64 }\n\
+               extend Rect: Shape { function area(self): i64 { self.w } }\n\
+               extend Circle: Shape { function area(self): i64 { self.r } }\n\
+               function f(): i64 {\n\
+                 ((if true { Rect { w: 40 } as Shape } else { Circle { r: 1 } as Shape }) as Rect).w + 2\n\
+               }";
+    let (tokens, le) = lex(src, FileId(0));
+    assert!(le.is_empty(), "lex: {le:?}");
+    let (module, pe) = parse(src, &tokens);
+    assert!(pe.is_empty(), "parse: {pe:?}");
+    let analysis = analyze(&module);
+    assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+    let clif = compile_clif_for_files(&analysis, 1).expect("clif");
+    let f = clif_section(&clif, "f");
+    assert!(
+        !f.contains("+16"),
+        "immediate interface `as` should not build/load a wrapper type id:\n{f}"
+    );
+    assert_eq!(run(src, "f"), 42);
+}
+
+#[test]
+fn interface_match_immediate_is_avoids_wrapper_type_id_path() {
+    crate::set_release_profile(false);
+    let src = "interface Shape { function area(self): i64; }\n\
+               struct Rect { w: i64 }\n\
+               struct Circle { r: i64 }\n\
+               extend Rect: Shape { function area(self): i64 { self.w } }\n\
+               extend Circle: Shape { function area(self): i64 { self.r } }\n\
+               function yes(): i64 {\n\
+                 if (match 0 { 0 => Rect { w: 40 } as Shape, _ => Circle { r: 1 } as Shape }) is Rect { 42 } else { 0 }\n\
+               }\n\
+               function no(): i64 {\n\
+                 if (match 1 { 0 => Rect { w: 40 } as Shape, _ => Circle { r: 1 } as Shape }) is Rect { 0 } else { 42 }\n\
+               }";
+    let (tokens, le) = lex(src, FileId(0));
+    assert!(le.is_empty(), "lex: {le:?}");
+    let (module, pe) = parse(src, &tokens);
+    assert!(pe.is_empty(), "parse: {pe:?}");
+    let analysis = analyze(&module);
+    assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+    let clif = compile_clif_for_files(&analysis, 1).expect("clif");
+    let yes = clif_section(&clif, "yes");
+    assert!(
+        !yes.contains("+16"),
+        "immediate match-interface `is` should not build/load a wrapper type id:\n{yes}"
+    );
+    assert_eq!(run(src, "yes"), 42);
+    assert_eq!(run(src, "no"), 42);
+}
+
+#[test]
+fn interface_match_immediate_as_avoids_wrapper_downcast_path() {
+    crate::set_release_profile(false);
+    let src = "interface Shape { function area(self): i64; }\n\
+               struct Rect { w: i64 }\n\
+               struct Circle { r: i64 }\n\
+               extend Rect: Shape { function area(self): i64 { self.w } }\n\
+               extend Circle: Shape { function area(self): i64 { self.r } }\n\
+               function f(): i64 {\n\
+                 ((match 0 { 0 => Rect { w: 40 } as Shape, _ => Circle { r: 1 } as Shape }) as Rect).w + 2\n\
+               }";
+    let (tokens, le) = lex(src, FileId(0));
+    assert!(le.is_empty(), "lex: {le:?}");
+    let (module, pe) = parse(src, &tokens);
+    assert!(pe.is_empty(), "parse: {pe:?}");
+    let analysis = analyze(&module);
+    assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+    let clif = compile_clif_for_files(&analysis, 1).expect("clif");
+    let f = clif_section(&clif, "f");
+    assert!(
+        !f.contains("+16"),
+        "immediate match-interface `as` should not build/load a wrapper type id:\n{f}"
+    );
+    assert_eq!(run(src, "f"), 42);
+}
+
+#[test]
+fn interface_branch_local_still_uses_wrapper_type_id() {
+    crate::set_release_profile(false);
+    let src = "interface Shape { function area(self): i64; }\n\
+               struct Rect { w: i64 }\n\
+               struct Circle { r: i64 }\n\
+               extend Rect: Shape { function area(self): i64 { self.w } }\n\
+               extend Circle: Shape { function area(self): i64 { self.r } }\n\
+               function f(): i64 {\n\
+                 var s: Shape = if true { Rect { w: 40 } as Shape } else { Circle { r: 1 } as Shape };\n\
+                 if s is Rect { 42 } else { 0 }\n\
+               }";
+    let (tokens, le) = lex(src, FileId(0));
+    assert!(le.is_empty(), "lex: {le:?}");
+    let (module, pe) = parse(src, &tokens);
+    assert!(pe.is_empty(), "parse: {pe:?}");
+    let analysis = analyze(&module);
+    assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+    let clif = compile_clif_for_files(&analysis, 1).expect("clif");
+    let f = clif_section(&clif, "f");
+    assert!(
+        f.contains("+16"),
+        "escaping interface branch value must keep wrapper type id:\n{f}"
+    );
+    assert_eq!(run(src, "f"), 42);
+}
+
+#[test]
+fn interface_if_receiver_devirtualizes_each_branch() {
+    crate::set_release_profile(false);
+    let src = "interface Shape { function area(self): i64; }\n\
+               struct Rect { w: i64 }\n\
+               struct Circle { r: i64 }\n\
+               extend Rect: Shape { function area(self): i64 { self.w } }\n\
+               extend Circle: Shape { function area(self): i64 { self.r + 1 } }\n\
+               function f(flag: bool): i64 {\n\
+                 (if flag { Rect { w: 40 } as Shape } else { Circle { r: 1 } as Shape }).area() + 2\n\
+               }\n\
+               function main(): i64 { f(true) + f(false) }";
+    let (tokens, le) = lex(src, FileId(0));
+    assert!(le.is_empty(), "lex: {le:?}");
+    let (module, pe) = parse(src, &tokens);
+    assert!(pe.is_empty(), "parse: {pe:?}");
+    let analysis = analyze(&module);
+    assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+    let clif = compile_clif_for_files(&analysis, 1).expect("clif");
+    let f = clif_section(&clif, "f");
+    assert!(
+        !f.contains("call_indirect"),
+        "immediate if-interface receiver should direct-call branch impls:\n{f}"
+    );
+    assert!(
+        !f.contains("+16"),
+        "immediate if-interface receiver should not build wrapper type ids:\n{f}"
+    );
+    assert_eq!(run(src, "main"), 46);
+}
+
+#[test]
+fn interface_match_receiver_devirtualizes_each_arm() {
+    crate::set_release_profile(false);
+    let src = "interface Shape { function area(self): i64; }\n\
+               struct Rect { w: i64 }\n\
+               struct Circle { r: i64 }\n\
+               extend Rect: Shape { function area(self): i64 { self.w } }\n\
+               extend Circle: Shape { function area(self): i64 { self.r + 1 } }\n\
+               function f(n: i64): i64 {\n\
+                 (match n { 0 => Rect { w: 40 } as Shape, _ => Circle { r: 1 } as Shape }).area() + 2\n\
+               }\n\
+               function main(): i64 { f(0) + f(1) }";
+    let (tokens, le) = lex(src, FileId(0));
+    assert!(le.is_empty(), "lex: {le:?}");
+    let (module, pe) = parse(src, &tokens);
+    assert!(pe.is_empty(), "parse: {pe:?}");
+    let analysis = analyze(&module);
+    assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+    let clif = compile_clif_for_files(&analysis, 1).expect("clif");
+    let f = clif_section(&clif, "f");
+    assert!(
+        !f.contains("call_indirect"),
+        "immediate match-interface receiver should direct-call arm impls:\n{f}"
+    );
+    assert!(
+        !f.contains("+16"),
+        "immediate match-interface receiver should not build wrapper type ids:\n{f}"
+    );
+    assert_eq!(run(src, "main"), 46);
+}
+
+#[test]
+fn interface_local_receiver_still_uses_vtable_dispatch() {
+    crate::set_release_profile(false);
+    let src = "interface Shape { function area(self): i64; }\n\
+               struct Rect { w: i64 }\n\
+               struct Circle { r: i64 }\n\
+               extend Rect: Shape { function area(self): i64 { self.w } }\n\
+               extend Circle: Shape { function area(self): i64 { self.r + 1 } }\n\
+               function f(flag: bool): i64 {\n\
+                 var s: Shape = if flag { Rect { w: 40 } as Shape } else { Circle { r: 1 } as Shape };\n\
+                 s.area() + 2\n\
+               }\n\
+               function main(): i64 { f(true) + f(false) }";
+    let (tokens, le) = lex(src, FileId(0));
+    assert!(le.is_empty(), "lex: {le:?}");
+    let (module, pe) = parse(src, &tokens);
+    assert!(pe.is_empty(), "parse: {pe:?}");
+    let analysis = analyze(&module);
+    assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+    let clif = compile_clif_for_files(&analysis, 1).expect("clif");
+    let f = clif_section(&clif, "f");
+    assert!(
+        f.contains("call_indirect"),
+        "interface local receiver should keep vtable dispatch:\n{f}"
+    );
+    assert_eq!(run(src, "main"), 46);
+}
+
+#[test]
+fn interface_local_assigned_in_branch_keeps_vtable_dispatch_after_join() {
+    // The fact map is deliberately conservative around control-flow joins. A
+    // branch may replace the concrete value held by an interface local, so the
+    // post-join method call must remain dynamically dispatched.
+    crate::set_release_profile(false);
+    let src = "interface Shape { function area(self): i64; }\n\
+               struct Rect { w: i64 }\n\
+               struct Circle { r: i64 }\n\
+               extend Rect: Shape { function area(self): i64 { self.w } }\n\
+               extend Circle: Shape { function area(self): i64 { self.r } }\n\
+               function choose(flag: bool): i64 {\n\
+                 var s: Shape = Rect { w: 42 } as Shape;\n\
+                 if flag { s = Circle { r: 7 } as Shape; }\n\
+                 s.area()\n\
+               }\n\
+               function main(): i64 { choose(false) + choose(true) }";
+    let (tokens, le) = lex(src, FileId(0));
+    assert!(le.is_empty(), "lex: {le:?}");
+    let (module, pe) = parse(src, &tokens);
+    assert!(pe.is_empty(), "parse: {pe:?}");
+    let analysis = analyze(&module);
+    assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+    let clif = compile_clif_for_files(&analysis, 1).expect("clif");
+    assert!(
+        clif.contains("call_indirect"),
+        "post-branch interface local must keep vtable dispatch:\n{clif}"
+    );
+    let got = unsafe { compile_entry(&analysis).unwrap().call_i64("main").unwrap() };
+    assert_eq!(got, 49);
+}
+
+#[test]
+fn captured_interface_local_keeps_vtable_dispatch() {
+    // Captured locals are cell-backed and can be mutated by closures. Even when
+    // initialized from a known concrete value, keep later calls dynamic.
+    crate::set_release_profile(false);
+    let src = "interface Shape { function area(self): i64; }\n\
+               struct Rect { w: i64 }\n\
+               struct Circle { r: i64 }\n\
+               extend Rect: Shape { function area(self): i64 { self.w } }\n\
+               extend Circle: Shape { function area(self): i64 { self.r } }\n\
+               function main(): i64 {\n\
+                 var s: Shape = Rect { w: 42 } as Shape;\n\
+                 var set_circle = () => { s = Circle { r: 7 } as Shape; };\n\
+                 set_circle();\n\
+                 s.area()\n\
+               }";
+    let (tokens, le) = lex(src, FileId(0));
+    assert!(le.is_empty(), "lex: {le:?}");
+    let (module, pe) = parse(src, &tokens);
+    assert!(pe.is_empty(), "parse: {pe:?}");
+    let analysis = analyze(&module);
+    assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+    let clif = compile_clif_for_files(&analysis, 1).expect("clif");
+    assert!(
+        clif.contains("call_indirect"),
+        "captured interface local must keep dynamic dispatch:\n{clif}"
+    );
+    let got = unsafe { compile_entry(&analysis).unwrap().call_i64("main").unwrap() };
+    assert_eq!(got, 7);
+}
+
+#[test]
+fn single_call_scalar_helper_inlines_into_caller() {
+    // Call-graph-guided inlining: a scalar expression-bodied helper with one
+    // direct call is emitted inline at the call site.
+    let src = "function mix(a: i64, b: i64): i64 { ((a & b) ^ (a | b)) ^ (a ^ b) }\n\
+               function main(): i64 { mix(8, 3) }";
+    let (tokens, le) = lex(src, FileId(0));
+    assert!(le.is_empty(), "lex: {le:?}");
+    let (module, pe) = parse(src, &tokens);
+    assert!(pe.is_empty(), "parse: {pe:?}");
+    let analysis = analyze(&module);
+    assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+    let clif = compile_clif_for_files(&analysis, 1).expect("clif");
+    let main = clif_section(&clif, "main");
+    assert!(
+        !main.contains("call fn"),
+        "single-call helper should inline into main:\n{main}"
+    );
+    assert!(
+        main.contains("band") || main.contains("bor") || main.contains("bxor"),
+        "expected inlined scalar ops:\n{main}"
+    );
+    let got = unsafe { compile_entry(&analysis).unwrap().call_i64("main").unwrap() };
+    assert_eq!(got, 0);
+}
+
+#[test]
+fn single_call_scalar_let_helper_inlines_into_caller() {
+    // The inliner can also replay simple scalar let-bindings before the trailing
+    // expression. This is still deliberately limited to allocation-free scalar
+    // expressions.
+    let src = "function adjust(a: i64, b: i64): i64 {\n\
+                 var both = a & b;\n\
+                 var either = a | b;\n\
+                 (both ^ either) ^ (a ^ b)\n\
+               }\n\
+               function main(): i64 { adjust(8, 3) }";
+    let (tokens, le) = lex(src, FileId(0));
+    assert!(le.is_empty(), "lex: {le:?}");
+    let (module, pe) = parse(src, &tokens);
+    assert!(pe.is_empty(), "parse: {pe:?}");
+    let analysis = analyze(&module);
+    assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+    let clif = compile_clif_for_files(&analysis, 1).expect("clif");
+    let main = clif_section(&clif, "main");
+    assert!(
+        !main.contains("call fn"),
+        "single-call let helper should inline into main:\n{main}"
+    );
+    assert!(
+        main.contains("band") && main.contains("bor") && main.contains("bxor"),
+        "expected inlined scalar let body ops:\n{main}"
+    );
+    let got = unsafe { compile_entry(&analysis).unwrap().call_i64("main").unwrap() };
+    assert_eq!(got, 0);
+}
+
+#[test]
+fn helper_with_assignment_stays_direct_call() {
+    // Assignments are excluded from this inlining slice; replaying mutation
+    // safely needs a broader statement-model audit.
+    let src = "function bump(a: i64): i64 {\n\
+                 var x = a;\n\
+                 x = x + 1;\n\
+                 x\n\
+               }\n\
+               function main(): i64 { bump(41) }";
+    let (tokens, le) = lex(src, FileId(0));
+    assert!(le.is_empty(), "lex: {le:?}");
+    let (module, pe) = parse(src, &tokens);
+    assert!(pe.is_empty(), "parse: {pe:?}");
+    let analysis = analyze(&module);
+    assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+    let clif = compile_clif_for_files(&analysis, 1).expect("clif");
+    let main = clif_section(&clif, "main");
+    assert!(
+        main.contains("call fn"),
+        "assignment helper should remain a direct call:\n{main}"
+    );
+    let got = unsafe { compile_entry(&analysis).unwrap().call_i64("main").unwrap() };
+    assert_eq!(got, 42);
+}
+
+#[test]
+fn multi_call_non_tiny_helper_stays_direct_call() {
+    // The same non-tiny helper called more than once is left as a real function
+    // call. That keeps the first inlining slice conservative instead of
+    // duplicating larger bodies at every call site.
+    let src = "function mix(a: i64, b: i64): i64 { ((a & b) ^ (a | b)) ^ (a ^ b) }\n\
+               function main(): i64 { mix(8, 3) + mix(5, 2) }";
+    let (tokens, le) = lex(src, FileId(0));
+    assert!(le.is_empty(), "lex: {le:?}");
+    let (module, pe) = parse(src, &tokens);
+    assert!(pe.is_empty(), "parse: {pe:?}");
+    let analysis = analyze(&module);
+    assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+    let clif = compile_clif_for_files(&analysis, 1).expect("clif");
+    let main = clif_section(&clif, "main");
+    assert!(
+        main.contains("call fn"),
+        "multi-call larger helper should remain a call:\n{main}"
+    );
+    let got = unsafe { compile_entry(&analysis).unwrap().call_i64("main").unwrap() };
+    assert_eq!(got, 0);
 }
 
 #[test]
@@ -417,6 +1099,55 @@ fn record_struct_construct_and_access() {
 }
 
 #[test]
+fn non_escaping_scalar_struct_local_uses_stack_slot() {
+    crate::set_release_profile(false);
+    let src = "struct P { x: i64, y: i64 }\n\
+                   function f(): i64 { var p = P { x: 1, y: 2 }; p.x = 42; p.x }";
+    let (tokens, le) = lex(src, FileId(0));
+    assert!(le.is_empty(), "lex: {le:?}");
+    let (module, pe) = parse(src, &tokens);
+    assert!(pe.is_empty(), "parse: {pe:?}");
+    let analysis = analyze(&module);
+    assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+    let clif = compile_clif_for_files(&analysis, 1).expect("clif");
+    let f = clif_section(&clif, "f");
+    assert!(
+        f.contains("stack_addr"),
+        "non-escaping scalar struct local should use a stack slot:\n{f}"
+    );
+    assert!(
+        !f.contains("call fn"),
+        "non-escaping scalar struct local should not allocate or call:\n{f}"
+    );
+    assert_eq!(run(src, "f"), 42);
+}
+
+#[test]
+fn escaping_scalar_struct_local_stays_heap_allocated() {
+    crate::set_release_profile(false);
+    let src = "struct P { x: i64, y: i64 }\n\
+                   function sum(p: P): i64 { p.x + p.y }\n\
+                   function f(): i64 { var p = P { x: 40, y: 2 }; sum(p) }";
+    let (tokens, le) = lex(src, FileId(0));
+    assert!(le.is_empty(), "lex: {le:?}");
+    let (module, pe) = parse(src, &tokens);
+    assert!(pe.is_empty(), "parse: {pe:?}");
+    let analysis = analyze(&module);
+    assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+    let clif = compile_clif_for_files(&analysis, 1).expect("clif");
+    let f = clif_section(&clif, "f");
+    assert!(
+        !f.contains("stack_addr"),
+        "whole-value escaping struct local must not use a stack slot:\n{f}"
+    );
+    assert!(
+        f.contains("call fn"),
+        "escaping struct local should keep heap allocation/direct call shape:\n{f}"
+    );
+    assert_eq!(run(src, "f"), 42);
+}
+
+#[test]
 fn record_field_mutation() {
     let src = "struct P { x: i64, y: i64 }\n\
                    function f(): i64 { var p = P { x: 1, y: 2 }; p.x = 40; p.x + p.y }";
@@ -452,6 +1183,55 @@ fn nested_structs() {
 fn tuple_struct_construct_and_index() {
     let src = "struct Pair(i64, i64)\n\
                    function f(): i64 { var p = Pair(40, 2); p.0 + p.1 }";
+    assert_eq!(run(src, "f"), 42);
+}
+
+#[test]
+fn non_escaping_scalar_tuple_struct_local_uses_stack_slot() {
+    crate::set_release_profile(false);
+    let src = "struct Pair(i64, i64)\n\
+                   function f(): i64 { var p = Pair(1, 2); p.0 = 42; p.0 }";
+    let (tokens, le) = lex(src, FileId(0));
+    assert!(le.is_empty(), "lex: {le:?}");
+    let (module, pe) = parse(src, &tokens);
+    assert!(pe.is_empty(), "parse: {pe:?}");
+    let analysis = analyze(&module);
+    assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+    let clif = compile_clif_for_files(&analysis, 1).expect("clif");
+    let f = clif_section(&clif, "f");
+    assert!(
+        f.contains("stack_addr"),
+        "non-escaping tuple struct local should use a stack slot:\n{f}"
+    );
+    assert!(
+        !f.contains("call fn"),
+        "non-escaping tuple struct local should not allocate or call:\n{f}"
+    );
+    assert_eq!(run(src, "f"), 42);
+}
+
+#[test]
+fn escaping_scalar_tuple_struct_local_stays_heap_allocated() {
+    crate::set_release_profile(false);
+    let src = "struct Pair(i64, i64)\n\
+                   function sum(p: Pair): i64 { p.0 + p.1 }\n\
+                   function f(): i64 { var p = Pair(40, 2); sum(p) }";
+    let (tokens, le) = lex(src, FileId(0));
+    assert!(le.is_empty(), "lex: {le:?}");
+    let (module, pe) = parse(src, &tokens);
+    assert!(pe.is_empty(), "parse: {pe:?}");
+    let analysis = analyze(&module);
+    assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+    let clif = compile_clif_for_files(&analysis, 1).expect("clif");
+    let f = clif_section(&clif, "f");
+    assert!(
+        !f.contains("stack_addr"),
+        "whole-value escaping tuple struct local must not use a stack slot:\n{f}"
+    );
+    assert!(
+        f.contains("call fn"),
+        "escaping tuple struct local should keep heap allocation/direct call shape:\n{f}"
+    );
     assert_eq!(run(src, "f"), 42);
 }
 
@@ -1662,6 +2442,72 @@ fn union_str_variant_roundtrip() {
     assert_eq!(run_str(src, "f"), "hello");
 }
 
+#[test]
+fn empty_struct_direct_construction_uses_null_sentinel() {
+    crate::set_release_profile(false);
+    let src = "struct Empty {}\n\
+                   function f(): Empty { Empty {} }";
+    let (tokens, le) = lex(src, FileId(0));
+    assert!(le.is_empty(), "lex: {le:?}");
+    let (module, pe) = parse(src, &tokens);
+    assert!(pe.is_empty(), "parse: {pe:?}");
+    let analysis = analyze(&module);
+    assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+    let clif = compile_clif_for_files(&analysis, 1).expect("clif");
+    let f = clif_section(&clif, "f");
+    assert!(
+        !f.contains("call fn"),
+        "empty struct construction should not allocate a payload:\n{f}"
+    );
+    assert_eq!(run(src, "f"), 0);
+}
+
+#[test]
+fn empty_struct_union_boxes_only_the_tag() {
+    crate::set_release_profile(false);
+    let src = "struct Empty {}\n\
+                   function f(): Empty | null { Empty {} }\n\
+                   function g(): i64 { var x = f(); if x is Empty { 42 } else { 0 } }";
+    let (tokens, le) = lex(src, FileId(0));
+    assert!(le.is_empty(), "lex: {le:?}");
+    let (module, pe) = parse(src, &tokens);
+    assert!(pe.is_empty(), "parse: {pe:?}");
+    let analysis = analyze(&module);
+    assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+    let clif = compile_clif_for_files(&analysis, 1).expect("clif");
+    let f = clif_section(&clif, "f");
+    let calls = f.matches("call fn").count();
+    assert_eq!(
+        calls, 1,
+        "empty struct union construction should allocate only the union box:\n{f}"
+    );
+    assert_eq!(run(src, "g"), 42);
+}
+
+#[test]
+fn empty_struct_interface_wrap_omits_payload_allocation() {
+    crate::set_release_profile(false);
+    let src = "interface Named { function value(self): i64; }\n\
+                   struct Empty {}\n\
+                   extend Empty: Named { function value(self): i64 { 42 } }\n\
+                   function make(): Named { Empty {} as Named }\n\
+                   function f(): i64 { make().value() }";
+    let (tokens, le) = lex(src, FileId(0));
+    assert!(le.is_empty(), "lex: {le:?}");
+    let (module, pe) = parse(src, &tokens);
+    assert!(pe.is_empty(), "parse: {pe:?}");
+    let analysis = analyze(&module);
+    assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+    let clif = compile_clif_for_files(&analysis, 1).expect("clif");
+    let make = clif_section(&clif, "make");
+    let calls = make.matches("call fn").count();
+    assert_eq!(
+        calls, 1,
+        "empty struct interface wrapping should allocate only the interface box:\n{make}"
+    );
+    assert_eq!(run(src, "f"), 42);
+}
+
 // --- anonymous tuples --------------------------------------------------
 
 #[test]
@@ -2001,6 +2847,154 @@ fn hir_union_is_tag_check() {
         run_hir("function f(): bool { var x: i64 | str = 5; x is str }", "f"),
         0
     );
+}
+
+#[test]
+fn union_if_immediate_is_avoids_boxed_tag_path() {
+    crate::set_release_profile(false);
+    let src = "function yes(): i64 {\n\
+                 if (if true { 40 } else { null }) is i64 { 42 } else { 0 }\n\
+               }\n\
+               function no(): i64 {\n\
+                 if (if false { 40 } else { null }) is i64 { 0 } else { 42 }\n\
+               }";
+    let (tokens, le) = lex(src, FileId(0));
+    assert!(le.is_empty(), "lex: {le:?}");
+    let (module, pe) = parse(src, &tokens);
+    assert!(pe.is_empty(), "parse: {pe:?}");
+    let analysis = analyze(&module);
+    assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+    let clif = compile_clif_for_files(&analysis, 1).expect("clif");
+    let yes = clif_section(&clif, "yes");
+    assert!(
+        !yes.contains("call fn"),
+        "immediate union `is` should not allocate a temporary box:\n{yes}"
+    );
+    assert!(
+        !yes.contains("load.i64"),
+        "immediate union `is` should not load a runtime tag:\n{yes}"
+    );
+    assert_eq!(run(src, "yes"), 42);
+    assert_eq!(run(src, "no"), 42);
+}
+
+#[test]
+fn union_if_local_still_boxes_before_tag_check() {
+    crate::set_release_profile(false);
+    let src = "function f(): i64 {\n\
+                 var x = if true { 40 } else { null };\n\
+                 if x is i64 { 42 } else { 0 }\n\
+               }";
+    let (tokens, le) = lex(src, FileId(0));
+    assert!(le.is_empty(), "lex: {le:?}");
+    let (module, pe) = parse(src, &tokens);
+    assert!(pe.is_empty(), "parse: {pe:?}");
+    let analysis = analyze(&module);
+    assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+    let clif = compile_clif_for_files(&analysis, 1).expect("clif");
+    let f = clif_section(&clif, "f");
+    assert!(
+        f.contains("call fn"),
+        "escaping union-valued if should allocate a box for the local:\n{f}"
+    );
+    assert!(
+        f.contains("load.i64"),
+        "boxed local union should still load its runtime tag:\n{f}"
+    );
+    assert_eq!(run(src, "f"), 42);
+}
+
+#[test]
+fn union_if_immediate_as_avoids_tag_load_on_success_path() {
+    crate::set_release_profile(false);
+    let src = "function f(): i64 { ((if true { 40 } else { null }) as i64) + 2 }";
+    let (tokens, le) = lex(src, FileId(0));
+    assert!(le.is_empty(), "lex: {le:?}");
+    let (module, pe) = parse(src, &tokens);
+    assert!(pe.is_empty(), "parse: {pe:?}");
+    let analysis = analyze(&module);
+    assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+    let clif = compile_clif_for_files(&analysis, 1).expect("clif");
+    let f = clif_section(&clif, "f");
+    assert!(
+        !f.contains("load.i64"),
+        "immediate union `as` should not load a runtime tag:\n{f}"
+    );
+    assert_eq!(run(src, "f"), 42);
+}
+
+#[test]
+fn union_match_immediate_is_avoids_boxed_tag_path() {
+    crate::set_release_profile(false);
+    let src = "function yes(): i64 {\n\
+                 if (match 0 { 0 => 40, _ => null }) is i64 { 42 } else { 0 }\n\
+               }\n\
+               function no(): i64 {\n\
+                 if (match 1 { 0 => 40, _ => null }) is i64 { 0 } else { 42 }\n\
+               }";
+    let (tokens, le) = lex(src, FileId(0));
+    assert!(le.is_empty(), "lex: {le:?}");
+    let (module, pe) = parse(src, &tokens);
+    assert!(pe.is_empty(), "parse: {pe:?}");
+    let analysis = analyze(&module);
+    assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+    let clif = compile_clif_for_files(&analysis, 1).expect("clif");
+    let yes = clif_section(&clif, "yes");
+    assert!(
+        !yes.contains("call fn"),
+        "immediate match-union `is` should not allocate a temporary box:\n{yes}"
+    );
+    assert!(
+        !yes.contains("load.i64"),
+        "immediate match-union `is` should not load a runtime tag:\n{yes}"
+    );
+    assert_eq!(run(src, "yes"), 42);
+    assert_eq!(run(src, "no"), 42);
+}
+
+#[test]
+fn union_match_local_still_boxes_before_tag_check() {
+    crate::set_release_profile(false);
+    let src = "function f(): i64 {\n\
+                 var x = match 0 { 0 => 40, _ => null };\n\
+                 if x is i64 { 42 } else { 0 }\n\
+               }";
+    let (tokens, le) = lex(src, FileId(0));
+    assert!(le.is_empty(), "lex: {le:?}");
+    let (module, pe) = parse(src, &tokens);
+    assert!(pe.is_empty(), "parse: {pe:?}");
+    let analysis = analyze(&module);
+    assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+    let clif = compile_clif_for_files(&analysis, 1).expect("clif");
+    let f = clif_section(&clif, "f");
+    assert!(
+        f.contains("call fn"),
+        "escaping match-union should allocate a box for the local:\n{f}"
+    );
+    assert!(
+        f.contains("load.i64"),
+        "boxed match-union local should still load its runtime tag:\n{f}"
+    );
+    assert_eq!(run(src, "f"), 42);
+}
+
+#[test]
+fn union_match_immediate_as_avoids_tag_load_on_success_path() {
+    crate::set_release_profile(false);
+    let src = "function f(): i64 { ((match 0 { 0 => 40, _ => null }) as i64) + 2 }";
+    let (tokens, le) = lex(src, FileId(0));
+    assert!(le.is_empty(), "lex: {le:?}");
+    let (module, pe) = parse(src, &tokens);
+    assert!(pe.is_empty(), "parse: {pe:?}");
+    let analysis = analyze(&module);
+    assert!(analysis.errors.is_empty(), "sema: {:?}", analysis.errors);
+    let clif = compile_clif_for_files(&analysis, 1).expect("clif");
+    let f = clif_section(&clif, "f");
+    assert!(
+        !f.contains("load.i64"),
+        "immediate match-union `as` should not load a runtime tag:\n{f}"
+    );
+    assert_eq!(run(src, "f"), 42);
 }
 
 #[test]

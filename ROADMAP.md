@@ -2642,6 +2642,89 @@ feature, JIT≡native byte-identical and GC-stress clean.
    items below one by one, test-gated, docs/LSP/examples kept consistent.
 
 **Recently completed:**
+- **Interface direct/branch fast paths: DONE.** HIR codegen now recognizes
+  interface values constructed directly from concrete structs, and
+  interface-valued `if`/`match` expressions, when they are immediately consumed
+  by `is Concrete`, by a concrete `as` downcast, or as an interface-method
+  receiver. When the source concrete type is statically known and non-
+  `@RefCounted`, codegen evaluates the concrete value and produces the final
+  boolean/downcast result or direct concrete method call directly, skipping the
+  temporary `{vtable,data,type_id}` wrapper, vtable pointer store/load, type-id
+  stamp/load, and `call_indirect`. Interface values that escape into
+  locals/results still keep the ordinary wrapper representation. Added backend
+  CLIF/runtime regressions for direct immediate tests/downcasts, immediate `if`
+  and `match` tests/downcasts/method receivers, plus the boxed-local fallbacks,
+  JIT/native CLI parity regressions, and `examples/interface_devirt_bench.otter`
+  coverage for `otter_fusion bench`.
+- **Union branch tag fast paths: DONE.** HIR codegen now recognizes
+  union/`dynamic`-typed `if` and `match` expressions that are immediately
+  consumed by `is` or by a concrete `as` narrowing. When each branch/arm has a
+  statically-known unmanaged scalar/null variant, codegen evaluates the selected
+  path and produces the final boolean/narrowed value directly, avoiding a
+  transient union box and runtime tag load. The ordinary escaping path was
+  tightened at the same time: union-valued `if`/`match` joins that flow into
+  locals/results now box concrete branch values before the merge block, so later
+  tag checks see the correct `{type_id,data}` representation. Added backend
+  CLIF/runtime regressions for the immediate fast paths and boxed-local
+  fallbacks, JIT/native CLI parity regressions, and
+  `examples/union_tag_bench.otter` for `otter_fusion bench`.
+- **Empty-struct payload/tag thinning: DONE.** Ordinary final structs with no
+  runtime fields, no `Drop`, no `@RefCounted`, no transparent representation,
+  and no extern layout now use a null field-block sentinel instead of allocating
+  an empty managed payload. Union/dynamic boxes still carry the semantic type id,
+  and interface objects still carry their vtable/type id, but their data slot is
+  a non-traced null sentinel for these empty structs. This implements the first
+  safe part of the "empty structs don't need to be allocated" optimization
+  without changing `is`/`as`, pattern matching, dynamic dispatch, or GC
+  observability. Added CLIF-shape/runtime backend regressions for direct empty
+  construction, union tagging, and interface wrapping, a JIT/native CLI parity
+  regression, and `examples/empty_struct_tag_bench.otter` for
+  `otter_fusion bench`.
+- **Escape-analysis stack allocation for scalar final struct locals: DONE.**
+  HIR codegen now pre-scans each function body for record- and tuple-struct
+  locals whose binding-site literal/constructor is proven not to escape:
+  whole-value uses such as calls, returns, aliases, address-of, casts, boxing,
+  closure capture, and async capture disqualify the value, while field loads and
+  field stores remain eligible. The first production-safe slice only applies to
+  ordinary final structs with scalar fields and no traced pointers,
+  `@RefCounted` ownership, channel endpoints, `Drop`, spread, transparent
+  representation, arrays, or nested aggregate fields. Eligible locals use a
+  zeroed Cranelift stack slot with the same in-frame field-block pointer
+  representation; escaping structs keep the managed heap object path. Added
+  CLIF-shape/runtime backend regressions for the stack and heap sides, JIT/native
+  CLI parity regressions, and `examples/stack_struct_bench.otter` for
+  `otter_fusion bench`.
+- **Conservative scalar helper inlining: DONE.** Backend codegen now collects
+  whole-HIR direct-call counts and uses them as a call-graph signal for a tiny
+  direct-call inliner. Non-generic free functions over unmanaged scalar
+  parameter/return types can be emitted inline when called once (or when
+  trivially tiny), including simple scalar `let` temporaries before the trailing
+  expression. Larger helpers called multiple times stay as real calls to avoid
+  code growth. The slice deliberately excludes managed values,
+  ownership-sensitive types, async, closures, assignments, control flow, nested
+  calls, and allocations. Added CLIF-shape/runtime backend regressions for the
+  inlined and non-inlined paths, JIT/native parity CLI regressions, and
+  `examples/inlining_bench.otter` for `otter_fusion bench`.
+- **Staged interface receiver devirtualization: DONE.** HIR codegen now
+  recognizes interface method calls whose receiver is an immediately-created
+  interface object, such as `(Concrete { ... } as Interface).method()` or a baked
+  `WidenDyn` wrapper. It evaluates the concrete receiver first, roots it across
+  argument evaluation for GC safety, and emits a direct monomorphized call to the
+  concrete impl instead of allocating the `{vtable,data,type_id}` wrapper and
+  issuing a `call_indirect`. It also tracks conservative straight-line facts for
+  interface-typed locals initialized or assigned from known concrete values, so
+  `var s: Shape = Rect { ... } as Shape; s.area()` can call the concrete impl
+  directly while preserving the interface box as the local representation.
+  The fact inference also survives `if` and `match` expression joins when every
+  branch/arm produces the same concrete implementor. Facts are dropped for
+  captured locals, locals assigned inside branch/loop/match bodies, and
+  mixed-concrete joins, so interface-typed parameters and genuinely dynamic
+  receivers still use vtable dispatch. Added CLIF-shape and runtime backend
+  regressions for immediate receivers, straight-line locals, same-concrete and
+  mixed-concrete `if`/`match` initializers, branch joins, captured locals, and
+  interface parameters, plus `examples/interface_devirt_bench.otter` to benchmark
+  the devirtualized-local, same-concrete-if, same-concrete-match, and
+  dynamic-parameter paths with `otter_fusion bench`.
 - **Backend optimization pass: DONE.** Release builds now ask Cranelift for its
   speed-oriented backend optimization pipeline while debug keeps CLIF readable.
   CLI/native codegen is root-seeded (`main` or exact test/bench body) and lazily

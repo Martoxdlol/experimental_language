@@ -1,0 +1,62 @@
+struct Point {
+  x: i64,
+  y: i64,
+}
+
+struct Pair(i64, i64)
+
+bench "stack_scalar_struct_local" {
+  var total: i64 = 0;
+  var i: i64 = 0;
+  while i < 1000 {
+    var p = Point { x: i, y: 2 };
+    p.x = p.x + p.y;
+    total = total + p.x;
+    i = i + 1;
+  }
+  total;
+}
+
+bench "stack_scalar_tuple_struct_local" {
+  var total: i64 = 0;
+  var i: i64 = 0;
+  while i < 1000 {
+    var p = Pair(i, 2);
+    p.0 = p.0 + p.1;
+    total = total + p.0;
+    i = i + 1;
+  }
+  total;
+}
+
+bench "heap_scalar_struct_escape" {
+  var total: i64 = 0;
+  var i: i64 = 0;
+  while i < 1000 {
+    var p = Point { x: i, y: 2 };
+    total = total + point_value(p);
+    i = i + 1;
+  }
+  total;
+}
+
+bench "heap_scalar_tuple_struct_escape" {
+  var total: i64 = 0;
+  var i: i64 = 0;
+  while i < 1000 {
+    var p = Pair(i, 2);
+    total = total + pair_value(p);
+    i = i + 1;
+  }
+  total;
+}
+
+function point_value(p: Point): i64 {
+  p.x + p.y
+}
+
+function pair_value(p: Pair): i64 {
+  p.0 + p.1
+}
+
+function main() {}

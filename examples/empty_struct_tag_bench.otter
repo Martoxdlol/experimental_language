@@ -1,0 +1,53 @@
+// Empty-struct tag/payload benchmarks for backend optimization work.
+//
+//   otter_fusion bench examples/empty_struct_tag_bench.otter
+//
+// Empty final structs use a null payload sentinel. Union boxes still carry their
+// type tag, and interface objects still carry their vtable, but no separate
+// empty payload object is allocated.
+
+interface Marker {
+  function value(self): i64;
+}
+
+struct Empty {}
+
+extend Empty: Marker {
+  function value(self): i64 { 1 }
+}
+
+bench "empty_direct_sentinel" {
+  var i = 0;
+  var total = 0;
+  while i < 1000 {
+    var e = Empty {};
+    if e is Empty {
+      total = total + 1;
+    }
+    i = i + 1;
+  }
+}
+
+bench "empty_union_tag" {
+  var i = 0;
+  var total = 0;
+  while i < 1000 {
+    var e: Empty | null = Empty {};
+    if e is Empty {
+      total = total + 1;
+    }
+    i = i + 1;
+  }
+}
+
+bench "empty_interface_vtable" {
+  var i = 0;
+  var total = 0;
+  while i < 1000 {
+    var e: Marker = Empty {} as Marker;
+    total = total + e.value();
+    i = i + 1;
+  }
+}
+
+function main() {}

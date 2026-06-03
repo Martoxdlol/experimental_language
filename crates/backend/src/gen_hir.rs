@@ -15,6 +15,19 @@
 use super::*;
 use compiler::hir;
 
+enum ConcreteIfaceReceiver<'e> {
+    Immediate {
+        inner: &'e hir::Expr,
+        target: DefId,
+        targs: Vec<Ty>,
+    },
+    InterfaceLocal {
+        local: LocalId,
+        target: DefId,
+        targs: Vec<Ty>,
+    },
+}
+
 impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     // -- blocks & statements -------------------------------------------------
 
@@ -37,13 +50,69 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 let init_ty = init.ty;
                 let init_owned = Self::is_owned_rc_expr(init);
                 let endpoint_init_owned = Self::is_owned_endpoint_expr(init);
-                let val = self.h_expr(init)?;
-                self.h_bind_pattern(pattern, val, init_ty, init_owned, endpoint_init_owned)
+                let val = match &pattern.kind {
+                    hir::PatternKind::Bind(local)
+                        if self.stack_struct_locals.contains(local)
+                            && matches!(init.kind, hir::ExprKind::Struct { .. }) =>
+                    {
+                        if let hir::ExprKind::Struct {
+                            def,
+                            type_args,
+                            fields,
+                            spread,
+                        } = &init.kind
+                        {
+                            Some(self.h_struct_lit(
+                                *def,
+                                type_args,
+                                fields,
+                                spread.as_deref(),
+                                init.ty,
+                                init.span,
+                                true,
+                            )?)
+                        } else {
+                            unreachable!("matched struct literal above")
+                        }
+                    }
+                    hir::PatternKind::Bind(local)
+                        if self.stack_struct_locals.contains(local)
+                            && matches!(
+                                init.kind,
+                                hir::ExprKind::Call {
+                                    kind: hir::CallKind::TupleCtor { .. },
+                                    ..
+                                }
+                            ) =>
+                    {
+                        if let hir::ExprKind::Call {
+                            kind: hir::CallKind::TupleCtor { def, .. },
+                            args,
+                            ..
+                        } = &init.kind
+                        {
+                            self.h_tuple_ctor(*def, args, init.ty, init.span, true)?
+                        } else {
+                            unreachable!("matched tuple constructor above")
+                        }
+                    }
+                    _ => self.h_expr(init)?,
+                };
+                let result =
+                    self.h_bind_pattern(pattern, val, init_ty, init_owned, endpoint_init_owned);
+                if result.is_ok() {
+                    self.note_iface_pattern_init(pattern, init);
+                }
+                result
             }
             hir::StmtKind::Assign { target, value } => {
                 let owned = Self::is_owned_rc_expr(value);
                 let v = self.h_expr(value)?;
-                self.h_assign(target, v, owned)
+                let result = self.h_assign(target, v, owned);
+                if result.is_ok() {
+                    self.note_iface_assignment(target, value);
+                }
+                result
             }
             hir::StmtKind::Expr(e) => {
                 let v = self.h_expr(e)?;
@@ -59,6 +128,302 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             }
             hir::StmtKind::Item(_) => Ok(()),
         }
+    }
+
+    pub(crate) fn prepare_stack_struct_locals(&mut self, block: &hir::Block) {
+        if self.async_out.is_some() {
+            self.stack_struct_locals.clear();
+            return;
+        }
+        let mut candidates = HashSet::new();
+        self.collect_stack_struct_candidates_block(block, &mut candidates);
+        if candidates.is_empty() {
+            self.stack_struct_locals.clear();
+            return;
+        }
+
+        let mut escapes = HashSet::new();
+        h_collect_stack_struct_escapes_block(block, &candidates, &mut escapes);
+        candidates.retain(|local| !escapes.contains(local));
+        self.stack_struct_locals = candidates;
+    }
+
+    fn collect_stack_struct_candidates_block(
+        &self,
+        block: &hir::Block,
+        out: &mut HashSet<LocalId>,
+    ) {
+        for stmt in &block.stmts {
+            match &stmt.kind {
+                hir::StmtKind::Let { pattern, init } => {
+                    if let hir::PatternKind::Bind(local) = pattern.kind {
+                        if self.stack_struct_candidate_init(local, init) {
+                            out.insert(local);
+                        }
+                    }
+                    self.collect_stack_struct_candidates_expr(init, out);
+                }
+                hir::StmtKind::Assign { target, value } => {
+                    self.collect_stack_struct_candidates_expr(target, out);
+                    self.collect_stack_struct_candidates_expr(value, out);
+                }
+                hir::StmtKind::Expr(e) => self.collect_stack_struct_candidates_expr(e, out),
+                hir::StmtKind::Item(_) => {}
+            }
+        }
+        if let Some(trailing) = &block.trailing {
+            self.collect_stack_struct_candidates_expr(trailing, out);
+        }
+    }
+
+    fn collect_stack_struct_candidates_expr(&self, expr: &hir::Expr, out: &mut HashSet<LocalId>) {
+        use hir::ExprKind as K;
+        match &expr.kind {
+            K::Closure { .. } | K::AsyncBlock { .. } => {}
+            K::Block(block) | K::Loop(block) => {
+                self.collect_stack_struct_candidates_block(block, out)
+            }
+            K::If {
+                cond,
+                then_block,
+                else_branch,
+            } => {
+                self.collect_stack_struct_candidates_expr(cond, out);
+                self.collect_stack_struct_candidates_block(then_block, out);
+                if let Some(e) = else_branch {
+                    self.collect_stack_struct_candidates_expr(e, out);
+                }
+            }
+            K::While { cond, body } => {
+                self.collect_stack_struct_candidates_expr(cond, out);
+                self.collect_stack_struct_candidates_block(body, out);
+            }
+            K::Match { scrutinee, arms } => {
+                self.collect_stack_struct_candidates_expr(scrutinee, out);
+                for arm in arms {
+                    if let Some(guard) = &arm.guard {
+                        self.collect_stack_struct_candidates_expr(guard, out);
+                    }
+                    self.collect_stack_struct_candidates_expr(&arm.body, out);
+                }
+            }
+            K::For { iter, body, .. } => {
+                self.collect_stack_struct_candidates_expr(iter, out);
+                self.collect_stack_struct_candidates_block(body, out);
+            }
+            K::Struct { fields, spread, .. } => {
+                for field in fields {
+                    self.collect_stack_struct_candidates_expr(&field.value, out);
+                }
+                if let Some(e) = spread {
+                    self.collect_stack_struct_candidates_expr(e, out);
+                }
+            }
+            K::Call {
+                kind: hir::CallKind::TupleCtor { .. },
+                args,
+                ..
+            } => {
+                for arg in args {
+                    self.collect_stack_struct_candidates_expr(arg, out);
+                }
+            }
+            _ => h_for_each_child_expr(expr, &mut |child| {
+                self.collect_stack_struct_candidates_expr(child, out)
+            }),
+        }
+    }
+
+    fn stack_struct_candidate_init(&self, local: LocalId, init: &hir::Expr) -> bool {
+        if self.cx.captured_locals.contains(&local) {
+            return false;
+        }
+        let (def, type_args) = match &init.kind {
+            hir::ExprKind::Struct {
+                def,
+                type_args,
+                spread,
+                ..
+            } => {
+                if spread.is_some() {
+                    return false;
+                }
+                (*def, type_args.as_slice())
+            }
+            hir::ExprKind::Call {
+                kind: hir::CallKind::TupleCtor { def, type_args },
+                ..
+            } => (*def, type_args.as_slice()),
+            _ => return false,
+        };
+        self.stack_struct_ty_safe(def, type_args, init.ty)
+    }
+
+    fn stack_struct_ty_safe(&self, def: DefId, type_args: &[Ty], ty: Ty) -> bool {
+        let d = self.cx.analysis.program.def(def);
+        if d.kind != DefKind::Struct || self.is_extern_struct_def(def) {
+            return false;
+        }
+        let resolved = resolve_shallow(self.cx.analysis, ty, &self.subst);
+        if transparent_inner(self.cx.analysis, resolved).is_some()
+            || is_refcounted_ty(self.cx.analysis, resolved)
+            || self.ty_has_drop_impl(resolved)
+        {
+            return false;
+        }
+
+        let layout = self.struct_layout(def, type_args);
+        if !layout.ptr_offsets.is_empty()
+            || !layout.rc_offsets.is_empty()
+            || layout.cltys.iter().any(Option::is_none)
+        {
+            return false;
+        }
+        layout.tys.iter().all(|field_ty| {
+            let field_ty = resolve_shallow(self.cx.analysis, *field_ty, &self.subst);
+            !is_managed_ptr(self.cx.analysis, field_ty)
+                && !is_refcounted_ty(self.cx.analysis, field_ty)
+                && self.channel_endpoint_kind(field_ty).is_none()
+        })
+    }
+
+    fn ty_has_drop_impl(&self, ty: Ty) -> bool {
+        let drop_def = self.cx.analysis.program.drop_def;
+        if drop_def == DefId(0) {
+            return false;
+        }
+        matches!(
+            self.cx.analysis.tcx.kind(ty),
+            TyKind::Named { def, .. } if self.cx.hir.iface_impls.contains_key(&(*def, drop_def))
+        )
+    }
+
+    fn note_iface_pattern_init(&mut self, pattern: &hir::Pattern, init: &hir::Expr) {
+        match &pattern.kind {
+            hir::PatternKind::Bind(local) => self.note_iface_local_value(*local, init),
+            hir::PatternKind::Tuple { elems, .. } => {
+                for elem in elems {
+                    self.clear_iface_pattern_facts(elem);
+                }
+            }
+            hir::PatternKind::TupleStruct { fields, .. } => {
+                for field in fields {
+                    self.clear_iface_pattern_facts(field);
+                }
+            }
+            hir::PatternKind::RecordStruct { fields, .. } => {
+                for field in fields {
+                    self.clear_iface_pattern_facts(&field.pattern);
+                }
+            }
+            _ => self.clear_iface_pattern_facts(pattern),
+        }
+    }
+
+    fn clear_iface_pattern_facts(&mut self, pattern: &hir::Pattern) {
+        match &pattern.kind {
+            hir::PatternKind::Bind(local) => {
+                self.iface_local_concretes.remove(local);
+            }
+            hir::PatternKind::Tuple { elems, .. } => {
+                for elem in elems {
+                    self.clear_iface_pattern_facts(elem);
+                }
+            }
+            hir::PatternKind::TupleStruct { fields, .. } => {
+                for field in fields {
+                    self.clear_iface_pattern_facts(field);
+                }
+            }
+            hir::PatternKind::RecordStruct { fields, .. } => {
+                for field in fields {
+                    self.clear_iface_pattern_facts(&field.pattern);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn note_iface_assignment(&mut self, target: &hir::Expr, value: &hir::Expr) {
+        if let hir::ExprKind::Name(hir::Res::Local(local)) = &target.kind {
+            self.note_iface_local_value(*local, value);
+        }
+    }
+
+    fn note_iface_local_value(&mut self, local: LocalId, value: &hir::Expr) {
+        if self.cx.captured_locals.contains(&local) {
+            self.iface_local_concretes.remove(&local);
+            return;
+        }
+        let Some(local_ty) = self.cx.analysis.hir.local_ty(local) else {
+            self.iface_local_concretes.remove(&local);
+            return;
+        };
+        let local_ty = resolve_shallow(self.cx.analysis, local_ty, &self.subst);
+        if !self.is_interface_ty(local_ty) {
+            self.iface_local_concretes.remove(&local);
+            return;
+        }
+        match self.iface_concrete_ty(value) {
+            Some(concrete) => {
+                self.iface_local_concretes.insert(local, concrete);
+            }
+            None => {
+                self.iface_local_concretes.remove(&local);
+            }
+        }
+    }
+
+    fn iface_concrete_ty(&self, expr: &hir::Expr) -> Option<Ty> {
+        if let Some(concrete) = self.immediate_iface_concrete_ty(expr) {
+            return Some(concrete);
+        }
+        match &expr.kind {
+            hir::ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                let then_ty = self.iface_concrete_ty_block(then_block)?;
+                let else_ty = self.iface_concrete_ty(else_branch.as_deref()?)?;
+                (then_ty == else_ty).then_some(then_ty)
+            }
+            hir::ExprKind::Match { arms, .. } => {
+                let mut concrete = None;
+                for arm in arms {
+                    let arm_ty = self.iface_concrete_ty(&arm.body)?;
+                    match concrete {
+                        Some(prev) if prev != arm_ty => return None,
+                        Some(_) => {}
+                        None => concrete = Some(arm_ty),
+                    }
+                }
+                concrete
+            }
+            hir::ExprKind::Block(block) => self.iface_concrete_ty_block(block),
+            _ => None,
+        }
+    }
+
+    fn iface_concrete_ty_block(&self, block: &hir::Block) -> Option<Ty> {
+        self.iface_concrete_ty(block.trailing.as_deref()?)
+    }
+
+    fn immediate_iface_concrete_ty(&self, expr: &hir::Expr) -> Option<Ty> {
+        let inner = match &expr.kind {
+            hir::ExprKind::Adjust {
+                adjust: Adjust::WidenDyn(_),
+                expr,
+            } => expr.as_ref(),
+            hir::ExprKind::Cast {
+                op: hir::CastOp::As,
+                expr,
+                target,
+            } if self.is_interface_ty(*target) => expr.as_ref(),
+            _ => return None,
+        };
+        let concrete = resolve_shallow(self.cx.analysis, inner.ty, &self.subst);
+        (!self.is_interface_ty(concrete)).then_some(concrete)
     }
 
     fn h_bind_pattern(
@@ -368,7 +733,20 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 cond,
                 then_block,
                 else_branch,
-            } => self.h_if(cond, then_block, else_branch.as_deref(), ty),
+            } => {
+                let saved = self.iface_local_concretes.clone();
+                let mut assigned = HashSet::new();
+                h_collect_assigned_locals_block(then_block, &mut assigned);
+                if let Some(e) = else_branch.as_deref() {
+                    h_collect_assigned_locals_expr(e, &mut assigned);
+                }
+                let result = self.h_if(cond, then_block, else_branch.as_deref(), ty);
+                self.iface_local_concretes = saved;
+                for local in assigned {
+                    self.iface_local_concretes.remove(&local);
+                }
+                result
+            }
             K::Block(b) => self.h_block(b),
             K::Return(v) => {
                 let val = match v {
@@ -380,8 +758,28 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 self.emit_return(val)?;
                 Ok(None)
             }
-            K::While { cond, body } => self.h_while(cond, body),
-            K::Loop(b) => self.h_loop(b, ty),
+            K::While { cond, body } => {
+                let saved = self.iface_local_concretes.clone();
+                let mut assigned = HashSet::new();
+                h_collect_assigned_locals_block(body, &mut assigned);
+                let result = self.h_while(cond, body);
+                self.iface_local_concretes = saved;
+                for local in assigned {
+                    self.iface_local_concretes.remove(&local);
+                }
+                result
+            }
+            K::Loop(b) => {
+                let saved = self.iface_local_concretes.clone();
+                let mut assigned = HashSet::new();
+                h_collect_assigned_locals_block(b, &mut assigned);
+                let result = self.h_loop(b, ty);
+                self.iface_local_concretes = saved;
+                for local in assigned {
+                    self.iface_local_concretes.remove(&local);
+                }
+                result
+            }
             K::Break(v) => self.h_break(v.as_deref(), e.span),
             K::Continue => self.h_continue(e.span),
             K::Call { kind, args, .. } => self.h_call(kind, args, ty, e.span),
@@ -398,10 +796,26 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 spread.as_deref(),
                 ty,
                 e.span,
+                false,
             )?)),
             K::Field { receiver, field } => self.h_field_at(receiver, field.index as usize),
             K::TupleIndex { receiver, index } => self.h_field_at(receiver, *index as usize),
             K::Cast { op, expr, target } => {
+                if let Some(v) = self.h_static_union_if_cast(*op, expr, *target, expr.span)? {
+                    return Ok(v);
+                }
+                if let Some(v) = self.h_static_union_match_cast(*op, expr, *target, expr.span)? {
+                    return Ok(v);
+                }
+                if let Some(v) = self.h_static_iface_direct_cast(*op, expr, *target, expr.span)? {
+                    return Ok(v);
+                }
+                if let Some(v) = self.h_static_iface_if_cast(*op, expr, *target, expr.span)? {
+                    return Ok(v);
+                }
+                if let Some(v) = self.h_static_iface_match_cast(*op, expr, *target, expr.span)? {
+                    return Ok(v);
+                }
                 let from = expr.ty;
                 let opv = self.h_expr(expr)?;
                 match op {
@@ -421,7 +835,22 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 branch,
                 residual_conversions,
             } => self.h_try(expr, branch.as_ref(), residual_conversions, ty),
-            K::Match { scrutinee, arms } => self.h_match(scrutinee, arms, ty),
+            K::Match { scrutinee, arms } => {
+                let saved = self.iface_local_concretes.clone();
+                let mut assigned = HashSet::new();
+                for arm in arms {
+                    if let Some(guard) = &arm.guard {
+                        h_collect_assigned_locals_expr(guard, &mut assigned);
+                    }
+                    h_collect_assigned_locals_expr(&arm.body, &mut assigned);
+                }
+                let result = self.h_match(scrutinee, arms, ty);
+                self.iface_local_concretes = saved;
+                for local in assigned {
+                    self.iface_local_concretes.remove(&local);
+                }
+                result
+            }
             K::For {
                 pattern,
                 iter,
@@ -738,8 +1167,16 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         self.b.ins().brif(c, then_bb, &[], else_bb, &[]);
         self.term = true;
 
+        let then_ty = self
+            .block_result_ty(then_block)
+            .unwrap_or(self.cx.analysis.tcx.null);
+        let else_ty = else_branch
+            .map(|e| self.expr_result_ty(e))
+            .unwrap_or(self.cx.analysis.tcx.null);
+
         self.switch(then_bb);
         let then_val = self.h_block(then_block)?;
+        let then_val = self.coerce_branch_to_result(then_val, then_ty, result_ty);
         self.jump_to_merge(merge, then_val, result_ct)?;
 
         self.switch(else_bb);
@@ -747,10 +1184,778 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             None => None,
             Some(e) => self.h_expr(e)?,
         };
+        let else_val = self.coerce_branch_to_result(else_val, else_ty, result_ty);
         self.jump_to_merge(merge, else_val, result_ct)?;
 
         self.switch(merge);
         Ok(result_ct.map(|_| self.b.block_params(merge)[0]))
+    }
+
+    fn coerce_branch_to_result(
+        &mut self,
+        val: Option<Value>,
+        from: Ty,
+        result_ty: Ty,
+    ) -> Option<Value> {
+        if self.term {
+            return val;
+        }
+        let target = resolve_shallow(self.cx.analysis, result_ty, &self.subst);
+        let from = resolve_shallow(self.cx.analysis, from, &self.subst);
+        if matches!(
+            self.cx.analysis.tcx.kind(target),
+            TyKind::Union(_) | TyKind::Dynamic
+        ) && !matches!(
+            self.cx.analysis.tcx.kind(from),
+            TyKind::Union(_) | TyKind::Dynamic
+        ) {
+            if npo_union(self.cx.analysis, target).is_some() {
+                return Some(val.unwrap_or_else(|| self.b.ins().iconst(PTR, 0)));
+            }
+            return Some(self.apply_widen(val, from));
+        }
+        val
+    }
+
+    fn h_static_union_if_cast(
+        &mut self,
+        op: hir::CastOp,
+        expr: &hir::Expr,
+        target: Ty,
+        span: Span,
+    ) -> CgResult<Option<Option<Value>>> {
+        use hir::ExprKind as K;
+
+        let K::If {
+            cond,
+            then_block,
+            else_branch,
+        } = &expr.kind
+        else {
+            return Ok(None);
+        };
+
+        let expr_ty = resolve_shallow(self.cx.analysis, expr.ty, &self.subst);
+        if npo_union(self.cx.analysis, expr_ty).is_some()
+            || !matches!(
+                self.cx.analysis.tcx.kind(expr_ty),
+                TyKind::Union(_) | TyKind::Dynamic
+            )
+        {
+            return Ok(None);
+        }
+
+        let then_ty = self
+            .block_result_ty(then_block)
+            .unwrap_or(self.cx.analysis.tcx.null);
+        let else_ty = else_branch
+            .as_deref()
+            .map(|e| self.expr_result_ty(e))
+            .unwrap_or(self.cx.analysis.tcx.null);
+        if !self.static_union_cast_branch_ty(then_ty) || !self.static_union_cast_branch_ty(else_ty)
+        {
+            return Ok(None);
+        }
+
+        let target = resolve_shallow(self.cx.analysis, target, &self.subst);
+        let result_ct = match op {
+            hir::CastOp::Is => Some(types::I8),
+            hir::CastOp::As => {
+                if matches!(
+                    self.cx.analysis.tcx.kind(target),
+                    TyKind::Union(_) | TyKind::Dynamic
+                ) || self.is_interface_ty(target)
+                {
+                    return Ok(None);
+                }
+                self.cx_clty(target)
+            }
+        };
+
+        let c = self
+            .h_expr(cond)?
+            .ok_or_else(|| CodegenError::new(cond.span, "condition has no value"))?;
+        let then_bb = self.b.create_block();
+        let else_bb = self.b.create_block();
+        let merge = self.b.create_block();
+        if let Some(ct) = result_ct {
+            self.b.append_block_param(merge, ct);
+        }
+        self.b.ins().brif(c, then_bb, &[], else_bb, &[]);
+        self.term = true;
+
+        self.switch(then_bb);
+        let then_val = self.h_block(then_block)?;
+        let then_cast =
+            self.finish_static_union_cast_branch(op, then_val, then_ty, target, span)?;
+        self.jump_to_merge(merge, then_cast, result_ct)?;
+
+        self.switch(else_bb);
+        let else_val = match else_branch.as_deref() {
+            Some(e) => self.h_expr(e)?,
+            None => None,
+        };
+        let else_cast =
+            self.finish_static_union_cast_branch(op, else_val, else_ty, target, span)?;
+        self.jump_to_merge(merge, else_cast, result_ct)?;
+
+        self.switch(merge);
+        let out = result_ct.map(|_| self.b.block_params(merge)[0]);
+        if matches!(op, hir::CastOp::As) && is_managed_ptr(self.cx.analysis, target) {
+            if let Some(v) = out {
+                self.mark_root(v);
+            }
+        }
+        Ok(Some(out))
+    }
+
+    fn block_result_ty(&self, block: &hir::Block) -> Option<Ty> {
+        block.trailing.as_ref().map(|expr| expr.ty)
+    }
+
+    fn expr_result_ty(&self, expr: &hir::Expr) -> Ty {
+        match &expr.kind {
+            hir::ExprKind::Block(block) => self
+                .block_result_ty(block)
+                .unwrap_or(self.cx.analysis.tcx.null),
+            _ => expr.ty,
+        }
+    }
+
+    fn static_union_cast_branch_ty(&self, ty: Ty) -> bool {
+        let ty = resolve_shallow(self.cx.analysis, ty, &self.subst);
+        if matches!(self.cx.analysis.tcx.kind(ty), TyKind::Null) {
+            return true;
+        }
+        if self.is_interface_ty(ty)
+            || is_managed_ptr(self.cx.analysis, ty)
+            || is_refcounted_ty(self.cx.analysis, ty)
+            || self.channel_endpoint_kind(ty).is_some()
+        {
+            return false;
+        }
+        matches!(
+            self.cx.analysis.tcx.kind(ty),
+            TyKind::Int(_)
+                | TyKind::Float(_)
+                | TyKind::Bool
+                | TyKind::Char
+                | TyKind::Named { .. }
+                    if clty_of(self.cx.analysis, ty).is_some()
+                        && (transparent_inner(self.cx.analysis, ty).is_some()
+                            || matches!(
+                                self.cx.analysis.tcx.kind(ty),
+                                TyKind::Int(_) | TyKind::Float(_) | TyKind::Bool | TyKind::Char
+                            ))
+        )
+    }
+
+    fn finish_static_union_cast_branch(
+        &mut self,
+        op: hir::CastOp,
+        val: Option<Value>,
+        from: Ty,
+        target: Ty,
+        span: Span,
+    ) -> CgResult<Option<Value>> {
+        if self.term {
+            return Ok(None);
+        }
+        let from = resolve_shallow(self.cx.analysis, from, &self.subst);
+        let matches = self.cx.analysis.tcx.variants(target).contains(&from);
+        match op {
+            hir::CastOp::Is => Ok(Some(self.b.ins().iconst(types::I8, i64::from(matches)))),
+            hir::CastOp::As if matches => match self.cx_clty(target) {
+                Some(_) => Ok(val),
+                None => Ok(None),
+            },
+            hir::CastOp::As => {
+                self.emit_static_union_cast_panic(span);
+                Ok(None)
+            }
+        }
+    }
+
+    fn emit_static_union_cast_panic(&mut self, span: Span) {
+        let _ = span;
+        let msg = self.const_str("cast failed: value is not the requested type");
+        self.call_intrinsic("lang_panic", &[PTR], None, &[msg]);
+        let tc = cranelift_codegen::ir::TrapCode::user(1).unwrap();
+        self.b.ins().trap(tc);
+        self.term = true;
+    }
+
+    fn static_union_cast_source_ty(&self, expr: &hir::Expr) -> Ty {
+        match &expr.kind {
+            hir::ExprKind::Adjust {
+                adjust: hir::Adjust::Widen(_),
+                expr,
+            } => self.static_union_cast_source_ty(expr),
+            hir::ExprKind::Block(block) => block
+                .trailing
+                .as_ref()
+                .map(|expr| self.static_union_cast_source_ty(expr))
+                .unwrap_or(self.cx.analysis.tcx.null),
+            _ => expr.ty,
+        }
+    }
+
+    fn h_static_union_cast_source_expr(
+        &mut self,
+        expr: &hir::Expr,
+    ) -> CgResult<(Option<Value>, Ty)> {
+        match &expr.kind {
+            hir::ExprKind::Adjust {
+                adjust: hir::Adjust::Widen(target),
+                expr: inner,
+            } if npo_union(
+                self.cx.analysis,
+                resolve_shallow(self.cx.analysis, *target, &self.subst),
+            )
+            .is_none() =>
+            {
+                let v = self.h_expr(inner)?;
+                Ok((v, inner.ty))
+            }
+            hir::ExprKind::Block(block) => {
+                for stmt in &block.stmts {
+                    self.h_stmt(stmt)?;
+                    if self.term {
+                        return Ok((None, self.cx.analysis.tcx.null));
+                    }
+                }
+                match &block.trailing {
+                    Some(trailing) => self.h_static_union_cast_source_expr(trailing),
+                    None => Ok((None, self.cx.analysis.tcx.null)),
+                }
+            }
+            _ => {
+                let v = self.h_expr(expr)?;
+                Ok((v, expr.ty))
+            }
+        }
+    }
+
+    fn h_static_iface_direct_cast(
+        &mut self,
+        op: hir::CastOp,
+        expr: &hir::Expr,
+        target: Ty,
+        span: Span,
+    ) -> CgResult<Option<Option<Value>>> {
+        let expr_ty = resolve_shallow(self.cx.analysis, expr.ty, &self.subst);
+        if !self.is_interface_ty(expr_ty) {
+            return Ok(None);
+        }
+        let Some(source_ty) = self.iface_cast_source_ty(expr) else {
+            return Ok(None);
+        };
+        if !self.static_iface_cast_source_ty_allowed(source_ty) {
+            return Ok(None);
+        }
+        let target = resolve_shallow(self.cx.analysis, target, &self.subst);
+        if !self.static_iface_cast_target_allowed(target) {
+            return Ok(None);
+        }
+        let (val, actual_ty) = self.h_iface_cast_source_expr(expr)?;
+        let out = self.finish_static_iface_cast_branch(op, val, actual_ty, target, span)?;
+        if matches!(op, hir::CastOp::As) && is_managed_ptr(self.cx.analysis, target) {
+            if let Some(v) = out {
+                self.mark_root(v);
+            }
+        }
+        Ok(Some(out))
+    }
+
+    fn h_static_iface_if_cast(
+        &mut self,
+        op: hir::CastOp,
+        expr: &hir::Expr,
+        target: Ty,
+        span: Span,
+    ) -> CgResult<Option<Option<Value>>> {
+        use hir::ExprKind as K;
+
+        let K::If {
+            cond,
+            then_block,
+            else_branch,
+        } = &expr.kind
+        else {
+            return Ok(None);
+        };
+        let expr_ty = resolve_shallow(self.cx.analysis, expr.ty, &self.subst);
+        if !self.is_interface_ty(expr_ty) {
+            return Ok(None);
+        }
+
+        let then_ty = self
+            .iface_cast_source_ty_block(then_block)
+            .ok_or_else(|| CodegenError::new(span, "interface branch has no value"))?;
+        let else_expr = else_branch
+            .as_deref()
+            .ok_or_else(|| CodegenError::new(span, "interface branch has no value"))?;
+        let else_ty = self
+            .iface_cast_source_ty(else_expr)
+            .ok_or_else(|| CodegenError::new(span, "interface branch has no concrete source"))?;
+        if !self.static_iface_cast_source_ty_allowed(then_ty)
+            || !self.static_iface_cast_source_ty_allowed(else_ty)
+        {
+            return Ok(None);
+        }
+
+        let target = resolve_shallow(self.cx.analysis, target, &self.subst);
+        if !self.static_iface_cast_target_allowed(target) {
+            return Ok(None);
+        }
+        let result_ct = self.static_iface_cast_result_ct(op, target)?;
+        let c = self
+            .h_expr(cond)?
+            .ok_or_else(|| CodegenError::new(cond.span, "condition has no value"))?;
+        let then_bb = self.b.create_block();
+        let else_bb = self.b.create_block();
+        let merge = self.b.create_block();
+        if let Some(ct) = result_ct {
+            self.b.append_block_param(merge, ct);
+        }
+        self.b.ins().brif(c, then_bb, &[], else_bb, &[]);
+        self.term = true;
+
+        self.switch(then_bb);
+        let (then_val, actual_then_ty) = self.h_iface_cast_source_block(then_block)?;
+        let then_cast =
+            self.finish_static_iface_cast_branch(op, then_val, actual_then_ty, target, span)?;
+        self.jump_to_merge(merge, then_cast, result_ct)?;
+
+        self.switch(else_bb);
+        let (else_val, actual_else_ty) = self.h_iface_cast_source_expr(else_expr)?;
+        let else_cast =
+            self.finish_static_iface_cast_branch(op, else_val, actual_else_ty, target, span)?;
+        self.jump_to_merge(merge, else_cast, result_ct)?;
+
+        self.switch(merge);
+        let out = result_ct.map(|_| self.b.block_params(merge)[0]);
+        if matches!(op, hir::CastOp::As) && is_managed_ptr(self.cx.analysis, target) {
+            if let Some(v) = out {
+                self.mark_root(v);
+            }
+        }
+        Ok(Some(out))
+    }
+
+    fn h_static_iface_match_cast(
+        &mut self,
+        op: hir::CastOp,
+        expr: &hir::Expr,
+        target: Ty,
+        span: Span,
+    ) -> CgResult<Option<Option<Value>>> {
+        use hir::ExprKind as K;
+
+        let K::Match { scrutinee, arms } = &expr.kind else {
+            return Ok(None);
+        };
+        let expr_ty = resolve_shallow(self.cx.analysis, expr.ty, &self.subst);
+        if !self.is_interface_ty(expr_ty) {
+            return Ok(None);
+        }
+
+        let mut source_tys = Vec::with_capacity(arms.len());
+        for arm in arms {
+            let Some(source_ty) = self.iface_cast_source_ty(&arm.body) else {
+                return Ok(None);
+            };
+            if !self.static_iface_cast_source_ty_allowed(source_ty) {
+                return Ok(None);
+            }
+            source_tys.push(source_ty);
+        }
+
+        let target = resolve_shallow(self.cx.analysis, target, &self.subst);
+        if !self.static_iface_cast_target_allowed(target) {
+            return Ok(None);
+        }
+        let result_ct = self.static_iface_cast_result_ct(op, target)?;
+        let sty = scrutinee.ty;
+        let scrut = self.h_expr(scrutinee)?;
+        let is_union = matches!(
+            self.cx.analysis.tcx.kind(sty),
+            TyKind::Union(_) | TyKind::Dynamic
+        );
+        let tag = if is_union {
+            scrut.map(|p| self.b.ins().load(types::I64, MemFlags::trusted(), p, 0))
+        } else {
+            None
+        };
+        let merge = self.b.create_block();
+        if let Some(ct) = result_ct {
+            self.b.append_block_param(merge, ct);
+        }
+
+        for (arm, source_ty) in arms.iter().zip(source_tys.into_iter()) {
+            let matched = self.h_pattern_matches(&arm.pattern, sty, scrut, tag)?;
+            let cand = self.b.create_block();
+            let next = self.b.create_block();
+            self.b.ins().brif(matched, cand, &[], next, &[]);
+            self.term = true;
+            self.switch(cand);
+            self.h_bind_match_pattern(&arm.pattern, sty, scrut, tag)?;
+            let proceed = match &arm.guard {
+                Some(g) => self
+                    .h_expr(g)?
+                    .ok_or_else(|| CodegenError::new(g.span, "guard has no value"))?,
+                None => self.b.ins().iconst(types::I8, 1),
+            };
+            let body_block = self.b.create_block();
+            self.b.ins().brif(proceed, body_block, &[], next, &[]);
+            self.term = true;
+            self.switch(body_block);
+            let (body_val, actual_ty) = self.h_iface_cast_source_expr(&arm.body)?;
+            let branch_ty = if self.term { source_ty } else { actual_ty };
+            let body_cast =
+                self.finish_static_iface_cast_branch(op, body_val, branch_ty, target, span)?;
+            self.jump_to_merge(merge, body_cast, result_ct)?;
+            self.switch(next);
+        }
+
+        let tc = cranelift_codegen::ir::TrapCode::user(1).unwrap();
+        self.b.ins().trap(tc);
+        self.term = true;
+        self.switch(merge);
+        Ok(Some(result_ct.map(|_| self.b.block_params(merge)[0])))
+    }
+
+    fn iface_cast_source_ty_block(&self, block: &hir::Block) -> Option<Ty> {
+        self.iface_cast_source_ty(block.trailing.as_deref()?)
+    }
+
+    fn iface_cast_source_ty(&self, expr: &hir::Expr) -> Option<Ty> {
+        match &expr.kind {
+            hir::ExprKind::Adjust {
+                adjust: Adjust::WidenDyn(_),
+                expr,
+            } => Some(expr.ty),
+            hir::ExprKind::Cast {
+                op: hir::CastOp::As,
+                expr,
+                target,
+            } if self.is_interface_ty(*target) => Some(expr.ty),
+            hir::ExprKind::Block(block) => self.iface_cast_source_ty_block(block),
+            _ => None,
+        }
+    }
+
+    fn h_iface_cast_source_block(&mut self, block: &hir::Block) -> CgResult<(Option<Value>, Ty)> {
+        for stmt in &block.stmts {
+            self.h_stmt(stmt)?;
+            if self.term {
+                return Ok((None, self.cx.analysis.tcx.null));
+            }
+        }
+        match &block.trailing {
+            Some(trailing) => self.h_iface_cast_source_expr(trailing),
+            None => Ok((None, self.cx.analysis.tcx.null)),
+        }
+    }
+
+    fn h_iface_cast_source_expr(&mut self, expr: &hir::Expr) -> CgResult<(Option<Value>, Ty)> {
+        match &expr.kind {
+            hir::ExprKind::Adjust {
+                adjust: Adjust::WidenDyn(_),
+                expr: inner,
+            } => {
+                let v = self.h_expr(inner)?;
+                Ok((v, inner.ty))
+            }
+            hir::ExprKind::Cast {
+                op: hir::CastOp::As,
+                expr: inner,
+                target,
+            } if self.is_interface_ty(*target) => {
+                let v = self.h_expr(inner)?;
+                Ok((v, inner.ty))
+            }
+            hir::ExprKind::Block(block) => self.h_iface_cast_source_block(block),
+            _ => {
+                let v = self.h_expr(expr)?;
+                Ok((v, expr.ty))
+            }
+        }
+    }
+
+    fn static_iface_cast_source_ty_allowed(&self, ty: Ty) -> bool {
+        let ty = resolve_shallow(self.cx.analysis, ty, &self.subst);
+        if self.is_interface_ty(ty)
+            || is_refcounted_ty(self.cx.analysis, ty)
+            || self.channel_endpoint_kind(ty).is_some()
+        {
+            return false;
+        }
+        matches!(
+            self.cx.analysis.tcx.kind(ty),
+            TyKind::Named { def, .. }
+                if self.cx.analysis.program.def(*def).kind == DefKind::Struct
+        )
+    }
+
+    fn static_iface_cast_target_allowed(&self, ty: Ty) -> bool {
+        let ty = resolve_shallow(self.cx.analysis, ty, &self.subst);
+        !self.is_interface_ty(ty)
+            && matches!(
+                self.cx.analysis.tcx.kind(ty),
+                TyKind::Named { def, .. }
+                    if self.cx.analysis.program.def(*def).kind == DefKind::Struct
+            )
+    }
+
+    fn static_iface_cast_result_ct(&self, op: hir::CastOp, target: Ty) -> CgResult<Option<ClType>> {
+        match op {
+            hir::CastOp::Is => Ok(Some(types::I8)),
+            hir::CastOp::As => Ok(self.cx_clty(target)),
+        }
+    }
+
+    fn finish_static_iface_cast_branch(
+        &mut self,
+        op: hir::CastOp,
+        val: Option<Value>,
+        from: Ty,
+        target: Ty,
+        span: Span,
+    ) -> CgResult<Option<Value>> {
+        if self.term {
+            return Ok(None);
+        }
+        let from = resolve_shallow(self.cx.analysis, from, &self.subst);
+        let target = resolve_shallow(self.cx.analysis, target, &self.subst);
+        let matches = from == target;
+        match op {
+            hir::CastOp::Is => Ok(Some(self.b.ins().iconst(types::I8, i64::from(matches)))),
+            hir::CastOp::As if matches => Ok(val),
+            hir::CastOp::As => {
+                self.emit_static_interface_cast_panic(span);
+                Ok(None)
+            }
+        }
+    }
+
+    fn emit_static_interface_cast_panic(&mut self, span: Span) {
+        let _ = span;
+        let msg = self.const_str("cast failed: interface object is not the requested type");
+        self.call_intrinsic("lang_panic", &[PTR], None, &[msg]);
+        let tc = cranelift_codegen::ir::TrapCode::user(1).unwrap();
+        self.b.ins().trap(tc);
+        self.term = true;
+    }
+
+    fn h_static_iface_branch_method_call(
+        &mut self,
+        iface_method: DefId,
+        receiver: &hir::Expr,
+        method_args: &[hir::Expr],
+        result_ty: Ty,
+        span: Span,
+    ) -> CgResult<Option<Option<Value>>> {
+        match &receiver.kind {
+            hir::ExprKind::If {
+                cond,
+                then_block,
+                else_branch,
+            } => self.h_static_iface_if_method_call(
+                iface_method,
+                cond,
+                then_block,
+                else_branch.as_deref(),
+                method_args,
+                result_ty,
+                span,
+            ),
+            hir::ExprKind::Match { scrutinee, arms } => self.h_static_iface_match_method_call(
+                iface_method,
+                scrutinee,
+                arms,
+                method_args,
+                result_ty,
+                span,
+            ),
+            _ => Ok(None),
+        }
+    }
+
+    fn h_static_iface_if_method_call(
+        &mut self,
+        iface_method: DefId,
+        cond: &hir::Expr,
+        then_block: &hir::Block,
+        else_branch: Option<&hir::Expr>,
+        method_args: &[hir::Expr],
+        result_ty: Ty,
+        span: Span,
+    ) -> CgResult<Option<Option<Value>>> {
+        let Some(then_ty) = self.iface_cast_source_ty_block(then_block) else {
+            return Ok(None);
+        };
+        let Some(else_expr) = else_branch else {
+            return Ok(None);
+        };
+        let Some(else_ty) = self.iface_cast_source_ty(else_expr) else {
+            return Ok(None);
+        };
+        if !self.static_iface_cast_source_ty_allowed(then_ty)
+            || !self.static_iface_cast_source_ty_allowed(else_ty)
+        {
+            return Ok(None);
+        }
+        if self.resolve_iface_method(iface_method, then_ty).is_none()
+            || self.resolve_iface_method(iface_method, else_ty).is_none()
+        {
+            return Ok(None);
+        }
+
+        let c = self
+            .h_expr(cond)?
+            .ok_or_else(|| CodegenError::new(cond.span, "condition has no value"))?;
+        let then_bb = self.b.create_block();
+        let else_bb = self.b.create_block();
+        let merge = self.b.create_block();
+        let result_ct = self.cx_clty(result_ty);
+        if let Some(ct) = result_ct {
+            self.b.append_block_param(merge, ct);
+        }
+        self.b.ins().brif(c, then_bb, &[], else_bb, &[]);
+        self.term = true;
+
+        self.switch(then_bb);
+        let (then_val, actual_then_ty) = self.h_iface_cast_source_block(then_block)?;
+        let then_result = self.finish_static_iface_method_branch(
+            iface_method,
+            then_val,
+            actual_then_ty,
+            method_args,
+            span,
+        )?;
+        self.jump_to_merge(merge, then_result, result_ct)?;
+
+        self.switch(else_bb);
+        let (else_val, actual_else_ty) = self.h_iface_cast_source_expr(else_expr)?;
+        let else_result = self.finish_static_iface_method_branch(
+            iface_method,
+            else_val,
+            actual_else_ty,
+            method_args,
+            span,
+        )?;
+        self.jump_to_merge(merge, else_result, result_ct)?;
+
+        self.switch(merge);
+        Ok(Some(result_ct.map(|_| self.b.block_params(merge)[0])))
+    }
+
+    fn h_static_iface_match_method_call(
+        &mut self,
+        iface_method: DefId,
+        scrutinee: &hir::Expr,
+        arms: &[hir::MatchArm],
+        method_args: &[hir::Expr],
+        result_ty: Ty,
+        span: Span,
+    ) -> CgResult<Option<Option<Value>>> {
+        let mut source_tys = Vec::with_capacity(arms.len());
+        for arm in arms {
+            let Some(source_ty) = self.iface_cast_source_ty(&arm.body) else {
+                return Ok(None);
+            };
+            if !self.static_iface_cast_source_ty_allowed(source_ty)
+                || self.resolve_iface_method(iface_method, source_ty).is_none()
+            {
+                return Ok(None);
+            }
+            source_tys.push(source_ty);
+        }
+
+        let sty = scrutinee.ty;
+        let scrut = self.h_expr(scrutinee)?;
+        let is_union = matches!(
+            self.cx.analysis.tcx.kind(sty),
+            TyKind::Union(_) | TyKind::Dynamic
+        );
+        let tag = if is_union {
+            scrut.map(|p| self.b.ins().load(types::I64, MemFlags::trusted(), p, 0))
+        } else {
+            None
+        };
+        let result_ct = self.cx_clty(result_ty);
+        let merge = self.b.create_block();
+        if let Some(ct) = result_ct {
+            self.b.append_block_param(merge, ct);
+        }
+
+        for (arm, source_ty) in arms.iter().zip(source_tys.into_iter()) {
+            let matched = self.h_pattern_matches(&arm.pattern, sty, scrut, tag)?;
+            let cand = self.b.create_block();
+            let next = self.b.create_block();
+            self.b.ins().brif(matched, cand, &[], next, &[]);
+            self.term = true;
+            self.switch(cand);
+            self.h_bind_match_pattern(&arm.pattern, sty, scrut, tag)?;
+            let proceed = match &arm.guard {
+                Some(g) => self
+                    .h_expr(g)?
+                    .ok_or_else(|| CodegenError::new(g.span, "guard has no value"))?,
+                None => self.b.ins().iconst(types::I8, 1),
+            };
+            let body_block = self.b.create_block();
+            self.b.ins().brif(proceed, body_block, &[], next, &[]);
+            self.term = true;
+            self.switch(body_block);
+            let (body_val, actual_ty) = self.h_iface_cast_source_expr(&arm.body)?;
+            let branch_ty = if self.term { source_ty } else { actual_ty };
+            let body_result = self.finish_static_iface_method_branch(
+                iface_method,
+                body_val,
+                branch_ty,
+                method_args,
+                span,
+            )?;
+            self.jump_to_merge(merge, body_result, result_ct)?;
+            self.switch(next);
+        }
+
+        let tc = cranelift_codegen::ir::TrapCode::user(1).unwrap();
+        self.b.ins().trap(tc);
+        self.term = true;
+        self.switch(merge);
+        Ok(Some(result_ct.map(|_| self.b.block_params(merge)[0])))
+    }
+
+    fn finish_static_iface_method_branch(
+        &mut self,
+        iface_method: DefId,
+        self_val: Option<Value>,
+        self_ty: Ty,
+        method_args: &[hir::Expr],
+        span: Span,
+    ) -> CgResult<Option<Value>> {
+        if self.term {
+            return Ok(None);
+        }
+        let self_ty = resolve_shallow(self.cx.analysis, self_ty, &self.subst);
+        let (target, targs) = self
+            .resolve_iface_method(iface_method, self_ty)
+            .ok_or_else(|| CodegenError::new(span, "interface method has no concrete impl"))?;
+        let self_val =
+            self_val.ok_or_else(|| CodegenError::new(span, "method receiver has no value"))?;
+        if is_managed_ptr(self.cx.analysis, self_ty) {
+            self.mark_root(self_val);
+        }
+        let mut arg_vals = vec![self_val];
+        for arg in method_args {
+            arg_vals.push(
+                self.h_expr(arg)?
+                    .ok_or_else(|| CodegenError::new(arg.span, "argument has no value"))?,
+            );
+        }
+        self.emit_call(target, targs, &arg_vals, span)
     }
 
     fn h_while(&mut self, cond: &hir::Expr, body: &hir::Block) -> CgResult<Option<Value>> {
@@ -865,11 +2070,14 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                             .ok_or_else(|| CodegenError::new(a.span, "argument has no value"))?,
                     );
                 }
+                if let Some(inlined) = self.try_inline_direct_call(*def, &targs, &arg_vals, span)? {
+                    return Ok(Some(inlined));
+                }
                 self.emit_call(*def, targs, &arg_vals, span)
             }
             hir::CallKind::Builtin(b) => self.h_builtin_call(*b, args),
             hir::CallKind::Extern { def } => self.h_extern_call(*def, args, span),
-            hir::CallKind::TupleCtor { def, .. } => self.h_tuple_ctor(*def, args, ty, span),
+            hir::CallKind::TupleCtor { def, .. } => self.h_tuple_ctor(*def, args, ty, span, false),
             hir::CallKind::BuiltinMethod { name } => self.h_builtin_method(name, args, ty),
             hir::CallKind::Closure { callee } => {
                 let env = self
@@ -897,6 +2105,110 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 is_static,
             } => self.h_method_call(*def, type_args, *recv_static, *is_static, args, ty, span),
         }
+    }
+
+    fn try_inline_direct_call(
+        &mut self,
+        def: DefId,
+        type_args: &[Ty],
+        arg_vals: &[Value],
+        span: Span,
+    ) -> CgResult<Option<Value>> {
+        if !type_args.is_empty() || self.async_out.is_some() {
+            return Ok(None);
+        }
+        let prog = &self.cx.analysis.program;
+        let d = prog.def(def);
+        if d.kind != DefKind::Function || d.parent.is_some() || !d.generics.is_empty() {
+            return Ok(None);
+        }
+        let Some(sig) = self.cx.hir.fn_sigs.get(&def) else {
+            return Ok(None);
+        };
+        if sig.async_output.is_some() || sig.params.len() != arg_vals.len() {
+            return Ok(None);
+        }
+        let Some(body) = self.cx.hir.bodies.get(&def) else {
+            return Ok(None);
+        };
+        let Some(expr) = body.block.trailing.as_deref() else {
+            return Ok(None);
+        };
+        if !self.scalar_inline_ty(sig.ret) {
+            return Ok(None);
+        }
+        for (_, ty) in &sig.params {
+            if !self.scalar_inline_ty(*ty) {
+                return Ok(None);
+            }
+        }
+        let mut allowed: HashSet<LocalId> = sig.params.iter().map(|(local, _)| *local).collect();
+        let mut cost = 0usize;
+        for stmt in &body.block.stmts {
+            let hir::StmtKind::Let { pattern, init } = &stmt.kind else {
+                return Ok(None);
+            };
+            let hir::PatternKind::Bind(local) = pattern.kind else {
+                return Ok(None);
+            };
+            let Some(local_ty) = self.cx.analysis.hir.local_ty(local) else {
+                return Ok(None);
+            };
+            if !self.scalar_inline_ty(local_ty) || !self.scalar_inline_ty(init.ty) {
+                return Ok(None);
+            }
+            let init_cost = inline_expr_cost_allowed(init, &allowed);
+            if init_cost == usize::MAX {
+                return Ok(None);
+            }
+            cost = cost.saturating_add(init_cost).saturating_add(1);
+            allowed.insert(local);
+        }
+        let expr_cost = inline_expr_cost_allowed(expr, &allowed);
+        if expr_cost == usize::MAX {
+            return Ok(None);
+        }
+        cost = cost.saturating_add(expr_cost);
+        let call_count = *self.cx.direct_call_counts.get(&def).unwrap_or(&0);
+        if !(call_count == 1 && cost <= 20 || cost <= 3) {
+            return Ok(None);
+        }
+
+        let saved_vars = self.vars.clone();
+        let saved_cells = self.cell_content.clone();
+        let saved_iface_facts = self.iface_local_concretes.clone();
+        for ((local, ty), value) in sig.params.iter().zip(arg_vals.iter().copied()) {
+            let ct = clty_of(self.cx.analysis, *ty)
+                .ok_or_else(|| CodegenError::new(span, "inline parameter is not lowerable"))?;
+            self.bind_local(*local, ct, value);
+        }
+        for stmt in &body.block.stmts {
+            if let hir::StmtKind::Let { pattern, init } = &stmt.kind {
+                if let hir::PatternKind::Bind(local) = pattern.kind {
+                    let v = self.h_expr(init)?.ok_or_else(|| {
+                        CodegenError::new(init.span, "inline local initializer has no value")
+                    })?;
+                    let ty =
+                        self.cx.analysis.hir.local_ty(local).ok_or_else(|| {
+                            CodegenError::new(init.span, "inline local has no type")
+                        })?;
+                    let ct = clty_of(self.cx.analysis, ty).ok_or_else(|| {
+                        CodegenError::new(init.span, "inline local is not lowerable")
+                    })?;
+                    self.bind_local(local, ct, v);
+                }
+            }
+        }
+        let result = self.h_expr(expr);
+        self.vars = saved_vars;
+        self.cell_content = saved_cells;
+        self.iface_local_concretes = saved_iface_facts;
+        result
+    }
+
+    fn scalar_inline_ty(&self, ty: Ty) -> bool {
+        let ty = resolve_shallow(self.cx.analysis, ty, &self.subst);
+        clty_of(self.cx.analysis, ty).is_some() && !is_managed_ptr(self.cx.analysis, ty)
     }
 
     /// A builtin `str`/`Map` method `recv.m(..)` — `args[0]` is the receiver.
@@ -1276,15 +2588,21 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         args: &[hir::Expr],
         ty: Ty,
         span: Span,
+        stack_alloc: bool,
     ) -> CgResult<Option<Value>> {
         if transparent_inner(self.cx.analysis, ty).is_some() {
             return self.h_expr(&args[0]);
+        }
+        if self.is_zero_sized_final_struct_ty(ty) {
+            return Ok(Some(self.b.ins().iconst(PTR, 0)));
         }
         let layout = self
             .layout_for_ty(ty)
             .unwrap_or_else(|| self.struct_layout(def, &[]));
         let ptr = if self.is_extern_struct_def(def) {
             self.alloc_extern(&layout)
+        } else if stack_alloc {
+            self.alloc_stack_struct(&layout)
         } else {
             let ptr = self.alloc_struct(&layout);
             self.mark_root(ptr)
@@ -1310,10 +2628,16 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         spread: Option<&hir::Expr>,
         sty: Ty,
         span: Span,
+        stack_alloc: bool,
     ) -> CgResult<Value> {
+        if self.is_zero_sized_final_struct_ty(sty) {
+            return Ok(self.b.ins().iconst(PTR, 0));
+        }
         let layout = self.struct_layout(def, type_args);
         let ptr = if self.is_extern_struct_def(def) {
             self.alloc_extern(&layout)
+        } else if stack_alloc {
+            self.alloc_stack_struct(&layout)
         } else {
             let ptr = self.alloc_struct_typed(&layout, sty)?;
             self.mark_root(ptr)
@@ -1819,6 +3143,8 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             self.term = true;
             self.switch(body_block);
             let body_val = self.h_expr(&arm.body)?;
+            let body_ty = self.expr_result_ty(&arm.body);
+            let body_val = self.coerce_branch_to_result(body_val, body_ty, result_ty);
             self.jump_to_merge(merge, body_val, result_ct)?;
             self.switch(next);
         }
@@ -1828,6 +3154,103 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         self.term = true;
         self.switch(merge);
         Ok(result_ct.map(|_| self.b.block_params(merge)[0]))
+    }
+
+    fn h_static_union_match_cast(
+        &mut self,
+        op: hir::CastOp,
+        expr: &hir::Expr,
+        target: Ty,
+        span: Span,
+    ) -> CgResult<Option<Option<Value>>> {
+        use hir::ExprKind as K;
+
+        let K::Match { scrutinee, arms } = &expr.kind else {
+            return Ok(None);
+        };
+
+        let expr_ty = resolve_shallow(self.cx.analysis, expr.ty, &self.subst);
+        if npo_union(self.cx.analysis, expr_ty).is_some()
+            || !matches!(
+                self.cx.analysis.tcx.kind(expr_ty),
+                TyKind::Union(_) | TyKind::Dynamic
+            )
+        {
+            return Ok(None);
+        }
+
+        let mut source_tys = Vec::with_capacity(arms.len());
+        for arm in arms {
+            let source_ty = self.static_union_cast_source_ty(&arm.body);
+            if !self.static_union_cast_branch_ty(source_ty) {
+                return Ok(None);
+            }
+            source_tys.push(source_ty);
+        }
+
+        let target = resolve_shallow(self.cx.analysis, target, &self.subst);
+        let result_ct = match op {
+            hir::CastOp::Is => Some(types::I8),
+            hir::CastOp::As => {
+                if matches!(
+                    self.cx.analysis.tcx.kind(target),
+                    TyKind::Union(_) | TyKind::Dynamic
+                ) || self.is_interface_ty(target)
+                    || !self.static_union_cast_branch_ty(target)
+                {
+                    return Ok(None);
+                }
+                self.cx_clty(target)
+            }
+        };
+
+        let sty = scrutinee.ty;
+        let scrut = self.h_expr(scrutinee)?;
+        let is_union = matches!(
+            self.cx.analysis.tcx.kind(sty),
+            TyKind::Union(_) | TyKind::Dynamic
+        );
+        let tag = if is_union {
+            scrut.map(|p| self.b.ins().load(types::I64, MemFlags::trusted(), p, 0))
+        } else {
+            None
+        };
+        let merge = self.b.create_block();
+        if let Some(ct) = result_ct {
+            self.b.append_block_param(merge, ct);
+        }
+
+        for (arm, source_ty) in arms.iter().zip(source_tys.into_iter()) {
+            let matched = self.h_pattern_matches(&arm.pattern, sty, scrut, tag)?;
+            let cand = self.b.create_block();
+            let next = self.b.create_block();
+            self.b.ins().brif(matched, cand, &[], next, &[]);
+            self.term = true;
+            self.switch(cand);
+            self.h_bind_match_pattern(&arm.pattern, sty, scrut, tag)?;
+            let proceed = match &arm.guard {
+                Some(g) => self
+                    .h_expr(g)?
+                    .ok_or_else(|| CodegenError::new(g.span, "guard has no value"))?,
+                None => self.b.ins().iconst(types::I8, 1),
+            };
+            let body_block = self.b.create_block();
+            self.b.ins().brif(proceed, body_block, &[], next, &[]);
+            self.term = true;
+            self.switch(body_block);
+            let (body_val, actual_ty) = self.h_static_union_cast_source_expr(&arm.body)?;
+            let branch_ty = if self.term { source_ty } else { actual_ty };
+            let body_val =
+                self.finish_static_union_cast_branch(op, body_val, branch_ty, target, span)?;
+            self.jump_to_merge(merge, body_val, result_ct)?;
+            self.switch(next);
+        }
+
+        let tc = cranelift_codegen::ir::TrapCode::user(1).unwrap();
+        self.b.ins().trap(tc);
+        self.term = true;
+        self.switch(merge);
+        Ok(Some(result_ct.map(|_| self.b.block_params(merge)[0])))
     }
 
     fn h_pattern_matches(
@@ -2795,6 +4218,51 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         self.h_expr(arg)
     }
 
+    /// If an interface-object receiver was just built from a concrete value for
+    /// this call, return the inner concrete receiver and the concrete impl that
+    /// should be called directly. This devirtualizes the common
+    /// `(Concrete { ... } as Interface).method()` / baked `WidenDyn` shape:
+    /// evaluation order stays receiver-then-arguments, but codegen skips the
+    /// interface wrapper allocation, vtable load, type-id stamp, and indirect
+    /// call.
+    fn concrete_iface_receiver<'e>(
+        &self,
+        iface_method: DefId,
+        receiver: &'e hir::Expr,
+    ) -> Option<ConcreteIfaceReceiver<'e>> {
+        if let hir::ExprKind::Name(hir::Res::Local(local)) = &receiver.kind {
+            let concrete = *self.iface_local_concretes.get(local)?;
+            let (target, targs) = self.resolve_iface_method(iface_method, concrete)?;
+            return Some(ConcreteIfaceReceiver::InterfaceLocal {
+                local: *local,
+                target,
+                targs,
+            });
+        }
+        let inner = match &receiver.kind {
+            hir::ExprKind::Adjust {
+                adjust: Adjust::WidenDyn(_),
+                expr,
+            } => expr.as_ref(),
+            hir::ExprKind::Cast {
+                op: hir::CastOp::As,
+                expr,
+                target,
+            } if self.is_interface_ty(*target) => expr.as_ref(),
+            _ => return None,
+        };
+        let concrete = resolve_shallow(self.cx.analysis, inner.ty, &self.subst);
+        if self.is_interface_ty(concrete) {
+            return None;
+        }
+        let (target, targs) = self.resolve_iface_method(iface_method, concrete)?;
+        Some(ConcreteIfaceReceiver::Immediate {
+            inner,
+            target,
+            targs,
+        })
+    }
+
     /// A method call `recv.m(..)` / static `Type.m(..)` — mirrors the AST
     /// `gen_method_call`/`gen_static_call`, covering dynamic dispatch through an
     /// interface object's vtable, the builtin-bound fallbacks
@@ -2857,6 +4325,53 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             && matches!(self.cx.analysis.tcx.kind(recv_ty),
                 TyKind::Named { def: d, .. } if self.cx.analysis.program.def(*d).kind == DefKind::Interface)
         {
+            if let Some(v) =
+                self.h_static_iface_branch_method_call(def, receiver, method_args, ty, span)?
+            {
+                return Ok(v);
+            }
+            if let Some(devirt) = self.concrete_iface_receiver(def, receiver) {
+                let (self_val, target, targs) = match devirt {
+                    ConcreteIfaceReceiver::Immediate {
+                        inner,
+                        target,
+                        targs,
+                    } => {
+                        let self_val = self.h_expr(inner)?.ok_or_else(|| {
+                            CodegenError::new(inner.span, "method receiver has no value")
+                        })?;
+                        // `gen_widen_dyn` used to root the concrete data pointer
+                        // before allocating the interface object. After
+                        // devirtualization, keep the same GC safety across
+                        // method-argument evaluation.
+                        let inner_ty = resolve_shallow(self.cx.analysis, inner.ty, &self.subst);
+                        if is_managed_ptr(self.cx.analysis, inner_ty) {
+                            self.mark_root(self_val);
+                        }
+                        (self_val, target, targs)
+                    }
+                    ConcreteIfaceReceiver::InterfaceLocal {
+                        local,
+                        target,
+                        targs,
+                    } => {
+                        let obj = self.read_local(local).ok_or_else(|| {
+                            CodegenError::new(receiver.span, "interface receiver has no value")
+                        })?;
+                        let data = self.b.ins().load(PTR, MemFlags::trusted(), obj, 8);
+                        self.mark_root(data);
+                        (data, target, targs)
+                    }
+                };
+                let mut arg_vals = vec![self_val];
+                for a in method_args {
+                    arg_vals.push(
+                        self.h_expr(a)?
+                            .ok_or_else(|| CodegenError::new(a.span, "argument has no value"))?,
+                    );
+                }
+                return self.emit_call(target, targs, &arg_vals, span);
+            }
             let slot = self
                 .vtable_slot(def)
                 .ok_or_else(|| CodegenError::new(span, "method not found in interface"))?;
@@ -3417,9 +4932,370 @@ fn hir_to_ast_binop(op: hir::BinaryOp) -> BinaryOp {
     }
 }
 
+fn inline_expr_cost_allowed(expr: &hir::Expr, allowed: &HashSet<LocalId>) -> usize {
+    inline_expr_cost_inner(expr, allowed)
+}
+
+fn inline_expr_cost_inner(expr: &hir::Expr, allowed: &HashSet<LocalId>) -> usize {
+    use hir::ExprKind as K;
+    const NO: usize = usize::MAX;
+    match &expr.kind {
+        K::Int(_) | K::Float(_) | K::Bool(_) | K::Char(_) | K::Null => 1,
+        K::Name(hir::Res::Local(local)) if allowed.contains(local) => 1,
+        K::Unary {
+            operand,
+            overload: None,
+            ..
+        } => inline_expr_cost_inner(operand, allowed).saturating_add(1),
+        K::Binary {
+            op,
+            left,
+            right,
+            overload: None,
+        } if !matches!(op, hir::BinaryOp::And | hir::BinaryOp::Or) => {
+            let l = inline_expr_cost_inner(left, allowed);
+            let r = inline_expr_cost_inner(right, allowed);
+            if l == NO || r == NO {
+                NO
+            } else {
+                l.saturating_add(r).saturating_add(1)
+            }
+        }
+        K::Cast {
+            op: hir::CastOp::As,
+            expr,
+            ..
+        } => inline_expr_cost_inner(expr, allowed).saturating_add(1),
+        K::Intrinsic {
+            intrinsic: hir::Intrinsic::Num(_),
+            args,
+        } => {
+            let mut cost = 1usize;
+            for arg in args {
+                let c = inline_expr_cost_inner(arg, allowed);
+                if c == NO {
+                    return NO;
+                }
+                cost = cost.saturating_add(c);
+            }
+            cost
+        }
+        _ => NO,
+    }
+}
+
+fn h_for_each_child_expr(expr: &hir::Expr, f: &mut impl FnMut(&hir::Expr)) {
+    use hir::ExprKind as K;
+    match &expr.kind {
+        K::Unary { operand, .. }
+        | K::Cast { expr: operand, .. }
+        | K::Field {
+            receiver: operand, ..
+        }
+        | K::TupleIndex {
+            receiver: operand, ..
+        }
+        | K::Try { expr: operand, .. }
+        | K::Await { expr: operand, .. }
+        | K::Spawn { expr: operand, .. }
+        | K::Ref(operand)
+        | K::Deref(operand)
+        | K::Adjust { expr: operand, .. }
+        | K::Return(Some(operand))
+        | K::Break(Some(operand)) => f(operand),
+        K::Binary { left, right, .. } => {
+            f(left);
+            f(right);
+        }
+        K::Tuple(xs) | K::List(xs) => {
+            for x in xs {
+                f(x);
+            }
+        }
+        K::Map(items) => {
+            for item in items {
+                match item {
+                    hir::MapEntry::Kv { key, value } => {
+                        f(key);
+                        f(value);
+                    }
+                    hir::MapEntry::Spread(x) => f(x),
+                }
+            }
+        }
+        K::Struct { fields, spread, .. } => {
+            for field in fields {
+                f(&field.value);
+            }
+            if let Some(x) = spread {
+                f(x);
+            }
+        }
+        K::Str(parts) => {
+            for part in parts {
+                if let hir::StrPart::Interp { expr, .. } = part {
+                    f(expr);
+                }
+            }
+        }
+        K::Call { kind, args, .. } => {
+            if let hir::CallKind::Closure { callee } = kind {
+                f(callee);
+            }
+            for arg in args {
+                f(arg);
+            }
+        }
+        K::Intrinsic { args, .. } => {
+            for arg in args {
+                f(arg);
+            }
+        }
+        K::Index { receiver, index } => {
+            f(receiver);
+            f(index);
+        }
+        K::If {
+            cond, else_branch, ..
+        } => {
+            f(cond);
+            if let Some(x) = else_branch {
+                f(x);
+            }
+        }
+        K::Match { scrutinee, arms } => {
+            f(scrutinee);
+            for arm in arms {
+                if let Some(guard) = &arm.guard {
+                    f(guard);
+                }
+                f(&arm.body);
+            }
+        }
+        K::While { cond, .. } => f(cond),
+        K::For { iter, .. } => f(iter),
+        _ => {}
+    }
+}
+
+fn h_collect_stack_struct_escapes_block(
+    block: &hir::Block,
+    candidates: &HashSet<LocalId>,
+    escapes: &mut HashSet<LocalId>,
+) {
+    for stmt in &block.stmts {
+        match &stmt.kind {
+            hir::StmtKind::Let { init, .. } => {
+                h_collect_stack_struct_escapes_expr(init, candidates, escapes, false);
+            }
+            hir::StmtKind::Assign { target, value } => {
+                h_collect_stack_struct_escapes_assignment_target(target, candidates, escapes);
+                h_collect_stack_struct_escapes_expr(value, candidates, escapes, false);
+            }
+            hir::StmtKind::Expr(e) => {
+                h_collect_stack_struct_escapes_expr(e, candidates, escapes, false);
+            }
+            hir::StmtKind::Item(_) => {}
+        }
+    }
+    if let Some(trailing) = &block.trailing {
+        h_collect_stack_struct_escapes_expr(trailing, candidates, escapes, false);
+    }
+}
+
+fn h_collect_stack_struct_escapes_assignment_target(
+    target: &hir::Expr,
+    candidates: &HashSet<LocalId>,
+    escapes: &mut HashSet<LocalId>,
+) {
+    match &target.kind {
+        hir::ExprKind::Name(hir::Res::Local(local)) if candidates.contains(local) => {}
+        hir::ExprKind::Field { receiver, .. } | hir::ExprKind::TupleIndex { receiver, .. } => {
+            h_collect_stack_struct_escapes_expr(receiver, candidates, escapes, true);
+        }
+        _ => h_collect_stack_struct_escapes_expr(target, candidates, escapes, false),
+    }
+}
+
+fn h_collect_stack_struct_escapes_expr(
+    expr: &hir::Expr,
+    candidates: &HashSet<LocalId>,
+    escapes: &mut HashSet<LocalId>,
+    field_receiver_ok: bool,
+) {
+    use hir::ExprKind as K;
+    match &expr.kind {
+        K::Name(hir::Res::Local(local)) if candidates.contains(local) => {
+            if !field_receiver_ok {
+                escapes.insert(*local);
+            }
+        }
+        K::Field { receiver, .. } | K::TupleIndex { receiver, .. } => {
+            h_collect_stack_struct_escapes_expr(receiver, candidates, escapes, true);
+        }
+        K::Block(block) | K::Loop(block) => {
+            h_collect_stack_struct_escapes_block(block, candidates, escapes);
+        }
+        K::If {
+            cond,
+            then_block,
+            else_branch,
+        } => {
+            h_collect_stack_struct_escapes_expr(cond, candidates, escapes, false);
+            h_collect_stack_struct_escapes_block(then_block, candidates, escapes);
+            if let Some(e) = else_branch {
+                h_collect_stack_struct_escapes_expr(e, candidates, escapes, false);
+            }
+        }
+        K::While { cond, body } => {
+            h_collect_stack_struct_escapes_expr(cond, candidates, escapes, false);
+            h_collect_stack_struct_escapes_block(body, candidates, escapes);
+        }
+        K::Match { scrutinee, arms } => {
+            h_collect_stack_struct_escapes_expr(scrutinee, candidates, escapes, false);
+            for arm in arms {
+                if let Some(guard) = &arm.guard {
+                    h_collect_stack_struct_escapes_expr(guard, candidates, escapes, false);
+                }
+                h_collect_stack_struct_escapes_expr(&arm.body, candidates, escapes, false);
+            }
+        }
+        K::For { iter, body, .. } => {
+            h_collect_stack_struct_escapes_expr(iter, candidates, escapes, false);
+            h_collect_stack_struct_escapes_block(body, candidates, escapes);
+        }
+        K::Closure { .. } | K::AsyncBlock { .. } => {}
+        _ => h_for_each_child_expr(expr, &mut |child| {
+            h_collect_stack_struct_escapes_expr(child, candidates, escapes, false)
+        }),
+    }
+}
+
 // ===========================================================================
 // Coverage predicate — conservatively, exactly the forms `h_expr` handles
 // ===========================================================================
+
+fn h_collect_assigned_locals_block(b: &hir::Block, out: &mut HashSet<LocalId>) {
+    for stmt in &b.stmts {
+        match &stmt.kind {
+            hir::StmtKind::Let { init, .. } => h_collect_assigned_locals_expr(init, out),
+            hir::StmtKind::Assign { target, value } => {
+                if let hir::ExprKind::Name(hir::Res::Local(local)) = &target.kind {
+                    out.insert(*local);
+                }
+                h_collect_assigned_locals_expr(target, out);
+                h_collect_assigned_locals_expr(value, out);
+            }
+            hir::StmtKind::Expr(e) => h_collect_assigned_locals_expr(e, out),
+            hir::StmtKind::Item(_) => {}
+        }
+    }
+    if let Some(t) = &b.trailing {
+        h_collect_assigned_locals_expr(t, out);
+    }
+}
+
+fn h_collect_assigned_locals_expr(e: &hir::Expr, out: &mut HashSet<LocalId>) {
+    use hir::ExprKind as K;
+    match &e.kind {
+        // Nested executable scopes run later, with their own fact maps.
+        K::Closure { .. } | K::AsyncBlock { .. } => {}
+        K::Unary { operand: x, .. }
+        | K::Cast { expr: x, .. }
+        | K::Field { receiver: x, .. }
+        | K::TupleIndex { receiver: x, .. }
+        | K::Try { expr: x, .. }
+        | K::Await { expr: x, .. }
+        | K::Spawn { expr: x, .. }
+        | K::Ref(x)
+        | K::Deref(x)
+        | K::Adjust { expr: x, .. }
+        | K::Return(Some(x))
+        | K::Break(Some(x)) => h_collect_assigned_locals_expr(x, out),
+        K::Binary { left, right, .. } => {
+            h_collect_assigned_locals_expr(left, out);
+            h_collect_assigned_locals_expr(right, out);
+        }
+        K::Tuple(xs) | K::List(xs) => {
+            for x in xs {
+                h_collect_assigned_locals_expr(x, out);
+            }
+        }
+        K::Map(items) => {
+            for item in items {
+                match item {
+                    hir::MapEntry::Kv { key, value } => {
+                        h_collect_assigned_locals_expr(key, out);
+                        h_collect_assigned_locals_expr(value, out);
+                    }
+                    hir::MapEntry::Spread(x) => h_collect_assigned_locals_expr(x, out),
+                }
+            }
+        }
+        K::Struct { fields, spread, .. } => {
+            for field in fields {
+                h_collect_assigned_locals_expr(&field.value, out);
+            }
+            if let Some(x) = spread {
+                h_collect_assigned_locals_expr(x, out);
+            }
+        }
+        K::Str(parts) => {
+            for part in parts {
+                if let hir::StrPart::Interp { expr, .. } = part {
+                    h_collect_assigned_locals_expr(expr, out);
+                }
+            }
+        }
+        K::Call { kind, args, .. } => {
+            if let hir::CallKind::Closure { callee } = kind {
+                h_collect_assigned_locals_expr(callee, out);
+            }
+            for arg in args {
+                h_collect_assigned_locals_expr(arg, out);
+            }
+        }
+        K::Intrinsic { args, .. } => {
+            for arg in args {
+                h_collect_assigned_locals_expr(arg, out);
+            }
+        }
+        K::Index { receiver, index } => {
+            h_collect_assigned_locals_expr(receiver, out);
+            h_collect_assigned_locals_expr(index, out);
+        }
+        K::If {
+            cond,
+            then_block,
+            else_branch,
+        } => {
+            h_collect_assigned_locals_expr(cond, out);
+            h_collect_assigned_locals_block(then_block, out);
+            if let Some(x) = else_branch {
+                h_collect_assigned_locals_expr(x, out);
+            }
+        }
+        K::Match { scrutinee, arms } => {
+            h_collect_assigned_locals_expr(scrutinee, out);
+            for arm in arms {
+                if let Some(guard) = &arm.guard {
+                    h_collect_assigned_locals_expr(guard, out);
+                }
+                h_collect_assigned_locals_expr(&arm.body, out);
+            }
+        }
+        K::Block(b) | K::Loop(b) => h_collect_assigned_locals_block(b, out),
+        K::While { cond, body } => {
+            h_collect_assigned_locals_expr(cond, out);
+            h_collect_assigned_locals_block(body, out);
+        }
+        K::For { iter, body, .. } => {
+            h_collect_assigned_locals_expr(iter, out);
+            h_collect_assigned_locals_block(body, out);
+        }
+        _ => {}
+    }
+}
 
 // ===========================================================================
 // Async-body analysis over the HIR (mirrors `support.rs`'s AST versions; the

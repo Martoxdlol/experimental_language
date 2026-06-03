@@ -16,11 +16,15 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         span: Span,
     ) -> CgResult<Value> {
         let data = v.ok_or_else(|| CodegenError::new(span, "interface value has no data"))?;
-        self.mark_root(data);
+        let zero_sized = self.is_zero_sized_final_struct_ty(from);
+        if !zero_sized {
+            self.mark_root(data);
+        }
         let vtable = self.emit_vtable(from, iface, span)?;
         // box: [vtable: *const (unmanaged)][data: *managed][type_id: i64]
         // The type id supports `is`/`as` downcasts back to the concrete type.
-        let desc = self.emit_descriptor(24, GC_KIND_PLAIN, &[8]);
+        let ptr_offsets: &[u32] = if zero_sized { &[] } else { &[8] };
+        let desc = self.emit_descriptor(24, GC_KIND_PLAIN, ptr_offsets);
         let ptr = self
             .call_intrinsic("lang_alloc", &[PTR], Some(PTR), &[desc])
             .expect("lang_alloc returns a pointer");
@@ -173,7 +177,8 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             self.b.ins().store(MemFlags::trusted(), copy, ptr, 8);
             return ptr;
         }
-        let managed = is_managed_ptr(self.cx.analysis, resolved);
+        let zero_sized = self.is_zero_sized_final_struct_ty(resolved);
+        let managed = !zero_sized && is_managed_ptr(self.cx.analysis, resolved);
         // If the payload is itself a managed pointer, it must survive the box
         // allocation below (which is a GC safepoint) even though it is not yet
         // stored anywhere — root it so a collection cannot free it.

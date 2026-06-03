@@ -208,6 +208,46 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     /// (extern struct fields are scalars / raw pointers), and `&value` is this
     /// same address ("extern stack values: no pin needed", `docs/19` §2).
     pub(crate) fn alloc_extern(&mut self, layout: &Layout) -> Value {
+        self.alloc_stack_block(layout)
+    }
+
+    /// Allocate a zeroed stack field-block for a non-escaping, heap-layout
+    /// ordinary struct. This deliberately has the same field-block pointer
+    /// representation as managed structs within the frame, but no object header
+    /// or descriptor because the value is proven local and has no traced fields.
+    pub(crate) fn alloc_stack_struct(&mut self, layout: &Layout) -> Value {
+        self.alloc_stack_block(layout)
+    }
+
+    /// A nominal struct whose runtime value carries no field data and no
+    /// finalization/ownership obligation can use a null field-block sentinel.
+    /// Union/dynamic boxing still records the type id; interface objects still
+    /// record the vtable. This only removes the otherwise-empty payload object.
+    pub(crate) fn is_zero_sized_final_struct_ty(&self, ty: Ty) -> bool {
+        let resolved = resolve_shallow(self.cx.analysis, ty, &self.subst);
+        if is_refcounted_ty(self.cx.analysis, resolved) {
+            return false;
+        }
+        let TyKind::Named { def, .. } = self.cx.analysis.tcx.kind(resolved) else {
+            return false;
+        };
+        let d = self.cx.analysis.program.def(*def);
+        if d.kind != DefKind::Struct || d.attrs.iter().any(|a| a.name.name == "Transparent") {
+            return false;
+        }
+        let drop_def = self.cx.analysis.program.drop_def;
+        if drop_def != DefId(0) && self.cx.hir.iface_impls.contains_key(&(*def, drop_def)) {
+            return false;
+        }
+        match self.cx.hir.structs.get(def) {
+            Some(compiler::sema::StructFields::Unit) => true,
+            Some(compiler::sema::StructFields::Tuple(fields)) => fields.is_empty(),
+            Some(compiler::sema::StructFields::Record(fields)) => fields.is_empty(),
+            None => false,
+        }
+    }
+
+    fn alloc_stack_block(&mut self, layout: &Layout) -> Value {
         let size = layout.size.max(1);
         let align = layout.align.max(1);
         // Cranelift only reliably honors stack-slot alignment up to the stack's

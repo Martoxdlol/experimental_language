@@ -1,0 +1,48 @@
+// Scalar helper inlining benchmarks for backend optimization work.
+//
+//   otter_fusion bench examples/inlining_bench.otter
+//
+// `single_call_scalar_inline` and `single_call_scalar_let_inline` exercise the
+// call-graph-guided inliner: each non-tiny helper is called once from the
+// benchmark body and can be emitted inline. `multi_call_scalar_direct` calls the
+// same non-tiny helper repeatedly, so the conservative inlining pass keeps it as
+// a real call.
+
+function mix(a: i64, b: i64): i64 { ((a & b) ^ (a | b)) ^ (a ^ b) }
+
+function adjust(a: i64, b: i64): i64 {
+  var both = a & b;
+  var either = a | b;
+  (both ^ either) ^ (a ^ b)
+}
+
+bench "single_call_scalar_inline" {
+  var i = 0;
+  var total = 0;
+  while i < 1000 {
+    total = total + i;
+    i = i + 1;
+  }
+  mix(total, 3);
+}
+
+bench "single_call_scalar_let_inline" {
+  var i = 0;
+  var total = 0;
+  while i < 1000 {
+    total = total + i;
+    i = i + 1;
+  }
+  adjust(total, 3);
+}
+
+bench "multi_call_scalar_direct" {
+  var i = 0;
+  var total = 0;
+  while i < 1000 {
+    total = total + mix(i, 3);
+    i = i + 1;
+  }
+}
+
+function main() {}

@@ -20,7 +20,7 @@
 //! one `Module`-generic backend.
 
 use compiler::ast::*;
-use compiler::hir::Hir;
+use compiler::hir::{self, Hir};
 use compiler::ids::{DefId, LocalId};
 use compiler::sema::results::ForIter;
 use compiler::sema::{Adjust, Analysis, Builtin, CloneKind, DefKind, NumIntrinsic};
@@ -639,6 +639,147 @@ fn is_release() -> bool {
 /// object output, at program load time.
 type Safepoint = (FuncId, u32, u32, Vec<u32>);
 
+fn collect_direct_call_counts(hir: &Hir) -> HashMap<DefId, usize> {
+    let mut out = HashMap::new();
+    for body in hir.bodies.values() {
+        collect_direct_calls_block(&body.block, &mut out);
+    }
+    out
+}
+
+fn collect_direct_calls_block(block: &hir::Block, out: &mut HashMap<DefId, usize>) {
+    for stmt in &block.stmts {
+        match &stmt.kind {
+            hir::StmtKind::Let { init, .. } => collect_direct_calls_expr(init, out),
+            hir::StmtKind::Assign { target, value } => {
+                collect_direct_calls_expr(target, out);
+                collect_direct_calls_expr(value, out);
+            }
+            hir::StmtKind::Expr(e) => collect_direct_calls_expr(e, out),
+            hir::StmtKind::Item(_) => {}
+        }
+    }
+    if let Some(t) = &block.trailing {
+        collect_direct_calls_expr(t, out);
+    }
+}
+
+fn collect_direct_calls_expr(expr: &hir::Expr, out: &mut HashMap<DefId, usize>) {
+    use hir::ExprKind as K;
+    match &expr.kind {
+        K::Call {
+            kind: hir::CallKind::Direct { def, .. },
+            args,
+            ..
+        } => {
+            *out.entry(*def).or_insert(0) += 1;
+            for arg in args {
+                collect_direct_calls_expr(arg, out);
+            }
+        }
+        K::Call { kind, args, .. } => {
+            if let hir::CallKind::Closure { callee } = kind {
+                collect_direct_calls_expr(callee, out);
+            }
+            for arg in args {
+                collect_direct_calls_expr(arg, out);
+            }
+        }
+        K::Unary { operand, .. }
+        | K::Cast { expr: operand, .. }
+        | K::Field {
+            receiver: operand, ..
+        }
+        | K::TupleIndex {
+            receiver: operand, ..
+        }
+        | K::Try { expr: operand, .. }
+        | K::Await { expr: operand, .. }
+        | K::Spawn { expr: operand, .. }
+        | K::Ref(operand)
+        | K::Deref(operand)
+        | K::Adjust { expr: operand, .. }
+        | K::Return(Some(operand))
+        | K::Break(Some(operand)) => collect_direct_calls_expr(operand, out),
+        K::Binary { left, right, .. } => {
+            collect_direct_calls_expr(left, out);
+            collect_direct_calls_expr(right, out);
+        }
+        K::Tuple(xs) | K::List(xs) => {
+            for x in xs {
+                collect_direct_calls_expr(x, out);
+            }
+        }
+        K::Map(items) => {
+            for item in items {
+                match item {
+                    hir::MapEntry::Kv { key, value } => {
+                        collect_direct_calls_expr(key, out);
+                        collect_direct_calls_expr(value, out);
+                    }
+                    hir::MapEntry::Spread(x) => collect_direct_calls_expr(x, out),
+                }
+            }
+        }
+        K::Struct { fields, spread, .. } => {
+            for field in fields {
+                collect_direct_calls_expr(&field.value, out);
+            }
+            if let Some(x) = spread {
+                collect_direct_calls_expr(x, out);
+            }
+        }
+        K::Str(parts) => {
+            for part in parts {
+                if let hir::StrPart::Interp { expr, .. } = part {
+                    collect_direct_calls_expr(expr, out);
+                }
+            }
+        }
+        K::Intrinsic { args, .. } => {
+            for arg in args {
+                collect_direct_calls_expr(arg, out);
+            }
+        }
+        K::Index { receiver, index } => {
+            collect_direct_calls_expr(receiver, out);
+            collect_direct_calls_expr(index, out);
+        }
+        K::If {
+            cond,
+            then_block,
+            else_branch,
+        } => {
+            collect_direct_calls_expr(cond, out);
+            collect_direct_calls_block(then_block, out);
+            if let Some(x) = else_branch {
+                collect_direct_calls_expr(x, out);
+            }
+        }
+        K::Match { scrutinee, arms } => {
+            collect_direct_calls_expr(scrutinee, out);
+            for arm in arms {
+                if let Some(guard) = &arm.guard {
+                    collect_direct_calls_expr(guard, out);
+                }
+                collect_direct_calls_expr(&arm.body, out);
+            }
+        }
+        K::Block(b) | K::Loop(b) => collect_direct_calls_block(b, out),
+        K::While { cond, body } => {
+            collect_direct_calls_expr(cond, out);
+            collect_direct_calls_block(body, out);
+        }
+        K::For { iter, body, .. } => {
+            collect_direct_calls_expr(iter, out);
+            collect_direct_calls_block(body, out);
+        }
+        K::Closure { body, .. } => collect_direct_calls_expr(body, out),
+        K::AsyncBlock { body, .. } => collect_direct_calls_block(body, out),
+        _ => {}
+    }
+}
+
 /// Build a target ISA for `triple`. `pic` selects position-independent code:
 /// the JIT loads code at a fixed address (`false`), but object output is linked
 /// into a PIE executable, so it must be position-independent (`true`).
@@ -686,6 +827,7 @@ fn run_codegen_with_filter<M: Module>(
     // Locals captured by some closure / `async` block — collected by walking the
     // HIR (was the `closures` / `async_blocks` side tables).
     let captured_locals: HashSet<LocalId> = hir.captured_locals();
+    let direct_call_counts = collect_direct_call_counts(hir);
     let mut cg = Codegen {
         analysis,
         hir,
@@ -698,6 +840,7 @@ fn run_codegen_with_filter<M: Module>(
         clone_thunks: Vec::new(),
         safepoints: Vec::new(),
         captured_locals,
+        direct_call_counts,
         clif: None,
         line_info: Vec::new(),
         func_len: HashMap::new(),
@@ -739,6 +882,7 @@ fn compile_clif_with_filter(
     // Locals captured by some closure / `async` block — collected by walking the
     // HIR (was the `closures` / `async_blocks` side tables).
     let captured_locals: HashSet<LocalId> = hir.captured_locals();
+    let direct_call_counts = collect_direct_call_counts(hir);
     let mut cg = Codegen {
         analysis,
         hir,
@@ -751,6 +895,7 @@ fn compile_clif_with_filter(
         clone_thunks: Vec::new(),
         safepoints: Vec::new(),
         captured_locals,
+        direct_call_counts,
         clif: Some(Vec::new()),
         line_info: Vec::new(),
         func_len: HashMap::new(),
@@ -1264,6 +1409,10 @@ struct Codegen<'a, M: Module> {
     /// LocalIds are program-wide unique, so a global set is enough — a binding
     /// in any function consults this set at its declaration site.
     captured_locals: HashSet<LocalId>,
+    /// Whole-HIR direct call counts by callee definition. The HIR inliner uses
+    /// this as a conservative call-graph signal: expression-bodied helpers called
+    /// once are preferred candidates, with a tiny-size fallback.
+    direct_call_counts: HashMap<DefId, usize>,
     /// When `Some`, every function's generated Cranelift IR text is appended
     /// here (debug observability: `--emit=clif`). `None` on normal builds.
     clif: Option<Vec<String>>,
@@ -1485,6 +1634,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                         analysis: self.analysis,
                         hir: self.hir,
                         captured_locals: &self.captured_locals,
+                        direct_call_counts: &self.direct_call_counts,
                     },
                     module: self.module,
                     funcs: &mut self.funcs,
@@ -1495,6 +1645,8 @@ impl<'a, M: Module> Codegen<'a, M> {
                     subst,
                     b: &mut b,
                     vars: HashMap::new(),
+                    iface_local_concretes: HashMap::new(),
+                    stack_struct_locals: HashSet::new(),
                     cell_content: HashMap::new(),
                     term: false,
                     loops: Vec::new(),
@@ -1520,6 +1672,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                         "function has no HIR body",
                     )
                 })?;
+                fg.prepare_stack_struct_locals(&hb.block);
                 let val = fg.h_block(&hb.block)?;
                 let val = fg.rc_return_value(hb.block.trailing.as_deref(), val);
                 fg.endpoint_return_value(hb.block.trailing.as_deref(), val)?;
@@ -1589,6 +1742,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                         analysis: self.analysis,
                         hir: self.hir,
                         captured_locals: &self.captured_locals,
+                        direct_call_counts: &self.direct_call_counts,
                     },
                     module: self.module,
                     funcs: &mut self.funcs,
@@ -1599,6 +1753,8 @@ impl<'a, M: Module> Codegen<'a, M> {
                     subst,
                     b: &mut b,
                     vars: HashMap::new(),
+                    iface_local_concretes: HashMap::new(),
+                    stack_struct_locals: HashSet::new(),
                     cell_content: HashMap::new(),
                     term: false,
                     loops: Vec::new(),
@@ -1715,6 +1871,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                         analysis: self.analysis,
                         hir: self.hir,
                         captured_locals: &self.captured_locals,
+                        direct_call_counts: &self.direct_call_counts,
                     },
                     module: self.module,
                     funcs: &mut self.funcs,
@@ -1725,6 +1882,8 @@ impl<'a, M: Module> Codegen<'a, M> {
                     subst,
                     b: &mut b,
                     vars: HashMap::new(),
+                    iface_local_concretes: HashMap::new(),
+                    stack_struct_locals: HashSet::new(),
                     cell_content: HashMap::new(),
                     term: false,
                     loops: Vec::new(),
@@ -1864,6 +2023,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                         analysis: self.analysis,
                         hir: self.hir,
                         captured_locals: &self.captured_locals,
+                        direct_call_counts: &self.direct_call_counts,
                     },
                     module: self.module,
                     funcs: &mut self.funcs,
@@ -1874,6 +2034,8 @@ impl<'a, M: Module> Codegen<'a, M> {
                     subst: subst.clone(),
                     b: &mut b,
                     vars: HashMap::new(),
+                    iface_local_concretes: HashMap::new(),
+                    stack_struct_locals: HashSet::new(),
                     cell_content: HashMap::new(),
                     term: false,
                     loops: Vec::new(),
@@ -1934,6 +2096,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                         analysis: self.analysis,
                         hir: self.hir,
                         captured_locals: &self.captured_locals,
+                        direct_call_counts: &self.direct_call_counts,
                     },
                     module: self.module,
                     funcs: &mut self.funcs,
@@ -1944,6 +2107,8 @@ impl<'a, M: Module> Codegen<'a, M> {
                     subst: subst.clone(),
                     b: &mut b,
                     vars: HashMap::new(),
+                    iface_local_concretes: HashMap::new(),
+                    stack_struct_locals: HashSet::new(),
                     cell_content: HashMap::new(),
                     term: false,
                     loops: Vec::new(),
@@ -2051,6 +2216,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                         analysis: self.analysis,
                         hir: self.hir,
                         captured_locals: &self.captured_locals,
+                        direct_call_counts: &self.direct_call_counts,
                     },
                     module: self.module,
                     funcs: &mut self.funcs,
@@ -2061,6 +2227,8 @@ impl<'a, M: Module> Codegen<'a, M> {
                     subst: subst.clone(),
                     b: &mut b,
                     vars: HashMap::new(),
+                    iface_local_concretes: HashMap::new(),
+                    stack_struct_locals: HashSet::new(),
                     cell_content: HashMap::new(),
                     term: false,
                     loops: Vec::new(),
@@ -2189,6 +2357,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                         analysis: self.analysis,
                         hir: self.hir,
                         captured_locals: &self.captured_locals,
+                        direct_call_counts: &self.direct_call_counts,
                     },
                     module: self.module,
                     funcs: &mut self.funcs,
@@ -2199,6 +2368,8 @@ impl<'a, M: Module> Codegen<'a, M> {
                     subst: subst.clone(),
                     b: &mut b,
                     vars: HashMap::new(),
+                    iface_local_concretes: HashMap::new(),
+                    stack_struct_locals: HashSet::new(),
                     cell_content: HashMap::new(),
                     term: false,
                     loops: Vec::new(),
@@ -2352,6 +2523,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                         analysis: self.analysis,
                         hir: self.hir,
                         captured_locals: &self.captured_locals,
+                        direct_call_counts: &self.direct_call_counts,
                     },
                     module: self.module,
                     funcs: &mut self.funcs,
@@ -2362,6 +2534,8 @@ impl<'a, M: Module> Codegen<'a, M> {
                     subst: subst.clone(),
                     b: &mut b,
                     vars: HashMap::new(),
+                    iface_local_concretes: HashMap::new(),
+                    stack_struct_locals: HashSet::new(),
                     cell_content: HashMap::new(),
                     term: false,
                     loops: Vec::new(),
@@ -2495,6 +2669,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                         analysis: self.analysis,
                         hir: self.hir,
                         captured_locals: &self.captured_locals,
+                        direct_call_counts: &self.direct_call_counts,
                     },
                     module: self.module,
                     funcs: &mut self.funcs,
@@ -2505,6 +2680,8 @@ impl<'a, M: Module> Codegen<'a, M> {
                     subst,
                     b: &mut b,
                     vars: HashMap::new(),
+                    iface_local_concretes: HashMap::new(),
+                    stack_struct_locals: HashSet::new(),
                     cell_content: HashMap::new(),
                     term: false,
                     loops: Vec::new(),
@@ -2576,6 +2753,8 @@ struct CgShared<'a> {
     /// backed binding/access for these locals (`docs/09` §7) is gated on
     /// membership here. `'a` ties the borrow to the outer codegen.
     captured_locals: &'a HashSet<LocalId>,
+    /// Whole-HIR direct call counts for conservative inlining heuristics.
+    direct_call_counts: &'a HashMap<DefId, usize>,
 }
 
 /// Per-function code generator (for one monomorphized instance).
@@ -2599,6 +2778,16 @@ struct FnGen<'a, 'b, 'f, M: Module> {
     /// pointer; reads/writes go through `lang_alloc`-allocated cells so the
     /// outer scope and the closure share state. See [`cell_content`].
     vars: HashMap<LocalId, Variable>,
+    /// Conservative straight-line devirtualization facts: an interface-typed
+    /// local currently holds a value produced from this concrete type. Cleared
+    /// or restored around control-flow joins; used only to replace vtable calls
+    /// with direct impl calls when the concrete receiver is provable.
+    iface_local_concretes: HashMap<LocalId, Ty>,
+    /// Locals whose binding-site record struct literal is proven not to escape
+    /// this function and whose layout needs no heap tracing/finalization. These
+    /// can use a zeroed stack slot while preserving the usual field-block
+    /// pointer representation inside this frame.
+    stack_struct_locals: HashSet<LocalId>,
     /// LocalId → its Cranelift content type, set only for cell-backed locals.
     /// Membership in this map is what `read_local`/`write_local` consult to
     /// decide between a direct `use_var` / `def_var` and a load/store through
@@ -2783,6 +2972,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     /// results (which `gen_expr` already marks).
     /// Generate a function/async body by walking its typed HIR block.
     pub(crate) fn gen_body_view(&mut self, body: &BodyView) -> CgResult<Option<Value>> {
+        self.prepare_stack_struct_locals(body.0);
         self.h_block(body.0)
     }
 

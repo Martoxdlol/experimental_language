@@ -1,0 +1,73 @@
+// Union tag-path benchmarks for backend optimization work.
+//
+//   otter_fusion bench examples/union_tag_bench.otter
+//
+// An immediately-tested union-valued branch can lower to branch-local static
+// answers instead of constructing a temporary `{type_id, data}` box. Storing the
+// union in a local still uses the ordinary boxed representation.
+
+bench "immediate_union_if_is" {
+  var i = 0;
+  var total = 0;
+  while i < 1000 {
+    if (if (i & 1) == 0 { i } else { null }) is i64 {
+      total = total + 1;
+    }
+    i = i + 1;
+  }
+}
+
+bench "boxed_union_if_is_local" {
+  var i = 0;
+  var total = 0;
+  while i < 1000 {
+    var x = if (i & 1) == 0 { i } else { null };
+    if x is i64 {
+      total = total + 1;
+    }
+    i = i + 1;
+  }
+}
+
+bench "immediate_union_if_as" {
+  var i = 0;
+  var total = 0;
+  while i < 1000 {
+    total = total + ((if true { i } else { null }) as i64);
+    i = i + 1;
+  }
+}
+
+bench "immediate_union_match_is" {
+  var i = 0;
+  var total = 0;
+  while i < 1000 {
+    if (match i & 1 { 0 => i, _ => null }) is i64 {
+      total = total + 1;
+    }
+    i = i + 1;
+  }
+}
+
+bench "boxed_union_match_is_local" {
+  var i = 0;
+  var total = 0;
+  while i < 1000 {
+    var x = match i & 1 { 0 => i, _ => null };
+    if x is i64 {
+      total = total + 1;
+    }
+    i = i + 1;
+  }
+}
+
+bench "immediate_union_match_as" {
+  var i = 0;
+  var total = 0;
+  while i < 1000 {
+    total = total + ((match 0 { 0 => i, _ => null }) as i64);
+    i = i + 1;
+  }
+}
+
+function main() {}

@@ -1,0 +1,174 @@
+// Interface-dispatch benchmarks for backend devirtualization work.
+//
+//   otter_fusion bench examples/interface_devirt_bench.otter
+//
+// `interface_local_known` exercises the straight-line interface-local fact path:
+// the local still has interface representation, but the method call can be
+// emitted as a direct concrete impl call. `interface_if_same_concrete` keeps the
+// same concrete fact through an if-expression join whose branches agree.
+// `interface_match_same_concrete` does the same across a match-expression join.
+// `interface_direct_immediate_is`, `interface_if_immediate_is`,
+// `interface_match_immediate_is`, and the matching `*_as` cases exercise
+// tag/downcast thinning: the concrete value is built, but the temporary
+// interface wrapper is skipped.
+// `interface_if_receiver_direct` / `interface_match_receiver_direct` do the
+// same for immediate method receivers, direct-calling each concrete impl.
+// The `interface_if_boxed_is_local` case stores the interface value first and
+// therefore keeps the wrapper/type-id path. `interface_param_dynamic` crosses an
+// interface-typed parameter boundary and must keep vtable dispatch.
+
+interface Shape { function area(self): i64; }
+
+struct Rect { w: i64 }
+struct Circle { r: i64 }
+
+extend Rect: Shape { function area(self): i64 { self.w } }
+extend Circle: Shape { function area(self): i64 { self.r + 1 } }
+
+function call_shape(s: Shape): i64 { s.area() }
+
+bench "interface_local_known" {
+  var i = 0;
+  var total = 0;
+  var s: Shape = Rect { w: 1 } as Shape;
+  while i < 1000 {
+    s = Circle { r: i } as Shape;
+    total = total + s.area();
+    i = i + 1;
+  }
+}
+
+bench "interface_if_same_concrete" {
+  var i = 0;
+  var total = 0;
+  while i < 1000 {
+    var s: Shape = if (i & 1) == 0 { Rect { w: i } as Shape } else { Rect { w: i + 1 } as Shape };
+    total = total + s.area();
+    i = i + 1;
+  }
+}
+
+bench "interface_match_same_concrete" {
+  var i = 0;
+  var total = 0;
+  while i < 1000 {
+    var s: Shape = match i % 3 {
+      0 => Rect { w: i } as Shape,
+      1 => Rect { w: i + 1 } as Shape,
+      _ => Rect { w: i + 2 } as Shape,
+    };
+    total = total + s.area();
+    i = i + 1;
+  }
+}
+
+bench "interface_if_immediate_is" {
+  var i = 0;
+  var total = 0;
+  while i < 1000 {
+    if (if (i & 1) == 0 { Rect { w: i } as Shape } else { Circle { r: i } as Shape }) is Rect {
+      total = total + 1;
+    }
+    i = i + 1;
+  }
+}
+
+bench "interface_match_immediate_is" {
+  var i = 0;
+  var total = 0;
+  while i < 1000 {
+    if (match i & 1 { 0 => Rect { w: i } as Shape, _ => Circle { r: i } as Shape }) is Rect {
+      total = total + 1;
+    }
+    i = i + 1;
+  }
+}
+
+bench "interface_if_immediate_as" {
+  var i = 0;
+  var total = 0;
+  while i < 1000 {
+    total = total + ((if true { Rect { w: i } as Shape } else { Circle { r: i } as Shape }) as Rect).w;
+    i = i + 1;
+  }
+}
+
+bench "interface_match_immediate_as" {
+  var i = 0;
+  var total = 0;
+  while i < 1000 {
+    total = total + ((match 0 { 0 => Rect { w: i } as Shape, _ => Circle { r: i } as Shape }) as Rect).w;
+    i = i + 1;
+  }
+}
+
+bench "interface_direct_immediate_is" {
+  var i = 0;
+  var total = 0;
+  while i < 1000 {
+    if (Rect { w: i } as Shape) is Rect {
+      total = total + 1;
+    }
+    i = i + 1;
+  }
+}
+
+bench "interface_direct_immediate_as" {
+  var i = 0;
+  var total = 0;
+  while i < 1000 {
+    total = total + ((Rect { w: i } as Shape) as Rect).w;
+    i = i + 1;
+  }
+}
+
+bench "interface_if_receiver_direct" {
+  var i = 0;
+  var total = 0;
+  while i < 1000 {
+    total = total + (if (i & 1) == 0 { Rect { w: i } as Shape } else { Circle { r: i } as Shape }).area();
+    i = i + 1;
+  }
+}
+
+bench "interface_match_receiver_direct" {
+  var i = 0;
+  var total = 0;
+  while i < 1000 {
+    total = total + (match i & 1 { 0 => Rect { w: i } as Shape, _ => Circle { r: i } as Shape }).area();
+    i = i + 1;
+  }
+}
+
+bench "interface_if_receiver_boxed_local" {
+  var i = 0;
+  var total = 0;
+  while i < 1000 {
+    var s: Shape = if (i & 1) == 0 { Rect { w: i } as Shape } else { Circle { r: i } as Shape };
+    total = total + s.area();
+    i = i + 1;
+  }
+}
+
+bench "interface_if_boxed_is_local" {
+  var i = 0;
+  var total = 0;
+  while i < 1000 {
+    var s: Shape = if (i & 1) == 0 { Rect { w: i } as Shape } else { Circle { r: i } as Shape };
+    if s is Rect {
+      total = total + 1;
+    }
+    i = i + 1;
+  }
+}
+
+bench "interface_param_dynamic" {
+  var i = 0;
+  var total = 0;
+  while i < 1000 {
+    total = total + call_shape(Circle { r: i } as Shape);
+    i = i + 1;
+  }
+}
+
+function main() {}
