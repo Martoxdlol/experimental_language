@@ -105,13 +105,24 @@ The full module/import/package system, end to end.
   `serve` (host a private registry). **Live registry network round-trips are now
   exercised end-to-end**: `crates/pkg/tests/live_registry.rs` boots the server on
   an ephemeral localhost port and round-trips `HttpRegistry` connect → publish
-  (auth-gated) → index → download → checksum-verify → search (yank-aware) → yank
-  over real TCP (3 tests). The offline `LocalRegistry` still proves resolution.
-  Deferred (advanced): git dependency *fetching* (sources recorded, not cloned),
-  feature-gated optional-dep resolution (`[features]` parsed; optional deps
-  skipped), multi-major coexistence (incompatible majors error), and the
-  metadata-sidecar on publish (the server records empty `deps` for uploaded
-  versions — sufficient to host/resolve; dependency edges are written directly).
+  with metadata sidecar (auth-gated) → index → download → checksum-verify →
+  search (yank-aware) → yank over real TCP (3 tests). The offline
+  `LocalRegistry` still proves resolution. `otter_fusion publish` now sends
+  package dependency edges and the package feature map in the sidecar, and the
+  built-in registry persists them into sparse-index JSON-lines; path/git
+  dependencies are rejected at publish time because registry consumers cannot
+  resolve those sources. Feature-gated optional dependencies are resolved:
+  active manifest/index features expand `dep:name` and `name/feature` entries,
+  and optional deps stay out of the graph until enabled. Git dependencies are
+  fetched through a bare mirror cache, resolved to exact commits, materialized
+  under `~/.otter_fusion/git/<url-hash>/<rev>/`, and recorded in the lockfile
+  with deterministic source-tree checksums. Existing locks keep branch/tag/
+  default refs pinned until update-style resolution ignores the lock. Multi-major
+  coexistence is implemented: resolver graph nodes are package instances keyed
+  by source + semver-compatible range, so incompatible major requirements for
+  the same package name can coexist, tree/why/vendor display them deterministically,
+  and package-internal `pkg:name` imports resolve through the importing package's
+  own dependency context instead of a flat global name.
 - **Tests**: `imports` 11, `pkg` 80+ (manifest/loader/lockfile/store/semver/
   registry/resolve/commands/credentials/package), `cli` e2e (every scheme,
   run modes, escape rule, file: gating, dep commands, `pkg:` run e2e). All
@@ -225,9 +236,9 @@ The full module/import/package system, end to end.
       implements `std:error.Error`. The value layer implements equality, clone,
       hash, stringification/ISO-like rendering, immutable timezone replacement,
       and diagnostic debug rendering.
-      UTC/fixed-offset system-time conversion is implemented; local timezone
-      lookup, timezone databases, named-zone conversion, and leap-second policy
-      remain planned provider/library work.
+      UTC/fixed-offset system-time conversion and provider-backed local offset
+      conversion are implemented; timezone databases, named-zone conversion,
+      and leap-second policy remain planned provider/library work.
 - [x] **`std:time` ISO-like DateTime parsing**: added pure Otter Fusion
       `parse_iso8601(s): DateTime | TimeError` plus
       `DateTime.parse_iso8601`. The parser accepts the same portable shapes
@@ -235,8 +246,8 @@ The full module/import/package system, end to end.
       optional fractional seconds up to nanosecond precision, and bracketed
       named timezone identifiers. It reuses `DateTime.new` validation and
       returns `TimeError` for malformed fields. Full timezone database
-      resolution, local-time lookup, named-zone conversion, and leap-second
-      policy remain planned provider/library work.
+      resolution, named-zone conversion, and leap-second policy remain planned
+      provider/library work.
 - [x] **`std:fs.Path` value surface**: added the pure Otter-authored
       `std:fs` module exporting `Path` with construction, `as_str`, `join`,
       `join_path`, `normalize`, `components`, `starts_with`, `ends_with`,
@@ -266,11 +277,13 @@ The full module/import/package system, end to end.
       path-backed `File.open`, `File.create`,
       `File.append`, `File.open_with`, `File.path`, descriptor-backed `Reader`/`Writer`/`Seeker`
       operations, text read/write/append, close,
+      concrete `File` async methods (`read_async`, `read_to_end_async`,
+      `write_async`, `write_all_async`, `flush_async`, and `seek_async`) backed
+      by reactor-woken runtime futures,
       explicit `OpenOptions` values for read/write/append/truncate/create/
       create_new modes with provider-independent validation before runtime
       opens, non-recursive `remove`, `rename`, `create_dir`, and
-      `create_dir_all`. Async filesystem adapters remain future
-      provider/runtime work.
+      `create_dir_all`.
 - [x] **`std:fmt` contracts**: added the Otter-authored `std:fmt` module
       exporting `Display: ToStr`, `Debug`, `FmtSink`, and `FmtError`.
       `FmtError` implements `std:error.Error`, equality, clone, hash, and
@@ -278,15 +291,16 @@ The full module/import/package system, end to end.
       Interpolation and `value as str` still lower through `ToStr`; this module
       gives libraries explicit user-facing and developer-facing rendering
       contracts without adding format strings. Pure stdlib values (`Bytes`,
-      `Utf8Error`, `Duration`, `Path`, `Json`, and `std:net:types` identifier
+      `Utf8Error`, `Duration`, `Path`, `Json`, and `std:net/types` identifier
       values, plus struct-shaped `std:http` values) now implement `Debug`;
       `Bytes` also implements `FmtSink` as the standard in-memory UTF-8
       formatting sink.
       renderable collections now implement `Debug` as
       `List<T: Debug>`, `Set<T: Eq + Debug>`, and
-      `Map<K: Eq + Hash + ToStr, V: Debug>`. Primitive `Debug` remains planned
-      because primitive-to-`std:fmt.Debug` interface objects need compiler/backend
-      intrinsic vtable support.
+      `Map<K: Eq + Hash + ToStr, V: Debug>`. Primitive scalars and `str`
+      now implement `Debug` through compiler/runtime intrinsics, including
+      primitive-to-`std:fmt.Debug` interface objects and monomorphized
+      `T: Debug` calls; strings and chars render quoted with diagnostic escapes.
 - [x] **Runtime marker value semantics**: `std:async.TimedOut`,
       `std:thread.Panicked`, `std:sync.ChannelClosed`, and
       `std:sync.LockBusy` now implement equality, clone, hash, stringification,
@@ -394,8 +408,8 @@ The full module/import/package system, end to end.
       nested values.
       Parsers and stricter canonicalization remain package/follow-up library
       work.
-- [x] **`std:net:types` value identifiers**: added the pure Otter-authored
-      `std:net:types` module exporting `IpAddr`, `SocketAddr`, `Uri`, `Url`,
+- [x] **`std:net/types` value identifiers**: added the pure Otter-authored
+      `std:net/types` module exporting `IpAddr`, `SocketAddr`, `Uri`, `Url`,
       `ParseError`, and constructor functions (`ip_v4`, `ip_v6`, `ip_v6_scoped`,
       `socket_addr`, `uri`, `url`). The implemented slice covers portable
       network identifier values, rendering, equality, hashing, cloning, debug
@@ -409,9 +423,47 @@ The full module/import/package system, end to end.
       query-map snapshots and query-entry lookup/set/remove/clear helpers,
       UTF-8 percent component encode/decode helpers, and
       explicit-import/old-core-path e2e coverage. It intentionally does not open
-      sockets, perform DNS, normalize URLs, perform IDNA handling, or implement
+      sockets, normalize URLs, perform IDNA handling, or implement
       target-backed networking;
       those remain future `std:net`/parser work.
+- [x] **`std:net` provider-backed name resolution slice**: added the mixed
+      `std:net` module exporting `resolve(host): List<IpAddr> | IoError`.
+      The Rust runtime hook uses the selected provider's address resolver and
+      returns a compact length-framed list of textual IP addresses; the
+      Otter-authored stdlib wrapper decodes provider payloads into existing
+      `std:net/types.IpAddr` values via `parse_ip_v4` / `parse_ip_v6`, or
+      returns ordinary `IoError` values for provider and malformed-payload
+      errors. Added runtime unit tests, e2e JIT/native coverage for deterministic
+      IPv4-literal resolution plus provider-error handling, near-empty-prelude
+      import enforcement for `resolve`, and LSP analysis coverage for files that
+      import the new stdlib function. TCP streams/listeners are now covered by
+      the follow-up slices below; async network adapters, IDNA, and richer
+      socket options remain planned target-backed work.
+- [x] **`std:net` synchronous TCP stream/listener slice**: added mixed
+      `TcpStream` and `TcpListener` handles backed by provider TCP sockets.
+      Both are deterministic `@RefCounted` runtime handles with shared clone
+      semantics and explicit `close()`; `TcpStream` implements the synchronous
+      `Reader`/`Writer` contracts plus `connect`, `peer_addr`, `local_addr`, and
+      `set_nodelay`, while `TcpListener` implements `bind`, `accept`, and
+      `local_addr`. The runtime handle registries store per-handle
+      `Arc<Mutex<...>>` entries so blocking accept/read/write operations do not
+      hold the whole registry lock. Added runtime loopback coverage, e2e
+      JIT/native loopback coverage over port `0`, near-empty-prelude import
+      enforcement for the new TCP types, and LSP analysis coverage for TCP
+      imports. UDP sockets are now covered by the follow-up slice below; async
+      network adapters, IDNA, and richer socket options remain planned
+      target-backed work.
+- [x] **`std:net` synchronous UDP socket slice**: added a mixed `UdpSocket`
+      handle backed by provider UDP sockets. It is a deterministic
+      `@RefCounted` runtime handle with shared clone semantics and explicit
+      `close`; it supports `bind`, `local_addr`, `send_to(Bytes, SocketAddr)`,
+      and `recv_from(Bytes): (i64, SocketAddr) | IoError`, appending each
+      received datagram into the caller-provided `Bytes` buffer and returning
+      the received byte count plus source address. Added runtime length-framed
+      ABI coverage, e2e JIT/native loopback datagram coverage over port `0`,
+      near-empty-prelude import enforcement for `UdpSocket`, and LSP analysis
+      coverage for UDP imports. Async network adapters, IDNA, and richer socket
+      options remain planned target-backed work.
 - [x] **`std:rand` deterministic + OS-backed RNG slice**: added the mixed
       `std:rand` module exporting `Rng`, `RandomError`, `SeededRng`,
       `OsRng`, `ThreadRng`, `random_error`, `os_rng`, `thread_rng`,
@@ -459,9 +511,10 @@ The full module/import/package system, end to end.
       caller-provided field maps too. Record equality and hashing compare
       fields by key/value membership rather than rendered field order.
       Replaceable global logger backends remain planned provider/runtime work.
-- [x] **`std:process` portable value layer + host environment/execution slice**: added the mixed
+- [x] **`std:process` portable value layer + host environment/execution/child slice**: added the mixed
       `std:process` module exporting `Command`, `ExitStatus`, captured
-      `Output`, constructor helpers, `args`, `env`, `env_all`, and `set_env`.
+      `Output`, live `Child`, constructor helpers, `args`, `env`, `env_all`,
+      and `set_env`.
       `Command` builders/accessors snapshot
       argument lists, environment maps, and cwd paths, including immutable-style
       program replacement, whole-args/env replacement, env inheritance/clearing,
@@ -478,20 +531,38 @@ The full module/import/package system, end to end.
       into ordinary `List<str>` / `Map<str, str>` values, read one variable as
       `str | null`, mutate one environment variable with validation, and run
       commands to completion through `Command.status()` / `Command.output()`,
+      and spawn live provider child processes through `Command.spawn()`,
       returning validation/provider failures as `IoError` or successful
-      `ExitStatus` / captured `Output` values.
+      `ExitStatus` / captured `Output` / `Child` values. `Child` is a
+      deterministic `@RefCounted` runtime handle: cloned handles share the same
+      child table entry, `id()` exposes the provider process id, `wait()` waits
+      once and caches the observed `ExitStatus`, `kill()` requests provider
+      termination, and final handle drop releases the runtime registry entry
+      without implicitly killing the OS process. The current `Command` surface
+      has no pipe configuration yet, so child stdin/stdout/stderr accessors
+      return `null`.
       `exit` and `abort` are imported from `std:process` and lower to the
-      existing runtime process-control intrinsics. Live process spawning,
-      `Child`, streamed child stdio, and richer target-specific status details
-      remain future provider/runtime work.
-- [x] **`core:sync:atomic.Ordering` value contract**: added the pure
-      Otter-authored `core:sync:atomic` module exporting `Ordering`, its five
+      existing runtime process-control intrinsics. Streamed child stdio and
+      richer target-specific status details remain future provider/runtime
+      work.
+- [x] **`core:sync/atomic.Ordering` value contract**: added the pure
+      Otter-authored `core:sync/atomic` module exporting `Ordering`, its five
       memory-ordering variants, and constructor helpers. `Ordering` implements
       equality, clone, hash, stringification, and diagnostic debug rendering;
-      atomic handle types and load/store/swap/compare-exchange/fetch operations
-      remain target/runtime work. This moved from the earlier `std:sync:atomic`
-      path because atomic operations are compiler/runtime substrate under the
-      revised core/std split.
+      `AtomicI32`, `AtomicI64`, `AtomicU32`, `AtomicU64`, `AtomicBool`, and
+      `AtomicPtr<T>` are now runtime-backed atomic handles: owned
+      `@RefCounted` native atomic cells with load/store/swap/compare-exchange
+      operations, type-specific fetch operations (`fetch_add`/`fetch_sub` for
+      integer handles; `fetch_and`/`fetch_or`/`fetch_xor` for bools; no pointer
+      arithmetic), operation/order validation, deterministic native cleanup,
+      shared handle cloning/capture semantics, runtime unit tests, e2e coverage
+      including cross-thread increments/toggles/pointer stores,
+      invalid-ordering panic coverage, LSP completion coverage, and JIT/native
+      parity. The concurrency and stdlib-extension docs now describe the
+      completed handle family instead of the old FFI fallback plan. This moved
+      from the earlier `std:sync/atomic` path because atomic
+      operations are compiler/runtime substrate under the revised core/std
+      split.
 - [x] **Stdlib provider invariants**: explicit provider catalogs are validated
       before public `core:*`/`std:*` views are materialized. Duplicate modules,
       root-only paths, unaddressable path segments, tier/root mismatches,
@@ -504,11 +575,11 @@ The full module/import/package system, end to end.
       providers, plus catalog-to-require-import coverage that catches exported
       names missing near-empty-prelude negative diagnostics.
 - [ ] **Next stdlib slices**:
-      async filesystem adapters, system-time
-      local timezone database/conversion extensions for `std:time`,
-      `std:net`, live process spawning and child management for
-      `std:process`, cryptographic/distribution work for `std:rand`, and
-      remaining collections/bytes/atomic-handle work. Each slice needs
+      named-zone timezone database/conversion extensions and leap-second policy
+      for `std:time`,
+      async network adapters and richer socket options for `std:net`, streamed child stdio and richer
+      process status details for `std:process`, cryptographic/distribution
+      work for `std:rand`, and remaining collections/bytes work. Each slice needs
       unit + e2e tests, docs, examples, and LSP support.
 
 ### Phase 2 — Type checking & inference  ✅ DONE
@@ -2319,17 +2390,21 @@ The tracing GC is functionally complete for single-threaded programs.
       `examples/`.
 - [x] **LSP server + VS Code extension** (`crates/lsp` → `otter_fusion_lsp`, plus
       `editors/vscode`). The server is built on `tower-lsp`/`tokio` and reuses
-      the front-end (`Compiled` recompiles each open buffer; queries are driven by
+      the front-end (`Compiled` is cached per open buffer and invalidated on
+      document mutations; queries are driven by
       a `HirIndex` built over the typed **HIR** — the old span-keyed `CheckResults`
       tables are gone, retired into HIR node fields per Phase 2.5). Features: live
       diagnostics (lex+parse+sema), hover (types +
       symbol/builtin signatures), go-to-definition (name-precise, for
       functions/methods/globals/struct ctors/locals), find-references, rename,
       document symbols (items + struct fields + interface/`extend` methods),
-      completion (keywords/builtins/top-level defs/locals), and full semantic
-      tokens (resolution-driven classes refining a bundled TextMate grammar).
+      completion (keywords/builtins/top-level defs/locals), full semantic
+      tokens (resolution-driven classes refining a bundled TextMate grammar),
+      code-action quick-fixes, formatting, document highlights, code lenses, and
+      folding ranges, local type inlay hints, incremental text sync, and cached
+      analysis.
       Editor positions are converted UTF-16↔UTF-8 (`LineIndex` on the hot path).
-      11 unit tests in `crates/lsp`; the extension compiles (`npm run compile`).
+      80 unit tests in `crates/lsp`; the extension compiles (`npm run compile`).
 - [x] **`project.toml` manifest** (`docs/17` §17.1): `otter_fusion run|build|emit`
       accept a project directory or a `project.toml` path and resolve the entry
       source file from the manifest — explicit `entry = "..."`, else the
@@ -2402,18 +2477,31 @@ The tracing GC is functionally complete for single-threaded programs.
       (also used by go-to-definition). `rename` groups edits per file into one
       `WorkspaceEdit`. Hover already reports cross-module symbol types (the type
       rides on the HIR node). 1 LSP test (a symbol used in the open doc *and*
-      within a submodule surfaces references in both files). Project-wide
-      indexing of files that *import* the open document (reverse references) is
-      the remaining follow-up.
+      within a submodule surfaces references in both files).
+- [x] **Reverse-importer LSP references + rename**: for file-backed definition
+      targets, `references`/`rename` now scan the package source root (nearest
+      `project.toml`'s `src/`, or the current directory in direct mode), compile
+      candidate `.otter` roots with the same open-buffer overlay used by normal
+      analysis, and match targets across independent compilations by normalized
+      source file + definition name span instead of unstable per-compilation
+      `DefId`s. Importer files that declare/import the current module now
+      contribute call/use sites, and named import specifiers are included so
+      rename keeps importers compiling. Aliased imports update the imported
+      source name while preserving the local alias uses. Focused LSP tests cover
+      unaliased importer references/rename and aliased importer behavior.
 - [x] **Type-position go-to-definition**: goto on a type name written in a type
       annotation (param / return / field / alias / `extend` target / generic
-      bound) jumps to that type's definition. Type-position names aren't value
-      resolutions in the HIR, so the LSP resolves them from the AST: a recursive
-      `walk_type` over every item-level type position builds `(name-span, name)`
-      refs (`collect_type_refs`), `type_def_span_at(off)` resolves the innermost
-      one to its def's name span (`def_name_span`), and `goto_definition` tries
-      it as a fallback after value resolution. 1 LSP test (param + return + field
-      type names). Follow-up: body `var x: T` / `e as T` / pattern type names.
+      bound) or a body type position (`var x: T`, `e as T`, closure
+      annotations, struct literals, pattern type names) jumps to that type's
+      definition. Type-position names aren't value resolutions in the HIR, so
+      the LSP resolves them from the parsed AST: `collect_type_refs` walks every
+      item, inline module, function/test/default-method/global body, syntactic
+      type, `TypePath`, expression, and pattern to build `(name-span, name)`
+      refs; `type_def_span_at(off)` resolves the innermost one to its def's name
+      span (`def_name_span`), and `goto_definition` tries it as a fallback after
+      value resolution. LSP tests cover item-level param/return/field names and
+      body local annotations, casts, closure annotations, struct literals, and
+      type-binding/record patterns.
 - [x] **`otter_fusion test` + the `test` keyword** (`docs/23`): named tests
       `test "name" { … }` — a *contextual* keyword (special only as `test "…" {`
       at item position, so `test` stays usable as an identifier). Each is a
@@ -2460,24 +2548,49 @@ The tracing GC is functionally complete for single-threaded programs.
       `_`-prefixed, used var untouched, lint then clean).
 - [x] **`otter_fusion fmt`** (`docs/23`): a conservative source formatter
       (`crates/cli/fmt.rs`). Normalizes **indentation** (two spaces per bracket
-      level, closer-leading lines dedented), strips trailing whitespace, collapses
-      blank-line runs, and ensures a single trailing newline. A string/comment-
+      level, closer-leading lines dedented), common intra-line token spacing
+      (commas, colons, assignment, comparisons including `<`/`>`, generic/type
+      angle spacing, logical operators, and clearly binary arithmetic), strips
+      trailing whitespace, collapses blank-line runs, normalizes code around
+      balanced inline block comments and multi-line block-comment boundary lines
+      while preserving comment text exactly, wraps long parenthesized,
+      bracketed, type-led brace, generic-angle, named-import brace, named-import paths, named-import closing paths, single-argument attributes, macro block bodies, ambient/namespace import paths, extern type declarations, extern var declarations, extern function declarations, function bodies, module bodies, map-literal brace, match-arm brace, record-declaration brace comma lists, record field type-annotation union pipe lists, return expressions, break expressions, await/spawn operand expressions, test/bench declaration headers, test/bench bodies, assignment expressions, for iterator headers, for bodies, while condition headers, if/else-if condition headers, match scrutinee headers, match guard headers, unguarded match arm bodies, top-level parenthesized arrow closure bodies, explicit trailing closure bodies, implicit trailing closure bodies, anonymous function expression headers, async block bodies, block expression bodies, loop bodies, else bodies, if bodies, while bodies, type-alias union pipe lists, var initializer expressions, var type-annotation union pipe lists, parameter type-annotation union pipe lists including full multi-parameter layouts, function return union pipe lists, arrow closure return union pipe lists, interface/extend declaration headers, struct declaration headers, type-alias declaration headers, interface/extend bound plus lists, interface/extend body member lists, generic type-parameter bound plus lists including full multi-parameter layouts, cast chains, method chains, logical chains, comparison expressions, additive chains, multiplicative chains, shift chains, bitwise-AND chains, bitwise-XOR chains, and bitwise-OR chains at token boundaries, and ensures a single trailing newline. A string/comment-
       aware single scan computes each line's bracket depth (brackets inside
       strings / `//` / nested `/* */` are ignored; block-comment interiors are left
-      verbatim). It deliberately does **not** rewrap or re-space within a line, so
-      no token ever crosses a line boundary — and every reformat is verified by
-      **re-lexing the output and requiring an identical token stream** (same
-      kinds + text), so `fmt` can only change whitespace, never code (it refuses
-      to write otherwise). `fmt <file|dir>` formats in place (recurses dirs,
+      verbatim). Broader wrapping contexts remain conservative follow-up work. Every reformat is verified by
+      **re-lexing the output and requiring identical parser tokens plus ordinary
+      comment trivia** (same kinds + text), so `fmt` can only change whitespace,
+      never code or comments (it refuses to write otherwise). `fmt <file|dir>` formats in place (recurses dirs,
       skipping hidden/`target`); `--check` lists unformatted files and exits
       non-zero (CI gate). Idempotent; verified across all 22 examples (0 token-
-      stream violations; formatted output runs identically). 5 unit + 1 CLI test.
-      Follow-up: token-level intra-line spacing + line wrapping. The formatter
-      lives in `compiler::fmt` (shared), and the **LSP exposes it as a
+      stream violations; formatted output runs identically). 149 unit + 56 CLI
+      tests + 58 LSP tests cover formatting/token-safety. Follow-up: broaden line
+      wrapping beyond parenthesized/bracketed/type-led brace/generic-angle/named-import brace/named-import paths/named-import closing paths/single-argument attributes/macro block bodies/ambient-namespace import paths/extern type declarations/extern var declarations/extern function declarations/function declaration headers/function bodies/module declaration headers/module bodies/interface-or-extend declaration headers/struct declaration headers/type-alias declaration headers/map-literal brace/match-arm brace/record-declaration brace comma lists/record field type-annotation union pipe lists/return expressions/break expressions/await/spawn operand expressions/test/bench declaration headers/test/bench bodies/assignment expressions/for iterator headers/for bodies/while condition headers/if/else-if condition headers/match scrutinee headers/match guard headers/unguarded match arm bodies/top-level parenthesized arrow closure bodies/explicit trailing closure bodies/implicit trailing closure bodies/anonymous function expression headers/async block bodies/block expression bodies/loop bodies/else bodies/if bodies/while bodies/type-alias union pipe lists/var initializer expressions/var type-annotation union pipe lists/parameter type-annotation union pipe lists, including full multi-parameter layouts, function return union pipe lists/arrow closure return union pipe lists/interface/extend declaration headers, struct declaration headers, type-alias declaration headers, interface/extend bound plus lists/interface-or-extend body member lists/generic type-parameter bound plus lists, including full multi-parameter layouts/cast chains/method chains/logical chains/comparison expressions/additive chains/multiplicative chains/shift chains/bitwise-AND chains/bitwise-XOR chains/bitwise-OR chains. The formatter lives in `compiler::fmt` (shared), and the **LSP exposes it as a
       `document_formatting` provider** (format-on-save in the editor): the handler
       formats the open buffer, verifies the token-preservation invariant, and
-      returns a whole-document edit (declining if it would change tokens). 2 LSP
+      returns a whole-document edit (declining if it would change tokens). 58 LSP
       tests; the VS Code extension picks the capability up automatically.
+- [x] **LSP folding ranges**: the server advertises `textDocument/foldingRange`
+      and returns deterministic ranges for multiline `{...}` code blocks plus
+      multiline nested block comments. The scanner is string-, char-, line-comment,
+      and block-comment-aware, so braces inside literals or comments do not create
+      bogus editor folds. 3 focused LSP tests cover nested code folds, block-comment
+      folds, and ignored braces in strings/comments.
+- [x] **LSP local type inlay hints**: the server advertises
+      `textDocument/inlayHint` and returns inferred type hints for unannotated
+      local `var` bindings. Hints are built from HIR `local_decls`/`local_types`
+      joined with AST binding spans, so explicit annotations, parameters, and
+      non-`var` bindings are not duplicated. 4 focused LSP tests cover inferred
+      labels, annotated-local/parameter skips, nested block bindings, and requested
+      range filtering.
+- [x] **LSP incremental sync + cached analysis**: the server advertises
+      incremental `textDocument/didChange`, applies LSP range edits in order using
+      UTF-16↔UTF-8 conversion, and still accepts full-document replacement changes.
+      Open-document queries reuse a cached `Compiled` result until the document
+      text changes; any open-buffer mutation clears the cache globally so unsaved
+      file-backed submodule overlays cannot go stale. 3 focused LSP tests cover
+      UTF-16 incremental edits, full-document replacement, and cache reuse versus
+      text-change recompilation.
 - [x] **`otter_fusion repl`** (`docs/23`): a line-oriented read-eval-print loop
       (`crates/cli/repl.rs`). Each line is classified — a **declaration**
       (`function`/`struct`/…/`test`/`bench`) accumulates as a top-level item; a
@@ -2512,8 +2625,45 @@ The tracing GC is functionally complete for single-threaded programs.
 - [x] **`pkg:` live registry network round-trips** — done: a dependency-free
       sparse-HTTP registry server (`pkg::server`, CLI `otter_fusion serve`) hosts
       the full protocol, and `crates/pkg/tests/live_registry.rs` round-trips the
-      `HttpRegistry` client against it over real TCP (publish/index/download/
-      verify/search/yank).
+      `HttpRegistry` client against it over real TCP (publish with metadata
+      sidecar/index/download/verify/search/yank).
+- [x] **Publish metadata sidecar** — done: packaging generates sparse-index
+      dependency metadata from registry dependencies, rejects path/git sources
+      for registry-published packages, the HTTP client sends a length-prefixed
+      JSON sidecar with the tarball, and `pkg::server` persists those deps into
+      the JSON-lines index (legacy tarball-only uploads still decode as empty
+      deps for compatibility).
+- [x] **Feature-gated optional dependency resolution** — done: the resolver
+      computes a package feature closure from `[features] default`,
+      `[package] default-features`, nested feature names, `dep:name`, and
+      `name/feature`; optional deps are skipped until activated, requested
+      dependency features are carried into registry package resolution, and
+      published sparse-index metadata now includes the package feature map.
+      Focused resolver tests cover disabled optional deps, default-feature
+      activation, dependency-feature activation of optional transitive registry
+      deps, and malformed `dep:` entries; CLI coverage proves `otter_fusion lock`
+      includes a feature-enabled optional path dependency.
+- [x] **Git dependency fetching** — done: `{ git = "...", rev/branch/tag = ... }`
+      dependencies are fetched through `pkg::git`, which maintains bare mirror
+      caches, resolves branch/tag/default refs to exact commits, materializes
+      immutable source checkouts under the documented git store layout, strips
+      `.git` metadata, computes deterministic source-tree checksums, and records
+      `git+url#rev` plus checksum in `project.lock`. Existing lockfiles keep
+      moving branch/default refs pinned; update-style resolution refreshes them.
+      Unit tests exercise exact rev, branch, tag, idempotent checkout reuse, and
+      lock pinning; CLI coverage locks and runs a real local git dependency via
+      `pkg:` import.
+- [x] **Multi-major package coexistence** — done: registry requirements are
+      partitioned by package name, registry, and semver-compatible range, so
+      `shared ^1` and `shared ^2` resolve to separate package instances rather
+      than conflicting. The resolved graph stores instance IDs plus contextual
+      dependency-name edges; the compiler loads dependency package instances
+      under unique keys and resolves package-internal `pkg:name` imports against
+      the importing package's own dependency map. Lockfile output remains the
+      documented package list, sorted deterministically by name/version/source;
+      tree/why/vendor handle duplicate names without collisions. Tests cover
+      registry multi-major resolution and an e2e path graph where two libraries
+      compile against different `shared` packages with the same import name.
 - [x] **Custom GC allocator** (`gc_alloc`) — done; no system-`malloc` contention
       during sweep, and the GC-stress suite actually stresses (see GC §).
 - [x] **Concurrent-GC reclamation** — DONE via the world-barrier stop-the-world
@@ -2521,11 +2671,9 @@ The tracing GC is functionally complete for single-threaded programs.
       removed, and the deterministic heavy-churn repro that previously SIGSEGV'd
       every run is clean 130/130 under stress, with a regression case in the
       suite.
-- [ ] Remaining: only the advanced deferrals noted inline — git dependency
-      *fetching*, feature-gated optional-dep resolution, multi-major coexistence,
-      and the publish metadata-sidecar. Per-thread TLABs are now **done** (see the
-      GC section); the full MMTk Immix move is the remaining behavior-neutral
-      throughput follow-up.
+- [ ] Remaining advanced deferrals noted inline: per-thread TLABs are now **done**
+      (see the GC section); the full MMTk Immix move is the remaining
+      behavior-neutral throughput follow-up.
 
 ### Phase 7 — Embedding engine (`std:engine`, `docs/26`)  🔧 DESIGN — NOT STARTED
 Run Otter Fusion *from* Otter Fusion: compile + execute guest source inside a
@@ -2626,20 +2774,33 @@ feature, JIT≡native byte-identical and GC-stress clean.
 - **Phase 6 (toolchain): DONE** — `check`/`build`/`run`/`exec` (`--release`,
   `--time`), `test`/`bench`, `lint`/`fix`/`fmt`, `repl`, `doc`, `expand`,
   `explain` (`E0001`–`E0019`), full module/import/package system + live registry
-  (`serve`), LSP + VS Code extension (multi-file, cross-file goto/refs/rename).
+  (`serve`), LSP + VS Code extension (multi-file, cross-file goto/refs/rename,
+  formatting, quick-fixes, folding ranges).
 
 ## What's next (drives goals.txt)
 
 **Immediate (active goals):**
-1. **Deeper backend / compiler optimizations** (split from the completed first
-   backend optimization pass; see `possible-optimizations.txt`): escape-analysis
-   stack allocation for non-escaping final structs, call-graph-guided inlining,
-   devirtualization of statically-known interface-object paths, and thinner
-   type-tag/vtable paths after devirtualization. Keep all observability
-   (`--emit=tokens|ast|hir|clif`, DWARF, `--time`) and JIT≡native parity.
-   *No behavior change; benchmark with `bench` + `run --time`.*
-2. **Finish the long tail** (goals.txt "finish end to end"): work the remaining
-   items below one by one, test-gated, docs/LSP/examples kept consistent.
+1. **Deeper optimizing compiler work** (goals.txt "Push Otter Fusion from the
+   current production-safe backend optimization pass toward a deeper optimizing
+   compiler"): design and implement a MIR/SSA-oriented optimization pipeline, or
+   an equivalent backend optimization layer, with interprocedural escape
+   analysis, broader inlining/cost modeling, constant folding/propagation,
+   dead-store/dead-branch elimination, loop-aware optimizations where safe,
+   richer devirtualization/monomorphization, target-aware lowering improvements,
+   and tighter code emission where it fits the module/provider architecture.
+   Preserve semantics, GC/rooting/finalizer safety, observability
+   (`otter_fusion emit tokens|ast|hir|clif`, DWARF, `run --time`/`exec --time`),
+   and JIT≡native parity. *No behavior change; benchmark each slice with
+   `bench` and timing where relevant.*
+2. **Finish Otter Fusion end to end** (goals.txt "Finish Otter Fusion end to end
+   as a production-ready language"): treat this ROADMAP and the design docs as
+   the authoritative backlog, then close every remaining core language,
+   compiler, runtime, backend, std/core library, package-manager, tooling,
+   LSP/editor, documentation, example, and test-suite item one test-gated slice
+   at a time. This includes formatter spacing/wrapping work,
+   behavior-neutral GC throughput work, provider/stdlib surface completion, and Phase 7
+   `std:engine` unless a later design decision explicitly moves an item beyond
+   production-ready scope.
 
 **Recently completed:**
 - **Interface direct/branch fast paths: DONE.** HIR codegen now recognizes
@@ -3005,15 +3166,13 @@ feature, JIT≡native byte-identical and GC-stress clean.
 - **Generic `Drop` types; generic-interface default methods; cross-module
   interface default methods** — currently scoped out with clear errors, not
   miscompiles.
-- **Package manager advanced:** git-dependency *fetching* (sources recorded, not
-  cloned), feature-gated optional-dep resolution, multi-major coexistence, publish
-  metadata-sidecar.
-- **LSP follow-ups:** reverse references (files that *import* the open doc),
-  body-position type goto (`var x: T`, `e as T`, pattern type names).
+- **Package manager advanced:** advanced deferrals are complete as of multi-major
+  coexistence; keep hardening registry/package-manager behavior through tests.
 - **GC throughput:** per-thread TLABs **done** (~2× multi-thread alloc); the full
   MMTk Immix move remains (behavior-neutral).
-- **`fmt` follow-up:** token-level intra-line spacing + line wrapping (currently
-  whitespace/indentation only, comment-preserving infra permitting).
+- **`fmt` follow-up:** broaden line wrapping beyond parenthesized/bracketed/type-led brace/generic-angle/named-import brace/named-import paths/named-import closing paths/single-argument attributes/macro block bodies/ambient-namespace import paths/extern type declarations/extern var declarations/extern function declarations/function declaration headers/function bodies/module declaration headers/module bodies/interface-or-extend declaration headers/struct declaration headers/type-alias declaration headers/map-literal brace/match-arm brace/record-declaration brace comma lists/record field type-annotation union pipe lists/return expressions/break expressions/await/spawn operand expressions/test/bench declaration headers/test/bench bodies/assignment expressions/for iterator headers/for bodies/while condition headers/if/else-if condition headers/match scrutinee headers/match guard headers/unguarded match arm bodies/top-level parenthesized arrow closure bodies/explicit trailing closure bodies/implicit trailing closure bodies/anonymous function expression headers/async block bodies/block expression bodies/loop bodies/else bodies/if bodies/while bodies/type-alias union pipe lists/var initializer expressions/var type-annotation union pipe lists/parameter type-annotation union pipe lists, including full multi-parameter layouts, function return union pipe lists/arrow closure return union pipe lists/interface/extend declaration headers, struct declaration headers, type-alias declaration headers, interface/extend bound plus lists/interface-or-extend body member lists/generic type-parameter bound plus lists, including full multi-parameter layouts/cast chains/method chains/logical chains/comparison expressions/additive chains/multiplicative chains/shift chains/bitwise-AND chains/bitwise-XOR chains/bitwise-OR chains
+  (ordinary comment-trivia preservation, common spacing, sensitive comment
+  boundary spacing, and the first sixty-eight wrapping slices are in place).
 - **Embedding engine (`std:engine`, `docs/26`)** — run guest Otter Fusion inside a
   sandboxed isolate (capability whitelist, host bindings, `@Bridge` copy-by-value
   ABI, per-isolate heap/GC + hard limits). Design done (`docs/26`, Phase 7);

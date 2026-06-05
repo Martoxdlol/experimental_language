@@ -56,6 +56,11 @@ extern function lang_fs_file_read_to_end(handle: i64): str;
 extern function lang_fs_file_write(handle: i64, contents_hex: str): str;
 extern function lang_fs_file_flush(handle: i64): str;
 extern function lang_fs_file_seek(handle: i64, mode: str, offset: i64): str;
+extern function __otter_fs_file_read_async(handle: i64, count: i64): Future<str>;
+extern function __otter_fs_file_read_to_end_async(handle: i64): Future<str>;
+extern function __otter_fs_file_write_async(handle: i64, contents_hex: str): Future<str>;
+extern function __otter_fs_file_flush_async(handle: i64): Future<str>;
+extern function __otter_fs_file_seek_async(handle: i64, mode: str, offset: i64): Future<str>;
 extern function lang_fs_exists(path: str): str;
 extern function lang_fs_is_file(path: str): str;
 extern function lang_fs_is_dir(path: str): str;
@@ -146,7 +151,7 @@ function __fs_decode_kind(result: str): FileKind | IoError {
 function __fs_digit(ch: char): u64 | IoError {
   var cp = ch as i64;
   if cp >= 48 && cp <= 57 {
-    (cp - 48) as u64
+    (cp - 48)as u64
   } else {
     __fs_io_error("invalid decimal digit in filesystem metadata")
   }
@@ -204,13 +209,13 @@ function __fs_decode_i64(result: str): i64 | IoError {
 function __fs_hex_digit(value: u8): str {
   var n = value as i64;
   var cp = if n < 10 { 48 + n } else { 87 + n };
-  (cp as char) as str
+  (cp as char)as str
 }
 
 function __fs_bytes_to_hex(data: Bytes): str {
   var out = "";
   for b in data.iter() {
-    out = out + __fs_hex_digit((b / 16u8) as u8) + __fs_hex_digit((b % 16u8) as u8);
+    out = out + __fs_hex_digit((b / 16u8)as u8) + __fs_hex_digit((b % 16u8)as u8);
   }
   out
 }
@@ -218,11 +223,11 @@ function __fs_bytes_to_hex(data: Bytes): str {
 function __fs_hex_value(ch: char): u8 | IoError {
   var cp = ch as i64;
   if cp >= 48 && cp <= 57 {
-    (cp - 48) as u8
+    (cp - 48)as u8
   } else if cp >= 97 && cp <= 102 {
-    (cp - 87) as u8
+    (cp - 87)as u8
   } else if cp >= 65 && cp <= 70 {
-    (cp - 55) as u8
+    (cp - 55)as u8
   } else {
     __fs_io_error("invalid hexadecimal digit in filesystem byte payload")
   }
@@ -251,7 +256,7 @@ function __fs_hex_to_bytes(text: str): Bytes | IoError {
       if lo is IoError {
         return lo as IoError;
       }
-      out.push(((hi as u8) * 16u8 + (lo as u8)) as u8);
+      out.push(((hi as u8) * 16u8 + (lo as u8))as u8);
       i = i + 2;
     }
     out
@@ -269,11 +274,11 @@ function __fs_decode_bytes(result: str): Bytes | IoError {
 
 function __fs_options_mode(options: OpenOptions): str {
   var out = if options.read { "1" } else { "0" };
-  out = out + if options.write { "1" } else { "0" };
-  out = out + if options.append { "1" } else { "0" };
-  out = out + if options.truncate { "1" } else { "0" };
-  out = out + if options.create { "1" } else { "0" };
-  out = out + if options.create_new { "1" } else { "0" };
+  out = out+if options.write { "1" } else { "0" };
+  out = out+if options.append { "1" } else { "0" };
+  out = out+if options.truncate { "1" } else { "0" };
+  out = out+if options.create { "1" } else { "0" };
+  out = out+if options.create_new { "1" } else { "0" };
   out
 }
 
@@ -371,7 +376,10 @@ function __fs_decode_read_dir(payload: str): List<DirEntry> | IoError {
       return kind as IoError;
     }
 
-    entries.push(DirEntry { path: path_from_native(payload.substring(pos, end)), kind: (kind as FileKind).clone() });
+    entries.push(DirEntry {
+        path: path_from_native(payload.substring(pos, end)),
+        kind: (kind as FileKind).clone()
+      });
     pos = end;
   }
   entries
@@ -525,7 +533,11 @@ extend Path {
         if perms is IoError {
           perms as IoError
         } else {
-          Metadata { kind: (kind as FileKind).clone(), byte_len: len as u64, permissions: (perms as Permissions).clone() }
+          Metadata {
+            kind: (kind as FileKind).clone(),
+            byte_len: len as u64,
+            permissions: (perms as Permissions).clone()
+          }
         }
       }
     }
@@ -565,7 +577,7 @@ extend Path {
       } else if part == ".." {
         if stack.size() > 0 && stack[stack.size() - 1] != ".." {
           stack.pop();
-        } else if !absolute {
+        } else if!absolute {
           stack.push(part);
         }
       } else {
@@ -654,7 +666,7 @@ extend Path {
   function strip_prefix(self, base: Path): Path | null {
     var path = self.normalize();
     var prefix = base.normalize();
-    if !path.starts_with(prefix) {
+    if!path.starts_with(prefix) {
       null
     } else {
       var path_parts = path.components();
@@ -921,7 +933,14 @@ extend DirEntries: Iterator<DirEntry | IoError> {
 
 extend OpenOptions {
   function new(): OpenOptions {
-    OpenOptions { read: false, write: false, append: false, truncate: false, create: false, create_new: false }
+    OpenOptions {
+      read: false,
+      write: false,
+      append: false,
+      truncate: false,
+      create: false,
+      create_new: false
+    }
   }
 
   function read(self): bool { self.read }
@@ -937,31 +956,73 @@ extend OpenOptions {
   function create_new(self): bool { self.create_new }
 
   function with_read(self, value: bool): OpenOptions {
-    OpenOptions { read: value, write: self.write, append: self.append, truncate: self.truncate, create: self.create, create_new: self.create_new }
+    OpenOptions {
+      read: value,
+      write: self.write,
+      append: self.append,
+      truncate: self.truncate,
+      create: self.create,
+      create_new: self.create_new
+    }
   }
 
   function with_write(self, value: bool): OpenOptions {
-    OpenOptions { read: self.read, write: value, append: self.append, truncate: self.truncate, create: self.create, create_new: self.create_new }
+    OpenOptions {
+      read: self.read,
+      write: value,
+      append: self.append,
+      truncate: self.truncate,
+      create: self.create,
+      create_new: self.create_new
+    }
   }
 
   function with_append(self, value: bool): OpenOptions {
-    OpenOptions { read: self.read, write: self.write, append: value, truncate: self.truncate, create: self.create, create_new: self.create_new }
+    OpenOptions {
+      read: self.read,
+      write: self.write,
+      append: value,
+      truncate: self.truncate,
+      create: self.create,
+      create_new: self.create_new
+    }
   }
 
   function with_truncate(self, value: bool): OpenOptions {
-    OpenOptions { read: self.read, write: self.write, append: self.append, truncate: value, create: self.create, create_new: self.create_new }
+    OpenOptions {
+      read: self.read,
+      write: self.write,
+      append: self.append,
+      truncate: value,
+      create: self.create,
+      create_new: self.create_new
+    }
   }
 
   function with_create(self, value: bool): OpenOptions {
-    OpenOptions { read: self.read, write: self.write, append: self.append, truncate: self.truncate, create: value, create_new: self.create_new }
+    OpenOptions {
+      read: self.read,
+      write: self.write,
+      append: self.append,
+      truncate: self.truncate,
+      create: value,
+      create_new: self.create_new
+    }
   }
 
   function with_create_new(self, value: bool): OpenOptions {
-    OpenOptions { read: self.read, write: self.write, append: self.append, truncate: self.truncate, create: self.create, create_new: value }
+    OpenOptions {
+      read: self.read,
+      write: self.write,
+      append: self.append,
+      truncate: self.truncate,
+      create: self.create,
+      create_new: value
+    }
   }
 
   function validation_error(self): IoError | null {
-    if !self.read && !self.write && !self.append {
+    if!self.read && !self.write && !self.append {
       __fs_io_error("filesystem open options must enable read, write, or append")
     } else if self.truncate && !__fs_options_can_write(self) {
       __fs_io_error("filesystem open options using truncate require write or append access")
@@ -984,24 +1045,31 @@ extend OpenOptions {
   }
 
   function is_valid(self): bool {
-    self.validation_error() is null
+    self.validation_error()is null
   }
 }
 
 extend OpenOptions: Eq {
   function eq(self, other: OpenOptions): bool {
     self.read == other.read &&
-      self.write == other.write &&
-      self.append == other.append &&
-      self.truncate == other.truncate &&
-      self.create == other.create &&
-      self.create_new == other.create_new
+    self.write == other.write &&
+    self.append == other.append &&
+    self.truncate == other.truncate &&
+    self.create == other.create &&
+    self.create_new == other.create_new
   }
 }
 
 extend OpenOptions: Clone {
   function clone(self): OpenOptions {
-    OpenOptions { read: self.read, write: self.write, append: self.append, truncate: self.truncate, create: self.create, create_new: self.create_new }
+    OpenOptions {
+      read: self.read,
+      write: self.write,
+      append: self.append,
+      truncate: self.truncate,
+      create: self.create,
+      create_new: self.create_new
+    }
   }
 }
 
@@ -1021,22 +1089,22 @@ extend OpenOptions: Hash {
 extend OpenOptions: ToStr {
   function to_str(self): str {
     "OpenOptions(read=" + (self.read as str) +
-      ", write=" + (self.write as str) +
-      ", append=" + (self.append as str) +
-      ", truncate=" + (self.truncate as str) +
-      ", create=" + (self.create as str) +
-      ", create_new=" + (self.create_new as str) + ")"
+    ", write=" + (self.write as str) +
+    ", append=" + (self.append as str) +
+    ", truncate=" + (self.truncate as str) +
+    ", create=" + (self.create as str) +
+    ", create_new=" + (self.create_new as str) + ")"
   }
 }
 
 extend OpenOptions: Debug {
   function debug(self): str {
     "OpenOptions { read: " + (self.read as str) +
-      ", write: " + (self.write as str) +
-      ", append: " + (self.append as str) +
-      ", truncate: " + (self.truncate as str) +
-      ", create: " + (self.create as str) +
-      ", create_new: " + (self.create_new as str) + " }"
+    ", write: " + (self.write as str) +
+    ", append: " + (self.append as str) +
+    ", truncate: " + (self.truncate as str) +
+    ", create: " + (self.create as str) +
+    ", create_new: " + (self.create_new as str) + " }"
   }
 }
 
@@ -1081,6 +1149,71 @@ extend File {
 
   function close(self): null | IoError {
     __fs_decode_unit(lang_fs_file_close(self.handle))
+  }
+
+  function read_async(self, buf: Bytes): Future < i64 | IoError > async {
+    var raw = await __otter_fs_file_read_async(self.handle, buf.size());
+    var data = __fs_decode_bytes(raw);
+    if data is IoError {
+      data as IoError
+    } else {
+      var chunk = data as Bytes;
+      for b in chunk.iter() {
+        buf.push(b);
+      }
+      chunk.size()
+    }
+  }
+
+  function read_to_end_async(self, buf: Bytes): Future < i64 | IoError > async {
+    var raw = await __otter_fs_file_read_to_end_async(self.handle);
+    var data = __fs_decode_bytes(raw);
+    if data is IoError {
+      data as IoError
+    } else {
+      var chunk = data as Bytes;
+      for b in chunk.iter() {
+        buf.push(b);
+      }
+      chunk.size()
+    }
+  }
+
+  function write_async(self, buf: Bytes): Future < i64 | IoError > async {
+    var raw = await __otter_fs_file_write_async(self.handle, __fs_bytes_to_hex(buf));
+    __fs_decode_i64(raw)
+  }
+
+  function write_all_async(self, buf: Bytes): Future < null | IoError > async {
+    var written = await self.write_async(buf);
+    if written is IoError {
+      written as IoError
+    } else {
+      null
+    }
+  }
+
+  function flush_async(self): Future < null | IoError > async {
+    var raw = await __otter_fs_file_flush_async(self.handle);
+    __fs_decode_unit(raw)
+  }
+
+  function seek_async(self, pos: SeekFrom): Future < i64 | IoError > async {
+    if pos is Start {
+      var offset = (pos as Start).offset;
+      if offset > 9223372036854775807u64 {
+        __fs_io_error("invalid seek")
+      } else {
+        var raw = await __otter_fs_file_seek_async(self.handle, "start", offset as i64);
+        __fs_decode_i64(raw)
+      }
+    } else if pos is Current {
+      var raw = await __otter_fs_file_seek_async(self.handle, "current", (pos as Current).offset);
+      __fs_decode_i64(raw)
+    } else {
+      var raw = await __otter_fs_file_seek_async(self.handle, "end", (pos as End).offset);
+      __fs_decode_i64(raw)
+    }
   }
 }
 
@@ -1154,7 +1287,13 @@ extend File: ToStr {
 
 extend File: Debug {
   function debug(self): str {
-    "File { path: " + self.path.debug() + ", append_mode: " + (self.append_mode as str) + ", handle: " + (self.handle as str) + " }"
+    "File { path: "
+      + self.path.debug()
+      + ", append_mode: "
+      + (self.append_mode as str)
+      + ", handle: "
+      + (self.handle as str)
+      + " }"
   }
 }
 
@@ -1196,13 +1335,21 @@ extend Permissions: Hash {
 
 extend Permissions: ToStr {
   function to_str(self): str {
-    "permissions(read_only=" + (self.read_only as str) + ", executable=" + (self.executable as str) + ")"
+    "permissions(read_only="
+      + (self.read_only as str)
+      + ", executable="
+      + (self.executable as str)
+      + ")"
   }
 }
 
 extend Permissions: Debug {
   function debug(self): str {
-    "Permissions { read_only: " + (self.read_only as str) + ", executable: " + (self.executable as str) + " }"
+    "Permissions { read_only: "
+      + (self.read_only as str)
+      + ", executable: "
+      + (self.executable as str)
+      + " }"
   }
 }
 
@@ -1238,7 +1385,9 @@ extend Metadata {
 
 extend Metadata: Eq {
   function eq(self, other: Metadata): bool {
-    self.kind.equals(other.kind) && self.byte_len == other.byte_len && self.permissions == other.permissions
+    self.kind.equals(other.kind)
+      && self.byte_len == other.byte_len
+      && self.permissions == other.permissions
   }
 }
 
@@ -1266,6 +1415,12 @@ extend Metadata: ToStr {
 
 extend Metadata: Debug {
   function debug(self): str {
-    "Metadata { kind: " + self.kind.debug_string() + ", len: " + (self.byte_len as str) + ", permissions: " + self.permissions.debug() + " }"
+    "Metadata { kind: "
+      + self.kind.debug_string()
+      + ", len: "
+      + (self.byte_len as str)
+      + ", permissions: "
+      + self.permissions.debug()
+      + " }"
   }
 }

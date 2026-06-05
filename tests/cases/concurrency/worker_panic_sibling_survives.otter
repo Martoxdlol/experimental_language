@@ -21,12 +21,12 @@ function div(a: i64, b: i64): i64 { a / b }
 
 function show(label: str, r: Joined<i64> | Panicked) {
   match r {
-    Joined<i64> j => println(label + " = ok " + (j.value as str)),
-    Panicked p    => println(label + " = panicked: " + p.message),
+    Joined < i64 > j => println(label + " = ok " + (j.value as str)),
+    Panicked p => println(label + " = panicked: " + p.message),
   };
 }
 
-function main(): Future<null> async {
+function main(): Future < null > async {
   var a: JoinHandle<i64> = Thread.spawn(() => maybe_panic(0));
   var b: JoinHandle<i64> = Thread.spawn(() => maybe_panic(5));
   var c: JoinHandle<i64> = Thread.spawn(() => div(10, 0));

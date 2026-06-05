@@ -8,15 +8,15 @@ import { Future } from "core:prelude";
 import { Task, JoinHandle, Joined, Panicked, Cancelled } from "std:task";
 import { sleep } from "std:async";
 
-function main(): Future<null> async {
-  var h: JoinHandle<i64> = Task.spawn(() async => {
-    var _ = await sleep(1000);
-    42
-  });
+function main(): Future < null > async {
+  var h: JoinHandle<i64> = Task.spawn(()async => {
+      var _ = await sleep(1000);
+      42
+    });
   var _started = await sleep(20);
   h.abort();
   match await h.join() {
-    Joined<i64> j => println("abort = joined ${j.value}"),
+    Joined < i64 > j => println("abort = joined ${j.value }"),
     Panicked p => println("abort = panicked"),
     Cancelled c => println("abort = cancelled"),
   };

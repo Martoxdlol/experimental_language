@@ -5,15 +5,15 @@
 import { println } from "std:io";
 import { Future, panic } from "core:prelude";
 
-function work(): Future<i64> async {
+function work(): Future < i64 > async {
   panic("spawned task failed");
   0
 }
 
-function main(): Future<null> async {
+function main(): Future < null > async {
   var h: Future<i64> = spawn work();
   // The worker panicked; awaiting it re-raises the panic here. With no boundary
   // on main, the process exits 101 with the propagated message.
   var v: i64 = await h;
-  println("unreachable ${v}");
+  println("unreachable ${v }");
 }

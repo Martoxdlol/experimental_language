@@ -183,7 +183,7 @@ extend Record {
   }
 
   function has_field(self, key: str): bool {
-    self.fields.get(key) is str
+    self.fields.get(key)is str
   }
 
   function field_count(self): i64 { self.fields.size() }
@@ -295,7 +295,7 @@ extend Record: Eq {
 
 extend Record: Hash {
   function hash(self): u64 {
-    var h = (self.level.as_str() + "|" + self.message + "|" + self.module + "|" + self.time.as_unix_nanos() as str).hash();
+    var h = (self.level.as_str() + "|" + self.message + "|" + self.module + "|" + self.time.as_unix_nanos()as str).hash();
     (h + __log_fields_hash(self.fields)) % 4294967291u64
   }
 }
@@ -318,7 +318,17 @@ extend Record: ToStr {
 
 extend Record: Debug {
   function debug(self): str {
-    "Record { level: " + self.level.as_str() + ", message: \"" + self.message + "\", module: \"" + self.module + "\", fields: " + self.field_string() + ", time: " + self.time.debug() + " }"
+    "Record { level: "
+      + self.level.as_str()
+      + ", message: \""
+      + self.message
+      + "\", module: \""
+      + self.module
+      + "\", fields: "
+      + self.field_string()
+      + ", time: "
+      + self.time.debug()
+      + " }"
   }
 }
 

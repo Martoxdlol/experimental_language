@@ -1,8 +1,11 @@
 //! Hand-written lexer.
 //!
 //! Operates on a borrowed `&str` and produces `(Vec<Token>, Vec<LexError>)`.
-//! Whitespace and ordinary `//` / `/* */` comments are dropped. Doc comments
-//! (`///`, `//!`) become tokens because they attach to AST items.
+//! Whitespace and ordinary `//` / `/* */` comments are dropped by the parser
+//! token stream. Doc comments (`///`, `//!`) become tokens because they attach
+//! to AST items. Tooling that must preserve ordinary comments can call
+//! [`lex_ordinary_comments`] to get a parallel trivia stream without changing
+//! parser-facing lexing.
 //!
 //! String interpolation is handled by a small mode stack:
 //!
@@ -55,6 +58,169 @@ pub fn lex(src: &str, file: FileId) -> (Vec<Token>, Vec<LexError>) {
     let eof_pos = lx.pos;
     lx.emit(TokenKind::Eof, eof_pos);
     (lx.tokens, lx.errors)
+}
+
+/// An ordinary source comment retained for tooling. Doc comments are tokens in
+/// the normal lexer and are intentionally not included here.
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+pub enum CommentKind {
+    Line,
+    Block,
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+pub struct CommentTrivia {
+    pub kind: CommentKind,
+    pub span: Span,
+}
+
+#[derive(Copy, Clone, Debug)]
+enum CommentMode {
+    Normal,
+    String,
+    Interp { brace_depth: u32 },
+}
+
+/// Return ordinary `//` and nested `/* ... */` comments as trivia. The scanner
+/// mirrors the lexer mode rules enough for tooling: comments inside strings are
+/// ignored, comments inside `${ ... }` interpolation are retained, and doc
+/// comments remain excluded because the parser token stream already preserves
+/// them as `DocOuter` / `DocInner`.
+pub fn lex_ordinary_comments(src: &str, file: FileId) -> (Vec<CommentTrivia>, Vec<LexError>) {
+    let bytes = src.as_bytes();
+    let mut comments = Vec::new();
+    let mut errors = Vec::new();
+    let mut modes = vec![CommentMode::Normal];
+    let mut pos = 0usize;
+
+    while pos < bytes.len() {
+        match *modes.last().expect("comment mode stack is never empty") {
+            CommentMode::Normal | CommentMode::Interp { .. } => {
+                let b = bytes[pos];
+                if b == b'/' && bytes.get(pos + 1) == Some(&b'/') {
+                    let third = bytes.get(pos + 2).copied();
+                    let start = pos;
+                    pos += 2;
+                    while pos < bytes.len() && bytes[pos] != b'\n' {
+                        bump_comment_char(src, &mut pos);
+                    }
+                    if third != Some(b'/') && third != Some(b'!') {
+                        let span = Span::new(file, BytePos(start as u32), BytePos(pos as u32));
+                        comments.push(CommentTrivia {
+                            kind: CommentKind::Line,
+                            span,
+                        });
+                    }
+                    continue;
+                }
+                if b == b'/' && bytes.get(pos + 1) == Some(&b'*') {
+                    let start = pos;
+                    pos += 2;
+                    let mut depth = 1u32;
+                    while depth > 0 {
+                        match (bytes.get(pos).copied(), bytes.get(pos + 1).copied()) {
+                            (None, _) => {
+                                errors.push(LexError::new(
+                                    LexErrorKind::UnterminatedBlockComment,
+                                    Span::new(file, BytePos(start as u32), BytePos(pos as u32)),
+                                ));
+                                break;
+                            }
+                            (Some(b'/'), Some(b'*')) => {
+                                pos += 2;
+                                depth += 1;
+                            }
+                            (Some(b'*'), Some(b'/')) => {
+                                pos += 2;
+                                depth -= 1;
+                            }
+                            _ => bump_comment_char(src, &mut pos),
+                        }
+                    }
+                    let span = Span::new(file, BytePos(start as u32), BytePos(pos as u32));
+                    comments.push(CommentTrivia {
+                        kind: CommentKind::Block,
+                        span,
+                    });
+                    continue;
+                }
+                if b == b'"' {
+                    modes.push(CommentMode::String);
+                    pos += 1;
+                    continue;
+                }
+                if b == b'\'' {
+                    skip_comment_char_literal(src, &mut pos);
+                    continue;
+                }
+                match modes.last_mut().unwrap() {
+                    CommentMode::Interp { brace_depth } if b == b'{' => {
+                        *brace_depth += 1;
+                        pos += 1;
+                    }
+                    CommentMode::Interp { brace_depth } if b == b'}' => {
+                        if *brace_depth == 0 {
+                            modes.pop();
+                        } else {
+                            *brace_depth -= 1;
+                        }
+                        pos += 1;
+                    }
+                    _ => bump_comment_char(src, &mut pos),
+                }
+            }
+            CommentMode::String => {
+                let b = bytes[pos];
+                if b == b'"' {
+                    modes.pop();
+                    pos += 1;
+                } else if b == b'\\' {
+                    pos += 1;
+                    if pos < bytes.len() {
+                        bump_comment_char(src, &mut pos);
+                    }
+                } else if b == b'$' && bytes.get(pos + 1) == Some(&b'{') {
+                    pos += 2;
+                    modes.push(CommentMode::Interp { brace_depth: 0 });
+                } else {
+                    bump_comment_char(src, &mut pos);
+                }
+            }
+        }
+    }
+
+    (comments, errors)
+}
+
+fn bump_comment_char(src: &str, pos: &mut usize) {
+    if let Some(ch) = src[*pos..].chars().next() {
+        *pos += ch.len_utf8();
+    } else {
+        *pos += 1;
+    }
+}
+
+fn skip_comment_char_literal(src: &str, pos: &mut usize) {
+    *pos += 1;
+    while *pos < src.len() {
+        let Some(b) = src.as_bytes().get(*pos).copied() else {
+            return;
+        };
+        if b == b'\n' {
+            return;
+        }
+        if b == b'\\' {
+            *pos += 1;
+            if *pos < src.len() {
+                bump_comment_char(src, pos);
+            }
+            continue;
+        }
+        bump_comment_char(src, pos);
+        if b == b'\'' {
+            return;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -869,6 +1035,36 @@ mod tests {
                 TokenKind::Eof
             ]
         );
+    }
+
+    #[test]
+    fn ordinary_comment_trivia_is_available_for_tools() {
+        let src = "var x // line\n/* outer /* nested */ done */\n/// docs\n//! inner\n";
+        let (comments, errors) = lex_ordinary_comments(src, FileId(0));
+        assert!(errors.is_empty(), "{errors:?}");
+        let got = comments
+            .iter()
+            .map(|c| (c.kind, &src[c.span.range()]))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            got,
+            vec![
+                (CommentKind::Line, "// line"),
+                (CommentKind::Block, "/* outer /* nested */ done */"),
+            ]
+        );
+    }
+
+    #[test]
+    fn ordinary_comment_trivia_respects_string_interpolation_modes() {
+        let src = "var s = \"not // comment ${ value /* real */ } still not /* comment */\";";
+        let (comments, errors) = lex_ordinary_comments(src, FileId(0));
+        assert!(errors.is_empty(), "{errors:?}");
+        let got = comments
+            .iter()
+            .map(|c| (c.kind, &src[c.span.range()]))
+            .collect::<Vec<_>>();
+        assert_eq!(got, vec![(CommentKind::Block, "/* real */")]);
     }
 
     #[test]

@@ -659,6 +659,26 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         }
     }
 
+    /// Emit intrinsic `std:fmt.Debug.debug` for primitive scalars and `str`.
+    /// Numeric and bool values use their ordinary string form; `char` and `str`
+    /// go through diagnostic renderers that quote and escape their contents.
+    pub(crate) fn gen_primitive_debug(&mut self, v: Value, ty: Ty, span: Span) -> CgResult<Value> {
+        let ty = resolve_shallow(self.cx.analysis, ty, &self.subst);
+        match self.cx.analysis.tcx.kind(ty) {
+            TyKind::Char => Ok(self
+                .call_intrinsic("lang_debug_char", &[types::I32], Some(PTR), &[v])
+                .expect("lang_debug_char returns a value")),
+            TyKind::Str => {
+                self.mark_root(v);
+                Ok(self
+                    .call_intrinsic("lang_debug_str", &[PTR], Some(PTR), &[v])
+                    .expect("lang_debug_str returns a value"))
+            }
+            TyKind::Int(_) | TyKind::Float(_) | TyKind::Bool => self.cast_to_str(v, ty, span),
+            _ => Err(CodegenError::new(span, "cannot debug-render this type")),
+        }
+    }
+
     /// Emit a primitive/`str` comparison over already-evaluated operand values.
     /// Shared by the AST and HIR walks.
     pub(crate) fn emit_primitive_compare(

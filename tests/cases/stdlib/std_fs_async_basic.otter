@@ -1,0 +1,43 @@
+//@ kind: run
+//@ description: std:fs File async methods run descriptor-backed I/O through reactor futures
+//@ stdout:
+//~ async_file=10 4 bytes[65,66,67,68] 6 bytes[69,70,71,72,73,74] true true true true
+//~ async_file_closed=true
+import { Future } from "core:prelude";
+import { Bytes } from "std:bytes";
+import { println } from "std:io";
+import { Current, IoError, Start } from "std:io";
+import { File, Path, remove } from "std:fs";
+
+function main(): Future<null> async {
+  var path = Path.new("/tmp/otter_fusion_std_fs_async_basic.bin");
+  remove(path);
+
+  var opened = File.create(path);
+  if opened is File {
+    var file = opened as File;
+    var payload = Bytes.from_str("ABCDEFGHIJ");
+    var written = await file.write_async(payload);
+    var flushed = await file.flush_async();
+    var seek_start = await file.seek_async(Start { offset: 0u64 });
+
+    var first = Bytes.new();
+    first.push(0u8);
+    first.push(0u8);
+    first.push(0u8);
+    first.push(0u8);
+    var first_count = await file.read_async(first);
+    var first_payload = first.slice(4, first.size());
+
+    var seek_mid = await file.seek_async(Current { offset: 0 });
+    var rest = Bytes.new();
+    var rest_count = await file.read_to_end_async(rest);
+    var closed = file.close();
+    var after_close = await file.read_to_end_async(Bytes.new());
+
+    println("async_file=${written as i64} ${first_count as i64} ${first_payload.to_str()} ${rest_count as i64} ${rest.to_str()} ${flushed is null} ${seek_start is i64} ${seek_mid is i64} ${closed is null}");
+    println("async_file_closed=${after_close is IoError}");
+  }
+
+  remove(path);
+}

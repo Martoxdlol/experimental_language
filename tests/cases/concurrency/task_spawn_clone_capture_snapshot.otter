@@ -15,19 +15,19 @@ extend Boxed: Clone {
 
 function joined_value(r: Joined<i64> | Panicked | Cancelled): i64 {
   match r {
-    Joined<i64> j => j.value,
+    Joined < i64 > j => j.value,
     Panicked p => -1,
     Cancelled c => -2,
   }
 }
 
-function main(): Future<null> async {
+function main(): Future < null > async {
   var b: Boxed = Boxed { value: 1 };
-  var h: JoinHandle<i64> = Task.spawn(() async => {
-    var _ = await sleep(10);
-    b.value
-  });
+  var h: JoinHandle<i64> = Task.spawn(()async => {
+      var _ = await sleep(10);
+      b.value
+    });
   b.value = 9;
   var captured = joined_value(await h.join());
-  println("captured=${captured} parent=${b.value}");
+  println("captured=${captured } parent=${b.value }");
 }

@@ -4,6 +4,7 @@ struct Duration {
 
 function __otter_time_monotonic_nanos(): i64 { 0 }
 function __otter_time_system_nanos(): i64 { 0 }
+extern function lang_time_local_offset_seconds(unix_nanos: i64): i64;
 extern function lang_time_sleep_nanos(nanos: i64);
 
 function sleep(duration: Duration): null {
@@ -75,11 +76,11 @@ extend Duration: Clone {
 }
 
 extend Duration: ToStr {
-  function to_str(self): str { "${self.nanos}ns" }
+  function to_str(self): str { "${self.nanos }ns" }
 }
 
 extend Duration: Debug {
-  function debug(self): str { "Duration { nanos: ${self.nanos} }" }
+  function debug(self): str { "Duration { nanos: ${self.nanos } }" }
 }
 
 struct Instant {
@@ -176,7 +177,18 @@ function fixed_offset(seconds: i32): TimeZone { FixedOffset { seconds: seconds }
 function named_timezone(name: str): TimeZone { NamedTimeZone { name: name } }
 function time_error(message: str): TimeError { TimeError { message: message } }
 
-function date_time(year: i32, month: u8, day: u8, hour: u8, minute: u8, second: u8, nanos: u32, tz: TimeZone): DateTime | TimeError {
+function date_time(
+  year: i32,
+  month: u8,
+  day: u8,
+  hour: u8,
+  minute: u8,
+  second: u8,
+  nanos: u32,
+  tz: TimeZone
+):
+  DateTime |
+  TimeError {
   DateTime.new(year, month, day, hour, minute, second, nanos, tz)
 }
 
@@ -233,7 +245,9 @@ function __time_parse_digits(text: str, start: i64, count: i64, message: str): i
 }
 
 function __time_expect(text: str, pos: i64, token: str, message: str): null | TimeError {
-  if pos < 0 || pos + token.size() > text.size() || text.substring(pos, pos + token.size()) != token {
+  if pos < 0
+    || pos + token.size() > text.size()
+    || text.substring(pos, pos + token.size()) != token {
     __time_parse_error(message)
   } else {
     null
@@ -274,7 +288,7 @@ function __time_civil_from_days(days: i64): DateParts | TimeError {
   var doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
   var mp = (5 * doy + 2) / 153;
   var d = doy - (153 * mp + 2) / 5 + 1;
-  var m = mp + if mp < 10 { 3 } else { -9 };
+  var m = mp+if mp < 10 { 3 } else { -9 };
   if m <= 2 {
     y = y + 1;
   }
@@ -289,6 +303,18 @@ function __time_nanos_per_day(): i64 { 86400000000000 }
 function __time_nanos_per_hour(): i64 { 3600000000000 }
 function __time_nanos_per_minute(): i64 { 60000000000 }
 function __time_nanos_per_second(): i64 { 1000000000 }
+function __time_local_offset_error_sentinel(): i64 { (0 - 9223372036854775807) - 1 }
+
+function __time_local_offset_seconds(t: SystemTime): i32 | TimeError {
+  var offset = lang_time_local_offset_seconds(t.as_unix_nanos());
+  if offset == __time_local_offset_error_sentinel() {
+    TimeError { message: "local timezone lookup is unavailable for this target or timestamp" }
+  } else if offset < -2147483648 || offset > 2147483647 {
+    TimeError { message: "local timezone offset out of range" }
+  } else {
+    offset as i32
+  }
+}
 
 extend SystemTime {
   function now(): SystemTime {
@@ -326,7 +352,7 @@ extend SystemTime {
     if offset is null {
       TimeError { message: "named timezone conversion requires timezone database" }
     } else {
-      var local_nanos = self.nanos_since_unix_epoch + ((offset as i32) as i64) * __time_nanos_per_second();
+      var local_nanos = self.nanos_since_unix_epoch + ((offset as i32)as i64) * __time_nanos_per_second();
       var days = __time_floor_div(local_nanos, __time_nanos_per_day());
       var day_nanos = local_nanos - days * __time_nanos_per_day();
       var parts = __time_civil_from_days(days);
@@ -362,10 +388,22 @@ extend SystemTime: Eq {
 }
 
 extend SystemTime: Ord {
-  function lt(self, other: SystemTime): bool { self.nanos_since_unix_epoch < other.nanos_since_unix_epoch }
-  function le(self, other: SystemTime): bool { self.nanos_since_unix_epoch <= other.nanos_since_unix_epoch }
-  function gt(self, other: SystemTime): bool { self.nanos_since_unix_epoch > other.nanos_since_unix_epoch }
-  function ge(self, other: SystemTime): bool { self.nanos_since_unix_epoch >= other.nanos_since_unix_epoch }
+  function lt(
+    self,
+    other: SystemTime
+  ): bool { self.nanos_since_unix_epoch < other.nanos_since_unix_epoch }
+  function le(
+    self,
+    other: SystemTime
+  ): bool { self.nanos_since_unix_epoch <= other.nanos_since_unix_epoch }
+  function gt(
+    self,
+    other: SystemTime
+  ): bool { self.nanos_since_unix_epoch > other.nanos_since_unix_epoch }
+  function ge(
+    self,
+    other: SystemTime
+  ): bool { self.nanos_since_unix_epoch >= other.nanos_since_unix_epoch }
 }
 
 extend SystemTime: Hash {
@@ -504,7 +542,56 @@ extend TimeZone: Debug {
 }
 
 extend DateTime {
-  function new(year: i32, month: u8, day: u8, hour: u8, minute: u8, second: u8, nanos: u32, tz: TimeZone): DateTime | TimeError {
+  function now_utc(): DateTime {
+    var value = SystemTime.now().to_datetime(utc());
+    if value is TimeError {
+      panic((value as TimeError).message());
+      DateTime {
+        year: 1970i32,
+        month: 1u8,
+        day: 1u8,
+        hour: 0u8,
+        minute: 0u8,
+        second: 0u8,
+        nanos: 0u32,
+        tz: utc(),
+      }
+    } else {
+      value as DateTime
+    }
+  }
+
+  function now_local(): DateTime {
+    var value = DateTime.from_system_time_local(SystemTime.now());
+    if value is TimeError {
+      panic((value as TimeError).message());
+      DateTime.now_utc()
+    } else {
+      value as DateTime
+    }
+  }
+
+  function from_system_time_local(t: SystemTime): DateTime | TimeError {
+    var offset = __time_local_offset_seconds(t);
+    if offset is TimeError {
+      offset as TimeError
+    } else {
+      t.to_datetime(fixed_offset(offset as i32))
+    }
+  }
+
+  function new(
+    year: i32,
+    month: u8,
+    day: u8,
+    hour: u8,
+    minute: u8,
+    second: u8,
+    nanos: u32,
+    tz: TimeZone
+  ):
+    DateTime |
+    TimeError {
     var month_i = month as i64;
     var day_i = day as i64;
     var hour_i = hour as i64;
@@ -636,9 +723,9 @@ extend DateTime {
       if oh > 23 || om > 59 {
         return __time_parse_error("timezone offset out of range");
       }
-      tz = fixed_offset((sign * (oh * 3600 + om * 60)) as i32);
+      tz = fixed_offset((sign * (oh * 3600 + om * 60))as i32);
     } else if s.substring(pos, pos + 1) == "[" {
-      if !s.ends_with("]") || pos + 1 >= s.size() - 1 {
+      if!s.ends_with("]") || pos + 1 >= s.size() - 1 {
         return __time_parse_error("expected timezone name");
       }
       tz = named_timezone(s.substring(pos + 1, s.size() - 1));
@@ -647,12 +734,12 @@ extend DateTime {
     }
 
     DateTime.new(
-      (year as i64) as i32,
-      (month as i64) as u8,
-      (day as i64) as u8,
-      (hour as i64) as u8,
-      (minute as i64) as u8,
-      (second as i64) as u8,
+      (year as i64)as i32,
+      (month as i64)as u8,
+      (day as i64)as u8,
+      (hour as i64)as u8,
+      (minute as i64)as u8,
+      (second as i64)as u8,
       nanos as u32,
       tz as TimeZone,
     )
@@ -687,17 +774,25 @@ extend DateTime {
     } else {
       var days = __time_days_from_civil(self.year, self.month, self.day);
       var local_nanos = days * __time_nanos_per_day() +
-        (self.hour as i64) * __time_nanos_per_hour() +
-        (self.minute as i64) * __time_nanos_per_minute() +
-        (self.second as i64) * __time_nanos_per_second() +
-        self.nanos as i64;
-      SystemTime.from_unix_nanos(local_nanos - ((offset as i32) as i64) * __time_nanos_per_second())
+      (self.hour as i64) * __time_nanos_per_hour() +
+      (self.minute as i64) * __time_nanos_per_minute() +
+      (self.second as i64) * __time_nanos_per_second() +
+      self.nanos as i64;
+      SystemTime.from_unix_nanos(local_nanos - ((offset as i32)as i64) * __time_nanos_per_second())
     }
   }
 
   function format_iso8601(self): str {
-    var date = (self.year as str) + "-" + __time_pad2(self.month as i64) + "-" + __time_pad2(self.day as i64);
-    var time = __time_pad2(self.hour as i64) + ":" + __time_pad2(self.minute as i64) + ":" + __time_pad2(self.second as i64);
+    var date = (self.year as str)
+      + "-"
+      + __time_pad2(self.month as i64)
+      + "-"
+      + __time_pad2(self.day as i64);
+    var time = __time_pad2(self.hour as i64)
+      + ":"
+      + __time_pad2(self.minute as i64)
+      + ":"
+      + __time_pad2(self.second as i64);
     if self.nanos == 0u32 {
       date + "T" + time + self.tz.offset_string()
     } else {
@@ -709,13 +804,13 @@ extend DateTime {
 extend DateTime: Eq {
   function eq(self, other: DateTime): bool {
     self.year == other.year &&
-      self.month == other.month &&
-      self.day == other.day &&
-      self.hour == other.hour &&
-      self.minute == other.minute &&
-      self.second == other.second &&
-      self.nanos == other.nanos &&
-      self.tz.equals(other.tz)
+    self.month == other.month &&
+    self.day == other.day &&
+    self.hour == other.hour &&
+    self.minute == other.minute &&
+    self.second == other.second &&
+    self.nanos == other.nanos &&
+    self.tz.equals(other.tz)
   }
 }
 
@@ -745,12 +840,12 @@ extend DateTime: ToStr {
 extend DateTime: Debug {
   function debug(self): str {
     "DateTime { year: " + (self.year as str) +
-      ", month: " + (self.month as str) +
-      ", day: " + (self.day as str) +
-      ", hour: " + (self.hour as str) +
-      ", minute: " + (self.minute as str) +
-      ", second: " + (self.second as str) +
-      ", nanos: " + (self.nanos as str) +
-      ", tz: " + self.tz.debug() + " }"
+    ", month: " + (self.month as str) +
+    ", day: " + (self.day as str) +
+    ", hour: " + (self.hour as str) +
+    ", minute: " + (self.minute as str) +
+    ", second: " + (self.second as str) +
+    ", nanos: " + (self.nanos as str) +
+    ", tz: " + self.tz.debug() + " }"
   }
 }

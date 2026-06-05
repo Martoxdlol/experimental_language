@@ -5,14 +5,15 @@ struct JsonNull {}
 struct JsonBool { value: bool }
 struct JsonNumber { value: f64 }
 struct JsonStr { value: str }
-struct JsonArray { items: List<Json> }
-struct JsonObject { entries: Map<str, Json> }
+struct JsonArray { items: List < Json > }
+struct JsonObject { entries: Map < str, Json > }
 
 function json_null(): Json { Json { value: JsonNull {} } }
 function json_bool(value: bool): Json { Json { value: JsonBool { value: value } } }
 function json_number(value: f64): Json { Json { value: JsonNumber { value: value } } }
 function json_string(value: str): Json { Json { value: JsonStr { value: value } } }
-function json_array(items: List<Json>): Json { Json { value: JsonArray { items: __json_clone_list(items) } } }
+function
+  json_array(items: List<Json>): Json { Json { value: JsonArray { items: __json_clone_list(items) } } }
 function json_object(entries: Map<str, Json>): Json {
   Json { value: JsonObject { entries: __json_clone_map(entries) } }
 }
@@ -108,7 +109,7 @@ function __json_pretty(value: Json, depth: i64, width: i64): str {
   } else if value.value is JsonNull {
     "null"
   } else if value.value is JsonBool {
-    if (value.value as JsonBool).value { "true" } else { "false" }
+    if(value.value as JsonBool).value { "true" } else { "false" }
   } else if value.value is JsonNumber {
     (value.value as JsonNumber).value as str
   } else if value.value is JsonStr {
@@ -143,7 +144,12 @@ function __json_pretty(value: Json, depth: i64, width: i64): str {
         } else {
           out = out + ",\n";
         }
-        out = out + __json_indent(depth + 1, width) + "\"" + __json_escape_string(entry.key) + "\": " + __json_pretty(entry.value, depth + 1, width);
+        out = out
+          + __json_indent(depth + 1, width)
+          + "\""
+          + __json_escape_string(entry.key)
+          + "\": "
+          + __json_pretty(entry.value, depth + 1, width);
       }
       out + "\n" + __json_indent(depth, width) + "}"
     }
@@ -177,7 +183,7 @@ extend Json {
 
   function contains_key(self, key: str): bool {
     if self.value is JsonObject {
-      (self.value as JsonObject).entries.get(key) is Json
+      (self.value as JsonObject).entries.get(key)is Json
     } else {
       false
     }
@@ -186,7 +192,7 @@ extend Json {
   function keys(self): List<str> {
     var out = List<str>();
     if self.value is JsonObject {
-      for entry in (self.value as JsonObject).entries {
+      for entry in(self.value as JsonObject).entries {
         out.push(entry.key);
       }
     }
@@ -196,7 +202,7 @@ extend Json {
   function values(self): List<Json> {
     var out = List<Json>();
     if self.value is JsonObject {
-      for entry in (self.value as JsonObject).entries {
+      for entry in(self.value as JsonObject).entries {
         out.push(entry.value.deep_clone());
       }
     }
@@ -495,13 +501,13 @@ extend Json {
       json_string((self.value as JsonStr).value)
     } else if self.value is JsonArray {
       var out = List<Json>();
-      for item in (self.value as JsonArray).items {
+      for item in(self.value as JsonArray).items {
         out.push(item.deep_clone());
       }
       Json { value: JsonArray { items: out } }
     } else if self.value is JsonObject {
       var out = Map.new<str, Json>();
-      for entry in (self.value as JsonObject).entries {
+      for entry in(self.value as JsonObject).entries {
         out.set(entry.key, entry.value.deep_clone());
       }
       Json { value: JsonObject { entries: out } }
@@ -514,7 +520,7 @@ extend Json {
     if self.value is JsonNull {
       "null"
     } else if self.value is JsonBool {
-      if (self.value as JsonBool).value { "true" } else { "false" }
+      if(self.value as JsonBool).value { "true" } else { "false" }
     } else if self.value is JsonNumber {
       (self.value as JsonNumber).value as str
     } else if self.value is JsonStr {
@@ -522,7 +528,7 @@ extend Json {
     } else if self.value is JsonArray {
       var out = "[";
       var first = true;
-      for item in (self.value as JsonArray).items {
+      for item in(self.value as JsonArray).items {
         if first {
           first = false;
         } else {
@@ -534,7 +540,7 @@ extend Json {
     } else if self.value is JsonObject {
       var out = "{";
       var first = true;
-      for entry in (self.value as JsonObject).entries {
+      for entry in(self.value as JsonObject).entries {
         if first {
           first = false;
         } else {
@@ -556,7 +562,7 @@ extend Json {
     if self.value is JsonNull {
       "json:null".hash() % 4294967291u64
     } else if self.value is JsonBool {
-      if (self.value as JsonBool).value {
+      if(self.value as JsonBool).value {
         "json:true".hash() % 4294967291u64
       } else {
         "json:false".hash() % 4294967291u64
@@ -567,13 +573,13 @@ extend Json {
       __json_hash_add("json:str".hash(), (self.value as JsonStr).value.hash())
     } else if self.value is JsonArray {
       var out = "json:array".hash() % 4294967291u64;
-      for item in (self.value as JsonArray).items {
+      for item in(self.value as JsonArray).items {
         out = __json_hash_mix(out, item.deep_hash());
       }
       out
     } else if self.value is JsonObject {
       var out = "json:object".hash() % 4294967291u64;
-      for entry in (self.value as JsonObject).entries {
+      for entry in(self.value as JsonObject).entries {
         var entry_hash = __json_hash_add(("key:" + entry.key).hash(), entry.value.deep_hash());
         out = __json_hash_add(out, entry_hash);
       }

@@ -13,7 +13,7 @@ function hard_work(n: i64): i64 {
   acc
 }
 
-function main(): Future<null> async {
+function main(): Future < null > async {
   var handles: List<JoinHandle<i64>> = [];
 
   var count = 1;

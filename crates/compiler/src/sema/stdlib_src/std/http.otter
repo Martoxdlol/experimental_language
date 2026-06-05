@@ -50,7 +50,7 @@ function __http_header_key(name: str): str {
   for ch in name.chars() {
     var cp = ch as i64;
     if cp >= 65 && cp <= 90 {
-      out = out + ((cp + 32) as char) as str;
+      out = out + ((cp + 32)as char)as str;
     } else {
       out = out + ch as str;
     }
@@ -113,7 +113,13 @@ function http_request(
   body: Bytes,
   version: HttpVersion,
 ): HttpRequest {
-  HttpRequest { method: method.clone(), url: url.clone(), headers: headers.clone(), body: body.clone(), version: version.clone() }
+  HttpRequest {
+    method: method.clone(),
+    url: url.clone(),
+    headers: headers.clone(),
+    body: body.clone(),
+    version: version.clone()
+  }
 }
 
 function http_response(
@@ -122,7 +128,12 @@ function http_response(
   body: Bytes,
   version: HttpVersion,
 ): HttpResponse {
-  HttpResponse { status: status.clone(), headers: headers.clone(), body: body.clone(), version: version.clone() }
+  HttpResponse {
+    status: status.clone(),
+    headers: headers.clone(),
+    body: body.clone(),
+    version: version.clone()
+  }
 }
 
 extend Method {
@@ -381,9 +392,9 @@ extend Status: ToStr {
   function to_str(self): str {
     var reason = self.reason_or_default();
     if reason == "" {
-      "${self.code}"
+      "${self.code }"
     } else {
-      "${self.code} " + reason
+      "${self.code } " + reason
     }
   }
 }
@@ -391,9 +402,9 @@ extend Status: ToStr {
 extend Status: Debug {
   function debug(self): str {
     if self.reason is str {
-      "Status { code: ${self.code}, reason: \"" + (self.reason as str) + "\" }"
+      "Status { code: ${self.code }, reason: \"" + (self.reason as str) + "\" }"
     } else {
-      "Status { code: ${self.code}, reason: null }"
+      "Status { code: ${self.code }, reason: null }"
     }
   }
 }
@@ -419,7 +430,7 @@ extend Headers {
     var out = List<str>();
     var values = self.values.get(__http_header_key(name));
     if values is List<str> {
-      for value in (values as List<str>) {
+      for value in(values as List<str>) {
         out.push(value);
       }
     }
@@ -545,7 +556,10 @@ extend Headers {
   function stable_hash(self): u64 {
     var out = "headers".hash() % 4294967291u64;
     for entry in self.values {
-      var entry_hash = __http_hash_add(("header:" + entry.key).hash(), self.hash_values(entry.value));
+      var entry_hash = __http_hash_add(
+        ("header:" + entry.key).hash(),
+        self.hash_values(entry.value)
+      );
       out = __http_hash_add(out, entry_hash);
     }
     out
@@ -622,23 +636,53 @@ extend HttpRequest {
   function version(self): HttpVersion { self.version.clone() }
 
   function with_method(self, method: Method): HttpRequest {
-    HttpRequest { method: method.clone(), url: self.url.clone(), headers: self.headers.clone(), body: self.body.clone(), version: self.version.clone() }
+    HttpRequest {
+      method: method.clone(),
+      url: self.url.clone(),
+      headers: self.headers.clone(),
+      body: self.body.clone(),
+      version: self.version.clone()
+    }
   }
 
   function with_url(self, url: Url): HttpRequest {
-    HttpRequest { method: self.method.clone(), url: url.clone(), headers: self.headers.clone(), body: self.body.clone(), version: self.version.clone() }
+    HttpRequest {
+      method: self.method.clone(),
+      url: url.clone(),
+      headers: self.headers.clone(),
+      body: self.body.clone(),
+      version: self.version.clone()
+    }
   }
 
   function with_headers(self, headers: Headers): HttpRequest {
-    HttpRequest { method: self.method.clone(), url: self.url.clone(), headers: headers.clone(), body: self.body.clone(), version: self.version.clone() }
+    HttpRequest {
+      method: self.method.clone(),
+      url: self.url.clone(),
+      headers: headers.clone(),
+      body: self.body.clone(),
+      version: self.version.clone()
+    }
   }
 
   function with_body(self, body: Bytes): HttpRequest {
-    HttpRequest { method: self.method.clone(), url: self.url.clone(), headers: self.headers.clone(), body: body.clone(), version: self.version.clone() }
+    HttpRequest {
+      method: self.method.clone(),
+      url: self.url.clone(),
+      headers: self.headers.clone(),
+      body: body.clone(),
+      version: self.version.clone()
+    }
   }
 
   function with_version(self, version: HttpVersion): HttpRequest {
-    HttpRequest { method: self.method.clone(), url: self.url.clone(), headers: self.headers.clone(), body: self.body.clone(), version: version.clone() }
+    HttpRequest {
+      method: self.method.clone(),
+      url: self.url.clone(),
+      headers: self.headers.clone(),
+      body: self.body.clone(),
+      version: version.clone()
+    }
   }
 
   function with_header(self, name: str, value: str): HttpRequest {
@@ -719,19 +763,39 @@ extend HttpResponse {
   function version(self): HttpVersion { self.version.clone() }
 
   function with_status(self, status: Status): HttpResponse {
-    HttpResponse { status: status.clone(), headers: self.headers.clone(), body: self.body.clone(), version: self.version.clone() }
+    HttpResponse {
+      status: status.clone(),
+      headers: self.headers.clone(),
+      body: self.body.clone(),
+      version: self.version.clone()
+    }
   }
 
   function with_headers(self, headers: Headers): HttpResponse {
-    HttpResponse { status: self.status.clone(), headers: headers.clone(), body: self.body.clone(), version: self.version.clone() }
+    HttpResponse {
+      status: self.status.clone(),
+      headers: headers.clone(),
+      body: self.body.clone(),
+      version: self.version.clone()
+    }
   }
 
   function with_body(self, body: Bytes): HttpResponse {
-    HttpResponse { status: self.status.clone(), headers: self.headers.clone(), body: body.clone(), version: self.version.clone() }
+    HttpResponse {
+      status: self.status.clone(),
+      headers: self.headers.clone(),
+      body: body.clone(),
+      version: self.version.clone()
+    }
   }
 
   function with_version(self, version: HttpVersion): HttpResponse {
-    HttpResponse { status: self.status.clone(), headers: self.headers.clone(), body: self.body.clone(), version: version.clone() }
+    HttpResponse {
+      status: self.status.clone(),
+      headers: self.headers.clone(),
+      body: self.body.clone(),
+      version: version.clone()
+    }
   }
 
   function with_header(self, name: str, value: str): HttpResponse {

@@ -11,11 +11,11 @@ import { println } from "std:io";
 function main() {
   var m: Map<str, i64> = { "a": 1, "b": 2 };
   m.set("c", 3);
-  println("${m.size()}");
-  match m.get("c") { i64 n => println("${n}"), null => println("none") };
-  println("${m.contains("a")}");
+  println("${m.size() }");
+  match m.get("c") { i64 n => println("${n }"), null => println("none") };
+  println("${m.contains("a") }");
   m.remove("a");
-  println("${m.size()}");
+  println("${m.size() }");
   m["d"] = 42;
-  println("${m["d"]}");
+  println("${m["d"] }");
 }

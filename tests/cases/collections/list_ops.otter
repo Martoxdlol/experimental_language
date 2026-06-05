@@ -11,13 +11,13 @@ import { println } from "std:io";
 function main() {
   var xs = [10, 20, 30];
   xs.push(40);
-  println("${xs.size()}");
-  println("${xs[0]}");
+  println("${xs.size() }");
+  println("${xs[0] }");
   xs.set(0, 99);
-  println("${xs[0]}");
-  println("${xs.contains(30)}");
+  println("${xs[0] }");
+  println("${xs.contains(30) }");
   var at = xs.index_of(30);
-  if at is i64 { println("${at as i64}"); }
+  if at is i64 { println("${at as i64 }"); }
   xs.truncate(2);
-  println("${xs.size()}");
+  println("${xs.size() }");
 }

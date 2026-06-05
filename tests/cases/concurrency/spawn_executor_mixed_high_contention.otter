@@ -12,7 +12,7 @@ import { yield_now } from "std:async";
 
 struct Counter { value: i64 }
 
-function work(s: Shared<Counter>, tx: Sender<i64>, n: i64): Future<i64> async {
+function work(s: Shared<Counter>, tx: Sender<i64>, n: i64): Future < i64 > async {
   var local: i64 = 0;
   var round: i64 = 0;
   while round < 6 {
@@ -25,7 +25,7 @@ function work(s: Shared<Counter>, tx: Sender<i64>, n: i64): Future<i64> async {
   local
 }
 
-function main(): Future<null> async {
+function main(): Future < null > async {
   var state: Shared<Counter> = Shared.new(Counter { value: 0 });
   var ends = channel<i64>();
   var tx: Sender<i64> = ends.0;
@@ -51,10 +51,10 @@ function main(): Future<null> async {
   var awaited: i64 = 0;
   var j: i64 = 0;
   while j < handles.size() {
-    awaited = awaited + await handles[j];
+    awaited = awaited+await handles[j];
     j = j + 1;
   }
 
   var shared_total: i64 = await state.lock((c) => c.value);
-  println("shared=${shared_total} received=${received} awaited=${awaited}");
+  println("shared=${shared_total } received=${received } awaited=${awaited }");
 }

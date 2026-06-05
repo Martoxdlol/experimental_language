@@ -158,8 +158,12 @@ pub const TOOLCHAIN_SOURCES: &[ToolchainSourceSpec] = &[
         source: include_str!("stdlib_src/std/json.otter"),
     },
     ToolchainSourceSpec {
-        path: &["std", "net:types"],
+        path: &["std", "net", "types"],
         source: include_str!("stdlib_src/std/net_types.otter"),
+    },
+    ToolchainSourceSpec {
+        path: &["std", "net"],
+        source: include_str!("stdlib_src/std/net.otter"),
     },
     ToolchainSourceSpec {
         path: &["std", "rand"],
@@ -186,7 +190,7 @@ pub const TOOLCHAIN_SOURCES: &[ToolchainSourceSpec] = &[
         source: include_str!("stdlib_src/std/sync.otter"),
     },
     ToolchainSourceSpec {
-        path: &["core", "sync:atomic"],
+        path: &["core", "sync", "atomic"],
         source: include_str!("stdlib_src/core/sync_atomic.otter"),
     },
     ToolchainSourceSpec {
@@ -479,7 +483,7 @@ pub const TOOLCHAIN_MODULES: &[StdModuleSpec] = &[
         ],
     },
     StdModuleSpec {
-        path: &["std", "net:types"],
+        path: &["std", "net", "types"],
         tier: StdTier::Std,
         implementation: StdImplementation::Otter,
         exports: &[
@@ -503,6 +507,12 @@ pub const TOOLCHAIN_MODULES: &[StdModuleSpec] = &[
             "percent_encode_component",
             "percent_decode_component",
         ],
+    },
+    StdModuleSpec {
+        path: &["std", "net"],
+        tier: StdTier::Std,
+        implementation: StdImplementation::Mixed,
+        exports: &["TcpStream", "TcpListener", "UdpSocket", "resolve"],
     },
     StdModuleSpec {
         path: &["std", "rand"],
@@ -569,6 +579,7 @@ pub const TOOLCHAIN_MODULES: &[StdModuleSpec] = &[
         implementation: StdImplementation::Mixed,
         exports: &[
             "Command",
+            "Child",
             "ExitStatus",
             "Output",
             "command",
@@ -613,7 +624,7 @@ pub const TOOLCHAIN_MODULES: &[StdModuleSpec] = &[
         ],
     },
     StdModuleSpec {
-        path: &["core", "sync:atomic"],
+        path: &["core", "sync", "atomic"],
         tier: StdTier::Core,
         implementation: StdImplementation::Otter,
         exports: &[
@@ -623,6 +634,12 @@ pub const TOOLCHAIN_MODULES: &[StdModuleSpec] = &[
             "Release",
             "AcqRel",
             "SeqCst",
+            "AtomicI64",
+            "AtomicI32",
+            "AtomicU64",
+            "AtomicU32",
+            "AtomicBool",
+            "AtomicPtr",
             "ordering_relaxed",
             "ordering_acquire",
             "ordering_release",
@@ -747,6 +764,7 @@ mod tests {
             include_str!("../../../../tests/cases/stdlib/std_io_requires_import.otter"),
             include_str!("../../../../tests/cases/stdlib/std_json_requires_import.otter"),
             include_str!("../../../../tests/cases/stdlib/std_log_requires_import.otter"),
+            include_str!("../../../../tests/cases/stdlib/std_net_requires_import.otter"),
             include_str!("../../../../tests/cases/stdlib/std_net_types_requires_import.otter"),
             include_str!("../../../../tests/cases/stdlib/std_process_requires_import.otter"),
             include_str!("../../../../tests/cases/stdlib/std_rand_requires_import.otter"),
@@ -823,7 +841,7 @@ mod tests {
             &["core", "collections"][..],
             &["core", "async"][..],
             &["core", "ffi"][..],
-            &["core", "sync:atomic"][..],
+            &["core", "sync", "atomic"][..],
             &["core", "compiler"][..],
         ]
         .into_iter()
@@ -917,14 +935,14 @@ mod tests {
         assert_eq!(error.tier, StdTier::Std);
         assert_eq!(error.implementation, StdImplementation::Otter);
         let atomic = provider
-            .module(&["core".to_string(), "sync:atomic".to_string()])
+            .module(&["core".to_string(), "sync".to_string(), "atomic".to_string()])
             .unwrap();
         assert_eq!(atomic.tier, StdTier::Core);
         assert_eq!(atomic.implementation, StdImplementation::Otter);
         assert!(atomic.exports.contains(&"Ordering"));
         assert!(
             provider
-                .module(&["std".to_string(), "sync:atomic".to_string()])
+                .module(&["std".to_string(), "sync".to_string(), "atomic".to_string()])
                 .is_none()
         );
         assert!(

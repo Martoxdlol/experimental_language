@@ -6,7 +6,7 @@ import { Shared } from "std:sync";
 struct X { value: i64 }
 struct Counter { x: X }
 struct Holder { r: X | null }
-function main(): Future<null> async {
+function main(): Future < null > async {
   var state: Shared<Counter> = Shared.new(Counter { x: X { value: 0 } });
   var holder: Holder = Holder { r: null };
   await state.lock((c) => { c.x.value = 1; holder.r = c.x; 0 }); // alias stored in outer field

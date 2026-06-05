@@ -1,0 +1,73 @@
+//@ kind: run
+//@ serial
+//@ description: std:net UdpSocket supports loopback datagrams with byte buffers and source socket addresses
+//@ stdout:
+//~ udp=true 5 otter true 0 0
+
+import { Bytes } from "std:bytes";
+import { println, IoError } from "std:io";
+import { UdpSocket } from "std:net";
+import { SocketAddr, ip_v4, socket_addr } from "std:net/types";
+
+function trim_read_buffer(buf: Bytes, request_len: i64): Bytes {
+  var i = 0;
+  while i < request_len {
+    var _ = buf.remove_at(0);
+    i = i + 1;
+  }
+  buf
+}
+
+function read_datagram(socket: UdpSocket, len: i64): (str, i64, SocketAddr | IoError) {
+  var buf = Bytes.new();
+  var i = 0;
+  while i < len {
+    buf.push(0u8);
+    i = i + 1;
+  }
+  var received = socket.recv_from(buf);
+  if received is IoError {
+    var source: SocketAddr | IoError = received as IoError;
+    ("recv-error", -1, source)
+  } else {
+    var pair = received as (i64, SocketAddr);
+    var decoded = trim_read_buffer(buf, len).decode_utf8();
+    var text = if decoded is str { decoded as str } else { "utf8-error" };
+    var source: SocketAddr | IoError = pair.1;
+    (text, pair.0, source)
+  }
+}
+
+function main() {
+  var loopback = socket_addr(ip_v4(127u8, 0u8, 0u8, 1u8), 0u16);
+  var bound_receiver = UdpSocket.bind(loopback);
+  if bound_receiver is IoError {
+    println("udp=false -1 bind-receiver false 1 1");
+    return null;
+  }
+  var receiver = bound_receiver as UdpSocket;
+  var receiver_addr = receiver.local_addr();
+  if receiver_addr is IoError {
+    println("udp=false -1 receiver-addr false 1 1");
+    return null;
+  }
+
+  var bound_sender = UdpSocket.bind(loopback);
+  if bound_sender is IoError {
+    println("udp=false -1 bind-sender false 1 1");
+    return null;
+  }
+  var sender = bound_sender as UdpSocket;
+  var sender_addr = sender.local_addr();
+  if sender_addr is IoError {
+    println("udp=false -1 sender-addr false 1 1");
+    return null;
+  }
+
+  var sent = sender.send_to(Bytes.from_str("otter"), receiver_addr as SocketAddr);
+  var packet = read_datagram(receiver, 5);
+  var source_matches = packet.2 is SocketAddr && (packet.2 as SocketAddr).port() == (sender_addr as SocketAddr).port();
+  var close_sender = sender.close();
+  var close_receiver = receiver.close();
+  println("udp=${sent is i64 && packet.1 == sent as i64} ${if sent is i64 { sent as i64 } else { -1 }} ${packet.0} ${source_matches} ${if close_sender is IoError { 1 } else { 0 }} ${if close_receiver is IoError { 1 } else { 0 }}");
+}

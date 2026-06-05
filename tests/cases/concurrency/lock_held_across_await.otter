@@ -12,17 +12,17 @@ struct Counter { value: i64 }
 // The body is `async` and `await`s INSIDE the critical section: the read and the
 // write straddle a suspension point, so correctness depends on the lock staying
 // held across the `await`.
-function worker(s: Shared<Counter>): Future<null> async {
-  await s.lock((c) async => {
-    var start: i64 = c.value;   // read
-    await sleep(5);             // suspend while holding the lock
-    c.value = start + 1;        // write — must not interleave with another worker
-    0
-  });
+function worker(s: Shared<Counter>): Future < null > async {
+  await s.lock((c)async => {
+      var start: i64 = c.value; // read
+      await sleep(5); // suspend while holding the lock
+      c.value = start + 1; // write — must not interleave with another worker
+      0
+    });
 }
-function main(): Future<null> async {
+function main(): Future < null > async {
   var state: Shared<Counter> = Shared.new(Counter { value: 0 });
-  var handles: List<Future<null>> = [];
+  var handles: List<Future < null>> = [];
   var i: i64 = 0;
   while i < 5 {
     var s: Shared<Counter> = state.clone();

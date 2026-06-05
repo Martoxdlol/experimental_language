@@ -12,9 +12,9 @@ struct Dog {}
 struct Cat {}
 struct Robot { id: i64 }
 
-extend Dog: Show   { function show(self): str { "woof" } }
-extend Cat: Show   { function show(self): str { "meow" } }
-extend Robot: Show { function show(self): str { "unit-${self.id}" } }
+extend Dog: Show { function show(self): str { "woof" } }
+extend Cat: Show { function show(self): str { "meow" } }
+extend Robot: Show { function show(self): str { "unit-${self.id }" } }
 
 // `T: Show` lets us call `.show()` on any value of type T.
 function announce<T: Show>(label: str, x: T): str {
@@ -39,5 +39,5 @@ function main() {
   println(announce("the dog", Dog {}));
   println(announce("the cat", Cat {}));
   println(announce("the bot", Robot { id: 7 }));
-  println("scaled = ${total(Money { cents: 250 }, 4)}");
+  println("scaled = ${total(Money { cents: 250 }, 4) }");
 }

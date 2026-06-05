@@ -10,14 +10,14 @@ import { Future } from "core:prelude";
 import { Task, JoinHandle, Joined, Panicked, Cancelled } from "std:task";
 import { sleep, timeout, TimedOut } from "std:async";
 
-function main(): Future<null> async {
-  var h: JoinHandle<i64> = Task.spawn(() async => {
-    var _ = await sleep(40);
-    42
-  });
+function main(): Future < null > async {
+  var h: JoinHandle<i64> = Task.spawn(()async => {
+      var _ = await sleep(40);
+      42
+    });
 
   match await timeout(h.join(), 5) {
-    Joined<i64> j => println("first = joined ${j.value}"),
+    Joined < i64 > j => println("first = joined ${j.value }"),
     Panicked p => println("first = panicked"),
     Cancelled c => println("first = cancelled"),
     TimedOut t => println("first = timed out"),
@@ -25,7 +25,7 @@ function main(): Future<null> async {
 
   var _settled = await sleep(60);
   match await h.join() {
-    Joined<i64> j => println("second = joined ${j.value}"),
+    Joined < i64 > j => println("second = joined ${j.value }"),
     Panicked p => println("second = panicked"),
     Cancelled c => println("second = cancelled"),
   };

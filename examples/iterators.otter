@@ -46,7 +46,7 @@ function sum_all<T: Iterator<i64>>(it: T): i64 {
 
 function main() {
   var total = 0;
-  for x in (Range { current: 1, end: 6 }) {
+  for x in(Range { current: 1, end: 6 }) {
     total = total + x;
   }
   println("sum 1..6 = ${total}");        // 15
@@ -56,17 +56,17 @@ function main() {
   println("dyn iter = ${sum_all(dynit)}");                         // dispatched via vtable: 303
 
   var line = "";
-  for s in (Squares { i: 1, n: 5 }) {
-    line = line + "${s} ";
+  for s in(Squares { i: 1, n: 5 }) {
+    line = line + "${s } ";
   }
   println("squares  = ${line}");          // 1 4 9 16 25
 
   // break / continue work inside the protocol loop.
   var picked = "";
-  for n in (Range { current: 0, end: 100 }) {
+  for n in(Range { current: 0, end: 100 }) {
     if n == 3 { continue; }
     if n == 7 { break; }
-    picked = picked + "${n}";
+    picked = picked + "${n }";
   }
   println("picked   = ${picked}");        // 012456
 }

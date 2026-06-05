@@ -205,6 +205,194 @@ fn register_runtime_symbols(b: &mut JITBuilder) {
         "lang_shared_release_all",
         runtime::shared::lang_shared_release_all as *const u8,
     );
+    b.symbol(
+        "lang_atomic_i64_new",
+        runtime::atomic::lang_atomic_i64_new as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_i64_free",
+        runtime::atomic::lang_atomic_i64_free as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_i64_load",
+        runtime::atomic::lang_atomic_i64_load as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_i64_store",
+        runtime::atomic::lang_atomic_i64_store as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_i64_swap",
+        runtime::atomic::lang_atomic_i64_swap as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_i64_compare_exchange",
+        runtime::atomic::lang_atomic_i64_compare_exchange as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_i64_fetch_add",
+        runtime::atomic::lang_atomic_i64_fetch_add as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_i64_fetch_sub",
+        runtime::atomic::lang_atomic_i64_fetch_sub as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_i32_new",
+        runtime::atomic::lang_atomic_i32_new as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_i32_free",
+        runtime::atomic::lang_atomic_i32_free as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_i32_load",
+        runtime::atomic::lang_atomic_i32_load as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_i32_store",
+        runtime::atomic::lang_atomic_i32_store as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_i32_swap",
+        runtime::atomic::lang_atomic_i32_swap as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_i32_compare_exchange",
+        runtime::atomic::lang_atomic_i32_compare_exchange as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_i32_fetch_add",
+        runtime::atomic::lang_atomic_i32_fetch_add as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_i32_fetch_sub",
+        runtime::atomic::lang_atomic_i32_fetch_sub as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_u64_new",
+        runtime::atomic::lang_atomic_u64_new as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_u64_free",
+        runtime::atomic::lang_atomic_u64_free as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_u64_load",
+        runtime::atomic::lang_atomic_u64_load as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_u64_store",
+        runtime::atomic::lang_atomic_u64_store as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_u64_swap",
+        runtime::atomic::lang_atomic_u64_swap as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_u64_compare_exchange",
+        runtime::atomic::lang_atomic_u64_compare_exchange as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_u64_fetch_add",
+        runtime::atomic::lang_atomic_u64_fetch_add as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_u64_fetch_sub",
+        runtime::atomic::lang_atomic_u64_fetch_sub as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_u32_new",
+        runtime::atomic::lang_atomic_u32_new as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_u32_free",
+        runtime::atomic::lang_atomic_u32_free as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_u32_load",
+        runtime::atomic::lang_atomic_u32_load as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_u32_store",
+        runtime::atomic::lang_atomic_u32_store as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_u32_swap",
+        runtime::atomic::lang_atomic_u32_swap as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_u32_compare_exchange",
+        runtime::atomic::lang_atomic_u32_compare_exchange as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_u32_fetch_add",
+        runtime::atomic::lang_atomic_u32_fetch_add as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_u32_fetch_sub",
+        runtime::atomic::lang_atomic_u32_fetch_sub as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_ptr_new",
+        runtime::atomic::lang_atomic_ptr_new as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_ptr_free",
+        runtime::atomic::lang_atomic_ptr_free as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_ptr_load",
+        runtime::atomic::lang_atomic_ptr_load as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_ptr_store",
+        runtime::atomic::lang_atomic_ptr_store as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_ptr_swap",
+        runtime::atomic::lang_atomic_ptr_swap as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_ptr_compare_exchange",
+        runtime::atomic::lang_atomic_ptr_compare_exchange as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_bool_new",
+        runtime::atomic::lang_atomic_bool_new as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_bool_free",
+        runtime::atomic::lang_atomic_bool_free as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_bool_load",
+        runtime::atomic::lang_atomic_bool_load as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_bool_store",
+        runtime::atomic::lang_atomic_bool_store as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_bool_swap",
+        runtime::atomic::lang_atomic_bool_swap as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_bool_compare_exchange",
+        runtime::atomic::lang_atomic_bool_compare_exchange as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_bool_fetch_and",
+        runtime::atomic::lang_atomic_bool_fetch_and as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_bool_fetch_or",
+        runtime::atomic::lang_atomic_bool_fetch_or as *const u8,
+    );
+    b.symbol(
+        "lang_atomic_bool_fetch_xor",
+        runtime::atomic::lang_atomic_bool_fetch_xor as *const u8,
+    );
     b.symbol("lang_exit", runtime::lang_exit as *const u8);
     b.symbol("lang_abort", runtime::lang_abort as *const u8);
     b.symbol(
@@ -318,6 +506,8 @@ fn register_runtime_symbols(b: &mut JITBuilder) {
     b.symbol("lang_float_to_str", runtime::lang_float_to_str as *const u8);
     b.symbol("lang_bool_to_str", runtime::lang_bool_to_str as *const u8);
     b.symbol("lang_char_to_str", runtime::lang_char_to_str as *const u8);
+    b.symbol("lang_debug_str", runtime::lang_debug_str as *const u8);
+    b.symbol("lang_debug_char", runtime::lang_debug_char as *const u8);
     b.symbol("lang_print", runtime::lang_print as *const u8);
     b.symbol("lang_println", runtime::lang_println as *const u8);
     b.symbol("lang_eprint", runtime::lang_eprint as *const u8);
@@ -369,6 +559,26 @@ fn register_runtime_symbols(b: &mut JITBuilder) {
     b.symbol(
         "lang_io_stderr_flush_async",
         runtime::async_rt::lang_io_stderr_flush_async as *const u8,
+    );
+    b.symbol(
+        "lang_fs_file_read_async",
+        runtime::async_rt::lang_fs_file_read_async as *const u8,
+    );
+    b.symbol(
+        "lang_fs_file_read_to_end_async",
+        runtime::async_rt::lang_fs_file_read_to_end_async as *const u8,
+    );
+    b.symbol(
+        "lang_fs_file_write_async",
+        runtime::async_rt::lang_fs_file_write_async as *const u8,
+    );
+    b.symbol(
+        "lang_fs_file_flush_async",
+        runtime::async_rt::lang_fs_file_flush_async as *const u8,
+    );
+    b.symbol(
+        "lang_fs_file_seek_async",
+        runtime::async_rt::lang_fs_file_seek_async as *const u8,
     );
     b.symbol(
         "lang_fs_read_text",
@@ -478,6 +688,114 @@ fn register_runtime_symbols(b: &mut JITBuilder) {
         runtime::process::lang_process_output as *const u8,
     );
     b.symbol(
+        "lang_process_spawn",
+        runtime::process::lang_process_spawn as *const u8,
+    );
+    b.symbol(
+        "lang_process_child_wait",
+        runtime::process::lang_process_child_wait as *const u8,
+    );
+    b.symbol(
+        "lang_process_child_kill",
+        runtime::process::lang_process_child_kill as *const u8,
+    );
+    b.symbol(
+        "lang_process_child_release",
+        runtime::process::lang_process_child_release as *const u8,
+    );
+    b.symbol(
+        "lang_net_resolve",
+        runtime::net::lang_net_resolve as *const u8,
+    );
+    b.symbol(
+        "lang_net_tcp_connect",
+        runtime::net::lang_net_tcp_connect as *const u8,
+    );
+    b.symbol(
+        "lang_net_tcp_stream_release",
+        runtime::net::lang_net_tcp_stream_release as *const u8,
+    );
+    b.symbol(
+        "lang_net_tcp_stream_close",
+        runtime::net::lang_net_tcp_stream_close as *const u8,
+    );
+    b.symbol(
+        "lang_net_tcp_stream_peer_addr",
+        runtime::net::lang_net_tcp_stream_peer_addr as *const u8,
+    );
+    b.symbol(
+        "lang_net_tcp_stream_local_addr",
+        runtime::net::lang_net_tcp_stream_local_addr as *const u8,
+    );
+    b.symbol(
+        "lang_net_tcp_stream_set_nodelay",
+        runtime::net::lang_net_tcp_stream_set_nodelay as *const u8,
+    );
+    b.symbol(
+        "lang_net_tcp_stream_read",
+        runtime::net::lang_net_tcp_stream_read as *const u8,
+    );
+    b.symbol(
+        "lang_net_tcp_stream_read_to_end",
+        runtime::net::lang_net_tcp_stream_read_to_end as *const u8,
+    );
+    b.symbol(
+        "lang_net_tcp_stream_write",
+        runtime::net::lang_net_tcp_stream_write as *const u8,
+    );
+    b.symbol(
+        "lang_net_tcp_stream_write_all",
+        runtime::net::lang_net_tcp_stream_write_all as *const u8,
+    );
+    b.symbol(
+        "lang_net_tcp_stream_flush",
+        runtime::net::lang_net_tcp_stream_flush as *const u8,
+    );
+    b.symbol(
+        "lang_net_tcp_listener_bind",
+        runtime::net::lang_net_tcp_listener_bind as *const u8,
+    );
+    b.symbol(
+        "lang_net_tcp_listener_release",
+        runtime::net::lang_net_tcp_listener_release as *const u8,
+    );
+    b.symbol(
+        "lang_net_tcp_listener_close",
+        runtime::net::lang_net_tcp_listener_close as *const u8,
+    );
+    b.symbol(
+        "lang_net_tcp_listener_accept",
+        runtime::net::lang_net_tcp_listener_accept as *const u8,
+    );
+    b.symbol(
+        "lang_net_tcp_listener_local_addr",
+        runtime::net::lang_net_tcp_listener_local_addr as *const u8,
+    );
+    b.symbol(
+        "lang_net_udp_bind",
+        runtime::net::lang_net_udp_bind as *const u8,
+    );
+    b.symbol(
+        "lang_net_udp_release",
+        runtime::net::lang_net_udp_release as *const u8,
+    );
+    b.symbol(
+        "lang_net_udp_close",
+        runtime::net::lang_net_udp_close as *const u8,
+    );
+    b.symbol(
+        "lang_net_udp_local_addr",
+        runtime::net::lang_net_udp_local_addr as *const u8,
+    );
+    b.symbol(
+        "lang_net_udp_send_to",
+        runtime::net::lang_net_udp_send_to as *const u8,
+    );
+    b.symbol(
+        "lang_net_udp_recv_from",
+        runtime::net::lang_net_udp_recv_from as *const u8,
+    );
+    b.symbol(
         "lang_rand_os_u32",
         runtime::rand::lang_rand_os_u32 as *const u8,
     );
@@ -488,6 +806,10 @@ fn register_runtime_symbols(b: &mut JITBuilder) {
     b.symbol(
         "lang_time_system_nanos",
         runtime::time::lang_time_system_nanos as *const u8,
+    );
+    b.symbol(
+        "lang_time_local_offset_seconds",
+        runtime::time::lang_time_local_offset_seconds as *const u8,
     );
     b.symbol(
         "lang_time_sleep_nanos",
@@ -838,6 +1160,7 @@ fn run_codegen_with_filter<M: Module>(
         closures: Vec::new(),
         async_jobs: Vec::new(),
         clone_thunks: Vec::new(),
+        primitive_debug_wrappers: Vec::new(),
         safepoints: Vec::new(),
         captured_locals,
         direct_call_counts,
@@ -893,6 +1216,7 @@ fn compile_clif_with_filter(
         closures: Vec::new(),
         async_jobs: Vec::new(),
         clone_thunks: Vec::new(),
+        primitive_debug_wrappers: Vec::new(),
         safepoints: Vec::new(),
         captured_locals,
         direct_call_counts,
@@ -1351,6 +1675,13 @@ struct CloneThunkJob {
     span: Span,
 }
 
+struct PrimitiveDebugWrapperJob {
+    func_id: FuncId,
+    value_ty: Ty,
+    subst: HashMap<DefId, Ty>,
+    span: Span,
+}
+
 /// Per-async-`poll`-function state-machine context (`docs/21`): where the state
 /// struct lives, the slots that hold each saved local, and the suspend/resume
 /// blocks for each `await` site.
@@ -1399,6 +1730,8 @@ struct Codegen<'a, M: Module> {
     async_jobs: Vec<AsyncJob>,
     /// `Shared` lock-body clone-out thunks declared but not yet defined.
     clone_thunks: Vec<CloneThunkJob>,
+    /// Primitive `std:fmt.Debug` vtable wrappers declared but not yet defined.
+    primitive_debug_wrappers: Vec<PrimitiveDebugWrapperJob>,
     /// Captured GC safepoints: `(func, call code offset, frame_to_fp, ref SP
     /// offsets)`, registered with the runtime after linking.
     safepoints: Vec<(FuncId, u32, u32, Vec<u32>)>,
@@ -1561,6 +1894,10 @@ impl<'a, M: Module> Codegen<'a, M> {
                 self.define_clone_thunk(job)?;
                 continue;
             }
+            if let Some(job) = self.primitive_debug_wrappers.pop() {
+                self.define_primitive_debug_wrapper(job)?;
+                continue;
+            }
             match self.async_jobs.pop() {
                 Some(job) => self.define_async_job(job)?,
                 None => break,
@@ -1642,6 +1979,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     closures: &mut self.closures,
                     async_jobs: &mut self.async_jobs,
                     clone_thunks: &mut self.clone_thunks,
+                    primitive_debug_wrappers: &mut self.primitive_debug_wrappers,
                     subst,
                     b: &mut b,
                     vars: HashMap::new(),
@@ -1750,6 +2088,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     closures: &mut self.closures,
                     async_jobs: &mut self.async_jobs,
                     clone_thunks: &mut self.clone_thunks,
+                    primitive_debug_wrappers: &mut self.primitive_debug_wrappers,
                     subst,
                     b: &mut b,
                     vars: HashMap::new(),
@@ -1879,6 +2218,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     closures: &mut self.closures,
                     async_jobs: &mut self.async_jobs,
                     clone_thunks: &mut self.clone_thunks,
+                    primitive_debug_wrappers: &mut self.primitive_debug_wrappers,
                     subst,
                     b: &mut b,
                     vars: HashMap::new(),
@@ -1906,6 +2246,79 @@ impl<'a, M: Module> Codegen<'a, M> {
         self.module
             .define_function(func_id, &mut ctx)
             .map_err(|e| CodegenError::new(span, format!("define clone thunk: {e}")))?;
+        self.capture_safepoints(func_id, &ctx);
+        self.module.clear_context(&mut ctx);
+        Ok(())
+    }
+
+    /// Define a primitive `std:fmt.Debug` vtable wrapper:
+    /// `extern "C" fn(payload: *Payload) -> str`. The payload is the managed
+    /// 8-byte box allocated when the primitive is widened to `Debug`.
+    fn define_primitive_debug_wrapper(&mut self, job: PrimitiveDebugWrapperJob) -> CgResult<()> {
+        let PrimitiveDebugWrapperJob {
+            func_id,
+            value_ty,
+            subst,
+            span,
+        } = job;
+        let value_ty = resolve_shallow(self.analysis, value_ty, &subst);
+        let value_ct = clty_subst(self.analysis, value_ty, &subst)
+            .ok_or_else(|| CodegenError::new(span, "primitive Debug value has no runtime type"))?;
+        let mut ctx = self.module.make_context();
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(PTR));
+        sig.returns.push(AbiParam::new(PTR));
+        ctx.func.signature = sig;
+        let mut fctx = FunctionBuilderContext::new();
+        {
+            let mut b = FunctionBuilder::new(&mut ctx.func, &mut fctx);
+            let entry = b.create_block();
+            b.append_block_params_for_function_params(entry);
+            b.switch_to_block(entry);
+            let payload = b.block_params(entry)[0];
+            {
+                let mut fg = FnGen {
+                    cx: CgShared {
+                        analysis: self.analysis,
+                        hir: self.hir,
+                        captured_locals: &self.captured_locals,
+                        direct_call_counts: &self.direct_call_counts,
+                    },
+                    module: self.module,
+                    funcs: &mut self.funcs,
+                    worklist: &mut self.worklist,
+                    closures: &mut self.closures,
+                    async_jobs: &mut self.async_jobs,
+                    clone_thunks: &mut self.clone_thunks,
+                    primitive_debug_wrappers: &mut self.primitive_debug_wrappers,
+                    subst,
+                    b: &mut b,
+                    vars: HashMap::new(),
+                    iface_local_concretes: HashMap::new(),
+                    stack_struct_locals: HashSet::new(),
+                    cell_content: HashMap::new(),
+                    term: false,
+                    loops: Vec::new(),
+                    ret_ty: self.analysis.tcx.str,
+                    async_out: None,
+                    async_ctx: None,
+                    endpoint_releases: Vec::new(),
+                    endpoint_owned: Vec::new(),
+                    value_capture_locals: HashSet::new(),
+                    rc_owned: Vec::new(),
+                };
+                fg.mark_root(payload);
+                let value = fg.b.ins().load(value_ct, MemFlags::trusted(), payload, 0);
+                let rendered = fg.gen_primitive_debug(value, value_ty, span)?;
+                fg.b.ins().return_(&[rendered]);
+            }
+            b.seal_all_blocks();
+            b.finalize();
+        }
+        self.record_clif("<primitive Debug wrapper>", &ctx);
+        self.module
+            .define_function(func_id, &mut ctx)
+            .map_err(|e| CodegenError::new(span, format!("define primitive Debug wrapper: {e}")))?;
         self.capture_safepoints(func_id, &ctx);
         self.module.clear_context(&mut ctx);
         Ok(())
@@ -2031,6 +2444,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     closures: &mut self.closures,
                     async_jobs: &mut self.async_jobs,
                     clone_thunks: &mut self.clone_thunks,
+                    primitive_debug_wrappers: &mut self.primitive_debug_wrappers,
                     subst: subst.clone(),
                     b: &mut b,
                     vars: HashMap::new(),
@@ -2104,6 +2518,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     closures: &mut self.closures,
                     async_jobs: &mut self.async_jobs,
                     clone_thunks: &mut self.clone_thunks,
+                    primitive_debug_wrappers: &mut self.primitive_debug_wrappers,
                     subst: subst.clone(),
                     b: &mut b,
                     vars: HashMap::new(),
@@ -2224,6 +2639,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     closures: &mut self.closures,
                     async_jobs: &mut self.async_jobs,
                     clone_thunks: &mut self.clone_thunks,
+                    primitive_debug_wrappers: &mut self.primitive_debug_wrappers,
                     subst: subst.clone(),
                     b: &mut b,
                     vars: HashMap::new(),
@@ -2365,6 +2781,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     closures: &mut self.closures,
                     async_jobs: &mut self.async_jobs,
                     clone_thunks: &mut self.clone_thunks,
+                    primitive_debug_wrappers: &mut self.primitive_debug_wrappers,
                     subst: subst.clone(),
                     b: &mut b,
                     vars: HashMap::new(),
@@ -2531,6 +2948,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     closures: &mut self.closures,
                     async_jobs: &mut self.async_jobs,
                     clone_thunks: &mut self.clone_thunks,
+                    primitive_debug_wrappers: &mut self.primitive_debug_wrappers,
                     subst: subst.clone(),
                     b: &mut b,
                     vars: HashMap::new(),
@@ -2677,6 +3095,7 @@ impl<'a, M: Module> Codegen<'a, M> {
                     closures: &mut self.closures,
                     async_jobs: &mut self.async_jobs,
                     clone_thunks: &mut self.clone_thunks,
+                    primitive_debug_wrappers: &mut self.primitive_debug_wrappers,
                     subst,
                     b: &mut b,
                     vars: HashMap::new(),
@@ -2770,6 +3189,8 @@ struct FnGen<'a, 'b, 'f, M: Module> {
     async_jobs: &'a mut Vec<AsyncJob>,
     /// `Shared` lock-body clone-out thunks queued for code generation.
     clone_thunks: &'a mut Vec<CloneThunkJob>,
+    /// Primitive `std:fmt.Debug` vtable wrappers queued for code generation.
+    primitive_debug_wrappers: &'a mut Vec<PrimitiveDebugWrapperJob>,
     /// This instance's generic-parameter substitution.
     subst: HashMap<DefId, Ty>,
     b: &'b mut FunctionBuilder<'f>,

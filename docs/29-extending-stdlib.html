@@ -125,7 +125,7 @@
       <td><code>Otter</code></td>
       <td>The surface and behavior can be authored in Otter Fusion source:
       interfaces, value wrappers, adapters, pure helpers, and portable library logic.</td>
-      <td><code>std:error</code>, <code>std:bytes</code>, <code>std:fmt</code>, <code>std:time.Duration</code>, <code>std:fs.Path</code>, <code>std:fs.DirEntry</code>, <code>core:sync:atomic.Ordering</code>, <code>std:hash</code>, <code>std:http</code>, <code>std:net:types</code></td>
+      <td><code>std:error</code>, <code>std:bytes</code>, <code>std:fmt</code>, <code>std:time.Duration</code>, <code>std:fs.Path</code>, <code>std:fs.DirEntry</code>, <code>core:sync/atomic.Ordering</code>, <code>std:hash</code>, <code>std:http</code>, <code>std:net/types</code></td>
     </tr>
     <tr>
       <td><code>RustBacked</code></td>
@@ -137,7 +137,7 @@
       <td><code>Mixed</code></td>
       <td>The public API is ordinary Otter Fusion, but some operations call Rust
       runtime hooks or compiler intrinsics.</td>
-      <td><code>std:io</code>, <code>core:ffi</code>, <code>std:sync</code>, <code>std:fs.File</code> handles and file helpers, <code>std:time.Instant</code>/<code>SystemTime</code>, <code>std:process</code> host environment/execution helpers, <code>std:rand.OsRng</code>/<code>ThreadRng</code></td>
+      <td><code>std:io</code>, <code>core:ffi</code>, <code>core:sync/atomic</code> handles, <code>std:sync</code>, <code>std:fs.File</code> handles and file helpers, <code>std:time.Instant</code>/<code>SystemTime</code>, <code>std:process</code> host environment/execution/child helpers, <code>std:net</code> resolver/socket handles, <code>std:rand.OsRng</code>/<code>ThreadRng</code></td>
     </tr>
   </tbody>
 </table>

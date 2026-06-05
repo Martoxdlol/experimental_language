@@ -16,10 +16,10 @@ function make_receiver(): Receiver<i64> {
   rx
 }
 
-function main(): Future<null> async {
+function main(): Future < null > async {
   var rx = make_receiver();
   match await timeout(rx.recv(), 20) {
-    i64 n => println("recv = value ${n}"),
+    i64 n => println("recv = value ${n }"),
     ChannelClosed c => println("recv = closed"),
     TimedOut t => println("recv = timed out"),
   };

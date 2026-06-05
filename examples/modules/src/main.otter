@@ -18,8 +18,8 @@ import { Vec2, length_sq } from "self:geometry/vec";
 
 function main() {
   var r: Rect = Rect { w: 6, h: 7 };
-  println("area = ${area(r)}");
+  println("area = ${area(r) }");
 
   var v: Vec2 = Vec2 { x: 3, y: 4 };
-  println("|v|^2 = ${length_sq(v)}");
+  println("|v|^2 = ${length_sq(v) }");
 }

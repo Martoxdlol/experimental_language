@@ -10,8 +10,8 @@ use crate::resolve::Resolved;
 /// starting at the root package. Cycles are guarded (a repeat is marked `(*)`).
 pub fn render_tree(resolved: &Resolved) -> String {
     let mut out = String::new();
-    let root = &resolved.root_name;
-    out.push_str(root);
+    let root = &resolved.root_id;
+    out.push_str(&resolved.root_name);
     out.push('\n');
     let mut on_path = vec![root.clone()];
     render_children(resolved, root, "", &mut on_path, &mut out);
@@ -30,14 +30,14 @@ fn render_children(
     for (i, child) in children.iter().enumerate() {
         let last = i + 1 == n;
         let branch = if last { "└── " } else { "├── " };
-        let version = resolved
-            .get(child)
-            .map(|p| p.version.as_str())
-            .unwrap_or("?");
+        let (name, version) = resolved
+            .get_by_id(child)
+            .map(|p| (p.name.as_str(), p.version.as_str()))
+            .unwrap_or((child.as_str(), "?"));
         let cyclic = on_path.contains(child);
         out.push_str(prefix);
         out.push_str(branch);
-        out.push_str(&format!("{child} v{version}"));
+        out.push_str(&format!("{name} v{version}"));
         if cyclic {
             out.push_str(" (*)");
         }
@@ -54,15 +54,15 @@ fn render_children(
 /// Explain why `target` is in the graph (`otter_fusion why`): every dependency
 /// path from the root to `target`. Returns `None` if `target` is not present.
 pub fn explain_why(resolved: &Resolved, target: &str) -> Option<String> {
-    if resolved.get(target).is_none() && target != resolved.root_name {
+    if resolved.packages_named(target).next().is_none() && target != resolved.root_name {
         return None;
     }
     let mut paths = Vec::new();
-    let mut stack = vec![resolved.root_name.clone()];
+    let mut stack = vec![resolved.root_id.clone()];
     let mut visited = std::collections::HashSet::new();
     find_paths(
         resolved,
-        &resolved.root_name,
+        &resolved.root_id,
         target,
         &mut stack,
         &mut visited,
@@ -73,7 +73,8 @@ pub fn explain_why(resolved: &Resolved, target: &str) -> Option<String> {
     }
     let mut out = String::new();
     for path in paths {
-        out.push_str(&path.join(" → "));
+        let labels: Vec<String> = path.iter().map(|id| why_label(resolved, id)).collect();
+        out.push_str(&labels.join(" → "));
         out.push('\n');
     }
     Some(out)
@@ -87,7 +88,15 @@ fn find_paths(
     visited: &mut std::collections::HashSet<String>,
     paths: &mut Vec<Vec<String>>,
 ) {
-    if node == target && stack.len() > 1 {
+    let is_target = if node == resolved.root_id {
+        target == resolved.root_name
+    } else {
+        resolved
+            .get_by_id(node)
+            .map(|p| p.name == target)
+            .unwrap_or(false)
+    };
+    if is_target && stack.len() > 1 {
         paths.push(stack.clone());
         return;
     }
@@ -100,6 +109,20 @@ fn find_paths(
         stack.pop();
     }
     visited.remove(node);
+}
+
+fn why_label(resolved: &Resolved, id: &str) -> String {
+    if id == resolved.root_id {
+        return resolved.root_name.clone();
+    }
+    let Some(pkg) = resolved.get_by_id(id) else {
+        return id.to_string();
+    };
+    if resolved.has_duplicate_name(&pkg.name) {
+        format!("{} v{}", pkg.name, pkg.version)
+    } else {
+        pkg.name.clone()
+    }
 }
 
 /// A dependency source for `add`.
@@ -169,6 +192,7 @@ mod tests {
 
     fn pkg(name: &str, version: &str) -> ResolvedPackage {
         ResolvedPackage {
+            id: name.into(),
             name: name.into(),
             version: version.into(),
             source: LockSource::Path {
@@ -189,7 +213,9 @@ mod tests {
             lockfile: Lockfile::empty(),
             packages: vec![pkg("a", "1.0.0"), pkg("b", "2.0.0"), pkg("c", "0.5.0")],
             edges,
+            dependency_edges: BTreeMap::new(),
             root_name: "app".to_string(),
+            root_id: "app".to_string(),
         }
     }
 

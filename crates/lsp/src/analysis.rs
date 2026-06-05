@@ -10,8 +10,10 @@
 
 use compiler::ast::ModuleKind;
 use compiler::ast::{
-    ExternItem, FunctionItem, FunctionSig, GenericParams, Item, ItemKind, Module, ParamKind,
-    StructItem, StructKind, Type, TypeKind,
+    AttrArg, Block, ElseBranch, Expr, ExprKind, ExternItem, FieldPattern, FunctionItem,
+    FunctionSig, GenericParams, Item, ItemKind, LocalVar, MapItem, MatchArm, Module, ParamKind,
+    Pattern, PatternKind, Stmt, StmtKind, StringPart, StructItem, StructKind, Type, TypeKind,
+    TypePath,
 };
 use compiler::hir::{self, Hir};
 use compiler::ids::{DefId, LocalId};
@@ -408,6 +410,7 @@ impl Compiled {
                 file_import_allow: Vec::new(),
                 dependencies: HashSet::new(),
                 packages: HashMap::new(),
+                package_dependencies: HashMap::new(),
                 file_targets: HashMap::new(),
                 macro_recursion_limit: None,
             };
@@ -717,13 +720,12 @@ pub fn item_name_span(item: &ItemKind) -> Option<Span> {
     })
 }
 
-/// Collect `(name-span, type-name)` for every type-name occurrence in the
-/// **item-level** type positions of `items` — function / method signatures
-/// (params, returns, generic bounds & defaults), struct/extern-struct fields,
-/// type aliases, `extend`/interface targets and supers, and extern items —
-/// recursing into inline submodules. Powers type-position go-to-definition.
-/// (Function-body annotations `var x: T`, `e as T`, and pattern type names are
-/// a follow-up; the variable/value itself already resolves via the HIR index.)
+/// Collect `(name-span, type-name)` for every syntactic type-name occurrence
+/// in `items` — signatures, fields, type aliases, `extend`/interface targets,
+/// extern items, inline submodules, plus function/test/global bodies (`var x:
+/// T`, `e as T`, closure annotations, struct literals, and pattern type names).
+/// Powers type-position go-to-definition for names that are in the existing
+/// module type lookup.
 pub fn collect_type_refs(items: &[Item]) -> Vec<(Span, String)> {
     let mut out = Vec::new();
     for item in items {
@@ -739,6 +741,7 @@ fn collect_item_type_refs(item: &ItemKind, out: &mut Vec<(Span, String)>) {
             if let Some(t) = &v.ty {
                 walk_type(t, out);
             }
+            walk_expr(&v.init, out);
         }
         ItemKind::Struct(s) => collect_struct_type_refs(s, out),
         ItemKind::Interface(i) => {
@@ -746,6 +749,9 @@ fn collect_item_type_refs(item: &ItemKind, out: &mut Vec<(Span, String)>) {
             i.supers.iter().for_each(|t| walk_type(t, out));
             for m in &i.members {
                 collect_sig_type_refs(&m.function, out);
+                if let Some(body) = &m.default_body {
+                    walk_block(body, out);
+                }
             }
         }
         ItemKind::TypeAlias(a) => {
@@ -773,8 +779,8 @@ fn collect_item_type_refs(item: &ItemKind, out: &mut Vec<(Span, String)>) {
             ExternItem::Var { ty, .. } => walk_type(ty, out),
             ExternItem::OpaqueType(_) => {}
         },
-        // A test body has no item-level type annotations to index.
-        ItemKind::Import(_) | ItemKind::Test(_) => {}
+        ItemKind::Test(t) => walk_block(&t.body, out),
+        ItemKind::Import(_) => {}
     }
 }
 
@@ -798,6 +804,9 @@ fn collect_fn_type_refs(f: &FunctionItem, out: &mut Vec<(Span, String)>) {
     }
     if let Some(r) = &f.return_type {
         walk_type(r, out);
+    }
+    if let Some(body) = &f.body {
+        walk_block(body, out);
     }
 }
 
@@ -841,9 +850,238 @@ fn walk_type(t: &Type, out: &mut Vec<(Span, String)>) {
             walk_type(ret, out);
         }
         TypeKind::Pointer(b) | TypeKind::Paren(b) => walk_type(b, out),
-        TypeKind::Array { elem, .. } => walk_type(elem, out),
+        TypeKind::Array { elem, len } => {
+            walk_type(elem, out);
+            walk_expr(len, out);
+        }
         TypeKind::SelfType => {}
     }
+}
+
+fn walk_type_path(path: &TypePath, out: &mut Vec<(Span, String)>) {
+    out.push((path.name.span, path.name.name.clone()));
+    path.generics.iter().for_each(|g| walk_type(g, out));
+}
+
+fn walk_block(block: &Block, out: &mut Vec<(Span, String)>) {
+    for stmt in &block.stmts {
+        walk_stmt(stmt, out);
+    }
+    if let Some(trailing) = &block.trailing {
+        walk_expr(trailing, out);
+    }
+}
+
+fn walk_stmt(stmt: &Stmt, out: &mut Vec<(Span, String)>) {
+    match &stmt.kind {
+        StmtKind::Var(v) => walk_local_var(v, out),
+        StmtKind::Assign { target, value } => {
+            walk_expr(target, out);
+            walk_expr(value, out);
+        }
+        StmtKind::Expr(e) => walk_expr(e, out),
+        StmtKind::Item(item) => collect_item_type_refs(&item.kind, out),
+    }
+}
+
+fn walk_local_var(var: &LocalVar, out: &mut Vec<(Span, String)>) {
+    walk_pattern(&var.pattern, out);
+    if let Some(ty) = &var.ty {
+        walk_type(ty, out);
+    }
+    walk_expr(&var.init, out);
+}
+
+fn walk_pattern(pattern: &Pattern, out: &mut Vec<(Span, String)>) {
+    match &pattern.kind {
+        PatternKind::Literal(e) => walk_expr(e, out),
+        PatternKind::TypeBinding { ty, .. } => walk_type(ty, out),
+        PatternKind::UnitPath(path) => walk_type_path(path, out),
+        PatternKind::TupleStruct { path, fields, .. } => {
+            walk_type_path(path, out);
+            fields.iter().for_each(|field| walk_pattern(field, out));
+        }
+        PatternKind::RecordStruct { path, fields, .. } => {
+            walk_type_path(path, out);
+            fields
+                .iter()
+                .for_each(|field| walk_field_pattern(field, out));
+        }
+        PatternKind::Tuple { elems, .. } | PatternKind::List { elems, .. } => {
+            elems.iter().for_each(|elem| walk_pattern(elem, out));
+        }
+        PatternKind::Or(patterns) => patterns.iter().for_each(|pat| walk_pattern(pat, out)),
+        PatternKind::Wildcard | PatternKind::Binding(_) => {}
+    }
+}
+
+fn walk_field_pattern(field: &FieldPattern, out: &mut Vec<(Span, String)>) {
+    if let Some(pattern) = &field.pattern {
+        walk_pattern(pattern, out);
+    }
+}
+
+fn walk_expr(expr: &Expr, out: &mut Vec<(Span, String)>) {
+    match &expr.kind {
+        ExprKind::Str(s) => {
+            for part in &s.parts {
+                match part {
+                    StringPart::Expr(e) => walk_expr(e, out),
+                    StringPart::Text { .. } | StringPart::Ident(_) => {}
+                }
+            }
+        }
+        ExprKind::Tuple(exprs) | ExprKind::List(exprs) => {
+            exprs.iter().for_each(|expr| walk_expr(expr, out));
+        }
+        ExprKind::Paren(inner)
+        | ExprKind::Unary { operand: inner, .. }
+        | ExprKind::Try { expr: inner, .. }
+        | ExprKind::Ref { expr: inner, .. }
+        | ExprKind::Deref { expr: inner, .. }
+        | ExprKind::Await { expr: inner, .. }
+        | ExprKind::Spawn { expr: inner, .. } => walk_expr(inner, out),
+        ExprKind::MapLit(items) => {
+            for item in items {
+                match item {
+                    MapItem::Entry { key, value, .. } => {
+                        walk_expr(key, out);
+                        walk_expr(value, out);
+                    }
+                    MapItem::Spread(base) => walk_expr(base, out),
+                }
+            }
+        }
+        ExprKind::StructLit {
+            path,
+            fields,
+            spread,
+        } => {
+            walk_type_path(path, out);
+            fields.iter().for_each(|field| {
+                if let Some(value) = &field.value {
+                    walk_expr(value, out);
+                }
+            });
+            if let Some(spread) = spread {
+                walk_expr(spread, out);
+            }
+        }
+        ExprKind::Binary { left, right, .. } => {
+            walk_expr(left, out);
+            walk_expr(right, out);
+        }
+        ExprKind::Cast { expr, ty, .. } => {
+            walk_expr(expr, out);
+            walk_type(ty, out);
+        }
+        ExprKind::Field { receiver, .. } | ExprKind::TupleIndex { receiver, .. } => {
+            walk_expr(receiver, out);
+        }
+        ExprKind::Call {
+            callee,
+            generics,
+            args,
+            trailing_closure,
+        } => {
+            walk_expr(callee, out);
+            generics.iter().for_each(|generic| walk_type(generic, out));
+            args.iter().for_each(|arg| walk_expr(arg, out));
+            if let Some(closure) = trailing_closure {
+                walk_expr(closure, out);
+            }
+        }
+        ExprKind::Index { receiver, index } => {
+            walk_expr(receiver, out);
+            walk_expr(index, out);
+        }
+        ExprKind::If {
+            cond,
+            then_block,
+            else_branch,
+        } => {
+            walk_expr(cond, out);
+            walk_block(then_block, out);
+            if let Some(branch) = else_branch {
+                match branch {
+                    ElseBranch::If(e) => walk_expr(e, out),
+                    ElseBranch::Block(b) => walk_block(b, out),
+                }
+            }
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            walk_expr(scrutinee, out);
+            arms.iter().for_each(|arm| walk_match_arm(arm, out));
+        }
+        ExprKind::Block(block) | ExprKind::Loop(block) | ExprKind::AsyncBlock(block) => {
+            walk_block(block, out);
+        }
+        ExprKind::While { cond, body } => {
+            walk_expr(cond, out);
+            walk_block(body, out);
+        }
+        ExprKind::For {
+            pattern,
+            iter,
+            body,
+            ..
+        } => {
+            walk_pattern(pattern, out);
+            walk_expr(iter, out);
+            walk_block(body, out);
+        }
+        ExprKind::Return(value) | ExprKind::Break(value) => {
+            if let Some(value) = value {
+                walk_expr(value, out);
+            }
+        }
+        ExprKind::Closure {
+            params,
+            return_type,
+            body,
+            ..
+        } => {
+            for param in params {
+                if let Some(ty) = &param.ty {
+                    walk_type(ty, out);
+                }
+            }
+            if let Some(ret) = return_type {
+                walk_type(ret, out);
+            }
+            walk_expr(body, out);
+        }
+        ExprKind::AnonFn(function) => collect_fn_type_refs(function, out),
+        ExprKind::MacroCall { args, block, .. } => {
+            for arg in args {
+                match arg {
+                    AttrArg::Positional(value) | AttrArg::Named { value, .. } => {
+                        walk_expr(value, out);
+                    }
+                }
+            }
+            if let Some(block) = block {
+                walk_block(block, out);
+            }
+        }
+        ExprKind::Int(_)
+        | ExprKind::Float(_)
+        | ExprKind::Bool(_)
+        | ExprKind::Null
+        | ExprKind::Char(_)
+        | ExprKind::Ident(_)
+        | ExprKind::SelfExpr
+        | ExprKind::Underscore
+        | ExprKind::Continue => {}
+    }
+}
+
+fn walk_match_arm(arm: &MatchArm, out: &mut Vec<(Span, String)>) {
+    walk_pattern(&arm.pattern, out);
+    if let Some(guard) = &arm.guard {
+        walk_expr(guard, out);
+    }
+    walk_expr(&arm.body, out);
 }
 
 /// Is `name` the textual name of a built-in primitive type? Used by semantic-
@@ -1531,6 +1769,60 @@ function main() {
     }
 
     #[test]
+    fn type_position_goto_resolves_body_annotations_casts_and_patterns() {
+        // Body-local type names live in the AST rather than the HIR resolution
+        // index: local annotations, cast targets, closure annotations, and match
+        // pattern type names should all jump to the defining struct.
+        let src = "struct Circle { radius: f64 }\n\
+                   struct Rect { w: f64, h: f64 }\n\
+                   type Shape = Circle | Rect;\n\
+                   function choose(flag: bool): Shape {\n\
+                     var local: Circle = Circle { radius: 1.0 };\n\
+                     var casted = local as Circle;\n\
+                     var thunk = (value: Circle): Circle => value;\n\
+                     match if flag { casted } else { Rect { w: 2.0, h: 3.0 } } {\n\
+                       Circle c => thunk(c),\n\
+                       Rect { w, h } => Circle { radius: w + h },\n\
+                     }\n\
+                   }";
+        let c = Compiled::new(src.into());
+        assert!(c.diagnostics.is_empty(), "unexpected: {:?}", c.diagnostics);
+
+        let circle_def = src.find("Circle").unwrap();
+        for (needle, label) in [
+            ("local: Circle", "local annotation"),
+            ("as Circle", "cast target"),
+            ("value: Circle", "closure parameter"),
+            ("): Circle =>", "closure return"),
+            ("Circle c", "type-binding pattern"),
+            ("Circle { radius: w + h", "struct literal in match arm"),
+        ] {
+            let use_off = src.find(needle).unwrap()
+                + needle
+                    .find("Circle")
+                    .unwrap_or_else(|| panic!("needle `{needle}` must contain Circle"));
+            let def = c
+                .type_def_span_at(use_off)
+                .unwrap_or_else(|| panic!("type def span ({label})"));
+            assert_eq!(c.map.slice(def), "Circle", "{label}");
+            assert_eq!(def.lo.to_usize(), circle_def, "{label}");
+        }
+
+        let rect_def = src.find("Rect").unwrap();
+        for (needle, label) in [
+            ("Rect { w: 2.0", "struct literal in scrutinee"),
+            ("Rect { w, h }", "record pattern"),
+        ] {
+            let use_off = src.find(needle).unwrap() + needle.find("Rect").unwrap();
+            let def = c
+                .type_def_span_at(use_off)
+                .unwrap_or_else(|| panic!("type def span ({label})"));
+            assert_eq!(c.map.slice(def), "Rect", "{label}");
+            assert_eq!(def.lo.to_usize(), rect_def, "{label}");
+        }
+    }
+
+    #[test]
     fn cross_file_references_span_multiple_files() {
         // `double` is defined in util.otter, called in main.otter, and also called
         // by `quad` *within* util.otter — so "find references" must surface use
@@ -1800,7 +2092,7 @@ function main(): Future<null> async {
 ";
         let c = Compiled::new(src.into());
         assert!(c.diagnostics.is_empty(), "unexpected: {:?}", c.diagnostics);
-        // The `function(..) async { }` form.
+        // The `function(..) async {}` form.
         let foff = find_at(src, "function(x: i64)");
         let (_, fty) = c.expr_ty_at(foff).expect("expr type at async closure");
         assert_eq!(c.display_ty(fty), "(i64) => Future<i64>");
@@ -2047,18 +2339,20 @@ mod fmt_integration_tests {
     fn formatting_reindents_and_is_token_safe() {
         // The LSP formatting handler formats the open buffer via `compiler::fmt`
         // and returns a whole-document edit. Exercise that path's pieces.
-        let src = "function main() {\nvar x = 1;\n  if x > 0 {\nx = 2;\n}\n}\n";
+        let src = "import { Clone,ToStr,Eq,Ord,Hash,Iterator,Item,Done,Try,FromResidual,Drop,Future,Ready,Pending,Context } from \"core:prelude\";\ntype Many=Result<Alpha,Beta,Gamma,Delta,Epsilon,Zeta,Eta,Theta,Iota,Kappa,Lambda,Mu,Nu>;\ntype Value=Alpha|Beta|Gamma|Delta|Epsilon|Zeta|Eta|Theta|Iota|Kappa|Lambda|Mu|Nu|Xi|Omicron;\ninterface Renderable: Alpha+Beta+Gamma+Delta+Epsilon+Zeta+Eta+Theta+Iota+Kappa+Lambda+Mu {\nfunction render(self): str;\n}
+interface Service { function start(self): i64; function stop(self): i64; function reset(self): i64; function status(self): i64; function configure(self, alpha: Alpha, beta: Beta): i64; }\nfunction dump<T: Alpha+Beta+Gamma+Delta+Epsilon+Zeta+Eta+Theta+Iota+Kappa+Lambda+Mu>(x: T): T { x }\nfunction choose(): Alpha|Beta|Gamma|Delta|Epsilon|Zeta|Eta|Theta|Iota|Kappa|Lambda|Mu|Nu|Xi|Omicron { return alpha; }\npub struct Packet { pub alpha: Alpha, beta: Beta, gamma: Gamma, delta: Delta, epsilon: Epsilon, zeta: Zeta, eta: Eta, theta: Theta, iota: Iota }\nfunction main<T>() {\nvar xs:List<Map<str,List<T>>> =List<Map<str,List<T>>>();\nvar y=1;/*keep  exact*/var z=y+2;\nvar a=1; /* open\n  keep interior\n*/var b=a+2;\nvar total=combine(alpha,beta,gamma,delta,epsilon,zeta,eta,theta,iota,kappa,lambda,mu,nu);\nvar list=[alpha,beta,gamma,delta,epsilon,zeta,eta,theta,iota,kappa,lambda,mu,nu,xi,omicron,pi,rho];\nvar map={\"alpha\":alpha,\"beta\":beta,\"gamma\":gamma,\"delta\":delta,\"epsilon\":epsilon,\"zeta\":zeta,\"eta\":eta,\"theta\":theta};\nvar point=Point{x:alpha,y:beta,z:gamma,w:delta,a:epsilon,b:zeta,c:eta,d:theta,e:iota,f:kappa,g:lambda};\nvar arm=match classify(input) {0=>alpha,1=>beta,2=>gamma,3=>delta,4=>epsilon,5=>zeta,6=>eta,7=>theta,_=>omega};\nvar url=\"http://host/a/*not comment*/\";\nvar c='+';\nvar msg=\"value ${x+1}!\";\nvar x = 1;\n  if x>0 {\nx = 2;\n}\n}\n";
         let c = Compiled::new(src.into());
         let formatted = compiler::fmt::format_source(&c.text);
         assert_eq!(
             formatted,
-            "function main() {\n  var x = 1;\n  if x > 0 {\n    x = 2;\n  }\n}\n"
+            "import {\n  Clone,\n  ToStr,\n  Eq,\n  Ord,\n  Hash,\n  Iterator,\n  Item,\n  Done,\n  Try,\n  FromResidual,\n  Drop,\n  Future,\n  Ready,\n  Pending,\n  Context\n} from \"core:prelude\";\ntype Many = Result<\n  Alpha,\n  Beta,\n  Gamma,\n  Delta,\n  Epsilon,\n  Zeta,\n  Eta,\n  Theta,\n  Iota,\n  Kappa,\n  Lambda,\n  Mu,\n  Nu\n>;\ntype Value =\n  Alpha |\n  Beta |\n  Gamma |\n  Delta |\n  Epsilon |\n  Zeta |\n  Eta |\n  Theta |\n  Iota |\n  Kappa |\n  Lambda |\n  Mu |\n  Nu |\n  Xi |\n  Omicron;\ninterface Renderable:\n  Alpha +\n  Beta +\n  Gamma +\n  Delta +\n  Epsilon +\n  Zeta +\n  Eta +\n  Theta +\n  Iota +\n  Kappa +\n  Lambda +\n  Mu {\n  function render(self): str;\n}
+interface Service {\n  function start(self): i64;\n  function stop(self): i64;\n  function reset(self): i64;\n  function status(self): i64;\n  function configure(self, alpha: Alpha, beta: Beta): i64;\n}\nfunction dump<T:\n  Alpha +\n  Beta +\n  Gamma +\n  Delta +\n  Epsilon +\n  Zeta +\n  Eta +\n  Theta +\n  Iota +\n  Kappa +\n  Lambda +\n  Mu>(x: T): T { x }\nfunction choose():\n  Alpha |\n  Beta |\n  Gamma |\n  Delta |\n  Epsilon |\n  Zeta |\n  Eta |\n  Theta |\n  Iota |\n  Kappa |\n  Lambda |\n  Mu |\n  Nu |\n  Xi |\n  Omicron { return alpha; }\npub struct Packet {\n  pub alpha: Alpha,\n  beta: Beta,\n  gamma: Gamma,\n  delta: Delta,\n  epsilon: Epsilon,\n  zeta: Zeta,\n  eta: Eta,\n  theta: Theta,\n  iota: Iota\n}\nfunction main<T>() {\n  var xs: List<Map<str, List<T>>> = List<Map<str, List<T>>>();\n  var y = 1; /*keep  exact*/ var z = y + 2;\n  var a = 1; /* open\n  keep interior\n*/ var b = a + 2;\n  var total = combine(\n    alpha,\n    beta,\n    gamma,\n    delta,\n    epsilon,\n    zeta,\n    eta,\n    theta,\n    iota,\n    kappa,\n    lambda,\n    mu,\n    nu\n  );\n  var list = [\n    alpha,\n    beta,\n    gamma,\n    delta,\n    epsilon,\n    zeta,\n    eta,\n    theta,\n    iota,\n    kappa,\n    lambda,\n    mu,\n    nu,\n    xi,\n    omicron,\n    pi,\n    rho\n  ];\n  var map = {\n    \"alpha\": alpha,\n    \"beta\": beta,\n    \"gamma\": gamma,\n    \"delta\": delta,\n    \"epsilon\": epsilon,\n    \"zeta\": zeta,\n    \"eta\": eta,\n    \"theta\": theta\n  };\n  var point = Point {\n    x: alpha,\n    y: beta,\n    z: gamma,\n    w: delta,\n    a: epsilon,\n    b: zeta,\n    c: eta,\n    d: theta,\n    e: iota,\n    f: kappa,\n    g: lambda\n  };\n  var arm = match classify(input) {\n    0 => alpha,\n    1 => beta,\n    2 => gamma,\n    3 => delta,\n    4 => epsilon,\n    5 => zeta,\n    6 => eta,\n    7 => theta,\n    _ => omega\n  };\n  var url = \"http://host/a/*not comment*/\";\n  var c = '+';\n  var msg = \"value ${x + 1 }!\";\n  var x = 1;\n  if x > 0 {\n    x = 2;\n  }\n}\n"
         );
         // The reformat must be token-preserving (the handler declines otherwise).
         assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
         // The whole-document edit end position is the text's end.
         let end = position_at(&c.text, c.text.len());
-        assert_eq!(end.line, 6); // six newlines → line index 6 at EOF
+        assert_eq!(end.line, 29); // twenty-nine newlines -> line index 29 at EOF
     }
 
     #[test]
@@ -2066,6 +2360,678 @@ mod fmt_integration_tests {
         let src = "function main() {\n  var x = 1;\n}\n";
         let c = Compiled::new(src.into());
         assert_eq!(compiler::fmt::format_source(&c.text), c.text);
+    }
+
+    #[test]
+    fn formatting_wraps_arrow_closure_return_unions() {
+        let src = "function main() {\nvar classify=(x: i64): Alpha|Beta|Gamma|Delta|Epsilon|Zeta|Eta|Theta|Iota|Kappa|Lambda|Mu|Nu|Xi|Omicron => alpha;\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function main() {\n  var classify = (x: i64):\n    Alpha |\n    Beta |\n    Gamma |\n    Delta |\n    Epsilon |\n    Zeta |\n    Eta |\n    Theta |\n    Iota |\n    Kappa |\n    Lambda |\n    Mu |\n    Nu |\n    Xi |\n    Omicron => alpha;\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_preserves_async_closure_and_null_generic_spacing() {
+        let src = "function value_of(r:Joined < i64 >|Panicked):i64{\nmatch r {Joined < i64 > j=>j.value,_=>-1}\n}\nfunction main():Future < null > async{\nvar h:JoinHandle < i64 > =Task.spawn(()async=>{null});\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function value_of(r: Joined<i64> | Panicked): i64 {\n  match r { Joined<i64> j => j.value, _ => -1 }\n}\nfunction main(): Future<null> async {\n  var h: JoinHandle<i64> = Task.spawn(() async => { null });\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_var_type_union_annotations() {
+        let src = "function main() {\nvar value: Alpha|Beta|Gamma|Delta|Epsilon|Zeta|Eta|Theta|Iota|Kappa|Lambda|Mu|Nu|Xi|Omicron = alpha;\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function main() {\n  var value:\n    Alpha |\n    Beta |\n    Gamma |\n    Delta |\n    Epsilon |\n    Zeta |\n    Eta |\n    Theta |\n    Iota |\n    Kappa |\n    Lambda |\n    Mu |\n    Nu |\n    Xi |\n    Omicron = alpha;\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_parameter_type_union_annotations() {
+        let src = "function handle(value: Alpha|Beta|Gamma|Delta|Epsilon|Zeta|Eta|Theta|Iota|Kappa|Lambda|Mu|Nu|Xi|Omicron): i64 { 1 }\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function handle(value:\n  Alpha |\n  Beta |\n  Gamma |\n  Delta |\n  Epsilon |\n  Zeta |\n  Eta |\n  Theta |\n  Iota |\n  Kappa |\n  Lambda |\n  Mu |\n  Nu |\n  Xi |\n  Omicron): i64 { 1 }\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_multiple_parameter_type_union_annotations() {
+        let src = "function handle(first: Alpha|Beta|Gamma|Delta|Epsilon|Zeta|Eta|Theta|Iota|Kappa|Lambda|Mu|Nu|Xi|Omicron, second: Rho|Sigma|Tau|Upsilon|Phi|Chi|Psi|Omega|One|Two|Three|Four|Five|Six|Seven): i64 { 1 }\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function handle(\n  first:\n    Alpha |\n    Beta |\n    Gamma |\n    Delta |\n    Epsilon |\n    Zeta |\n    Eta |\n    Theta |\n    Iota |\n    Kappa |\n    Lambda |\n    Mu |\n    Nu |\n    Xi |\n    Omicron,\n  second:\n    Rho |\n    Sigma |\n    Tau |\n    Upsilon |\n    Phi |\n    Chi |\n    Psi |\n    Omega |\n    One |\n    Two |\n    Three |\n    Four |\n    Five |\n    Six |\n    Seven\n): i64 { 1 }\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_multiple_generic_bound_lists() {
+        let src = "function dump<T: Alpha+Beta+Gamma+Delta+Epsilon+Zeta+Eta+Theta, U: Iota+Kappa+Lambda+Mu+Nu+Xi+Omicron+Pi>(x: T, y: U): T { x }\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function dump<\n  T:\n    Alpha +\n    Beta +\n    Gamma +\n    Delta +\n    Epsilon +\n    Zeta +\n    Eta +\n    Theta,\n  U:\n    Iota +\n    Kappa +\n    Lambda +\n    Mu +\n    Nu +\n    Xi +\n    Omicron +\n    Pi\n>(x: T, y: U): T { x }\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_record_field_type_union_annotations() {
+        let src = "struct Packet { value: Alpha|Beta|Gamma|Delta|Epsilon|Zeta|Eta|Theta|Iota|Kappa|Lambda|Mu|Nu|Xi|Omicron }\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "struct Packet {\n  value:\n    Alpha |\n    Beta |\n    Gamma |\n    Delta |\n    Epsilon |\n    Zeta |\n    Eta |\n    Theta |\n    Iota |\n    Kappa |\n    Lambda |\n    Mu |\n    Nu |\n    Xi |\n    Omicron\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_method_chains() {
+        let src = "function f() {\nvar result=service.alpha().beta(one,two).gamma<Delta,Epsilon>().delta().epsilon().zeta().eta().theta().iota().kappa().lambda();\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  var result = service\n    .alpha()\n    .beta(one, two)\n    .gamma<Delta, Epsilon>()\n    .delta()\n    .epsilon()\n    .zeta()\n    .eta()\n    .theta()\n    .iota()\n    .kappa()\n    .lambda();\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_logical_chains() {
+        let src = "function f() {\nvar ok=alpha&&beta(one,two)&&gamma<Delta,Epsilon>(three,four)||delta.epsilon()&&zeta&&eta(theta,iota)&&kappa;\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  var ok = alpha\n    && beta(one, two)\n    && gamma<Delta, Epsilon>(three, four)\n    || delta.epsilon()\n    && zeta\n    && eta(theta, iota)\n    && kappa;\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_comparison_expressions() {
+        let src = "function f() {\nvar ok=compute<Alpha,Beta>(first_value,second_value,third_value)>other<Gamma,Delta>(fourth_value,fifth_value,sixth_value);\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  var ok = compute<Alpha, Beta>(first_value, second_value, third_value)\n    > other<Gamma, Delta>(fourth_value, fifth_value, sixth_value);\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_var_initializers() {
+        let src = "function f() {\nvar generated=generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron;\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  var generated =\n    generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron;\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_return_expressions() {
+        let src = "function f() {\nreturn generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron;\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  return\n    generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron;\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_break_expressions() {
+        let src = "function f() {\nloop {\nbreak generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron;\n}\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  loop {\n    break\n      generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron;\n  }\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_assignment_expressions() {
+        let src = "function f() {\ngenerated=generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron;\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  generated =\n    generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron;\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_for_iterators() {
+        let src = "function f() {\nfor item in generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron {}\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  for item in\n    generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron {}\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_while_conditions() {
+        let src = "function f() {\nwhile generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron {}\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  while\n    generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron {}\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_if_conditions() {
+        let src = "function f() {\nif generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron {}\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  if\n    generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron {}\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_match_scrutinees() {
+        let src = "function f() {\nvar out=match generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron {_=>1};\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  var out = match\n    generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron { _ => 1 };\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_match_guards() {
+        let src = "function f() {\nvar out=match kind {\n0 if generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron=>alpha,\n_=>omega\n};\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  var out = match kind {\n    0 if\n      generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron => alpha,\n    _ => omega\n  };\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_match_arm_bodies() {
+        let src = "function f() {\nvar out=match value {\nJoinedResult result => generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron,\n_=>0\n};\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  var out = match value {\n    JoinedResult result =>\n      generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron,\n    _ => 0\n  };\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_arrow_closure_bodies() {
+        let src = "function f() {\nvar worker=(value:i64):i64=>generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron;\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  var worker = (value: i64): i64 =>\n    generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron;\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_trailing_closure_bodies() {
+        let src = "function f() {\nThread.spawn { async => generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; };\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  Thread.spawn { async =>\n    generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; };\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_implicit_trailing_closure_bodies() {
+        let src = "function f() {\nitems.each { generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; };\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  items.each {\n    generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; };\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_anonymous_function_expression_headers() {
+        let src = "function f() {\ncall(function(value: VeryLongTypeAlphaBetaGammaDeltaEpsilonZetaEtaThetaIotaKappaLambdaMuNuXiOmicron): VeryLongReturnAlphaBetaGammaDeltaEpsilonZetaEtaThetaIota async { value });\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  call(function\n    (value: VeryLongTypeAlphaBetaGammaDeltaEpsilonZetaEtaThetaIotaKappaLambdaMuNuXiOmicron): VeryLongReturnAlphaBetaGammaDeltaEpsilonZetaEtaThetaIota async { value });\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_async_block_bodies() {
+        let src = "function f() {\ndrive(async { generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; });\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  drive(async {\n      generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; });\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_block_expression_bodies() {
+        let src = "function f() {\ndrive({ generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; });\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  drive({\n      generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; });\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_macro_block_bodies() {
+        let src = "function f() {\nvar x=@AsBlock { generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; };\nvar y=@Trace(\"op\") { generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; };\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  var x = @AsBlock {\n    generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; };\n  var y = @Trace(\"op\") {\n    generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; };\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_loop_bodies() {
+        let src = "function f() {\nloop { generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; }\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  loop {\n    generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; }\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_else_bodies() {
+        let src = "function f() {\nif ready {\nshort();\n} else { generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; }\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  if ready {\n    short();\n  } else {\n    generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; }\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_if_bodies() {
+        let src = "function f() {\nif ready { generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; }\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  if ready {\n    generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; }\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_while_bodies() {
+        let src = "function f() {\nwhile ready { generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; }\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  while ready {\n    generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; }\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_for_bodies() {
+        let src = "function f() {\nfor item in items { generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; }\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  for item in items {\n    generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; }\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_function_bodies() {
+        let src = "function f(){ return generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; }\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  return generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; }\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_test_bodies() {
+        let src = "test \"short\" { generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; }\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "test \"short\" {\n  generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; }\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_module_bodies() {
+        let src = "mod short { generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; }\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "mod short {\n  generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; }\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_await_and_spawn_operands() {
+        let src = "function f() {\nawait generated_future_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron;\nspawn generated_worker_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron;\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  await\n    generated_future_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron;\n  spawn\n    generated_worker_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron;\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_test_and_bench_headers() {
+        let src = "test \"formatter_test_name_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron_pi\" {}\nbench \"formatter_bench_name_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron_pi\" {}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "test\n  \"formatter_test_name_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron_pi\" {}\nbench\n  \"formatter_bench_name_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron_pi\" {}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_import_paths() {
+        let src = "import \"pkg:alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron_pi_rho_sigma_tau\";\npub import \"pkg:alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron_pi_rho_sigma_tau\" as LongPkg;\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "import\n  \"pkg:alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron_pi_rho_sigma_tau\";\npub import\n  \"pkg:alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron_pi_rho_sigma_tau\" as LongPkg;\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_named_import_paths() {
+        let src = "import { Logger } from \"pkg:alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron_pi_rho_sigma_tau\";\npub import { Helper as RenamedHelper } from \"self:alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron\";\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "import { Logger }\n  from \"pkg:alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron_pi_rho_sigma_tau\";\npub import { Helper as RenamedHelper }\n  from \"self:alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron\";\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_named_import_list_closing_paths() {
+        let src = "pub import { Alpha,Beta as Renamed,Gamma,Delta,Epsilon,Zeta,Eta,Theta,Iota,Kappa,Lambda,Mu,Nu } from \"pkg:alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron_pi_rho_sigma_tau\";\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "pub import {\n  Alpha,\n  Beta as Renamed,\n  Gamma,\n  Delta,\n  Epsilon,\n  Zeta,\n  Eta,\n  Theta,\n  Iota,\n  Kappa,\n  Lambda,\n  Mu,\n  Nu\n}\n  from \"pkg:alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron_pi_rho_sigma_tau\";\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_single_argument_attributes() {
+        let src = "@Symbol(\"very_very_long_symbol_name_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron\")\nextern function inflate_init(code: i32);\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "@Symbol(\n  \"very_very_long_symbol_name_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron\"\n)\nextern function inflate_init(code: i32);\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_extern_type_declarations() {
+        let src = "extern type VeryLongOpaqueForeignHandleAlphaBetaGammaDeltaEpsilonZetaEtaThetaIotaKappaLambdaMuNuXiOmicronPiRho;\npub extern type VeryLongOpaqueForeignHandleAlphaBetaGammaDeltaEpsilonZetaEtaThetaIotaKappaLambdaMuNuXiOmicronPiRho;\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "extern type\n  VeryLongOpaqueForeignHandleAlphaBetaGammaDeltaEpsilonZetaEtaThetaIotaKappaLambdaMuNuXiOmicronPiRho;\npub extern type\n  VeryLongOpaqueForeignHandleAlphaBetaGammaDeltaEpsilonZetaEtaThetaIotaKappaLambdaMuNuXiOmicronPiRho;\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_extern_var_declarations() {
+        let src = "extern var very_long_foreign_global_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa: VeryLongForeignRuntimeCounterHandleAlphaBetaGammaDelta;\npub extern var very_long_foreign_global_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa: AtomicForeignRuntimeCounterHandle;\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "extern var\n  very_long_foreign_global_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa: VeryLongForeignRuntimeCounterHandleAlphaBetaGammaDelta;\npub extern var\n  very_long_foreign_global_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa: AtomicForeignRuntimeCounterHandle;\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_extern_function_declarations() {
+        let src = "extern function very_long_foreign_function_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa(arg: i64): VeryLongForeignRuntimeResultHandle;\npub extern function very_long_foreign_function_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa(arg: i64): VeryLongForeignRuntimeResultHandle;\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "extern function\n  very_long_foreign_function_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa(arg: i64): VeryLongForeignRuntimeResultHandle;\npub extern function\n  very_long_foreign_function_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa(arg: i64): VeryLongForeignRuntimeResultHandle;\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_function_declaration_headers() {
+        let src = "function very_long_function_name_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda(arg: i64): i64 { arg }\npub function very_long_function_name_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda(arg: i64): i64 { arg }\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function\n  very_long_function_name_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda(arg: i64): i64 { arg }\npub function\n  very_long_function_name_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda(arg: i64): i64 { arg }\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_module_declaration_headers() {
+        let src = "mod very_long_module_name_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron_pi_rho_sigma;\npub mod very_long_module_name_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron_pi_rho_sigma { function value(): i64 { 1 } }\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "mod\n  very_long_module_name_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron_pi_rho_sigma;\npub mod\n  very_long_module_name_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron_pi_rho_sigma { function value(): i64 { 1 } }\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_interface_declaration_headers() {
+        let src = "interface VeryLongInterfaceNameAlphaBetaGammaDeltaEpsilonZetaEtaThetaIotaKappaLambdaMuNuXiOmicronPiRhoSigma {}\npub interface VeryLongInterfaceNameAlphaBetaGammaDeltaEpsilonZetaEtaThetaIotaKappaLambdaMuNuXiOmicronPiRhoSigma {}\nextend<T> VeryLongWrapperNameAlphaBetaGammaDeltaEpsilonZetaEtaThetaIotaKappaLambdaMuNuXiOmicronPiRhoSigma<T> { function value(self): i64 { 1 } }\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "interface\n  VeryLongInterfaceNameAlphaBetaGammaDeltaEpsilonZetaEtaThetaIotaKappaLambdaMuNuXiOmicronPiRhoSigma {}\npub interface\n  VeryLongInterfaceNameAlphaBetaGammaDeltaEpsilonZetaEtaThetaIotaKappaLambdaMuNuXiOmicronPiRhoSigma {}\nextend\n  <T> VeryLongWrapperNameAlphaBetaGammaDeltaEpsilonZetaEtaThetaIotaKappaLambdaMuNuXiOmicronPiRhoSigma<T> { function value(self): i64 { 1 } }\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_struct_declaration_headers() {
+        let src = "struct VeryLongStructNameAlphaBetaGammaDeltaEpsilonZetaEtaThetaIotaKappaLambdaMuNuXiOmicronPiRhoSigma;\npub struct VeryLongStructNameAlphaBetaGammaDeltaEpsilonZetaEtaThetaIotaKappaLambdaMuNuXiOmicronPiRhoSigma { value: i64 }\nextern struct VeryLongForeignStructNameAlphaBetaGammaDeltaEpsilonZetaEtaThetaIotaKappaLambdaMuNuXiOmicronPiRhoSigma { value: i64 }\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "struct\n  VeryLongStructNameAlphaBetaGammaDeltaEpsilonZetaEtaThetaIotaKappaLambdaMuNuXiOmicronPiRhoSigma;\npub struct\n  VeryLongStructNameAlphaBetaGammaDeltaEpsilonZetaEtaThetaIotaKappaLambdaMuNuXiOmicronPiRhoSigma { value: i64 }\nextern struct\n  VeryLongForeignStructNameAlphaBetaGammaDeltaEpsilonZetaEtaThetaIotaKappaLambdaMuNuXiOmicronPiRhoSigma { value: i64 }\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_type_alias_declaration_headers() {
+        let src = "type VeryLongAliasNameAlphaBetaGammaDeltaEpsilonZetaEtaThetaIotaKappaLambdaMuNuXiOmicronPiRhoSigma = i64;\npub type VeryLongAliasNameAlphaBetaGammaDeltaEpsilonZetaEtaThetaIotaKappaLambdaMuNuXiOmicronPiRhoSigma<T> = List<T>;\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "type\n  VeryLongAliasNameAlphaBetaGammaDeltaEpsilonZetaEtaThetaIotaKappaLambdaMuNuXiOmicronPiRhoSigma = i64;\npub type\n  VeryLongAliasNameAlphaBetaGammaDeltaEpsilonZetaEtaThetaIotaKappaLambdaMuNuXiOmicronPiRhoSigma<T> = List<T>;\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_additive_chains() {
+        let src = "function f() {\nvar total=alpha+beta-gamma+delta-epsilon+zeta+eta-theta+iota+kappa-lambda+mu+nu-xi+omicron;\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  var total = alpha\n    + beta\n    - gamma\n    + delta\n    - epsilon\n    + zeta\n    + eta\n    - theta\n    + iota\n    + kappa\n    - lambda\n    + mu\n    + nu\n    - xi\n    + omicron;\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_multiplicative_chains() {
+        let src = "function f() {\nvar total=alpha*beta/gamma%delta*epsilon/zeta*eta/theta%iota*kappa/lambda*mu/nu%xi*omicron;\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  var total = alpha\n    * beta\n    / gamma\n    % delta\n    * epsilon\n    / zeta\n    * eta\n    / theta\n    % iota\n    * kappa\n    / lambda\n    * mu\n    / nu\n    % xi\n    * omicron;\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_shift_chains() {
+        let src = "function f() {\nvar shifted=alpha<<beta>>gamma<<delta>>epsilon<<zeta>>eta<<theta>>iota<<kappa>>lambda<<mu>>nu<<xi>>omicron;\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  var shifted = alpha\n    << beta\n    >> gamma\n    << delta\n    >> epsilon\n    << zeta\n    >> eta\n    << theta\n    >> iota\n    << kappa\n    >> lambda\n    << mu\n    >> nu\n    << xi\n    >> omicron;\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_cast_chains() {
+        let src = "function f() {\nvar value=source as Alpha as Beta as Gamma as Delta as Epsilon as Zeta as Eta as Theta as Iota as Kappa as Lambda;\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  var value = source\n    as Alpha\n    as Beta\n    as Gamma\n    as Delta\n    as Epsilon\n    as Zeta\n    as Eta\n    as Theta\n    as Iota\n    as Kappa\n    as Lambda;\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_bitwise_and_chains() {
+        let src = "function f() {\nvar mask=alpha&beta&gamma&delta&epsilon&zeta&eta&theta&iota&kappa&lambda&mu&nu&xi&omicron&pi;\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  var mask = alpha\n    & beta\n    & gamma\n    & delta\n    & epsilon\n    & zeta\n    & eta\n    & theta\n    & iota\n    & kappa\n    & lambda\n    & mu\n    & nu\n    & xi\n    & omicron\n    & pi;\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_bitwise_xor_chains() {
+        let src = "function f() {\nvar mask=alpha^beta^gamma^delta^epsilon^zeta^eta^theta^iota^kappa^lambda^mu^nu^xi^omicron^pi;\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  var mask = alpha\n    ^ beta\n    ^ gamma\n    ^ delta\n    ^ epsilon\n    ^ zeta\n    ^ eta\n    ^ theta\n    ^ iota\n    ^ kappa\n    ^ lambda\n    ^ mu\n    ^ nu\n    ^ xi\n    ^ omicron\n    ^ pi;\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_bitwise_or_chains() {
+        let src = "function f() {\nvar mask=alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lambda|mu|nu|xi|omicron;\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  var mask = alpha\n    | beta\n    | gamma\n    | delta\n    | epsilon\n    | zeta\n    | eta\n    | theta\n    | iota\n    | kappa\n    | lambda\n    | mu\n    | nu\n    | xi\n    | omicron;\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
     }
 }
 

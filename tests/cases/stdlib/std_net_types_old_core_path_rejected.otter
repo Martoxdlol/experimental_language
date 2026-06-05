@@ -1,7 +1,7 @@
 //@ kind: compile-error
-//@ description: Network identifier values are ordinary stdlib API, not compiler substrate; core:net:types is rejected
-//@ stderr: no built-in module `core:net:types`
+//@ description: Network identifier values are ordinary stdlib API, not compiler substrate; core:net/types is rejected
+//@ stderr: no built-in module `core:net/types`
 
-import { IpAddr } from "core:net:types";
+import { IpAddr } from "core:net/types";
 
 function main() {}

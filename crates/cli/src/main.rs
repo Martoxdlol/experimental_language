@@ -499,6 +499,7 @@ fn prepare_project(proj: &ProjectContext) -> Prepared {
     // (e.g. an offline registry), `pkg:` imports surface a clear error later.
     let mut dep_packages: Vec<loader::DepPackage> = Vec::new();
     let mut packages_map: HashMap<String, Vec<String>> = HashMap::new();
+    let mut package_dependencies: HashMap<String, HashMap<String, Vec<String>>> = HashMap::new();
     if !proj.manifest.dependencies.is_empty() {
         match deps::resolve_project(proj) {
             Ok(resolved) => {
@@ -508,15 +509,30 @@ fn prepare_project(proj: &ProjectContext) -> Prepared {
                         if dep_proj.manifest.package.kind.is_consumable() {
                             dep_packages.push(loader::DepPackage {
                                 name: rp.name.clone(),
+                                key: rp.id.clone(),
                                 entry: dep_proj.entry_file(),
                                 source_root: dep_proj.source_root(),
                             });
-                            packages_map.insert(
-                                rp.name.clone(),
-                                vec!["__pkg__".to_string(), rp.name.clone()],
-                            );
                         }
                     }
+                }
+                if let Some(root_deps) = resolved.dependency_edges.get(&resolved.root_id) {
+                    for (name, id) in root_deps {
+                        if resolved.get_by_id(id).is_some_and(|p| p.direct) {
+                            packages_map
+                                .insert(name.clone(), vec!["__pkg__".to_string(), id.clone()]);
+                        }
+                    }
+                }
+                for (owner, deps) in &resolved.dependency_edges {
+                    if owner == &resolved.root_id {
+                        continue;
+                    }
+                    let mut mapped = HashMap::new();
+                    for (name, id) in deps {
+                        mapped.insert(name.clone(), vec!["__pkg__".to_string(), id.clone()]);
+                    }
+                    package_dependencies.insert(owner.clone(), mapped);
                 }
             }
             Err(e) => eprintln!("warning: could not resolve dependencies: {e}"),
@@ -534,6 +550,7 @@ fn prepare_project(proj: &ProjectContext) -> Prepared {
         file_import_allow: proj.manifest.file_import_allow.clone(),
         dependencies,
         packages: packages_map,
+        package_dependencies,
         file_targets: tree.file_targets.clone(),
         macro_recursion_limit: proj.manifest.macro_recursion_limit,
     };
@@ -1808,7 +1825,12 @@ mod deps {
         };
         let vendor_dir = proj.root.join("vendor");
         for rp in &resolved.packages {
-            let dest = vendor_dir.join(&rp.name);
+            let dirname = if resolved.has_duplicate_name(&rp.name) {
+                format!("{}-{}", rp.name, rp.version)
+            } else {
+                rp.name.clone()
+            };
+            let dest = vendor_dir.join(&dirname);
             let _ = std::fs::remove_dir_all(&dest);
             if let Err(e) = copy_dir(&rp.root, &dest) {
                 return fail(&format!("vendoring `{}`: {e}", rp.name));
@@ -1912,12 +1934,17 @@ mod deps {
             Ok(t) => t,
             Err(e) => return fail(&format!("packaging failed: {e}")),
         };
+        let metadata = match pkg::package::publish_metadata(&proj) {
+            Ok(m) => m,
+            Err(e) => return fail(&format!("publish metadata failed: {e}")),
+        };
         if dry_run {
             println!(
-                "packaged {} v{} ({} bytes, {checksum})",
+                "packaged {} v{} ({} bytes, {checksum}, {} dep edge(s))",
                 proj.manifest.package.name,
                 proj.manifest.package.version,
-                tarball.len()
+                tarball.len(),
+                metadata.deps.len()
             );
             return ExitCode::SUCCESS;
         }
@@ -1929,6 +1956,7 @@ mod deps {
             &proj.manifest.package.name,
             &proj.manifest.package.version,
             &tarball,
+            &metadata,
         ) {
             Ok(()) => {
                 println!(

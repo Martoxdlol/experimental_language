@@ -8,15 +8,15 @@ import { Future } from "core:prelude";
 import { Shared } from "std:sync";
 struct X { value: i64 }
 struct Counter { x: X }
-function main(): Future<null> async {
+function main(): Future < null > async {
   var state: Shared<Counter> = Shared.new(Counter { x: X { value: 0 } });
   // Each `spawn async { … }` captures `state` directly; the capture clones the
   // handle, which points at the same shared cell — no lost updates because
   // `lock` serializes. Lock-using workers must be async (`lock` is await-only).
-  var h1: Future<null> = spawn async {
+  var h1: Future < null > = spawn async {
     await state.lock((c) => { c.x.value = c.x.value + 1; 0 });
   };
-  var h2: Future<null> = spawn async {
+  var h2: Future < null > = spawn async {
     await state.lock((c) => { c.x.value = c.x.value + 1; 0 });
   };
   await h1;

@@ -5,11 +5,170 @@ struct AcqRel {}
 struct SeqCst {}
 type Ordering = Relaxed | Acquire | Release | AcqRel | SeqCst;
 
+@RefCounted
+struct AtomicI64 { ptr: *u8 }
+
+@RefCounted
+struct AtomicI32 { ptr: *u8 }
+
+@RefCounted
+struct AtomicU64 { ptr: *u8 }
+
+@RefCounted
+struct AtomicU32 { ptr: *u8 }
+
+@RefCounted
+struct AtomicBool { ptr: *u8 }
+
+@RefCounted
+struct AtomicPtr<T> { ptr: *u8 }
+
+extern function lang_atomic_i64_new(value: i64): *u8;
+extern function lang_atomic_i64_free(ptr: *u8);
+extern function lang_atomic_i64_load(ptr: *u8, ord: i64): i64;
+extern function lang_atomic_i64_store(ptr: *u8, value: i64, ord: i64);
+extern function lang_atomic_i64_swap(ptr: *u8, value: i64, ord: i64): i64;
+extern function
+  lang_atomic_i64_compare_exchange(
+  ptr: *u8,
+  expected: i64,
+  new: i64,
+  success: i64,
+  failure: i64
+): i64;
+extern function lang_atomic_i64_fetch_add(ptr: *u8, value: i64, ord: i64): i64;
+extern function lang_atomic_i64_fetch_sub(ptr: *u8, value: i64, ord: i64): i64;
+
+extern function lang_atomic_i32_new(value: i32): *u8;
+extern function lang_atomic_i32_free(ptr: *u8);
+extern function lang_atomic_i32_load(ptr: *u8, ord: i64): i32;
+extern function lang_atomic_i32_store(ptr: *u8, value: i32, ord: i64);
+extern function lang_atomic_i32_swap(ptr: *u8, value: i32, ord: i64): i32;
+extern function
+  lang_atomic_i32_compare_exchange(
+  ptr: *u8,
+  expected: i32,
+  new: i32,
+  success: i64,
+  failure: i64
+): i32;
+extern function lang_atomic_i32_fetch_add(ptr: *u8, value: i32, ord: i64): i32;
+extern function lang_atomic_i32_fetch_sub(ptr: *u8, value: i32, ord: i64): i32;
+
+extern function lang_atomic_u64_new(value: u64): *u8;
+extern function lang_atomic_u64_free(ptr: *u8);
+extern function lang_atomic_u64_load(ptr: *u8, ord: i64): u64;
+extern function lang_atomic_u64_store(ptr: *u8, value: u64, ord: i64);
+extern function lang_atomic_u64_swap(ptr: *u8, value: u64, ord: i64): u64;
+extern function
+  lang_atomic_u64_compare_exchange(
+  ptr: *u8,
+  expected: u64,
+  new: u64,
+  success: i64,
+  failure: i64
+): u64;
+extern function lang_atomic_u64_fetch_add(ptr: *u8, value: u64, ord: i64): u64;
+extern function lang_atomic_u64_fetch_sub(ptr: *u8, value: u64, ord: i64): u64;
+
+extern function lang_atomic_u32_new(value: u32): *u8;
+extern function lang_atomic_u32_free(ptr: *u8);
+extern function lang_atomic_u32_load(ptr: *u8, ord: i64): u32;
+extern function lang_atomic_u32_store(ptr: *u8, value: u32, ord: i64);
+extern function lang_atomic_u32_swap(ptr: *u8, value: u32, ord: i64): u32;
+extern function
+  lang_atomic_u32_compare_exchange(
+  ptr: *u8,
+  expected: u32,
+  new: u32,
+  success: i64,
+  failure: i64
+): u32;
+extern function lang_atomic_u32_fetch_add(ptr: *u8, value: u32, ord: i64): u32;
+extern function lang_atomic_u32_fetch_sub(ptr: *u8, value: u32, ord: i64): u32;
+
+extern function lang_atomic_bool_new(value: i64): *u8;
+extern function lang_atomic_bool_free(ptr: *u8);
+extern function lang_atomic_bool_load(ptr: *u8, ord: i64): i64;
+extern function lang_atomic_bool_store(ptr: *u8, value: i64, ord: i64);
+extern function lang_atomic_bool_swap(ptr: *u8, value: i64, ord: i64): i64;
+extern function
+  lang_atomic_bool_compare_exchange(
+  ptr: *u8,
+  expected: i64,
+  new: i64,
+  success: i64,
+  failure: i64
+): i64;
+extern function lang_atomic_bool_fetch_and(ptr: *u8, value: i64, ord: i64): i64;
+extern function lang_atomic_bool_fetch_or(ptr: *u8, value: i64, ord: i64): i64;
+extern function lang_atomic_bool_fetch_xor(ptr: *u8, value: i64, ord: i64): i64;
+
+extern function lang_atomic_ptr_new(value: *u8): *u8;
+extern function lang_atomic_ptr_free(ptr: *u8);
+extern function lang_atomic_ptr_load(ptr: *u8, ord: i64): *u8;
+extern function lang_atomic_ptr_store(ptr: *u8, value: *u8, ord: i64);
+extern function lang_atomic_ptr_swap(ptr: *u8, value: *u8, ord: i64): *u8;
+extern function
+  lang_atomic_ptr_compare_exchange(
+  ptr: *u8,
+  expected: *u8,
+  new: *u8,
+  success: i64,
+  failure: i64
+): *u8;
+
 function ordering_relaxed(): Ordering { Relaxed {} }
 function ordering_acquire(): Ordering { Acquire {} }
 function ordering_release(): Ordering { Release {} }
 function ordering_acq_rel(): Ordering { AcqRel {} }
 function ordering_seq_cst(): Ordering { SeqCst {} }
+
+function __atomic_order_code(ord: Ordering): i64 {
+  if ord is Relaxed {
+    0
+  } else if ord is Acquire {
+    1
+  } else if ord is Release {
+    2
+  } else if ord is AcqRel {
+    3
+  } else {
+    4
+  }
+}
+
+function __atomic_load_order(ord: Ordering): i64 {
+  if ord is Release || ord is AcqRel {
+    panic("invalid atomic load ordering")
+  } else {
+    __atomic_order_code(ord)
+  }
+}
+
+function __atomic_store_order(ord: Ordering): i64 {
+  if ord is Acquire || ord is AcqRel {
+    panic("invalid atomic store ordering")
+  } else {
+    __atomic_order_code(ord)
+  }
+}
+
+function __atomic_failure_order(ord: Ordering): i64 {
+  if ord is Release || ord is AcqRel {
+    panic("invalid atomic compare_exchange failure ordering")
+  } else {
+    __atomic_order_code(ord)
+  }
+}
+
+function __atomic_bool_code(value: bool): i64 {
+  if value { 1 } else { 0 }
+}
+
+function __atomic_bool_value(value: i64): bool {
+  value != 0
+}
 
 extend Ordering {
   function as_str(self): str {
@@ -75,4 +234,326 @@ extend Ordering: ToStr {
 
 extend Ordering: Debug {
   function debug(self): str { self.debug_string() }
+}
+
+extend AtomicI64 {
+  function new(v: i64): AtomicI64 {
+    AtomicI64 { ptr: lang_atomic_i64_new(v) }
+  }
+
+  function load(self, ord: Ordering): i64 {
+    lang_atomic_i64_load(self.ptr, __atomic_load_order(ord))
+  }
+
+  function store(self, v: i64, ord: Ordering): null {
+    lang_atomic_i64_store(self.ptr, v, __atomic_store_order(ord));
+    null
+  }
+
+  function swap(self, v: i64, ord: Ordering): i64 {
+    lang_atomic_i64_swap(self.ptr, v, __atomic_order_code(ord))
+  }
+
+  function compare_exchange(self, expected: i64, new: i64, success: Ordering, failure: Ordering):
+    i64 |
+    i64 {
+    lang_atomic_i64_compare_exchange(
+      self.ptr,
+      expected,
+      new,
+      __atomic_order_code(success),
+      __atomic_failure_order(failure)
+    )
+  }
+
+  function fetch_add(self, v: i64, ord: Ordering): i64 {
+    lang_atomic_i64_fetch_add(self.ptr, v, __atomic_order_code(ord))
+  }
+
+  function fetch_sub(self, v: i64, ord: Ordering): i64 {
+    lang_atomic_i64_fetch_sub(self.ptr, v, __atomic_order_code(ord))
+  }
+}
+
+extend AtomicI64: Clone {
+  function clone(self): AtomicI64 {
+    self
+  }
+}
+
+extend AtomicI64: Drop {
+  function drop(self) {
+    lang_atomic_i64_free(self.ptr);
+  }
+}
+
+extend AtomicI32 {
+  function new(v: i32): AtomicI32 {
+    AtomicI32 { ptr: lang_atomic_i32_new(v) }
+  }
+
+  function load(self, ord: Ordering): i32 {
+    lang_atomic_i32_load(self.ptr, __atomic_load_order(ord))
+  }
+
+  function store(self, v: i32, ord: Ordering): null {
+    lang_atomic_i32_store(self.ptr, v, __atomic_store_order(ord));
+    null
+  }
+
+  function swap(self, v: i32, ord: Ordering): i32 {
+    lang_atomic_i32_swap(self.ptr, v, __atomic_order_code(ord))
+  }
+
+  function compare_exchange(self, expected: i32, new: i32, success: Ordering, failure: Ordering):
+    i32 |
+    i32 {
+    lang_atomic_i32_compare_exchange(
+      self.ptr,
+      expected,
+      new,
+      __atomic_order_code(success),
+      __atomic_failure_order(failure)
+    )
+  }
+
+  function fetch_add(self, v: i32, ord: Ordering): i32 {
+    lang_atomic_i32_fetch_add(self.ptr, v, __atomic_order_code(ord))
+  }
+
+  function fetch_sub(self, v: i32, ord: Ordering): i32 {
+    lang_atomic_i32_fetch_sub(self.ptr, v, __atomic_order_code(ord))
+  }
+}
+
+extend AtomicI32: Clone {
+  function clone(self): AtomicI32 {
+    self
+  }
+}
+
+extend AtomicI32: Drop {
+  function drop(self) {
+    lang_atomic_i32_free(self.ptr);
+  }
+}
+
+extend AtomicU64 {
+  function new(v: u64): AtomicU64 {
+    AtomicU64 { ptr: lang_atomic_u64_new(v) }
+  }
+
+  function load(self, ord: Ordering): u64 {
+    lang_atomic_u64_load(self.ptr, __atomic_load_order(ord))
+  }
+
+  function store(self, v: u64, ord: Ordering): null {
+    lang_atomic_u64_store(self.ptr, v, __atomic_store_order(ord));
+    null
+  }
+
+  function swap(self, v: u64, ord: Ordering): u64 {
+    lang_atomic_u64_swap(self.ptr, v, __atomic_order_code(ord))
+  }
+
+  function compare_exchange(self, expected: u64, new: u64, success: Ordering, failure: Ordering):
+    u64 |
+    u64 {
+    lang_atomic_u64_compare_exchange(
+      self.ptr,
+      expected,
+      new,
+      __atomic_order_code(success),
+      __atomic_failure_order(failure)
+    )
+  }
+
+  function fetch_add(self, v: u64, ord: Ordering): u64 {
+    lang_atomic_u64_fetch_add(self.ptr, v, __atomic_order_code(ord))
+  }
+
+  function fetch_sub(self, v: u64, ord: Ordering): u64 {
+    lang_atomic_u64_fetch_sub(self.ptr, v, __atomic_order_code(ord))
+  }
+}
+
+extend AtomicU64: Clone {
+  function clone(self): AtomicU64 {
+    self
+  }
+}
+
+extend AtomicU64: Drop {
+  function drop(self) {
+    lang_atomic_u64_free(self.ptr);
+  }
+}
+
+extend AtomicU32 {
+  function new(v: u32): AtomicU32 {
+    AtomicU32 { ptr: lang_atomic_u32_new(v) }
+  }
+
+  function load(self, ord: Ordering): u32 {
+    lang_atomic_u32_load(self.ptr, __atomic_load_order(ord))
+  }
+
+  function store(self, v: u32, ord: Ordering): null {
+    lang_atomic_u32_store(self.ptr, v, __atomic_store_order(ord));
+    null
+  }
+
+  function swap(self, v: u32, ord: Ordering): u32 {
+    lang_atomic_u32_swap(self.ptr, v, __atomic_order_code(ord))
+  }
+
+  function compare_exchange(self, expected: u32, new: u32, success: Ordering, failure: Ordering):
+    u32 |
+    u32 {
+    lang_atomic_u32_compare_exchange(
+      self.ptr,
+      expected,
+      new,
+      __atomic_order_code(success),
+      __atomic_failure_order(failure)
+    )
+  }
+
+  function fetch_add(self, v: u32, ord: Ordering): u32 {
+    lang_atomic_u32_fetch_add(self.ptr, v, __atomic_order_code(ord))
+  }
+
+  function fetch_sub(self, v: u32, ord: Ordering): u32 {
+    lang_atomic_u32_fetch_sub(self.ptr, v, __atomic_order_code(ord))
+  }
+}
+
+extend AtomicU32: Clone {
+  function clone(self): AtomicU32 {
+    self
+  }
+}
+
+extend AtomicU32: Drop {
+  function drop(self) {
+    lang_atomic_u32_free(self.ptr);
+  }
+}
+
+extend AtomicBool {
+  function new(v: bool): AtomicBool {
+    AtomicBool { ptr: lang_atomic_bool_new(__atomic_bool_code(v)) }
+  }
+
+  function load(self, ord: Ordering): bool {
+    __atomic_bool_value(lang_atomic_bool_load(self.ptr, __atomic_load_order(ord)))
+  }
+
+  function store(self, v: bool, ord: Ordering): null {
+    lang_atomic_bool_store(self.ptr, __atomic_bool_code(v), __atomic_store_order(ord));
+    null
+  }
+
+  function swap(self, v: bool, ord: Ordering): bool {
+    __atomic_bool_value(lang_atomic_bool_swap(
+        self.ptr,
+        __atomic_bool_code(v),
+        __atomic_order_code(ord)
+      ))
+  }
+
+  function compare_exchange(
+    self,
+    expected: bool,
+    new: bool,
+    success: Ordering,
+    failure: Ordering
+  ): bool {
+    __atomic_bool_value(lang_atomic_bool_compare_exchange(
+        self.ptr,
+        __atomic_bool_code(expected),
+        __atomic_bool_code(new),
+        __atomic_order_code(success),
+        __atomic_failure_order(failure)
+      ))
+  }
+
+  function fetch_and(self, v: bool, ord: Ordering): bool {
+    __atomic_bool_value(lang_atomic_bool_fetch_and(
+        self.ptr,
+        __atomic_bool_code(v),
+        __atomic_order_code(ord)
+      ))
+  }
+
+  function fetch_or(self, v: bool, ord: Ordering): bool {
+    __atomic_bool_value(lang_atomic_bool_fetch_or(
+        self.ptr,
+        __atomic_bool_code(v),
+        __atomic_order_code(ord)
+      ))
+  }
+
+  function fetch_xor(self, v: bool, ord: Ordering): bool {
+    __atomic_bool_value(lang_atomic_bool_fetch_xor(
+        self.ptr,
+        __atomic_bool_code(v),
+        __atomic_order_code(ord)
+      ))
+  }
+}
+
+extend AtomicBool: Clone {
+  function clone(self): AtomicBool {
+    self
+  }
+}
+
+extend AtomicBool: Drop {
+  function drop(self) {
+    lang_atomic_bool_free(self.ptr);
+  }
+}
+
+extend<T> AtomicPtr<T> {
+  function new(v: *T): AtomicPtr<T> {
+    AtomicPtr<T> { ptr: lang_atomic_ptr_new(v as*u8) }
+  }
+
+  function load(self, ord: Ordering): *T {
+    lang_atomic_ptr_load(self.ptr, __atomic_load_order(ord))as*T
+  }
+
+  function store(self, v: *T, ord: Ordering): null {
+    lang_atomic_ptr_store(self.ptr, v as*u8, __atomic_store_order(ord));
+    null
+  }
+
+  function swap(self, v: *T, ord: Ordering): *T {
+    lang_atomic_ptr_swap(self.ptr, v as*u8, __atomic_order_code(ord))as*T
+  }
+
+  function compare_exchange(self, expected: *T, new: *T, success: Ordering, failure: Ordering):
+    *T |
+    *T {
+    lang_atomic_ptr_compare_exchange(
+      self.ptr,
+      expected as*u8,
+      new as*u8,
+      __atomic_order_code(success),
+      __atomic_failure_order(failure)
+    )as*T
+  }
+}
+
+extend<T> AtomicPtr<T>: Clone {
+  function clone(self): AtomicPtr<T> {
+    self
+  }
+}
+
+extend<T> AtomicPtr<T>: Drop {
+  function drop(self) {
+    lang_atomic_ptr_free(self.ptr);
+  }
 }

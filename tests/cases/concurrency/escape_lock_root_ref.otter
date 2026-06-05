@@ -5,11 +5,11 @@ import { Future } from "core:prelude";
 import { Shared } from "std:sync";
 struct X { value: i64 }
 struct Counter { x: X }
-function main(): Future<null> async {
+function main(): Future < null > async {
   var state: Shared<Counter> = Shared.new(Counter { x: X { value: 0 } });
   var leaked: Counter | null = null;
   await state.lock((c) => { leaked = c; 0 }); // the body's reference itself escapes
-  (leaked as Counter).x.value = 99;     // mutating the cell with no lock held
+  (leaked as Counter).x.value = 99; // mutating the cell with no lock held
   var snap: i64 = await state.lock((c) => c.x.value);
   println("snap = " + (snap as str));
 }

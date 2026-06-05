@@ -14,26 +14,26 @@ import { yield_now } from "std:async";
 
 function show(label: str, r: Joined<i64> | Panicked | Cancelled) {
   match r {
-    Joined<i64> j => println(label + " joined: " + (j.value as str)),
+    Joined < i64 > j => println(label + " joined: " + (j.value as str)),
     Panicked p => println(label + " panic: " + p.message),
     Cancelled c => println(label + " cancelled"),
   }
 }
 
-function main(): Future<null> async {
+function main(): Future < null > async {
   var sync_bad: JoinHandle<i64> = Task.spawn(() => {
-    panic("sync boom");
-    0
-  });
-  var async_bad: JoinHandle<i64> = Task.spawn(() async => {
-    var _ = await yield_now();
-    panic("async boom");
-    0
-  });
-  var ok: JoinHandle<i64> = Task.spawn(() async => {
-    var _ = await yield_now();
-    99
-  });
+      panic("sync boom");
+      0
+    });
+  var async_bad: JoinHandle<i64> = Task.spawn(()async => {
+      var _ = await yield_now();
+      panic("async boom");
+      0
+    });
+  var ok: JoinHandle<i64> = Task.spawn(()async => {
+      var _ = await yield_now();
+      99
+    });
 
   show("sync", await sync_bad.join());
   show("async", await async_bad.join());

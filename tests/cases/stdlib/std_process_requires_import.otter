@@ -1,6 +1,7 @@
 //@ kind: compile-error
 //@ description: std:process values and helpers are not available without an explicit import
 //@ stderr: cannot find type `Command`
+//@ stderr: cannot find type `Child`
 //@ stderr: cannot find type `ExitStatus`
 //@ stderr: cannot find type `Output`
 //@ stderr: cannot find value `Command` in scope
@@ -22,6 +23,10 @@ function make_command(): Command {
   Command.new("otter_fusion")
 }
 
+function wait_child(child: Child): i32 | null {
+  child.wait().code()
+}
+
 function make_status(): ExitStatus {
   ExitStatus.exited(0i32)
 }
@@ -32,6 +37,8 @@ function make_output(): Output {
 
 function main() {
   var cmd = command("otter_fusion");
+  var child = Child { handle: 0, process_id: 0u32, stdin: null, stdout: null, stderr: null };
+  wait_child(child);
   var status = exit_status(0i32, null);
   var captured = output(status, Bytes.new(), Bytes.new());
   args();

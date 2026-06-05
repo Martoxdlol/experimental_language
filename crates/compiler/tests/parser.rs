@@ -148,6 +148,28 @@ fn function_no_args_no_return() {
 }
 
 #[test]
+fn function_name_may_be_spawn_keyword_for_documented_methods() {
+    let m = parse_ok("extend Command { function spawn(self): Child { self } }");
+    match &m.items[0].kind {
+        ItemKind::Extend(e) => {
+            assert_eq!(e.members.len(), 1);
+            assert_eq!(e.members[0].function.name.name, "spawn");
+        }
+        _ => panic!(),
+    }
+}
+
+#[test]
+fn top_level_function_name_may_not_be_spawn_keyword() {
+    let (_, errs, _) = parse_src("function spawn() {}");
+    assert!(
+        errs.iter()
+            .any(|e| matches!(e.kind, ParseErrorKind::Expected { .. })),
+        "expected parse error for top-level spawn function name, got {errs:?}"
+    );
+}
+
+#[test]
 fn function_with_args_and_return() {
     let m = parse_ok("pub function add(a: i64, b: i64): i64 { a + b }");
     match &m.items[0].kind {

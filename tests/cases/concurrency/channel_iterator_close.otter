@@ -25,6 +25,6 @@ function main() {
     count = count + 1;
     sum = sum + n;
   }
-  println("count=${count}");
-  println("sum=${sum}");
+  println("count=${count }");
+  println("sum=${sum }");
 }

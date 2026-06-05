@@ -608,11 +608,24 @@ await h</code></pre>
 <!-- =========================================================== -->
 <h2 id="atomics">5. Atomics</h2>
 
-<p><code>core:sync:atomic</code> exposes the portable <code>Ordering</code> value
-contract today. Individual atomic handle types and load/store/swap/
-compare-exchange/fetch operations remain planned compiler/runtime substrate.
-<code>Shared&lt;T&gt;</code> covers the common cases; for lock-free patterns before the
-native atomic handle work lands, drop down to FFI atomics.</p>
+<p><code>core:sync/atomic</code> exposes the portable <code>Ordering</code> value
+contract and runtime-backed atomic handle family. The current surface includes
+<code>AtomicI32</code>, <code>AtomicI64</code>, <code>AtomicU32</code>,
+<code>AtomicU64</code>, <code>AtomicBool</code>, and
+<code>AtomicPtr&lt;T&gt;</code>. These are owned <code>@RefCounted</code>
+native atomic cells: assigning, cloning, or capturing a handle shares the same
+cell, and the final strong reference releases the native allocation
+deterministically.</p>
+
+<p>All handles provide <code>load</code>, <code>store</code>,
+<code>swap</code>, and <code>compare_exchange</code>. Integer atomics also provide
+<code>fetch_add</code>/<code>fetch_sub</code>, bool atomics provide
+<code>fetch_and</code>/<code>fetch_or</code>/<code>fetch_xor</code>, and
+pointer atomics intentionally omit pointer arithmetic. Invalid
+operation/order pairs such as <code>load(Release)</code> or
+<code>store(Acquire)</code> panic before crossing into the runtime. Use
+<code>Shared&lt;T&gt;</code> for ordinary protected state and atomics for explicit
+lock-free coordination.</p>
 
 <!-- =========================================================== -->
 <h2 id="safety">6. Thread safety summary</h2>
@@ -625,6 +638,7 @@ native atomic handle work lands, drop down to FFI atomics.</p>
     <tr><td>Captured-by-spawn value</td><td>Deep-cloned at spawn — each thread has its own copy.</td></tr>
     <tr><td>Channel</td><td>Safe by construction; one message has exactly one owner at a time.</td></tr>
     <tr><td><code>Shared&lt;T&gt;</code></td><td>Safe; mutex-protected; one writer at a time.</td></tr>
+    <tr><td><code>core:sync/atomic</code> handles</td><td>Safe for explicit lock-free coordination; cloned and captured handles share one native atomic cell.</td></tr>
     <tr><td><code>extern struct</code> / foreign memory</td><td>Whatever C semantics apply — language doesn't help.</td></tr>
   </tbody>
 </table>

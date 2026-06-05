@@ -5,11 +5,11 @@
 import { println } from "std:io";
 import { Future } from "core:prelude";
 import { yield_now } from "std:async";
-function n(v: i64): Future<i64> async {
+function n(v: i64): Future < i64 > async {
   await yield_now();
   v
 }
-function main(): Future<null> async {
+function main(): Future < null > async {
   var z = !(true && ((await n(5)) > 0));
-  println("${z}");
+  println("${z }");
 }

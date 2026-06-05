@@ -16,26 +16,26 @@ function sum(xs: List<i64>): i64 {
 function main() {
   var nums = [10, 20, 30, 40];
   nums.push(50);
-  println("count = ${nums.size()}");
-  println("sum   = ${sum(nums)}");
+  println("count = ${nums.size() }");
+  println("sum   = ${sum(nums) }");
   var names: List<str> = ["Alice", "Bob"];
   println("first = " + names[0]);
 
   // contains / index_of (require T: Eq) and truncate (docs/18 §5).
-  println("has 30  = ${nums.contains(30)}");
+  println("has 30  = ${nums.contains(30) }");
   var at = nums.index_of(40);
-  if at is i64 { println("idx 40  = ${at as i64}"); }
+  if at is i64 { println("idx 40  = ${at as i64 }"); }
   nums.truncate(2);
-  println("after truncate = ${nums.size()}");
+  println("after truncate = ${nums.size() }");
 
   // str.split / str.get (docs/18 §4).
   var parts = "a,b,c".split(",");
-  println("parts   = ${parts.size()}");
+  println("parts   = ${parts.size() }");
   var c0 = "otter".get(0);
-  if c0 is char { println("first char = ${c0 as char}"); }
+  if c0 is char { println("first char = ${c0 as char }"); }
 
   // String iteration: `for ch in s` ≡ `for ch in s.chars()` (docs/18 §4).
   var letters = 0;
   for ch in "otter" { letters = letters + 1; }
-  println("letters = ${letters}");
+  println("letters = ${letters }");
 }

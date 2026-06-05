@@ -1,0 +1,9 @@
+//@ kind: panic
+//@ description: AtomicU32 rejects invalid load orderings before runtime atomics
+//@ stderr: invalid atomic load ordering
+import { AtomicU32, Release } from "core:sync/atomic";
+
+function main() {
+  var counter = AtomicU32.new(1u32);
+  counter.load(Release {});
+}

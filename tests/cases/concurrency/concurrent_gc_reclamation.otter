@@ -20,7 +20,7 @@ function churn(seed: i64): i64 {
     var xs: List<i64> = [];
     var j = 0;
     while j < 10 { xs.push(i + j + seed); j = j + 1; }
-    var s = "v=${xs.size()}-${i}";
+    var s = "v=${xs.size() }-${i }";
     acc = acc + xs.size() + s.size();
     i = i + 1;
   }
@@ -28,10 +28,10 @@ function churn(seed: i64): i64 {
 }
 
 function value_of(r: Joined<i64> | Panicked): i64 {
-  match r { Joined<i64> j => j.value, Panicked p => 0 }
+  match r { Joined < i64 > j => j.value, Panicked p => 0 }
 }
 
-function gather(handles: List<JoinHandle<i64>>): Future<i64> async {
+function gather(handles: List<JoinHandle<i64>>): Future < i64 > async {
   var total = 0;
   for h in handles {
     var r: Joined<i64> | Panicked = await h.join();
@@ -40,12 +40,12 @@ function gather(handles: List<JoinHandle<i64>>): Future<i64> async {
   total
 }
 
-function main(): Future<null> async {
+function main(): Future < null > async {
   var handles: List<JoinHandle<i64>> = [];
   var i = 0;
   // Every worker runs the same seed-independent total, so the sum is exact and
   // deterministic regardless of scheduling: 6 workers × churn(_) .
   while i < 6 { handles.push(Thread.spawn(() => churn(0))); i = i + 1; }
   var total: i64 = await gather(handles);
-  println("${total}");
+  println("${total }");
 }

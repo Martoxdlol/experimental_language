@@ -1,0 +1,48 @@
+//@ kind: run
+//@ description: std:fmt.Debug is intrinsic for primitive scalars and str
+//@ stdout:
+//~ direct=42 -7 255 true 'A'
+//~ str="hi\n\"otter"
+//~ generic=3.5 false "generic"
+//~ iface=42 "iface" 'Z'
+//~ cast=42 "cast"
+//~ list=List[1, -2]
+//~ words=List["a\nb", "c\"d"]
+//~ map=Map{answer: 42}
+import { println } from "std:io";
+import { List, Map } from "core:collections";
+import { Debug } from "std:fmt";
+
+function render(value: Debug): str {
+  value.debug()
+}
+
+function generic<T: Debug>(value: T): str {
+  value.debug()
+}
+
+function main() {
+  println("direct=${42.debug()} ${(0 - 7).debug()} ${255u8.debug()} ${true.debug()} ${'A'.debug()}");
+  println("str=${"hi\n\"otter".debug()}");
+  println("generic=${generic(3.5)} ${generic(false)} ${generic("generic")}");
+
+  var number: Debug = 42;
+  var text: Debug = "iface";
+  var letter: Debug = 'Z';
+  println("iface=${number.debug()} ${text.debug()} ${letter.debug()}");
+  println("cast=${(42 as Debug).debug()} ${("cast" as Debug).debug()}");
+
+  var nums = List<i64>();
+  nums.push(1);
+  nums.push(0 - 2);
+  println("list=${render(nums)}");
+
+  var words = List<str>();
+  words.push("a\nb");
+  words.push("c\"d");
+  println("words=${render(words)}");
+
+  var map = Map<str, i64>();
+  map["answer"] = 42;
+  println("map=${render(map)}");
+}

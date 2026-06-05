@@ -13,28 +13,28 @@ import { yield_now } from "std:async";
 
 function joined_value(r: Joined<i64> | Panicked | Cancelled): i64 {
   match r {
-    Joined<i64> j => j.value,
+    Joined < i64 > j => j.value,
     Panicked p => -1,
     Cancelled c => -2,
   }
 }
 
-function main(): Future<null> async {
+function main(): Future < null > async {
   var handles: List<JoinHandle<i64>> = [];
   var i: i64 = 0;
   while i < 256 {
     var n = i;
-    handles.push(Task.spawn(() async => {
-      var local: i64 = 0;
-      var round: i64 = 0;
-      while round < 3 {
-        var junk: List<i64> = [n, round, n + round];
-        var _ = await yield_now();
-        local = local + junk[0] + junk[1];
-        round = round + 1;
-      }
-      local
-    }));
+    handles.push(Task.spawn(()async => {
+          var local: i64 = 0;
+          var round: i64 = 0;
+          while round < 3 {
+            var junk: List<i64> = [n, round, n + round];
+            var _ = await yield_now();
+            local = local + junk[0] + junk[1];
+            round = round + 1;
+          }
+          local
+        }));
     i = i + 1;
   }
 
@@ -45,5 +45,5 @@ function main(): Future<null> async {
     j = j + 1;
   }
 
-  println("total=${total}");
+  println("total=${total }");
 }

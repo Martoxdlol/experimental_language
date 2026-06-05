@@ -11,5 +11,5 @@ function main() {
     if i % 2 == 0 { continue; }
     sum = sum + i;
   }
-  println("${sum}");
+  println("${sum }");
 }

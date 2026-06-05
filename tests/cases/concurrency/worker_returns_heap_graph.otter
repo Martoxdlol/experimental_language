@@ -31,7 +31,7 @@ function work(n: i64): List<i64> {
 
 function sum_of(r: Joined<List<i64>> | Panicked): i64 {
   match r {
-    Joined<List<i64>> j => {
+    Joined < List < i64 >> j => {
       var s = 0;
       for x in j.value { s = s + 1; }
       s
@@ -40,7 +40,7 @@ function sum_of(r: Joined<List<i64>> | Panicked): i64 {
   }
 }
 
-function gather(handles: List<JoinHandle<List<i64>>>): Future<i64> async {
+function gather(handles: List<JoinHandle<List<i64>>>): Future < i64 > async {
   var total = 0;
   for h in handles {
     var r: Joined<List<i64>> | Panicked = await h.join();
@@ -49,10 +49,10 @@ function gather(handles: List<JoinHandle<List<i64>>>): Future<i64> async {
   total
 }
 
-function main(): Future<null> async {
+function main(): Future < null > async {
   var handles: List<JoinHandle<List<i64>>> = [];
   var t = 0;
   while t < 6 { handles.push(Thread.spawn(() => work(1000))); t = t + 1; }
   var total: i64 = await gather(handles);
-  println("total=${total}");
+  println("total=${total }");
 }

@@ -1,0 +1,9 @@
+//@ kind: panic
+//@ description: AtomicI32 rejects invalid compare_exchange failure orderings before runtime atomics
+//@ stderr: invalid atomic compare_exchange failure ordering
+import { AcqRel, AtomicI32, SeqCst } from "core:sync/atomic";
+
+function main() {
+  var counter = AtomicI32.new(1 as i32);
+  counter.compare_exchange(1 as i32, 2 as i32, SeqCst {}, AcqRel {});
+}

@@ -37,18 +37,26 @@ fn make_lang_str(s: &str) -> *const LangStr {
 }
 
 fn encode_success(payload: &str) -> *const LangStr {
+    make_lang_str(&encode_success_string(payload))
+}
+
+fn encode_success_string(payload: &str) -> String {
     let mut out = String::with_capacity(payload.len() + 1);
     out.push('0');
     out.push_str(payload);
-    make_lang_str(&out)
+    out
 }
 
 fn encode_error(error: impl std::fmt::Display) -> *const LangStr {
+    make_lang_str(&encode_error_string(error))
+}
+
+fn encode_error_string(error: impl std::fmt::Display) -> String {
     let message = error.to_string();
     let mut out = String::with_capacity(message.len() + 1);
     out.push('1');
     out.push_str(&message);
-    make_lang_str(&out)
+    out
 }
 
 fn encode_bool(value: bool) -> *const LangStr {
@@ -59,13 +67,18 @@ fn encode_u64(value: u64) -> *const LangStr {
     encode_success(&value.to_string())
 }
 
-fn encode_bytes_hex(bytes: &[u8]) -> *const LangStr {
+fn bytes_hex_payload(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut payload = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
         payload.push(HEX[(byte >> 4) as usize] as char);
         payload.push(HEX[(byte & 0x0f) as usize] as char);
     }
+    payload
+}
+
+fn encode_bytes_hex(bytes: &[u8]) -> *const LangStr {
+    let payload = bytes_hex_payload(bytes);
     encode_success(&payload)
 }
 
@@ -154,17 +167,6 @@ fn with_file_handle<T>(
         std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid file handle")
     })?;
     f(file)
-}
-
-fn encode_handle_command<T>(
-    handle: i64,
-    f: impl FnOnce(&mut std::fs::File) -> std::io::Result<T>,
-    encode: impl FnOnce(T) -> *const LangStr,
-) -> *const LangStr {
-    match with_file_handle(handle, f) {
-        Ok(value) => encode(value),
-        Err(err) => encode_error(err),
-    }
 }
 
 fn register_file(file: std::fs::File) -> *const LangStr {
@@ -311,45 +313,55 @@ pub unsafe extern "C" fn lang_fs_file_open(
 /// Close a descriptor-backed file handle.
 #[unsafe(no_mangle)]
 pub extern "C" fn lang_fs_file_close(handle: i64) -> *const LangStr {
+    make_lang_str(&fs_file_close_encoded(handle))
+}
+
+pub(crate) fn fs_file_close_encoded(handle: i64) -> String {
     let Ok(id) = u64::try_from(handle) else {
-        return encode_error("invalid file handle");
+        return encode_error_string("invalid file handle");
     };
     match lock_file_registry().remove(&id) {
-        Some(_) => encode_success(""),
-        None => encode_error("invalid file handle"),
+        Some(_) => encode_success_string(""),
+        None => encode_error_string("invalid file handle"),
     }
 }
 
 /// Read up to `count` bytes from a descriptor-backed file handle.
 #[unsafe(no_mangle)]
 pub extern "C" fn lang_fs_file_read(handle: i64, count: i64) -> *const LangStr {
+    make_lang_str(&fs_file_read_encoded(handle, count))
+}
+
+pub(crate) fn fs_file_read_encoded(handle: i64, count: i64) -> String {
     if count < 0 {
-        return encode_error("invalid read length");
+        return encode_error_string("invalid read length");
     }
-    encode_handle_command(
-        handle,
-        |file| {
-            let mut buf = vec![0u8; count as usize];
-            let n = file.read(&mut buf)?;
-            buf.truncate(n);
-            Ok(buf)
-        },
-        |bytes| encode_bytes_hex(&bytes),
-    )
+    match with_file_handle(handle, |file| {
+        let mut buf = vec![0u8; count as usize];
+        let n = file.read(&mut buf)?;
+        buf.truncate(n);
+        Ok(buf)
+    }) {
+        Ok(bytes) => encode_success_string(&bytes_hex_payload(&bytes)),
+        Err(err) => encode_error_string(err),
+    }
 }
 
 /// Read all remaining bytes from a descriptor-backed file handle.
 #[unsafe(no_mangle)]
 pub extern "C" fn lang_fs_file_read_to_end(handle: i64) -> *const LangStr {
-    encode_handle_command(
-        handle,
-        |file| {
-            let mut buf = Vec::new();
-            file.read_to_end(&mut buf)?;
-            Ok(buf)
-        },
-        |bytes| encode_bytes_hex(&bytes),
-    )
+    make_lang_str(&fs_file_read_to_end_encoded(handle))
+}
+
+pub(crate) fn fs_file_read_to_end_encoded(handle: i64) -> String {
+    match with_file_handle(handle, |file| {
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf)?;
+        Ok(buf)
+    }) {
+        Ok(bytes) => encode_success_string(&bytes_hex_payload(&bytes)),
+        Err(err) => encode_error_string(err),
+    }
 }
 
 /// Write bytes to a descriptor-backed file handle.
@@ -362,18 +374,29 @@ pub unsafe extern "C" fn lang_fs_file_write(
     contents_hex: *const LangStr,
 ) -> *const LangStr {
     let contents_hex = unsafe { read_lang_str(contents_hex) };
-    match decode_hex_bytes(&contents_hex)
+    make_lang_str(&fs_file_write_encoded(handle, &contents_hex))
+}
+
+pub(crate) fn fs_file_write_encoded(handle: i64, contents_hex: &str) -> String {
+    match decode_hex_bytes(contents_hex)
         .and_then(|bytes| with_file_handle(handle, |file| file.write(&bytes).map(|n| n as u64)))
     {
-        Ok(n) => encode_u64(n),
-        Err(err) => encode_error(err),
+        Ok(n) => encode_success_string(&n.to_string()),
+        Err(err) => encode_error_string(err),
     }
 }
 
 /// Flush a descriptor-backed file handle.
 #[unsafe(no_mangle)]
 pub extern "C" fn lang_fs_file_flush(handle: i64) -> *const LangStr {
-    encode_handle_command(handle, |file| file.flush(), |_| encode_success(""))
+    make_lang_str(&fs_file_flush_encoded(handle))
+}
+
+pub(crate) fn fs_file_flush_encoded(handle: i64) -> String {
+    match with_file_handle(handle, |file| file.flush()) {
+        Ok(()) => encode_success_string(""),
+        Err(err) => encode_error_string(err),
+    }
 }
 
 /// Seek a descriptor-backed file handle and return the new offset.
@@ -387,16 +410,23 @@ pub unsafe extern "C" fn lang_fs_file_seek(
     offset: i64,
 ) -> *const LangStr {
     let mode = unsafe { read_lang_str(mode) };
-    let seek_from = match mode.as_str() {
+    make_lang_str(&fs_file_seek_encoded(handle, &mode, offset))
+}
+
+pub(crate) fn fs_file_seek_encoded(handle: i64, mode: &str, offset: i64) -> String {
+    let seek_from = match mode {
         "start" => match u64::try_from(offset) {
             Ok(offset) => std::io::SeekFrom::Start(offset),
-            Err(_) => return encode_error("invalid seek"),
+            Err(_) => return encode_error_string("invalid seek"),
         },
         "current" => std::io::SeekFrom::Current(offset),
         "end" => std::io::SeekFrom::End(offset),
-        _ => return encode_error("invalid seek mode"),
+        _ => return encode_error_string("invalid seek mode"),
     };
-    encode_handle_command(handle, |file| file.seek(seek_from), encode_u64)
+    match with_file_handle(handle, |file| file.seek(seek_from)) {
+        Ok(pos) => encode_success_string(&pos.to_string()),
+        Err(err) => encode_error_string(err),
+    }
 }
 
 /// Return whether a path exists. Missing paths are `false`; other host errors
@@ -712,6 +742,32 @@ mod tests {
         assert_eq!(decode(lang_fs_file_close(handle)), "0");
         assert!(
             decode(lang_fs_file_read(handle, 1)).starts_with('1'),
+            "closed handle should report an error"
+        );
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn encoded_file_helpers_match_descriptor_contract() {
+        let path = temp_path();
+        let p = lang(&path);
+
+        let opened = decode(unsafe { lang_fs_file_open(p, lang("create")) });
+        assert!(
+            opened.starts_with('0'),
+            "expected handle success, got {opened:?}"
+        );
+        let handle: i64 = opened[1..].parse().unwrap();
+
+        assert_eq!(fs_file_write_encoded(handle, "41424344"), "04");
+        assert_eq!(fs_file_flush_encoded(handle), "0");
+        assert_eq!(fs_file_seek_encoded(handle, "start", 0), "00");
+        assert_eq!(fs_file_read_encoded(handle, 2), "04142");
+        assert_eq!(fs_file_read_to_end_encoded(handle), "04344");
+        assert_eq!(fs_file_close_encoded(handle), "0");
+        assert!(
+            fs_file_read_to_end_encoded(handle).starts_with('1'),
             "closed handle should report an error"
         );
 

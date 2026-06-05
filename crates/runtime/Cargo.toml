@@ -13,6 +13,7 @@ crate-type = ["rlib", "staticlib"]
 
 [dependencies]
 getrandom = "0.2"
+libc = "0.2"
 
 # Compiles the worker-panic-isolation setjmp/longjmp shim (src/panic_boundary.c).
 [build-dependencies]

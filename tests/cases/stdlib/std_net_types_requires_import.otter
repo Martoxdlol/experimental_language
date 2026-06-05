@@ -1,5 +1,5 @@
 //@ kind: compile-error
-//@ description: std:net:types follows the near-empty prelude rule; value types and helpers are not visible unless imported
+//@ description: std:net/types follows the near-empty prelude rule; value types and helpers are not visible unless imported
 //@ stderr: cannot find type `IpAddr`
 //@ stderr: cannot find type `SocketAddr`
 //@ stderr: cannot find type `Uri`

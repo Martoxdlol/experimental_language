@@ -25,14 +25,14 @@ function sum_to(n: i64): i64 {
 
 function result_of(r: Joined<i64> | Panicked): i64 {
   match r {
-    Joined<i64> j => j.value,
+    Joined < i64 > j => j.value,
     Panicked p => 0 - 1,
   }
 }
 
 // Await every worker in turn. `await h.join()` suspends this task until the
 // worker finishes, then resumes with the `Joined<i64> | Panicked` result.
-function gather(a: JoinHandle<i64>, b: JoinHandle<i64>, c: JoinHandle<i64>): Future<i64> async {
+function gather(a: JoinHandle<i64>, b: JoinHandle<i64>, c: JoinHandle<i64>): Future < i64 > async {
   var ra: Joined<i64> | Panicked = await a.join();
   var rb: Joined<i64> | Panicked = await b.join();
   var rc: Joined<i64> | Panicked = await c.join();
@@ -47,7 +47,7 @@ function gather(a: JoinHandle<i64>, b: JoinHandle<i64>, c: JoinHandle<i64>): Fut
 
 // An async `main`: the runtime drives the root future automatically — no
 // `block_on` in user code.
-function main(): Future<null> async {
+function main(): Future < null > async {
   // Spawn three workers; each computes independently on its own thread.
   var a: JoinHandle<i64> = Thread.spawn(() => sum_to(1000));
   var b: JoinHandle<i64> = Thread.spawn(() => sum_to(2000));

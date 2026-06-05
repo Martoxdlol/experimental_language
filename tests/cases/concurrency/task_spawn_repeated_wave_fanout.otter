@@ -14,13 +14,13 @@ import { yield_now } from "std:async";
 
 function joined_value(r: Joined<i64> | Panicked | Cancelled): i64 {
   match r {
-    Joined<i64> j => j.value,
+    Joined < i64 > j => j.value,
     Panicked p => -1,
     Cancelled c => -2,
   }
 }
 
-function main(): Future<null> async {
+function main(): Future < null > async {
   var total_received: i64 = 0;
   var total_joined: i64 = 0;
   var wave: i64 = 0;
@@ -35,17 +35,17 @@ function main(): Future<null> async {
       var n = i;
       var w = wave;
       var tx_i = tx.clone();
-      handles.push(Task.spawn(() async => {
-        var rounds: i64 = (n % 5) + 1;
-        var r: i64 = 0;
-        while r < rounds {
-          var _ = await yield_now();
-          r = r + 1;
-        }
-        var value: i64 = (w * 1000) + n;
-        tx_i.send(value);
-        value
-      }));
+      handles.push(Task.spawn(()async => {
+            var rounds: i64 = (n % 5) + 1;
+            var r: i64 = 0;
+            while r < rounds {
+              var _ = await yield_now();
+              r = r + 1;
+            }
+            var value: i64 = (w * 1000) + n;
+            tx_i.send(value);
+            value
+          }));
       i = i + 1;
     }
 
@@ -69,5 +69,5 @@ function main(): Future<null> async {
     wave = wave + 1;
   }
 
-  println("received=${total_received} joined=${total_joined}");
+  println("received=${total_received } joined=${total_joined }");
 }

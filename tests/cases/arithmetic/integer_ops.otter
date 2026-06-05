@@ -8,9 +8,9 @@
 //~ -8
 import { println } from "std:io";
 function main() {
-  println("${10 - 3 - 2}");
-  println("${7 / 2 + 2}");
-  println("${15 / 5}");
-  println("${17 % 5}");
-  println("${0 - 8}");
+  println("${10 - 3 - 2 }");
+  println("${7 / 2 + 2 }");
+  println("${15 / 5 }");
+  println("${17 % 5 }");
+  println("${0 - 8 }");
 }

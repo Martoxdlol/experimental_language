@@ -1,5 +1,5 @@
 //@ kind: run
-//@ description: std:net:types exposes portable network identifier value types without opening sockets
+//@ description: std:net/types exposes portable network identifier value types without opening sockets
 //@ stdout:
 //~ 127.0.0.1
 //~ true
@@ -71,7 +71,7 @@ import { Clone, Eq, Hash, ToStr } from "core:prelude";
 import { Error } from "std:error";
 import { Debug } from "std:fmt";
 import { println } from "std:io";
-import { ip_v4, ip_v6, ip_v6_scoped, socket_addr, uri, url, parse_ip_v4, parse_ip_v6, parse_ipv4_socket_addr, parse_socket_addr, parse_uri, parse_url, percent_encode_component, percent_decode_component, IpAddr, SocketAddr, Uri, Url, ParseError } from "std:net:types";
+import { ip_v4, ip_v6, ip_v6_scoped, socket_addr, uri, url, parse_ip_v4, parse_ip_v6, parse_ipv4_socket_addr, parse_socket_addr, parse_uri, parse_url, percent_encode_component, percent_decode_component, IpAddr, SocketAddr, Uri, Url, ParseError } from "std:net/types";
 
 function debug(value: Debug): str {
   value.debug()

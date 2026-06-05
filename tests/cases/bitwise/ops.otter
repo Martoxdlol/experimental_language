@@ -8,9 +8,9 @@
 //~ 2
 import { println } from "std:io";
 function main() {
-  println("${12 & 9}");
-  println("${12 | 2}");
-  println("${5 ^ 3}");
-  println("${5 << 3}");
-  println("${20 >> 3}");
+  println("${12 & 9 }");
+  println("${12 | 2 }");
+  println("${5 ^ 3 }");
+  println("${5 << 3 }");
+  println("${20 >> 3 }");
 }

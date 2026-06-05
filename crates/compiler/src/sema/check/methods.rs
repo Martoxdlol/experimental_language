@@ -93,6 +93,13 @@ impl<'a> Checker<'a> {
                 return t;
             }
         }
+        // `.debug()` on a primitive/`str` receiver: intrinsic `std:fmt.Debug`.
+        // User and stdlib value types resolve through normal `Debug` impls.
+        if name.name == "debug" && args.is_empty() {
+            if let Some(t) = self.check_builtin_debug(rty, callee.span) {
+                return t;
+            }
+        }
         // Builtin `List<T>` methods are resolved specially.
         if let Some(elem) = self.list_elem(rty) {
             return self.check_list_method(elem, name, args, span);
@@ -559,6 +566,11 @@ impl<'a> Checker<'a> {
         // `Hash` is intrinsic for primitives + `str` (`docs/15` §7); user types
         // via a derived or hand-written `extend … : Hash`.
         if iface == self.prog.hash_def && iface != DefId(0) && self.is_hashable(ty) {
+            return true;
+        }
+        // `std:fmt.Debug` is intrinsic for primitive scalars and `str`.
+        // Collection/user value impls still flow through normal `extend` scans.
+        if iface == self.prog.debug_def && iface != DefId(0) && self.is_primitive_debuggable(ty) {
             return true;
         }
         let module = self.current_module();

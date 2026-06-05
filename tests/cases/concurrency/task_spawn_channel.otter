@@ -19,30 +19,30 @@ function produce(tx: Sender<i64>, n: i64) {
 
 function value_of(r: Joined<i64> | Panicked | Cancelled): i64 {
   match r {
-    Joined<i64> j => j.value,
+    Joined < i64 > j => j.value,
     Panicked p => -1,
     Cancelled c => -2,
   }
 }
 
-function main(): Future<null> async {
+function main(): Future < null > async {
   var ends = channel<i64>();
   var tx = ends.0;
   var rx = ends.1;
-  var worker: JoinHandle<i64> = Task.spawn(() async => {
-    var total = 0;
-    var run = true;
-    while run {
-      var v: i64 | ChannelClosed = await rx.recv();
-      match v {
-        i64 x => { total = total + x; },
-        ChannelClosed c => { run = false; },
+  var worker: JoinHandle<i64> = Task.spawn(()async => {
+      var total = 0;
+      var run = true;
+      while run {
+        var v: i64 | ChannelClosed = await rx.recv();
+        match v {
+          i64 x => { total = total + x; },
+          ChannelClosed c => { run = false; },
+        }
       }
-    }
-    total
-  });
+      total
+    });
   var feeder = Thread.spawn(() => produce(tx, 4));
   var _ = await feeder.join();
   var r: Joined<i64> | Panicked | Cancelled = await worker.join();
-  println("sum=${value_of(r)}");
+  println("sum=${value_of(r) }");
 }

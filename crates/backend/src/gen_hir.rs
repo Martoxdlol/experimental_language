@@ -4436,6 +4436,18 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 return Ok(Some(self.cast_to_str(v, recv_ty, span)?));
             }
         }
+        // `std:fmt.Debug.debug` on primitive scalars / `str`.
+        if is_iface && parent == Some(prog.debug_def) && prog.debug_def != DefId(0) {
+            if matches!(
+                self.cx.analysis.tcx.kind(recv_ty),
+                TyKind::Int(_) | TyKind::Float(_) | TyKind::Bool | TyKind::Char | TyKind::Str
+            ) {
+                let v = self.h_expr(receiver)?.ok_or_else(|| {
+                    CodegenError::new(receiver.span, "debug receiver has no value")
+                })?;
+                return Ok(Some(self.gen_primitive_debug(v, recv_ty, span)?));
+            }
+        }
         // `Hash.hash` on a primitive/`str` receiver.
         if is_iface && parent == Some(prog.hash_def) && prog.hash_def != DefId(0) {
             if matches!(
@@ -4860,6 +4872,83 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                     _ => unreachable!(),
                 };
                 Ok(self.call_intrinsic(symbol, &[types::I64, types::I64], Some(PTR), &[rt, pt]))
+            }
+            hir::Intrinsic::FsFileReadAsync => {
+                let handle = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "file read_async handle has no value")
+                })?;
+                let count = self.h_expr(&args[1])?.ok_or_else(|| {
+                    CodegenError::new(args[1].span, "file read_async count has no value")
+                })?;
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                Ok(self.call_intrinsic(
+                    "lang_fs_file_read_async",
+                    &[types::I64, types::I64, types::I64, types::I64],
+                    Some(PTR),
+                    &[handle, count, rt, pt],
+                ))
+            }
+            hir::Intrinsic::FsFileReadToEndAsync | hir::Intrinsic::FsFileFlushAsync => {
+                let handle = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "file async handle has no value")
+                })?;
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                let symbol = match intrinsic {
+                    hir::Intrinsic::FsFileReadToEndAsync => "lang_fs_file_read_to_end_async",
+                    hir::Intrinsic::FsFileFlushAsync => "lang_fs_file_flush_async",
+                    _ => unreachable!(),
+                };
+                Ok(self.call_intrinsic(
+                    symbol,
+                    &[types::I64, types::I64, types::I64],
+                    Some(PTR),
+                    &[handle, rt, pt],
+                ))
+            }
+            hir::Intrinsic::FsFileWriteAsync => {
+                let handle = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "file write_async handle has no value")
+                })?;
+                let contents = self.h_expr(&args[1])?.ok_or_else(|| {
+                    CodegenError::new(args[1].span, "file write_async payload has no value")
+                })?;
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                Ok(self.call_intrinsic(
+                    "lang_fs_file_write_async",
+                    &[types::I64, PTR, types::I64, types::I64],
+                    Some(PTR),
+                    &[handle, contents, rt, pt],
+                ))
+            }
+            hir::Intrinsic::FsFileSeekAsync => {
+                let handle = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "file seek_async handle has no value")
+                })?;
+                let mode = self.h_expr(&args[1])?.ok_or_else(|| {
+                    CodegenError::new(args[1].span, "file seek_async mode has no value")
+                })?;
+                let offset = self.h_expr(&args[2])?.ok_or_else(|| {
+                    CodegenError::new(args[2].span, "file seek_async offset has no value")
+                })?;
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                Ok(self.call_intrinsic(
+                    "lang_fs_file_seek_async",
+                    &[types::I64, PTR, types::I64, types::I64, types::I64],
+                    Some(PTR),
+                    &[handle, mode, offset, rt, pt],
+                ))
             }
             hir::Intrinsic::TimeMonotonicNanos => {
                 Ok(self.call_intrinsic("lang_time_monotonic_nanos", &[], Some(types::I64), &[]))

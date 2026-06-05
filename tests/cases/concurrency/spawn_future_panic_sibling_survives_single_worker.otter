@@ -10,20 +10,20 @@ import { Future, panic } from "core:prelude";
 import { Sender, ChannelClosed, channel } from "std:sync";
 import { yield_now } from "std:async";
 
-function fail_after_yield(): Future<i64> async {
+function fail_after_yield(): Future < i64 > async {
   var _ = await yield_now();
   panic("spawn sibling boom");
   0
 }
 
-function send_after_yields(tx: Sender<i64>, n: i64): Future<i64> async {
+function send_after_yields(tx: Sender<i64>, n: i64): Future < i64 > async {
   var a = await yield_now();
   var b = await yield_now();
   tx.send(n);
   n
 }
 
-function main(): Future<null> async {
+function main(): Future < null > async {
   var ends = channel<i64>();
   var tx: Sender<i64> = ends.0;
   var rx = ends.1;
@@ -50,5 +50,5 @@ function main(): Future<null> async {
     }
   }
 
-  println("count=${count} sum=${sum}");
+  println("count=${count } sum=${sum }");
 }

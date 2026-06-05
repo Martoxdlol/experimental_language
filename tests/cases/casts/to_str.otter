@@ -10,5 +10,5 @@ function main() {
   println(42 as str);
   println(true as str);
   println(3.5 as str);
-  println('z' as str);
+  println('z'as str);
 }

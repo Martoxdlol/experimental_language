@@ -12,6 +12,7 @@
 
 pub mod commands;
 pub mod credentials;
+pub mod git;
 pub mod loader;
 pub mod lockfile;
 pub mod manifest;

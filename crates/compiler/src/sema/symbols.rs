@@ -307,6 +307,10 @@ pub struct Program {
     /// `T: Hash` bound for `@Derive(Hash)` on generic structs and for
     /// `Map<K, V>` keys.
     pub hash_def: DefId,
+    /// `std:fmt::Debug` — diagnostic rendering. Primitive/`str` impls are
+    /// compiler intrinsics; user and stdlib values satisfy it with normal
+    /// `extend … : Debug` blocks.
+    pub debug_def: DefId,
     /// Toolchain-private `MapKeys<K>` — the `Iterator<K>` returned by `Map.keys()`
     /// (`docs/18` §6). Holds a snapshot `List<K>` of the keys at call time.
     pub map_keys_def: DefId,
@@ -361,9 +365,10 @@ pub struct Program {
     /// lowers to the builtin intrinsic, so the names are ordinary importable
     /// symbols (`docs/17` §17.8) rather than magic.
     pub builtin_fns: HashMap<DefId, crate::sema::results::Builtin>,
-    /// Resolved dependency packages: `pkg:<name>` → the root module of that
-    /// dependency's collected subtree. `pkg:<name>` imports resolve against this
-    /// module's public surface (`docs/17` §17.4).
+    /// Resolved dependency packages: package-instance key → the root module of
+    /// that dependency's collected subtree. `pkg:<name>` imports resolve against
+    /// the key selected by the importing package's dependency context
+    /// (`docs/17` §17.4).
     pub package_roots: HashMap<String, ModId>,
     /// `file:` import targets: normalized target file → its collected module.
     /// A `file:` import resolves into this module's public surface.
@@ -414,6 +419,7 @@ impl Program {
             ord_def: DefId(0),
             to_str_def: DefId(0),
             hash_def: DefId(0),
+            debug_def: DefId(0),
             map_keys_def: DefId(0),
             map_values_def: DefId(0),
             map_entries_def: DefId(0),
@@ -490,16 +496,31 @@ impl Program {
         // visible — every named symbol (`List`, `Map`, `print`, `panic`, …) must
         // be imported. The universal-visibility maps stay empty.
         p.collect_items(ModId::ROOT, &root.items, externals, &[]);
-        // Collect each resolved dependency package as a standalone subtree (not
-        // reachable through the user `mod` tree); `pkg:<name>` resolves into it.
-        let mut pkgs: Vec<(&String, &Vec<String>)> = ctx.packages.iter().collect();
-        pkgs.sort_by(|a, b| a.0.cmp(b.0));
-        for (name, key) in pkgs {
-            if let Some(entry) = externals.get(key) {
-                let pkg_mod = p.new_module(format!("__pkg__{name}"), ModId::ROOT, true);
+        // Collect each resolved dependency package instance as a standalone
+        // subtree (not reachable through the user `mod` tree). Multiple versions
+        // of the same package name are distinct keys; `pkg:<name>` resolution
+        // chooses the key from the importing package's dependency context.
+        let mut package_keys: HashMap<String, Vec<String>> = HashMap::new();
+        for key in ctx.packages.values() {
+            if let Some(id) = package_instance_id(key) {
+                package_keys.insert(id.to_string(), key.clone());
+            }
+        }
+        for deps in ctx.package_dependencies.values() {
+            for key in deps.values() {
+                if let Some(id) = package_instance_id(key) {
+                    package_keys.insert(id.to_string(), key.clone());
+                }
+            }
+        }
+        let mut pkgs: Vec<(String, Vec<String>)> = package_keys.into_iter().collect();
+        pkgs.sort_by(|a, b| a.0.cmp(&b.0));
+        for (id, key) in pkgs {
+            if let Some(entry) = externals.get(&key) {
+                let pkg_mod = p.new_module(format!("__pkg__{id}"), ModId::ROOT, true);
                 p.modules[pkg_mod.index()].path = key.clone();
-                p.collect_items(pkg_mod, &entry.items, externals, key);
-                p.package_roots.insert(name.clone(), pkg_mod);
+                p.collect_items(pkg_mod, &entry.items, externals, &key);
+                p.package_roots.insert(id, pkg_mod);
             }
         }
         // Collect each `file:` import target as a standalone module.
@@ -578,6 +599,9 @@ impl Program {
         self.ord_def = self.toolchain_type("Ord").unwrap_or(DefId(0));
         self.to_str_def = self.toolchain_type("ToStr").unwrap_or(DefId(0));
         self.hash_def = self.toolchain_type("Hash").unwrap_or(DefId(0));
+        self.debug_def = self
+            .toolchain_source_type(&["std", "fmt"], "Debug")
+            .unwrap_or(DefId(0));
         self.set_def = self.toolchain_type("Set").unwrap_or(DefId(0));
         self.map_keys_def = self.toolchain_type("MapKeys").unwrap_or(DefId(0));
         self.map_values_def = self.toolchain_type("MapValues").unwrap_or(DefId(0));
@@ -1126,7 +1150,19 @@ impl Program {
                     }
                     Scheme::Pkg => {
                         let name = parsed.package_name().unwrap_or("").to_string();
-                        if !ctx.dependencies.contains(&name) {
+                        let package_key = if let Some(owner) = package_instance_id(&mod_path) {
+                            ctx.package_dependencies
+                                .get(owner)
+                                .and_then(|deps| deps.get(&name))
+                        } else {
+                            ctx.packages.get(&name)
+                        };
+                        let declared = if package_instance_id(&mod_path).is_some() {
+                            package_key.is_some()
+                        } else {
+                            ctx.dependencies.contains(&name)
+                        };
+                        if !declared {
                             self.errors.push(SemaError::new(
                                 SemaErrorKind::Message(format!(
                                     "no dependency named `{name}` in the manifest \
@@ -1138,7 +1174,26 @@ impl Program {
                         }
                         // Resolve `pkg:<name>[/<sub>…]` into the collected
                         // dependency subtree, honoring `pub`/`pub mod` visibility.
-                        let Some(&pkg_root) = self.package_roots.get(&name) else {
+                        let Some(package_key) = package_key else {
+                            self.errors.push(SemaError::new(
+                                SemaErrorKind::Message(format!(
+                                    "dependency `{name}` is declared but could not be loaded \
+                                     (run `otter_fusion lock` to resolve it)"
+                                )),
+                                span,
+                            ));
+                            continue;
+                        };
+                        let Some(package_id) = package_instance_id(package_key) else {
+                            self.errors.push(SemaError::new(
+                                SemaErrorKind::Message(format!(
+                                    "dependency `{name}` has an invalid package instance key"
+                                )),
+                                span,
+                            ));
+                            continue;
+                        };
+                        let Some(&pkg_root) = self.package_roots.get(package_id) else {
                             self.errors.push(SemaError::new(
                                 SemaErrorKind::Message(format!(
                                     "dependency `{name}` is declared but could not be loaded \
@@ -1856,6 +1911,13 @@ impl Program {
                 self.defs[def.index()].item = Some(item.kind.clone());
             }
         }
+    }
+}
+
+fn package_instance_id(key: &[String]) -> Option<&str> {
+    match key {
+        [prefix, id, ..] if prefix == "__pkg__" => Some(id.as_str()),
+        _ => None,
     }
 }
 

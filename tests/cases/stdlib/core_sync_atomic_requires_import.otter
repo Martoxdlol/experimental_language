@@ -1,6 +1,12 @@
 //@ kind: compile-error
-//@ description: core:sync:atomic Ordering contract values are not available without an explicit import
+//@ description: core:sync/atomic Ordering contract values are not available without an explicit import
 //@ stderr: cannot find type `Ordering`
+//@ stderr: cannot find type `AtomicI64`
+//@ stderr: cannot find type `AtomicI32`
+//@ stderr: cannot find type `AtomicU64`
+//@ stderr: cannot find type `AtomicU32`
+//@ stderr: cannot find type `AtomicBool`
+//@ stderr: cannot find type `AtomicPtr`
 //@ stderr: cannot find type `Relaxed`
 //@ stderr: cannot find type `Acquire`
 //@ stderr: cannot find type `Release`
@@ -12,11 +18,44 @@
 //@ stderr: cannot find value `ordering_acq_rel`
 //@ stderr: cannot find value `ordering_seq_cst`
 
+extern struct RawCell { value: i64 }
+
 function needs_ordering(value: Ordering): null {
   null
 }
 
+function needs_atomic(value: AtomicI64): null {
+  null
+}
+
+function needs_atomic_i32(value: AtomicI32): null {
+  null
+}
+
+function needs_atomic_u64(value: AtomicU64): null {
+  null
+}
+
+function needs_atomic_u32(value: AtomicU32): null {
+  null
+}
+
+function needs_atomic_bool(value: AtomicBool): null {
+  null
+}
+
+function needs_atomic_ptr(value: AtomicPtr<i64>): null {
+  null
+}
+
 function main() {
+  var atomic = AtomicI64.new(0);
+  var atomic32 = AtomicI32.new(0);
+  var atomic64u = AtomicU64.new(0u64);
+  var atomic32u = AtomicU32.new(0u32);
+  var flag = AtomicBool.new(false);
+  var raw = RawCell { value: 0 };
+  var p = AtomicPtr.new<RawCell>((&raw) as *RawCell);
   var relaxed: Ordering = Relaxed {};
   var acquire: Ordering = Acquire {};
   var release: Ordering = Release {};

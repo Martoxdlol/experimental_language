@@ -1,0 +1,53 @@
+//@ kind: run
+//@ serial
+//@ description: AtomicPtr<T> is a shared @RefCounted runtime handle safe across Thread.spawn workers
+//@ stdout:
+//~ atomic-ptr-threaded=true joins=4 value=222
+import { Future, panic } from "core:prelude";
+import { Foreign } from "core:ffi";
+import { AtomicPtr, SeqCst } from "core:sync/atomic";
+import { println } from "std:io";
+import { Thread, JoinHandle, Joined, Panicked } from "std:thread";
+
+function expect_i64_ptr(ptr: *i64 | null): *i64 {
+  if ptr is null {
+    panic("foreign alloc failed")
+  } else {
+    ptr as *i64
+  }
+}
+
+function store_target(atom: AtomicPtr<i64>, target_addr: usize): i64 {
+  atom.store(target_addr as *i64, SeqCst {});
+  1
+}
+
+function joined_value(result: Joined<i64> | Panicked): i64 {
+  match result {
+    Joined<i64> ok => ok.value,
+    Panicked p => 0,
+  }
+}
+
+function main(): Future<null> async {
+  var left = expect_i64_ptr(Foreign.alloc<i64>());
+  var right = expect_i64_ptr(Foreign.alloc<i64>());
+  *left = 111;
+  *right = 222;
+  var atom = AtomicPtr.new<i64>(left);
+  var right_addr = right as usize;
+
+  var a: JoinHandle<i64> = Thread.spawn(() => store_target(atom, right_addr));
+  var b: JoinHandle<i64> = Thread.spawn(() => store_target(atom, right_addr));
+  var c: JoinHandle<i64> = Thread.spawn(() => store_target(atom, right_addr));
+  var d: JoinHandle<i64> = Thread.spawn(() => store_target(atom, right_addr));
+
+  var joins = joined_value(await a.join()) +
+    joined_value(await b.join()) +
+    joined_value(await c.join()) +
+    joined_value(await d.join());
+  var final = atom.load(SeqCst {});
+  println("atomic-ptr-threaded=${(final as usize) == (right as usize)} joins=${joins} value=${*final}");
+  Foreign.free(left);
+  Foreign.free(right);
+}

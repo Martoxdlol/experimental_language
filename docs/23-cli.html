@@ -194,6 +194,23 @@
   <div class="cmd tools"><span class="name">otter_fusion inspect</span><span class="desc">introspect types, modules, deps</span></div>
 </div>
 
+<p><code>otter_fusion fmt</code> is conservative by design: it normalizes
+indentation, common intra-line spacing (commas, colons, assignments,
+comparisons including <code>&lt;</code>/<code>&gt;</code>, generic/type angle
+spacing, logical operators, and clearly binary arithmetic), trailing whitespace,
+blank-line runs, and the final newline, then verifies that both parser tokens
+and ordinary comment trivia are identical. That safety gate lets format-on-save
+keep <code>//</code> and nested <code>/* ... */</code> comments intact while
+also normalizing code around balanced inline block comments and multi-line
+block-comment boundary lines. String/char-adjacent spacing is normalized without
+changing literal contents. Long parenthesized, bracketed, type-led brace,
+generic-angle, named-import brace, named-import paths, named-import closing paths, single-argument attributes, macro block bodies, map-literal brace, match-arm brace,
+record-declaration brace comma lists, ambient/namespace import paths, extern type declarations, extern var declarations, extern function declarations, function declaration headers, function bodies, module declaration headers, module bodies, interface/extend declaration headers, struct declaration headers, type-alias declaration headers, return expressions, break expressions, await/spawn operand expressions, test/bench declaration headers, test/bench bodies, assignment expressions, for iterator headers, for bodies, while condition headers, if/else-if condition headers, match scrutinee headers, match guard headers, unguarded match arm bodies, top-level parenthesized arrow closure bodies, explicit trailing closure bodies, implicit trailing closure bodies, anonymous function expression headers, async block bodies, block expression bodies, loop bodies, else bodies, if bodies, while bodies, type-alias union pipe lists, var initializer
+expressions, var type-annotation
+union pipe lists, record field type-annotation union pipe lists, parameter type-annotation union pipe lists including full multi-parameter layouts, function return union pipe lists, arrow closure return union pipe lists, interface/extend
+bound plus lists, interface/extend body member lists, generic type-parameter bound plus lists including full multi-parameter layouts, cast chains, method chains, logical chains, comparison expressions, additive chains, multiplicative chains, shift chains, bitwise-AND chains, bitwise-XOR chains, and bitwise-OR chains wrap at conservative token boundaries;
+broader wrapping remains planned formatter work.</p>
+
 <h3>Dependencies</h3>
 <div class="cmd-grid">
   <div class="cmd deps"><span class="name">otter_fusion add</span><span class="desc">add a dependency</span></div>
@@ -412,6 +429,16 @@ otter_fusion emit mod-graph --format dot | dot -Tpng &gt; modules.png</code></pr
   </ul>
 </div>
 
+<p>When different semver-compatible ranges of the same package name appear in
+the graph, the resolver keeps them as distinct package instances. Source still
+uses the ordinary location-free form (<code>pkg:shared</code>), but that name is
+resolved in the importing package's dependency context: a root module sees the
+version declared by the root manifest, while an external package sees the
+<code>shared</code> instance selected by its own manifest/lockfile edge. Commands that
+display or copy dependencies keep this unambiguous: <code>tree</code> and
+<code>why</code> include versions when a name appears more than once, and
+<code>vendor</code> uses <code>name-version</code> directories only for duplicate names.</p>
+
 <h3>Lockfile rules</h3>
 <ul>
   <li>Binary packages: <code>project.lock</code> <strong>must</strong> be committed.</li>
@@ -443,6 +470,15 @@ source   = "path+../foo"            # path deps carry no checksum
 name     = "bar-git"
 version  = "0.4.0"
 source   = "git+https://…#abc123"   # pinned to the resolved commit</code></pre>
+
+<p>Git dependencies are fetched at resolution time through a bare mirror cache
+under <code>~/.otter_fusion/git/cache/</code>. <code>rev</code>, <code>branch</code>,
+<code>tag</code>, and unpinned default-branch dependencies all resolve to an exact commit;
+the immutable checkout is materialized at
+<code>~/.otter_fusion/git/&lt;url-hash&gt;/&lt;rev&gt;/</code>. The lockfile records
+<code>git+&lt;url&gt;#&lt;rev&gt;</code> plus a deterministic source-tree checksum. Existing
+locks keep branch/tag/default dependencies pinned until an update-style resolve
+ignores the old lockfile and refreshes the moving reference.</p>
 
 <h3 id="registry-protocol">Registries &amp; the registry protocol</h3>
 <p>A <strong>registry</strong> is a named index the resolver maps <code>pkg:</code> dependencies to. The
@@ -479,6 +515,17 @@ metadata files it needs over <code>https</code>, never a full clone. The index r
   <code>sha256</code>. The same checksum is recorded in the lockfile, so a registry cannot serve
   different bytes for an already-locked version without the build failing.
 </div>
+
+<p><code>otter_fusion publish</code> uploads the tarball with a metadata sidecar carrying
+the package name/version and sparse-index dependency edges: dependency name,
+version requirement, optional flag, default-feature flag, enabled feature list,
+non-default registry name, plus the package's <code>[features]</code> map. The built-in
+registry persists that metadata into the JSON-lines index so later resolver runs
+can pull transitive dependencies and honor feature-gated optional dependencies
+from published packages. Registry-published packages must use registry
+dependencies; publishing a manifest with <code>path</code> or <code>git</code> dependencies is
+rejected because downstream sparse-index consumers cannot resolve those local or
+repository-specific sources from the registry.</p>
 
 <h3>Path-form mapping</h3>
 <p>Every import path carries an explicit scheme (see <a href="17-modules.html#17-4-path-forms">17 §17.4</a>);
@@ -539,6 +586,16 @@ otterflags = []
 
 [scripts]                      # `otter_fusion run-script <name>`
 ci = "otter_fusion fmt --check &amp;&amp; otter_fusion lint &amp;&amp; otter_fusion test"</code></pre>
+
+<p>Feature resolution is part of dependency resolution. The resolver starts from
+the package's default feature set (<code>[features] default</code>, plus any
+<code>[package] default-features</code> aliases), expands feature entries transitively,
+and includes <code>optional = true</code> dependencies only when an active feature names
+them with <code>dep:name</code> (or requests one of their dependency features with
+<code>name/feature</code>). Enabled dependency features are carried into registry
+resolution, and the sparse-index metadata sidecar published by
+<code>otter_fusion publish</code> stores the package feature map so downstream consumers
+can resolve feature-gated optional transitive dependencies.</p>
 
 <!-- =========================================================== -->
 <h2 id="ffi">9. FFI &amp; linking</h2>

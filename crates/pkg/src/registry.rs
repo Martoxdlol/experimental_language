@@ -17,9 +17,10 @@
 //! [`HttpRegistry`] speaks sparse HTTP, while [`LocalRegistry`] serves a fixture
 //! directory (used throughout the tests — no live network).
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::version::{Version, VersionReq};
 
@@ -42,6 +43,8 @@ pub struct IndexEntry {
     pub name: String,
     pub vers: Version,
     pub deps: Vec<IndexDep>,
+    /// Feature name -> feature/dependency entries enabled by that feature.
+    pub features: BTreeMap<String, Vec<String>>,
     /// The tarball `sha256` (hex, no prefix).
     pub cksum: String,
     pub yanked: bool,
@@ -57,6 +60,16 @@ pub struct IndexDep {
     pub features: Vec<String>,
     /// A non-default registry this dep resolves against, if any.
     pub registry: Option<String>,
+}
+
+/// Metadata sent alongside a published tarball so the registry can write a
+/// complete sparse-index line.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PublishMetadata {
+    pub name: String,
+    pub vers: String,
+    pub deps: Vec<IndexDep>,
+    pub features: BTreeMap<String, Vec<String>>,
 }
 
 /// Errors from registry operations.
@@ -248,10 +261,18 @@ impl HttpRegistry {
         Ok(resp.crates)
     }
 
-    /// Publish a packaged tarball (`PUT <api>/api/v1/crates/new`). Requires a token.
-    pub fn publish(&self, name: &str, version: &str, tarball: &[u8]) -> Result<(), RegistryError> {
+    /// Publish a packaged tarball and its sparse-index metadata sidecar.
+    /// Requires a token.
+    pub fn publish(
+        &self,
+        name: &str,
+        version: &str,
+        tarball: &[u8],
+        metadata: &PublishMetadata,
+    ) -> Result<(), RegistryError> {
         let url = format!("{}/api/v1/crates/{name}/{version}/publish", self.api()?);
-        self.put_authed(&url, tarball)
+        let body = encode_publish_body(metadata, tarball)?;
+        self.put_authed(&url, &body)
     }
 
     /// Yank a published version (`DELETE <api>/api/v1/crates/<name>/<version>/yank`).
@@ -319,6 +340,121 @@ fn http_get_bytes(url: &str, token: Option<&str>) -> Result<Vec<u8>, RegistryErr
 
 use std::io::Read;
 
+// --- Publish payload --------------------------------------------------------
+
+const PUBLISH_PAYLOAD_MAGIC: &[u8] = b"otter-fusion-publish-v1\n";
+
+/// Encode a publish request body as:
+///
+/// `MAGIC`, decimal metadata byte length, `\n`, UTF-8 JSON metadata, tarball.
+///
+/// The explicit length keeps arbitrary tarball bytes out of the JSON parser and
+/// lets the registry reject truncated sidecars cleanly.
+pub fn encode_publish_body(
+    metadata: &PublishMetadata,
+    tarball: &[u8],
+) -> Result<Vec<u8>, RegistryError> {
+    let json = serde_json::to_vec(&metadata.to_wire())
+        .map_err(|e| RegistryError::Protocol(format!("cannot encode publish metadata: {e}")))?;
+    let mut out = Vec::with_capacity(PUBLISH_PAYLOAD_MAGIC.len() + 32 + json.len() + tarball.len());
+    out.extend_from_slice(PUBLISH_PAYLOAD_MAGIC);
+    out.extend_from_slice(json.len().to_string().as_bytes());
+    out.push(b'\n');
+    out.extend_from_slice(&json);
+    out.extend_from_slice(tarball);
+    Ok(out)
+}
+
+/// Decode a publish request body. Tarball-only legacy bodies are accepted and
+/// returned with an empty-dependency metadata record for compatibility.
+pub fn decode_publish_body<'a>(
+    path_name: &str,
+    path_version: &str,
+    body: &'a [u8],
+) -> Result<(PublishMetadata, &'a [u8]), RegistryError> {
+    if !body.starts_with(PUBLISH_PAYLOAD_MAGIC) {
+        return Ok((
+            PublishMetadata {
+                name: path_name.to_string(),
+                vers: path_version.to_string(),
+                deps: Vec::new(),
+                features: BTreeMap::new(),
+            },
+            body,
+        ));
+    }
+
+    let rest = &body[PUBLISH_PAYLOAD_MAGIC.len()..];
+    let Some(len_end) = rest.iter().position(|b| *b == b'\n') else {
+        return Err(RegistryError::Protocol(
+            "publish metadata sidecar is missing its length".into(),
+        ));
+    };
+    let len_text = std::str::from_utf8(&rest[..len_end]).map_err(|e| {
+        RegistryError::Protocol(format!("publish metadata length is not UTF-8: {e}"))
+    })?;
+    let json_len: usize = len_text.parse().map_err(|_| {
+        RegistryError::Protocol(format!("invalid publish metadata length `{len_text}`"))
+    })?;
+    let after_len = &rest[len_end + 1..];
+    if after_len.len() < json_len {
+        return Err(RegistryError::Protocol(
+            "publish metadata sidecar is truncated".into(),
+        ));
+    }
+    let (json, tarball) = after_len.split_at(json_len);
+    let raw: RawPublishMetadata = serde_json::from_slice(json)
+        .map_err(|e| RegistryError::Protocol(format!("bad publish metadata sidecar: {e}")))?;
+    let metadata = raw.into_metadata()?;
+    if metadata.name != path_name || metadata.vers != path_version {
+        return Err(RegistryError::Protocol(format!(
+            "publish metadata names `{}` v{} but URL names `{path_name}` v{path_version}",
+            metadata.name, metadata.vers
+        )));
+    }
+    Ok((metadata, tarball))
+}
+
+#[derive(Serialize)]
+struct WirePublishMetadata<'a> {
+    name: &'a str,
+    vers: &'a str,
+    deps: Vec<WireIndexDep<'a>>,
+    features: &'a BTreeMap<String, Vec<String>>,
+}
+
+#[derive(Serialize)]
+struct WireIndexDep<'a> {
+    name: &'a str,
+    req: String,
+    optional: bool,
+    default_features: bool,
+    features: &'a [String],
+    registry: &'a Option<String>,
+}
+
+impl PublishMetadata {
+    fn to_wire(&self) -> WirePublishMetadata<'_> {
+        WirePublishMetadata {
+            name: &self.name,
+            vers: &self.vers,
+            deps: self
+                .deps
+                .iter()
+                .map(|d| WireIndexDep {
+                    name: &d.name,
+                    req: d.req.to_string(),
+                    optional: d.optional,
+                    default_features: d.default_features,
+                    features: &d.features,
+                    registry: &d.registry,
+                })
+                .collect(),
+            features: &self.features,
+        }
+    }
+}
+
 // --- Local fixture transport ------------------------------------------------
 
 /// A registry backed by a local directory — the test transport (no network).
@@ -372,6 +508,8 @@ struct RawIndexLine {
     vers: String,
     #[serde(default)]
     deps: Vec<RawIndexDep>,
+    #[serde(default)]
+    features: BTreeMap<String, Vec<String>>,
     cksum: String,
     #[serde(default)]
     yanked: bool,
@@ -395,29 +533,61 @@ fn yes() -> bool {
     true
 }
 
+impl RawIndexDep {
+    fn into_dep(self) -> Result<IndexDep, RegistryError> {
+        let req = VersionReq::parse(&self.req)
+            .map_err(|e| RegistryError::Protocol(format!("bad dep req `{}`: {e}", self.req)))?;
+        Ok(IndexDep {
+            name: self.name,
+            req,
+            optional: self.optional,
+            default_features: self.default_features,
+            features: self.features,
+            registry: self.registry,
+        })
+    }
+}
+
 impl RawIndexLine {
     fn into_entry(self) -> Result<IndexEntry, RegistryError> {
         let vers = Version::parse(&self.vers)
             .map_err(|e| RegistryError::Protocol(format!("bad version `{}`: {e}", self.vers)))?;
         let mut deps = Vec::new();
         for d in self.deps {
-            let req = VersionReq::parse(&d.req)
-                .map_err(|e| RegistryError::Protocol(format!("bad dep req `{}`: {e}", d.req)))?;
-            deps.push(IndexDep {
-                name: d.name,
-                req,
-                optional: d.optional,
-                default_features: d.default_features,
-                features: d.features,
-                registry: d.registry,
-            });
+            deps.push(d.into_dep()?);
         }
         Ok(IndexEntry {
             name: self.name,
             vers,
             deps,
+            features: self.features,
             cksum: self.cksum,
             yanked: self.yanked,
+        })
+    }
+}
+
+#[derive(Deserialize)]
+struct RawPublishMetadata {
+    name: String,
+    vers: String,
+    #[serde(default)]
+    deps: Vec<RawIndexDep>,
+    #[serde(default)]
+    features: BTreeMap<String, Vec<String>>,
+}
+
+impl RawPublishMetadata {
+    fn into_metadata(self) -> Result<PublishMetadata, RegistryError> {
+        let mut deps = Vec::new();
+        for d in self.deps {
+            deps.push(d.into_dep()?);
+        }
+        Ok(PublishMetadata {
+            name: self.name,
+            vers: self.vers,
+            deps,
+            features: self.features,
         })
     }
 }
@@ -430,7 +600,7 @@ mod tests {
     fn parses_jsonlines_index() {
         let text = r#"
 {"name":"foo","vers":"1.0.0","deps":[],"cksum":"aa","yanked":false}
-{"name":"foo","vers":"1.2.0","deps":[{"name":"bar","req":"^1.0","optional":false,"default_features":true,"features":[]}],"cksum":"bb","yanked":false}
+{"name":"foo","vers":"1.2.0","deps":[{"name":"bar","req":"^1.0","optional":false,"default_features":true,"features":[]}],"features":{"default":["dep:bar"]},"cksum":"bb","yanked":false}
 {"name":"foo","vers":"2.0.0","deps":[],"cksum":"cc","yanked":true}
 "#;
         let entries = parse_index(text).unwrap();
@@ -438,7 +608,52 @@ mod tests {
         assert_eq!(entries[0].vers, Version::parse("1.0.0").unwrap());
         assert_eq!(entries[1].deps.len(), 1);
         assert_eq!(entries[1].deps[0].name, "bar");
+        assert_eq!(entries[1].features["default"], ["dep:bar"]);
         assert!(entries[2].yanked);
+    }
+
+    #[test]
+    fn publish_payload_round_trips_metadata_and_tarball() {
+        let metadata = PublishMetadata {
+            name: "top".into(),
+            vers: "1.2.3".into(),
+            deps: vec![IndexDep {
+                name: "dep".into(),
+                req: VersionReq::parse("^1.2").unwrap(),
+                optional: true,
+                default_features: false,
+                features: vec!["tls".into()],
+                registry: Some("myco".into()),
+            }],
+            features: BTreeMap::from([("default".into(), vec!["dep:dep".into()])]),
+        };
+        let body = encode_publish_body(&metadata, b"tarball-bytes").unwrap();
+        let (decoded, tarball) = decode_publish_body("top", "1.2.3", &body).unwrap();
+        assert_eq!(decoded, metadata);
+        assert_eq!(tarball, b"tarball-bytes");
+    }
+
+    #[test]
+    fn publish_payload_rejects_metadata_url_mismatch() {
+        let metadata = PublishMetadata {
+            name: "other".into(),
+            vers: "1.2.3".into(),
+            deps: Vec::new(),
+            features: BTreeMap::new(),
+        };
+        let body = encode_publish_body(&metadata, b"bytes").unwrap();
+        let err = decode_publish_body("top", "1.2.3", &body).unwrap_err();
+        assert!(err.to_string().contains("URL names `top`"));
+    }
+
+    #[test]
+    fn tarball_only_publish_body_is_legacy_empty_metadata() {
+        let (decoded, tarball) = decode_publish_body("top", "1.2.3", b"raw-gz").unwrap();
+        assert_eq!(decoded.name, "top");
+        assert_eq!(decoded.vers, "1.2.3");
+        assert!(decoded.deps.is_empty());
+        assert!(decoded.features.is_empty());
+        assert_eq!(tarball, b"raw-gz");
     }
 
     #[test]

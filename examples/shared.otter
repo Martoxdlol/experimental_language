@@ -12,7 +12,7 @@ struct Counter { value: i64 }
 
 // Lock-using workers must be async (`lock` is `await`-only), so this is an
 // `async` function driven by the `spawn` keyword (docs/20 §1/§4, docs/21).
-function bump(s: Shared<Counter>, times: i64): Future<null> async {
+function bump(s: Shared<Counter>, times: i64): Future < null > async {
   var i: i64 = 0;
   while i < times {
     // Exclusive access inside the body; the struct is mutated in place. The
@@ -24,15 +24,15 @@ function bump(s: Shared<Counter>, times: i64): Future<null> async {
 
 // An async `main` so we can `await` the lock and each worker without parking
 // the OS thread (docs/21).
-function main(): Future<null> async {
+function main(): Future < null > async {
   var state: Shared<Counter> = Shared.new(Counter { value: 0 });
 
   // `clone` clones the *handle* — both workers lock the same counter.
   var a: Shared<Counter> = state.clone();
   var b: Shared<Counter> = state.clone();
   // `spawn` schedules each async worker on the executor, yielding a Future.
-  var h1: Future<null> = spawn bump(a, 5000);
-  var h2: Future<null> = spawn bump(b, 5000);
+  var h1: Future < null > = spawn bump(a, 5000);
+  var h2: Future < null > = spawn bump(b, 5000);
   // Awaiting each spawn handle suspends the joiner task until the worker ends.
   await h1;
   await h2;

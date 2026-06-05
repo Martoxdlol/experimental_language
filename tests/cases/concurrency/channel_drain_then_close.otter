@@ -21,7 +21,7 @@ function produce(tx: Sender<i64>) {
   tx.send(30);
 }
 
-function main(): Future<null> async {
+function main(): Future < null > async {
   var ends = channel<i64>();
   var tx = ends.0;
   var rx = ends.1;
@@ -35,7 +35,7 @@ function main(): Future<null> async {
   var count = 0;
   for n in rx {
     count = count + 1;
-    println("got=${n}");
+    println("got=${n }");
   }
-  println("count=${count}");
+  println("count=${count }");
 }

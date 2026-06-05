@@ -6,14 +6,14 @@
 import { println, print } from "std:io";
 import { Future } from "core:prelude";
 import { yield_now } from "std:async";
-function n(tag: str, v: i64): Future<i64> async {
+function n(tag: str, v: i64): Future < i64 > async {
   await yield_now();
   print(tag);
   v
 }
-function main(): Future<null> async {
+function main(): Future < null > async {
   var x = false && ((await n("X", 3)) + 1 == 4);
   var y = true && ((await n("Y", 3)) + 1 == 4);
   println("");
-  println("x=${x} y=${y}");
+  println("x=${x } y=${y }");
 }

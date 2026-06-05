@@ -36,9 +36,15 @@ pub struct ResolveContext {
     pub dependencies: HashSet<String>,
     /// Resolved dependency packages: `pkg:<name>` → the module-tree key under
     /// which the driver loaded that package's entry into `externals` (e.g.
-    /// `["__pkg__", "json"]`). The compiler collects those subtrees and resolves
-    /// `pkg:<name>` against the package's public surface.
+    /// `["__pkg__", "registry:public:json:1.0"]`). The compiler collects those
+    /// subtrees and resolves root-package `pkg:<name>` imports against the
+    /// package's public surface.
     pub packages: HashMap<String, Vec<String>>,
+    /// Contextual package dependencies for external package instances:
+    /// owner package-instance key → dependency name → loaded module-tree key.
+    /// This is what lets two transitive packages import different major
+    /// versions of the same `pkg:name` without a global-name collision.
+    pub package_dependencies: HashMap<String, HashMap<String, Vec<String>>>,
     /// `file:` import targets: normalized target file → the `externals` key under
     /// which the driver loaded it (`["__file__", N]`). The compiler collects each
     /// as a standalone module and binds `file:` imports against it.

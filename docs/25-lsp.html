@@ -160,7 +160,7 @@
 <div class="feature-grid">
   <div class="feature"><span class="name">Diagnostics <span class="status done">done</span></span><span class="desc">Lex + parse + semantic errors, live on every keystroke.</span></div>
   <div class="feature"><span class="name">Hover <span class="status done">done</span></span><span class="desc">Type of the expression, plus symbol / builtin signature.</span></div>
-  <div class="feature"><span class="name">Go to definition <span class="status done">done</span></span><span class="desc">Functions, methods, globals, struct ctors, and locals — jumps to the name.</span></div>
+  <div class="feature"><span class="name">Go to definition <span class="status done">done</span></span><span class="desc">Functions, methods, globals, struct ctors, locals, and type-position names — jumps to the name.</span></div>
   <div class="feature"><span class="name">Find references <span class="status done">done</span></span><span class="desc">Every use of a value symbol, declaration optional.</span></div>
   <div class="feature"><span class="name">Rename <span class="status done">done</span></span><span class="desc">Renames a symbol and all its uses in one edit.</span></div>
   <div class="feature"><span class="name">Document symbols <span class="status done">done</span></span><span class="desc">Outline: items, struct fields, interface / extend methods.</span></div>
@@ -168,6 +168,8 @@
   <div class="feature"><span class="name">Signature help <span class="status done">done</span></span><span class="desc">Live parameter hints inside a call, with the active parameter highlighted.</span></div>
   <div class="feature"><span class="name">Document highlights <span class="status done">done</span></span><span class="desc">Every occurrence of the symbol at the cursor is highlighted in the current file.</span></div>
   <div class="feature"><span class="name">Semantic tokens <span class="status done">done</span></span><span class="desc">Resolution-driven highlighting that <em>refines</em> (never replaces) the grammar's rich sub-scopes.</span></div>
+  <div class="feature"><span class="name">Folding ranges <span class="status done">done</span></span><span class="desc">Multiline code blocks and block comments, with strings/comments ignored while scanning braces.</span></div>
+  <div class="feature"><span class="name">Inlay hints <span class="status done">done</span></span><span class="desc">Inferred local <code>var</code> binding types, omitted when the source already has an explicit annotation.</span></div>
 </div>
 
 <table>
@@ -175,14 +177,16 @@
   <tbody>
     <tr><td>Diagnostics</td><td><code>textDocument/publishDiagnostics</code></td><td><code>analyze().errors</code> + lex/parse errors</td></tr>
     <tr><td>Hover</td><td><code>textDocument/hover</code></td><td><code>expr_types</code> + <code>resolutions</code></td></tr>
-    <tr><td>Definition</td><td><code>textDocument/definition</code></td><td><code>resolutions</code> → <code>Def.span</code> / <code>local_decls</code></td></tr>
-    <tr><td>References</td><td><code>textDocument/references</code></td><td><code>resolutions</code> (reverse lookup)</td></tr>
-    <tr><td>Rename</td><td><code>textDocument/rename</code></td><td><code>resolutions</code> + declaration span</td></tr>
+    <tr><td>Definition</td><td><code>textDocument/definition</code></td><td><code>resolutions</code> → <code>Def.span</code> / <code>local_decls</code>, with AST type-reference fallback for type-position names</td></tr>
+    <tr><td>References</td><td><code>textDocument/references</code></td><td><code>resolutions</code> (reverse lookup) plus importer-file workspace scan</td></tr>
+    <tr><td>Rename</td><td><code>textDocument/rename</code></td><td><code>resolutions</code> + declaration/import spans, grouped into a workspace edit</td></tr>
     <tr><td>Symbols</td><td><code>textDocument/documentSymbol</code></td><td>parsed <code>Module</code> items</td></tr>
     <tr><td>Completion</td><td><code>textDocument/completion</code></td><td>receiver-aware: dot context dispatches to fields/methods/intrinsics; otherwise locals, top-level items, builtins, keywords (deduped, sorted)</td></tr>
     <tr><td>Signature help</td><td><code>textDocument/signatureHelp</code></td><td>scans back to the open <code>(</code>, looks up the callee in <code>resolutions</code>, renders the function signature with the active parameter index from the comma count</td></tr>
     <tr><td>Document highlight</td><td><code>textDocument/documentHighlight</code></td><td><code>resolutions</code> reverse lookup, restricted to the current file</td></tr>
     <tr><td>Semantic tokens</td><td><code>textDocument/semanticTokens/full</code></td><td>identifier classification via <code>resolutions</code> (grammar keeps its own keyword/number/string/comment/operator coloring)</td></tr>
+    <tr><td>Folding ranges</td><td><code>textDocument/foldingRange</code></td><td>string/comment-aware structural scan over multiline <code>{...}</code> blocks and nested <code>/* ... */</code> comments</td></tr>
+    <tr><td>Inlay hints</td><td><code>textDocument/inlayHint</code></td><td><code>local_types</code> joined with AST <code>var</code> bindings whose type annotation is omitted, range-filtered per request</td></tr>
   </tbody>
 </table>
 
@@ -191,14 +195,21 @@
 
 <p>
   The server keeps the latest text of each open document
-  (<code>DashMap&lt;Url, String&gt;</code>, full-sync). Every request recompiles
-  that text into a <code>Compiled</code> — the front-end is fast and
-  side-effect-free, so this is simpler and more robust than incremental caching,
-  and always reflects the current buffer.
+  (<code>DashMap&lt;Url, String&gt;</code>) and advertises incremental
+  <code>textDocument/didChange</code> sync. Range edits are applied in order
+  with UTF-16↔UTF-8 position conversion, while full-document replacement events
+  remain accepted for conservative clients.
 </p>
 
-<pre><code>didOpen / didChange  ──►  store text  ──►  Compiled::new  ──►  publishDiagnostics
-hover / definition   ──►  Compiled::new  ──►  offset_at(pos)  ──►  query side tables
+<p>
+  Queries reuse a cached <code>Compiled</code> result for the current document
+  text. Any open-buffer mutation clears the cache for all documents because a
+  document can depend on unsaved file-backed submodules. The next request then
+  rebuilds the affected analysis exactly once and subsequent requests share it.
+</p>
+
+<pre><code>didOpen / didChange  ──►  apply/store text  ──►  clear cache  ──►  publishDiagnostics
+hover / definition   ──►  cached Compiled   ──►  offset_at(pos) ──►  query HIR index
 </code></pre>
 
 <!-- =========================================================== -->
@@ -219,10 +230,19 @@ hover / definition   ──►  Compiled::new  ──►  offset_at(pos)  ──
     <code>ValueRes</code>. A <code>Local</code> resolves through the new
     <code>local_decls</code> table to its binding occurrence; a
     <code>Function</code>/<code>Method</code>/<code>Global</code>/
-    <code>StructCtor</code> resolves to its definition's <em>name</em> span.</li>
+    <code>StructCtor</code> resolves to its definition's <em>name</em> span. If
+    there is no value resolution, the server walks the parsed AST's syntactic
+    type references (signatures, fields, local annotations, casts, closure
+    annotations, struct literals, and pattern type names) and resolves the
+    innermost type name to its definition.</li>
   <li><strong>References / rename</strong> — scan <code>resolutions</code> for
     every span mapping to the same target (locals' binding spans are recorded
-    there too, so they are included for free).</li>
+    there too, so they are included for free). For file-backed definitions, the
+    server also scans the package source root for other <code>.otter</code> files,
+    recompiles importer candidates with the same open-buffer overlay, matches
+    targets by real source file + definition span, and merges importer uses and
+    named import specifiers into references/rename edits. Aliased imports update
+    the source import name while leaving the local alias use stable.</li>
 </ul>
 
 <div class="callout">
@@ -315,17 +335,19 @@ Property <span style="opacity:0.45">· Keyword · Number · String · Comment ·
 <!-- =========================================================== -->
 <h2 id="limits">9. Scope &amp; what's next</h2>
 
-<p>The server analyses one file at a time. That covers the dominant editing
-  case; the items below are the natural extensions.</p>
+<p>The server applies incremental edits to open documents, caches compiled
+  analysis between requests, loads declared submodules, and performs a bounded
+  package-source scan for reverse references/rename.</p>
 
 <table>
   <thead><tr><th>Area</th><th>Status</th></tr></thead>
   <tbody>
     <tr><td>Single-file diagnostics, hover, goto, references, rename, symbols, completion (with dot context), semantic tokens, signature help, document highlights</td><td><span class="status done">done</span></td></tr>
-    <tr><td>Multi-file workspaces (cross-module goto/diagnostics with unsaved-buffer overlay)</td><td><span class="status todo">next</span></td></tr>
-    <tr><td>Type-position go-to-definition (the checker records value-position resolutions today)</td><td><span class="status todo">next</span></td></tr>
-    <tr><td>Code actions / quick-fixes, formatting (<code>otter_fusion fmt</code>), inlay hints, folding ranges</td><td><span class="status todo">next</span></td></tr>
-    <tr><td>Incremental sync &amp; cached analysis for very large files</td><td><span class="status todo">next</span></td></tr>
+    <tr><td>Cross-module goto/diagnostics/references/rename for the open file and its loaded submodules, with unsaved-buffer overlay</td><td><span class="status done">done</span></td></tr>
+    <tr><td>Type-position go-to-definition in item signatures/fields and body positions (<code>var x: T</code>, <code>e as T</code>, closure annotations, struct literals, pattern type names)</td><td><span class="status done">done</span></td></tr>
+    <tr><td>Project-wide reverse references/rename for files that import the open document</td><td><span class="status done">done</span></td></tr>
+    <tr><td>Code actions / quick-fixes, formatting (<code>otter_fusion fmt</code>), folding ranges, local type inlay hints</td><td><span class="status done">done</span></td></tr>
+    <tr><td>Incremental sync &amp; cached analysis for repeated large-file queries</td><td><span class="status done">done</span></td></tr>
   </tbody>
 </table>
 

@@ -22,7 +22,7 @@ import { Thread } from "std:thread";
 function produce(tx: Sender<i64>, n: i64) {
   var i: i64 = 1;
   while i <= n {
-    tx.send(i * i);   // non-blocking; returns `null | ChannelClosed`
+    tx.send(i * i); // non-blocking; returns `null | ChannelClosed`
     i = i + 1;
   }
 }
@@ -46,8 +46,8 @@ function main() {
   // role into the worker, which releases it on return (closing the channel).
   var worker: JoinHandle<i64> = Thread.spawn(() => { produce(tx, 5); 0 });
 
-  var total: i64 = consume(rx);                          // blocks until closed
-  println("sum of squares 1..5 = " + (total as str));    // 1+4+9+16+25 = 55
+  var total: i64 = consume(rx); // blocks until closed
+  println("sum of squares 1..5 = " + (total as str)); // 1+4+9+16+25 = 55
 
   // The channel is now drained and closed; a non-blocking poll sees nothing.
   match rx.try_recv() {

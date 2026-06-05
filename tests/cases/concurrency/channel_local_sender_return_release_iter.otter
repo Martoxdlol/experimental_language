@@ -17,7 +17,7 @@ function make_receiver(): Receiver<i64> {
 function main() {
   var rx = make_receiver();
   for n in rx {
-    println("value ${n}");
+    println("value ${n }");
   }
   println("done");
 }

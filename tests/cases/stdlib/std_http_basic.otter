@@ -47,7 +47,7 @@ import { Clone, Eq, Hash, ToStr } from "core:prelude";
 import { Debug } from "std:fmt";
 import { println } from "std:io";
 import { Bytes } from "std:bytes";
-import { url } from "std:net:types";
+import { url } from "std:net/types";
 import {
   Headers,
   HeaderEntry,

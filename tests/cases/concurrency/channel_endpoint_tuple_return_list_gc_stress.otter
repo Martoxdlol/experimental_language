@@ -17,7 +17,7 @@ function make_receiver(n: i64): (Receiver<i64>, i64) {
   (ends.1, n)
 }
 
-function main(): Future<null> async {
+function main(): Future < null > async {
   var receivers: List<Receiver<i64>> = [];
   var i: i64 = 0;
   while i < 128 {
@@ -36,5 +36,5 @@ function main(): Future<null> async {
     j = j + 1;
   }
 
-  println("sum=${sum}");
+  println("sum=${sum }");
 }

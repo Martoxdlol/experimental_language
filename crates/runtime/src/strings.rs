@@ -82,6 +82,42 @@ pub extern "C" fn lang_char_to_str(v: u32) -> *const LangStr {
     make_str(c.to_string().as_bytes())
 }
 
+fn push_debug_escape(out: &mut String, c: char, quote: char) {
+    match c {
+        '\\' => out.push_str("\\\\"),
+        '\n' => out.push_str("\\n"),
+        '\r' => out.push_str("\\r"),
+        '\t' => out.push_str("\\t"),
+        '\0' => out.push_str("\\0"),
+        '"' if quote == '"' => out.push_str("\\\""),
+        '\'' if quote == '\'' => out.push_str("\\'"),
+        c if c.is_control() => {
+            use std::fmt::Write;
+            let _ = write!(out, "\\u{{{:x}}}", c as u32);
+        }
+        c => out.push(c),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lang_debug_str(s: *const LangStr) -> *const LangStr {
+    let mut out = String::from("\"");
+    for c in unsafe { s_str(s) }.chars() {
+        push_debug_escape(&mut out, c, '"');
+    }
+    out.push('"');
+    make_str(out.as_bytes())
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn lang_debug_char(v: u32) -> *const LangStr {
+    let c = char::from_u32(v).unwrap_or('\u{FFFD}');
+    let mut out = String::from("'");
+    push_debug_escape(&mut out, c, '\'');
+    out.push('\'');
+    make_str(out.as_bytes())
+}
+
 /// Borrow a `str` object's contents as `&str` (lossily for invalid UTF-8).
 unsafe fn s_str<'a>(s: *const LangStr) -> std::borrow::Cow<'a, str> {
     String::from_utf8_lossy(unsafe { str_bytes(s) })
@@ -577,5 +613,15 @@ mod tests {
         assert_eq!(decode(lang_io_stdout_flush()), "0");
         assert_eq!(decode(lang_io_stderr_flush()), "0");
         assert!(decode(unsafe { lang_io_stdout_write(lang("0x")) }).starts_with('1'));
+    }
+
+    #[test]
+    fn debug_renderers_quote_and_escape_strings_and_chars() {
+        assert_eq!(
+            decode(unsafe { lang_debug_str(lang("hi\n\"otter")) }),
+            "\"hi\\n\\\"otter\""
+        );
+        assert_eq!(decode(lang_debug_char('\n' as u32)), "'\\n'");
+        assert_eq!(decode(lang_debug_char('\'' as u32)), "'\\''");
     }
 }

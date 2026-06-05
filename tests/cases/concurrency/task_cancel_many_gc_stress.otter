@@ -13,7 +13,7 @@ import { Task, JoinHandle, Joined, Panicked, Cancelled } from "std:task";
 import { Receiver, ChannelClosed, channel } from "std:sync";
 import { sleep } from "std:async";
 
-function main(): Future<null> async {
+function main(): Future < null > async {
   var receivers: List<Receiver<i64>> = [];
   var handles: List<JoinHandle<i64>> = [];
 
@@ -23,11 +23,11 @@ function main(): Future<null> async {
     var tx = ends.0;
     receivers.push(ends.1);
     var n = i;
-    var h: JoinHandle<i64> = Task.spawn(() async => {
-      var _ = await sleep(1000);
-      tx.send(n);
-      n
-    });
+    var h: JoinHandle<i64> = Task.spawn(()async => {
+        var _ = await sleep(1000);
+        tx.send(n);
+        n
+      });
     h.cancel();
     handles.push(h);
     i = i + 1;
@@ -37,7 +37,7 @@ function main(): Future<null> async {
   var j: i64 = 0;
   while j < handles.size() {
     match await handles[j].join() {
-      Joined<i64> v => {},
+      Joined < i64 > v => {},
       Panicked p => {},
       Cancelled c => { cancelled = cancelled + 1; },
     }
@@ -55,8 +55,8 @@ function main(): Future<null> async {
   }
 
   if closed == 512 {
-    println("cancelled=${cancelled} recv=closed");
+    println("cancelled=${cancelled } recv=closed");
   } else {
-    println("cancelled=${cancelled} recv=open ${closed}");
+    println("cancelled=${cancelled } recv=open ${closed }");
   }
 }

@@ -1,0 +1,39 @@
+//@ kind: run
+//@ serial
+//@ description: AtomicBool is a shared @RefCounted runtime handle safe across Thread.spawn workers
+//@ stdout:
+//~ atomic-bool-threaded=false joins=4
+import { Future } from "core:prelude";
+import { AtomicBool, SeqCst } from "core:sync/atomic";
+import { println } from "std:io";
+import { Thread, JoinHandle, Joined, Panicked } from "std:thread";
+
+function toggle(flag: AtomicBool, n: i64): i64 {
+  var i = 0;
+  while i < n {
+    flag.fetch_xor(true, SeqCst {});
+    i = i + 1;
+  }
+  1
+}
+
+function joined_value(result: Joined<i64> | Panicked): i64 {
+  match result {
+    Joined<i64> ok => ok.value,
+    Panicked p => 0,
+  }
+}
+
+function main(): Future<null> async {
+  var flag = AtomicBool.new(false);
+  var a: JoinHandle<i64> = Thread.spawn(() => toggle(flag, 1000));
+  var b: JoinHandle<i64> = Thread.spawn(() => toggle(flag, 1000));
+  var c: JoinHandle<i64> = Thread.spawn(() => toggle(flag, 1000));
+  var d: JoinHandle<i64> = Thread.spawn(() => toggle(flag, 1000));
+
+  var joins = joined_value(await a.join()) +
+    joined_value(await b.join()) +
+    joined_value(await c.join()) +
+    joined_value(await d.join());
+  println("atomic-bool-threaded=${flag.load(SeqCst {})} joins=${joins}");
+}

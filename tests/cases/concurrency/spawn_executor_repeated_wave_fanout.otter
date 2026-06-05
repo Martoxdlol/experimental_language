@@ -11,7 +11,7 @@ import { List } from "core:collections";
 import { Sender, Receiver, ChannelClosed, channel } from "std:sync";
 import { yield_now } from "std:async";
 
-function wave_worker(tx: Sender<i64>, wave: i64, n: i64): Future<i64> async {
+function wave_worker(tx: Sender<i64>, wave: i64, n: i64): Future < i64 > async {
   var rounds: i64 = (n % 5) + 1;
   var r: i64 = 0;
   while r < rounds {
@@ -23,7 +23,7 @@ function wave_worker(tx: Sender<i64>, wave: i64, n: i64): Future<i64> async {
   value
 }
 
-function main(): Future<null> async {
+function main(): Future < null > async {
   var total_received: i64 = 0;
   var total_awaited: i64 = 0;
   var wave: i64 = 0;
@@ -52,7 +52,7 @@ function main(): Future<null> async {
     var awaited: i64 = 0;
     var j: i64 = 0;
     while j < handles.size() {
-      awaited = awaited + await handles[j];
+      awaited = awaited+await handles[j];
       j = j + 1;
     }
 
@@ -61,5 +61,5 @@ function main(): Future<null> async {
     wave = wave + 1;
   }
 
-  println("received=${total_received} awaited=${total_awaited}");
+  println("received=${total_received } awaited=${total_awaited }");
 }

@@ -31,15 +31,15 @@ extend<T> Repeat<T>: Iterator<T> {
 
 function main() {
   var p = Pair { first: 10, second: "ten" };
-  println("first  = ${p.fst()}");
-  println("second = ${p.snd()}");
+  println("first  = ${p.fst() }");
+  println("second = ${p.snd() }");
 
-  var s = p.swap();                 // Pair<str, i64>
-  println("swapped = ${s.snd()} ${s.fst()}");
+  var s = p.swap(); // Pair<str, i64>
+  println("swapped = ${s.snd() } ${s.fst() }");
 
   var out = "";
-  for word in (Repeat { value: "ok ", times: 3 }) {
+  for word in(Repeat { value: "ok ", times: 3 }) {
     out = out + word;
   }
-  println("repeat = ${out}");
+  println("repeat = ${out }");
 }

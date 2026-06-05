@@ -5,10 +5,10 @@
 import { println } from "std:io";
 import { Future } from "core:prelude";
 import { sleep } from "std:async";
-struct Holder { job: (i64) => Future<i64> }
-function main(): Future<null> async {
+struct Holder { job: (i64) => Future < i64 > }
+function main(): Future < null > async {
   var k: i64 = 7;
-  var h = Holder { job: function(x: i64): Future<i64> async { var _ = await sleep(1); k * x } };
+  var h = Holder { job: function(x: i64): Future < i64 > async { var _ = await sleep(1); k * x } };
   var f = h.job;
-  println("r=${await f(6)}");
+  println("r=${await f(6) }");
 }

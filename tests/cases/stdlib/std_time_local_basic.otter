@@ -1,0 +1,46 @@
+//@ kind: run
+//@ description: std:time exposes provider-backed local timezone offset conversion helpers
+//@ stdout:
+//~ now=true true true true
+//~ epoch=true true true
+//~ fixed=true true true
+
+import { DateTime, SystemTime, TimeError } from "std:time";
+import { println } from "std:io";
+
+function in_range(value: i64, low: i64, high: i64): bool {
+  value >= low && value <= high
+}
+
+function status(value: DateTime | TimeError): str {
+  if value is DateTime {
+    "datetime"
+  } else {
+    "error"
+  }
+}
+
+function main() {
+  var before = SystemTime.now().as_unix_nanos();
+  var utc_now = DateTime.now_utc();
+  var local_now = DateTime.now_local();
+  var after = SystemTime.now().as_unix_nanos();
+
+  var utc_roundtrip = utc_now.to_system_time() as SystemTime;
+  var local_roundtrip = local_now.to_system_time() as SystemTime;
+  println("now=${utc_now.timezone().is_utc()} ${local_now.timezone().is_fixed_offset()} ${in_range(utc_roundtrip.as_unix_nanos(), before, after)} ${in_range(local_roundtrip.as_unix_nanos(), before, after)}");
+
+  var epoch_local = DateTime.from_system_time_local(SystemTime.unix_epoch());
+  if epoch_local is DateTime {
+    var dt = epoch_local as DateTime;
+    var sys = dt.to_system_time() as SystemTime;
+    var has_separator = dt.format_iso8601().contains("T");
+    println("epoch=${dt.timezone().is_fixed_offset()} ${sys.as_unix_nanos() == 0} ${has_separator}");
+  } else {
+    println("epoch=false false false");
+  }
+
+  var fixed = DateTime.from_system_time_local(SystemTime.from_unix_nanos(1234567890000000000));
+  var is_datetime = status(fixed) == "datetime";
+  println("fixed=${is_datetime} ${(fixed as DateTime).timezone().is_fixed_offset()} ${((fixed as DateTime).to_system_time() as SystemTime).as_unix_nanos() == 1234567890000000000}");
+}

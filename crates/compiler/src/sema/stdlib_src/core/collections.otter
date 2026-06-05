@@ -172,7 +172,7 @@ extend<T: Eq> Set<T> {
   function difference(self, other: Set<T>): Set<T> {
     var out = Set { data: List<T>() };
     for value in self.iter() {
-      if !other.contains(value) {
+      if!other.contains(value) {
         out.insert(value);
       }
     }

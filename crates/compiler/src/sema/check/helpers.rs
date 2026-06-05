@@ -114,14 +114,17 @@ impl<'a> Checker<'a> {
             TyKind::Named { def, .. } if self.prog.def(*def).kind == DefKind::Interface)
     }
 
-    /// Whether `expected` is an interface type that `found` (a nominal type)
-    /// implements via a visible `extend` block.
+    /// Whether `expected` is an interface type that `found` implements via a
+    /// visible `extend` block or a compiler intrinsic interface implementation.
     pub(crate) fn implements_dyn(&mut self, found: Ty, expected: Ty) -> bool {
         let TyKind::Named { def: idef, .. } = self.tcx.kind(expected).clone() else {
             return false;
         };
         if self.prog.def(idef).kind != DefKind::Interface {
             return false;
+        }
+        if idef == self.prog.debug_def && self.is_primitive_debuggable(found) {
+            return true;
         }
         if let TyKind::Param(p) = self.tcx.kind(found).clone() {
             let bounds = self.bound_ifaces(p);
@@ -179,6 +182,16 @@ impl<'a> Checker<'a> {
                 | TyKind::Char
                 | TyKind::Str
                 | TyKind::Null
+        )
+    }
+
+    /// Primitive/managed scalar set with compiler-provided `std:fmt.Debug`.
+    /// `null` is intentionally excluded: it has no runtime payload slot to
+    /// place behind a `Debug` interface object.
+    pub(crate) fn is_primitive_debuggable(&self, ty: Ty) -> bool {
+        matches!(
+            self.tcx.kind(ty),
+            TyKind::Int(_) | TyKind::Float(_) | TyKind::Bool | TyKind::Char | TyKind::Str
         )
     }
     pub(crate) fn is_integer(&self, ty: Ty) -> bool {

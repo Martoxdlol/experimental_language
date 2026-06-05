@@ -8,11 +8,11 @@ import { println } from "std:io";
 import { Future } from "core:prelude";
 import { Task, JoinHandle, Joined, Panicked, Cancelled } from "std:task";
 
-function main(): Future<null> async {
+function main(): Future < null > async {
   var h: JoinHandle<i64> = Task.spawn(() => 42);
   h.cancel();
   match await h.join() {
-    Joined<i64> j => println("sync cancel = joined ${j.value}"),
+    Joined < i64 > j => println("sync cancel = joined ${j.value }"),
     Panicked p => println("sync cancel = panicked"),
     Cancelled c => println("sync cancel = cancelled"),
   };

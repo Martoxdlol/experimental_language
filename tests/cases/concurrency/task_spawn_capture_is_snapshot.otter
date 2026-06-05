@@ -11,25 +11,25 @@ import { yield_now } from "std:async";
 
 function joined_value(r: Joined<i64> | Panicked | Cancelled): i64 {
   match r {
-    Joined<i64> j => j.value,
+    Joined < i64 > j => j.value,
     Panicked p => -1,
     Cancelled c => -2,
   }
 }
 
-function main(): Future<null> async {
+function main(): Future < null > async {
   var sync_x = 1;
   var async_x = 2;
   var sync_h: JoinHandle<i64> = Task.spawn(() => sync_x);
-  var async_h: JoinHandle<i64> = Task.spawn(() async => {
-    var _ = await yield_now();
-    async_x
-  });
+  var async_h: JoinHandle<i64> = Task.spawn(()async => {
+      var _ = await yield_now();
+      async_x
+    });
 
   sync_x = 99;
   async_x = 100;
 
   var sync_value: i64 = joined_value(await sync_h.join());
   var async_value: i64 = joined_value(await async_h.join());
-  println("sync=${sync_value} async=${async_value}");
+  println("sync=${sync_value } async=${async_value }");
 }

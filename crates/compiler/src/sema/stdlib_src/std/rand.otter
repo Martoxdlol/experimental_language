@@ -45,8 +45,8 @@ function gen_range_i64(rng: Rng, low: i64, high: i64): i64 {
   if high <= low {
     low
   } else {
-    var width = (high - low) as u64;
-    low + (rng.next_u64() % width) as i64
+    var width = (high - low)as u64;
+    low + (rng.next_u64() % width)as i64
   }
 }
 
@@ -59,7 +59,7 @@ function gen_range_u64(rng: Rng, low: u64, high: u64): u64 {
 }
 
 function gen_f64(rng: Rng): f64 {
-  (rng.next_u64() % 9007199254740992u64) as f64 / 9007199254740992.0
+  (rng.next_u64() % 9007199254740992u64)as f64 / 9007199254740992.0
 }
 
 function gen_range_f64(rng: Rng, low: f64, high: f64): f64 {
@@ -94,7 +94,7 @@ function fill_bytes_n(rng: Rng, buf: Bytes, count: i64): null {
     var value = rng.next_u64();
     var i = 0;
     while i < 8 && written < count {
-      buf.push((value % 256u64) as u8);
+      buf.push((value % 256u64)as u8);
       value = value / 256u64;
       i = i + 1;
       written = written + 1;
@@ -147,8 +147,8 @@ extend SeededRng: Rng {
   }
 
   function next_u64(self): u64 {
-    var high = self.next_u32() as u64;
-    var low = self.next_u32() as u64;
+    var high = self.next_u32()as u64;
+    var low = self.next_u32()as u64;
     high * rand_modulus() + low
   }
 
@@ -156,7 +156,7 @@ extend SeededRng: Rng {
     var value = self.next_u64();
     var i = 0;
     while i < 8 {
-      buf.push((value % 256u64) as u8);
+      buf.push((value % 256u64)as u8);
       value = value / 256u64;
       i = i + 1;
     }
@@ -223,7 +223,7 @@ extend OsRng {
       u32 => {
         var low = self.try_next_u32();
         match low {
-          u32 => ((high as u32) as u64) * 4294967296u64 + ((low as u32) as u64),
+          u32 => ((high as u32)as u64) * 4294967296u64 + ((low as u32)as u64),
           RandomError => low as RandomError,
         }
       },
@@ -238,7 +238,7 @@ extend OsRng {
         var current = value as u64;
         var i = 0;
         while i < 8 {
-          buf.push((current % 256u64) as u8);
+          buf.push((current % 256u64)as u8);
           current = current / 256u64;
           i = i + 1;
         }
@@ -257,7 +257,7 @@ extend OsRng {
           var current = value as u64;
           var i = 0;
           while i < 8 && written < count {
-            buf.push((current % 256u64) as u8);
+            buf.push((current % 256u64)as u8);
             current = current / 256u64;
             i = i + 1;
             written = written + 1;

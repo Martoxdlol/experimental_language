@@ -1,0 +1,12 @@
+//@ kind: panic
+//@ description: AtomicPtr rejects invalid store orderings before runtime atomics
+//@ stderr: invalid atomic store ordering
+import { Acquire, AtomicPtr } from "core:sync/atomic";
+
+extern struct Cell { value: i64 }
+
+function main() {
+  var value = Cell { value: 1 };
+  var atom = AtomicPtr.new<Cell>((&value) as *Cell);
+  atom.store((&value) as *Cell, Acquire {});
+}

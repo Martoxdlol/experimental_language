@@ -15,11 +15,11 @@ function main() {
   var ends = channel<i64>();
   var tx = ends.0;
   var rx = ends.1;
-  var tx2 = tx.clone();   // a second producer — the channel now has two senders
+  var tx2 = tx.clone(); // a second producer — the channel now has two senders
   var h1: JoinHandle<i64> = Thread.spawn(() => { produce(tx, 100); 0 });
   var h2: JoinHandle<i64> = Thread.spawn(() => { produce(tx2, 200); 0 });
   // The iterator only terminates after BOTH workers have dropped their sender.
   var count = 0;
   for n in rx { count = count + 1; }
-  println("count=${count}");
+  println("count=${count }");
 }

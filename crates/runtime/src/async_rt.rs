@@ -787,21 +787,47 @@ pub unsafe extern "C" fn lang_async_timeout(
     bx
 }
 
-// -- std:io async futures ---------------------------------------------------
+// -- blocking stdlib async futures -----------------------------------------
 //
-// Portable stdio is not readiness-based on every target. The executor-facing
-// contract still must not block a worker poll, so these futures hand the
-// blocking stream operation to a helper thread and use the same cancellable
-// reactor registration as timers/I/O readiness to wake the parked task.
+// Portable stdio and descriptor-backed filesystem handles are not
+// readiness-based on every target. The executor-facing contract still must not
+// block a worker poll, so these futures hand the blocking operation to a helper
+// thread and use the same cancellable reactor registration as timers/I/O
+// readiness to wake the parked task.
 
 #[derive(Clone)]
 enum IoOp {
-    StdinRead { count: i64 },
+    StdinRead {
+        count: i64,
+    },
     StdinReadToEnd,
-    StdoutWrite { contents_hex: String },
-    StderrWrite { contents_hex: String },
+    StdoutWrite {
+        contents_hex: String,
+    },
+    StderrWrite {
+        contents_hex: String,
+    },
     StdoutFlush,
     StderrFlush,
+    FsFileRead {
+        handle: i64,
+        count: i64,
+    },
+    FsFileReadToEnd {
+        handle: i64,
+    },
+    FsFileWrite {
+        handle: i64,
+        contents_hex: String,
+    },
+    FsFileFlush {
+        handle: i64,
+    },
+    FsFileSeek {
+        handle: i64,
+        mode: String,
+        offset: i64,
+    },
 }
 
 struct IoCell {
@@ -846,6 +872,18 @@ fn io_run(op: &IoOp) -> String {
         }
         IoOp::StdoutFlush => crate::strings::io_flush_stream_encoded(false),
         IoOp::StderrFlush => crate::strings::io_flush_stream_encoded(true),
+        IoOp::FsFileRead { handle, count } => crate::fs::fs_file_read_encoded(*handle, *count),
+        IoOp::FsFileReadToEnd { handle } => crate::fs::fs_file_read_to_end_encoded(*handle),
+        IoOp::FsFileWrite {
+            handle,
+            contents_hex,
+        } => crate::fs::fs_file_write_encoded(*handle, contents_hex),
+        IoOp::FsFileFlush { handle } => crate::fs::fs_file_flush_encoded(*handle),
+        IoOp::FsFileSeek {
+            handle,
+            mode,
+            offset,
+        } => crate::fs::fs_file_seek_encoded(*handle, mode, *offset),
     }
 }
 
@@ -1009,6 +1047,83 @@ pub extern "C" fn lang_io_stdout_flush_async(ready_tid: i64, pending_tid: i64) -
 #[unsafe(no_mangle)]
 pub extern "C" fn lang_io_stderr_flush_async(ready_tid: i64, pending_tid: i64) -> *mut u8 {
     lang_io_future(IoOp::StderrFlush, ready_tid, pending_tid)
+}
+
+/// Build a reactor-backed future for reading up to `count` bytes from a file.
+#[unsafe(no_mangle)]
+pub extern "C" fn lang_fs_file_read_async(
+    handle: i64,
+    count: i64,
+    ready_tid: i64,
+    pending_tid: i64,
+) -> *mut u8 {
+    lang_io_future(IoOp::FsFileRead { handle, count }, ready_tid, pending_tid)
+}
+
+/// Build a reactor-backed future for reading all remaining bytes from a file.
+#[unsafe(no_mangle)]
+pub extern "C" fn lang_fs_file_read_to_end_async(
+    handle: i64,
+    ready_tid: i64,
+    pending_tid: i64,
+) -> *mut u8 {
+    lang_io_future(IoOp::FsFileReadToEnd { handle }, ready_tid, pending_tid)
+}
+
+/// Build a reactor-backed future for writing a hex byte payload to a file.
+///
+/// # Safety
+/// `contents_hex` must be a valid runtime `str` pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lang_fs_file_write_async(
+    handle: i64,
+    contents_hex: *const LangStr,
+    ready_tid: i64,
+    pending_tid: i64,
+) -> *mut u8 {
+    let contents_hex = String::from_utf8_lossy(unsafe { str_bytes(contents_hex) }).into_owned();
+    lang_io_future(
+        IoOp::FsFileWrite {
+            handle,
+            contents_hex,
+        },
+        ready_tid,
+        pending_tid,
+    )
+}
+
+/// Build a reactor-backed future for flushing a file handle.
+#[unsafe(no_mangle)]
+pub extern "C" fn lang_fs_file_flush_async(
+    handle: i64,
+    ready_tid: i64,
+    pending_tid: i64,
+) -> *mut u8 {
+    lang_io_future(IoOp::FsFileFlush { handle }, ready_tid, pending_tid)
+}
+
+/// Build a reactor-backed future for seeking a file handle.
+///
+/// # Safety
+/// `mode` must be a valid runtime `str` pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lang_fs_file_seek_async(
+    handle: i64,
+    mode: *const LangStr,
+    offset: i64,
+    ready_tid: i64,
+    pending_tid: i64,
+) -> *mut u8 {
+    let mode = String::from_utf8_lossy(unsafe { str_bytes(mode) }).into_owned();
+    lang_io_future(
+        IoOp::FsFileSeek {
+            handle,
+            mode,
+            offset,
+        },
+        ready_tid,
+        pending_tid,
+    )
 }
 
 /// Cancel runtime-built async futures that own reactor registrations.

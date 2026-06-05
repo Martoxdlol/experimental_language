@@ -42,13 +42,13 @@ pub function WithTotal(ctx: MacroContext, input: ASTNode): ASTNode {
 
 function main() {
   var p = Point { x: 1, y: 2 };
-  println(p.type_name());            // Point  (decorator-synthesised method)
+  println(p.type_name()); // Point  (decorator-synthesised method)
 
-  println(@Square(5) as str);        // 25     (expression macro)
-  println((@Square(3) + 1) as str);  // 10     (nested in a larger expression)
+  println(@Square(5)as str); // 25     (expression macro)
+  println((@Square(3) + 1)as str); // 10     (nested in a larger expression)
 
-  var total = 100;                   // caller's `total`
-  var r = @WithTotal { };            // macro's hygienic `total` is distinct
-  println(r as str);                 // 14
-  println(total as str);             // 100    (caller's `total` untouched)
+  var total = 100; // caller's `total`
+  var r = @WithTotal {}; // macro's hygienic `total` is distinct
+  println(r as str); // 14
+  println(total as str); // 100    (caller's `total` untouched)
 }

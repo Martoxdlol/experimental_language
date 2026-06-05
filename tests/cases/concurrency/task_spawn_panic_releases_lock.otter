@@ -16,39 +16,39 @@ struct Counter { value: i64 }
 
 function joined_i64(r: Joined<i64> | Panicked | Cancelled): i64 {
   match r {
-    Joined<i64> j => j.value,
+    Joined < i64 > j => j.value,
     Panicked p => -1,
     Cancelled c => -2,
   }
 }
 
-function main(): Future<null> async {
+function main(): Future < null > async {
   var state: Shared<Counter> = Shared.new(Counter { value: 0 });
   var s: Shared<Counter> = state.clone();
 
-  var bad: JoinHandle<i64> = Task.spawn(() async => {
-    await s.lock((c) async => {
-      c.value = 1;
-      var _ = await yield_now();
-      panic("task lock boom");
-      0
-    })
-  });
+  var bad: JoinHandle<i64> = Task.spawn(()async => {
+      await s.lock((c)async => {
+          c.value = 1;
+          var _ = await yield_now();
+          panic("task lock boom");
+          0
+        })
+    });
 
   var _settled = await sleep(20);
 
-  var sibling: JoinHandle<i64> = Task.spawn(() async => {
-    var _ = await yield_now();
-    match await state.try_lock((c) => c.value + 41) {
-      i64 n => n,
-      LockBusy busy => -99,
-    }
-  });
+  var sibling: JoinHandle<i64> = Task.spawn(()async => {
+      var _ = await yield_now();
+      match await state.try_lock((c) => c.value + 41) {
+        i64 n => n,
+        LockBusy busy => -99,
+      }
+    });
 
   match await bad.join() {
-    Joined<i64> j => println("bad = joined"),
+    Joined < i64 > j => println("bad = joined"),
     Panicked p => println("bad = panicked: " + p.message),
     Cancelled c => println("bad = cancelled"),
   };
-  println("sibling = ${joined_i64(await sibling.join())}");
+  println("sibling = ${joined_i64(await sibling.join()) }");
 }

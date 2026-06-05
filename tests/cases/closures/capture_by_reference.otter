@@ -7,5 +7,5 @@ function main() {
   var x = 1;
   var read_x = () => x;
   x = 42;
-  println("${read_x()}");
+  println("${read_x() }");
 }

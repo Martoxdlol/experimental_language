@@ -1,0 +1,9 @@
+//@ kind: panic
+//@ description: AtomicBool rejects operation/order pairs that Rust atomics would reject
+//@ stderr: invalid atomic store ordering
+import { AtomicBool, Acquire } from "core:sync/atomic";
+
+function main() {
+  var flag = AtomicBool.new(false);
+  flag.store(true, Acquire {});
+}

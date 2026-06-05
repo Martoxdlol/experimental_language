@@ -6,7 +6,7 @@
 import { println } from "std:io";
 function main() {
   var max = if 3 > 2 { 100 } else { 200 };
-  println("${max}");
+  println("${max }");
   var min = if 3 < 2 { 100 } else { 1 };
-  println("${min}");
+  println("${min }");
 }

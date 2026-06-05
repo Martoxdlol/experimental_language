@@ -17,9 +17,8 @@
 //!
 //! Scope: this is a complete, correct implementation of the endpoints the
 //! client uses, sufficient to host a registry and to round-trip every client
-//! operation. Published index lines record empty `deps` (the client uploads
-//! only the tarball, as the protocol's metadata-sidecar is not yet sent); a
-//! registry that needs dependency edges should write the index directly.
+//! operation. Published index lines are written from the client's metadata
+//! sidecar, so dependency edges are available to later resolver runs.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -29,7 +28,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use crate::registry::{IndexEntry, parse_index};
+use crate::registry::{IndexEntry, decode_publish_body, parse_index};
 use crate::store::{index_path, sha256_hex};
 use crate::version::Version;
 
@@ -353,6 +352,10 @@ fn publish(ctx: &Ctx, name: &str, version: &str, tarball: &[u8]) -> Response {
     if Version::parse(version).is_err() {
         return Response::text(400, "Bad Request", "invalid version");
     }
+    let (metadata, tarball) = match decode_publish_body(name, version, tarball) {
+        Ok(decoded) => decoded,
+        Err(e) => return Response::text(400, "Bad Request", e.to_string()),
+    };
     let cksum = sha256_hex(tarball);
 
     // Store the tarball.
@@ -371,11 +374,14 @@ fn publish(ctx: &Ctx, name: &str, version: &str, tarball: &[u8]) -> Response {
     if let Some(e) = entries.iter_mut().find(|e| e.vers == ver) {
         e.cksum = cksum.clone();
         e.yanked = false;
+        e.deps = metadata.deps;
+        e.features = metadata.features;
     } else {
         entries.push(IndexEntry {
             name: name.to_string(),
             vers: ver,
-            deps: Vec::new(),
+            deps: metadata.deps,
+            features: metadata.features,
             cksum: cksum.clone(),
             yanked: false,
         });
@@ -493,6 +499,7 @@ fn index_line(e: &IndexEntry) -> String {
         "name": e.name,
         "vers": e.vers.to_string(),
         "deps": deps,
+        "features": e.features,
         "cksum": e.cksum,
         "yanked": e.yanked,
     })
@@ -551,4 +558,121 @@ fn urldecode(s: &str) -> String {
         }
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::registry::{HttpRegistry, IndexDep, PublishMetadata, Registry};
+    use crate::version::VersionReq;
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static N: AtomicU64 = AtomicU64::new(0);
+        let n = std::process::id() as u64 * 1_000_000 + N.fetch_add(1, Ordering::Relaxed);
+        let base = std::env::temp_dir().join(format!("otter_server_{tag}_{n}"));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        base
+    }
+
+    #[test]
+    fn publish_records_metadata_sidecar_deps_in_index() {
+        let dir = temp_dir("publish_deps");
+        let server = serve(dir.clone(), Some("secret".into())).unwrap();
+        let reg = HttpRegistry::connect(
+            "public",
+            &format!("sparse+{}", server.base_url()),
+            Some("secret".into()),
+        )
+        .unwrap();
+        let metadata = PublishMetadata {
+            name: "top".into(),
+            vers: "1.2.3".into(),
+            deps: vec![IndexDep {
+                name: "bottom".into(),
+                req: VersionReq::parse("^0.4").unwrap(),
+                optional: false,
+                default_features: false,
+                features: vec!["tls".into()],
+                registry: Some("myco".into()),
+            }],
+            features: std::collections::BTreeMap::from([(
+                "default".into(),
+                vec!["dep:bottom".into()],
+            )]),
+        };
+
+        reg.publish("top", "1.2.3", b"tarball", &metadata).unwrap();
+
+        let entries = reg.index("top").unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].deps.len(), 1);
+        assert_eq!(entries[0].deps[0].name, "bottom");
+        assert_eq!(entries[0].deps[0].req.to_string(), "^0.4");
+        assert!(!entries[0].deps[0].default_features);
+        assert_eq!(entries[0].deps[0].features, ["tls"]);
+        assert_eq!(entries[0].deps[0].registry.as_deref(), Some("myco"));
+        assert_eq!(entries[0].features["default"], ["dep:bottom"]);
+        assert_eq!(reg.download(&entries[0]).unwrap(), b"tarball");
+
+        server.shutdown();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn publish_upsert_replaces_metadata_deps() {
+        let dir = temp_dir("publish_upsert");
+        let server = serve(dir.clone(), Some("secret".into())).unwrap();
+        let reg = HttpRegistry::connect(
+            "public",
+            &format!("sparse+{}", server.base_url()),
+            Some("secret".into()),
+        )
+        .unwrap();
+        let first = PublishMetadata {
+            name: "top".into(),
+            vers: "1.0.0".into(),
+            deps: vec![IndexDep {
+                name: "old".into(),
+                req: VersionReq::parse("^1").unwrap(),
+                optional: false,
+                default_features: true,
+                features: Vec::new(),
+                registry: None,
+            }],
+            features: std::collections::BTreeMap::from([("old-feature".into(), Vec::new())]),
+        };
+        let second = PublishMetadata {
+            name: "top".into(),
+            vers: "1.0.0".into(),
+            deps: vec![IndexDep {
+                name: "new".into(),
+                req: VersionReq::parse("^2").unwrap(),
+                optional: true,
+                default_features: true,
+                features: Vec::new(),
+                registry: None,
+            }],
+            features: std::collections::BTreeMap::from([(
+                "new-feature".into(),
+                vec!["dep:new".into()],
+            )]),
+        };
+
+        reg.publish("top", "1.0.0", b"first", &first).unwrap();
+        reg.publish("top", "1.0.0", b"second", &second).unwrap();
+
+        let entries = reg.index("top").unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].deps.len(), 1);
+        assert_eq!(entries[0].deps[0].name, "new");
+        assert!(entries[0].deps[0].optional);
+        assert!(entries[0].features.contains_key("new-feature"));
+        assert!(!entries[0].features.contains_key("old-feature"));
+        assert_eq!(reg.download(&entries[0]).unwrap(), b"second");
+
+        server.shutdown();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

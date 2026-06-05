@@ -6,16 +6,16 @@
 import { println, print } from "std:io";
 import { Future } from "core:prelude";
 import { yield_now } from "std:async";
-function probe(i: i64): Future<i64> async {
+function probe(i: i64): Future < i64 > async {
   await yield_now();
   print("c");
   i
 }
-function main(): Future<null> async {
+function main(): Future < null > async {
   var i = 0;
-  while (await probe(i)) < 3 {
+  while(await probe(i)) < 3 {
     i = i + 1;
   }
   println("");
-  println("i=${i}");
+  println("i=${i }");
 }

@@ -13,6 +13,7 @@
 //! (object output).
 
 pub mod async_rt;
+pub mod atomic;
 pub mod channels;
 pub mod foreign;
 pub mod fs;
@@ -21,6 +22,7 @@ pub mod gc_alloc;
 pub mod hash;
 pub mod list;
 pub mod map;
+pub mod net;
 pub mod panic_boundary;
 pub mod process;
 pub mod rand;

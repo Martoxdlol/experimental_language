@@ -2,7 +2,7 @@ struct Pending {}
 struct Ready<T> { value: T }
 extern struct Context {
   waker_data: *u8,
-  wake_fn: extern (*u8) => null,
+  wake_fn: extern(*u8) => null,
 }
 interface Future<Output> {
   function poll(self, ctx: *Context): Ready<Output> | Pending;

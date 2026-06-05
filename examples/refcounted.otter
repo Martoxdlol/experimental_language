@@ -15,7 +15,7 @@ struct File { id: i64 }
 
 extend File: Drop {
   // Deterministic finalization: runs at strong-count 0, before the memory is freed.
-  function drop(self) { println("close file ${self.id}"); }
+  function drop(self) { println("close file ${self.id }"); }
 }
 
 // A @RefCounted owner releases its @RefCounted fields when it is destroyed, so
@@ -24,17 +24,17 @@ extend File: Drop {
 struct Session { log: File }
 extend Session: Drop { function drop(self) { println("end session"); } }
 
-function open(id: i64): File { File { id: id } }   // factory: hands back an owned reference
+function open(id: i64): File { File { id: id } } // factory: hands back an owned reference
 
 function main() {
   // Deterministic scope-bound drop, reverse binding order.
   var a: File = open(1);
-  var b: File = a;            // shared: both name the same file; it closes once
-  println("opened ${b.id}");
+  var b: File = a; // shared: both name the same file; it closes once
+  println("opened ${b.id }");
 
   // Reassignment releases the previous value immediately.
   var c: File = open(2);
-  c = open(3);                // "close file 2" prints here
+  c = open(3); // "close file 2" prints here
 
   // Ownership cascade: the session owns its log file.
   var s: Session = Session { log: open(4) };

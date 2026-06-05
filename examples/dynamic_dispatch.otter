@@ -26,7 +26,7 @@ extend Rect: Shape {
 
 // A function over the interface type accepts any implementor.
 function describe(s: Shape): str {
-  s.name() + " has area " + (s.area() as str)
+  s.name() + " has area " + (s.area()as str)
 }
 
 function main() {
@@ -46,7 +46,7 @@ function main() {
   // `is`/`as` recover the concrete type from an interface object.
   if a is Square {
     var sq = a as Square;
-    println("a is a square of side ${sq.side}");
+    println("a is a square of side ${sq.side }");
   }
   println("b is a square: ${b is Square}");   // false
 }

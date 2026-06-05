@@ -16,6 +16,22 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         span: Span,
     ) -> CgResult<Value> {
         let data = v.ok_or_else(|| CodegenError::new(span, "interface value has no data"))?;
+        if self.is_primitive_debug_iface(from, iface) {
+            let data = self.box_primitive_debug_payload(data, from, span)?;
+            let data = self.mark_root(data);
+            let vtable = self.emit_primitive_debug_vtable(from, iface, span)?;
+            // box: [vtable: *const (unmanaged)][data: *managed][type_id: i64]
+            let desc = self.emit_descriptor(24, GC_KIND_PLAIN, &[8]);
+            let ptr = self
+                .call_intrinsic("lang_alloc", &[PTR], Some(PTR), &[desc])
+                .expect("lang_alloc returns a pointer");
+            self.b.ins().store(MemFlags::trusted(), vtable, ptr, 0);
+            self.b.ins().store(MemFlags::trusted(), data, ptr, 8);
+            let tid = self.type_id_of(from);
+            let tid_v = self.b.ins().iconst(types::I64, tid);
+            self.b.ins().store(MemFlags::trusted(), tid_v, ptr, 16);
+            return Ok(ptr);
+        }
         let zero_sized = self.is_zero_sized_final_struct_ty(from);
         if !zero_sized {
             self.mark_root(data);
@@ -125,6 +141,113 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             .expect("define vtable");
         let gv = self.module.declare_data_in_func(data_id, self.b.func);
         Ok(self.b.ins().global_value(PTR, gv))
+    }
+
+    fn is_primitive_debug_iface(&self, concrete: Ty, iface: Ty) -> bool {
+        let concrete = resolve_shallow(self.cx.analysis, concrete, &self.subst);
+        if !matches!(
+            self.cx.analysis.tcx.kind(concrete),
+            TyKind::Int(_) | TyKind::Float(_) | TyKind::Bool | TyKind::Char | TyKind::Str
+        ) {
+            return false;
+        }
+        matches!(
+            self.cx.analysis.tcx.kind(iface),
+            TyKind::Named { def, .. }
+                if *def == self.cx.analysis.program.debug_def
+                    && self.cx.analysis.program.debug_def != DefId(0)
+        )
+    }
+
+    fn box_primitive_debug_payload(&mut self, v: Value, ty: Ty, span: Span) -> CgResult<Value> {
+        let ty = resolve_shallow(self.cx.analysis, ty, &self.subst);
+        clty_of(self.cx.analysis, ty)
+            .ok_or_else(|| CodegenError::new(span, "Debug payload has no runtime value"))?;
+        let ptr_offsets: &[u32] = if matches!(self.cx.analysis.tcx.kind(ty), TyKind::Str) {
+            self.mark_root(v);
+            &[0]
+        } else {
+            &[]
+        };
+        let desc = self.emit_descriptor(8, GC_KIND_PLAIN, ptr_offsets);
+        let ptr = self
+            .call_intrinsic("lang_alloc", &[PTR], Some(PTR), &[desc])
+            .expect("lang_alloc returns a pointer");
+        self.b.ins().store(MemFlags::trusted(), v, ptr, 0);
+        Ok(ptr)
+    }
+
+    fn emit_primitive_debug_vtable(
+        &mut self,
+        concrete: Ty,
+        iface: Ty,
+        span: Span,
+    ) -> CgResult<Value> {
+        let TyKind::Named { def: idef, .. } = self.cx.analysis.tcx.kind(iface).clone() else {
+            return Err(CodegenError::new(
+                span,
+                "interface target is not an interface",
+            ));
+        };
+        let methods: Vec<DefId> = (0..self.cx.analysis.program.defs.len() as u32)
+            .map(DefId)
+            .filter(|&d| {
+                let def = self.cx.analysis.program.def(d);
+                def.kind == DefKind::InterfaceMethod && def.parent == Some(idef)
+            })
+            .collect();
+        let mut func_ids = Vec::with_capacity(methods.len());
+        for m in &methods {
+            let mname = self.cx.analysis.program.def(*m).name.as_str();
+            if mname != "debug" {
+                return Err(CodegenError::new(
+                    span,
+                    "primitive Debug vtable contains a non-debug method",
+                ));
+            }
+            func_ids.push(self.declare_primitive_debug_wrapper(concrete, span)?);
+        }
+        let name = format!("vtable.{}", DATA_CTR.fetch_add(1, Ordering::Relaxed));
+        let data_id = self
+            .module
+            .declare_data(&name, Linkage::Local, false, false)
+            .expect("declare primitive Debug vtable data");
+        let mut desc = DataDescription::new();
+        desc.set_align(8);
+        desc.define(vec![0u8; func_ids.len() * 8].into_boxed_slice());
+        for (slot, fid) in func_ids.iter().enumerate() {
+            let fref = self.module.declare_func_in_data(*fid, &mut desc);
+            desc.write_function_addr((slot * 8) as u32, fref);
+        }
+        self.module
+            .define_data(data_id, &desc)
+            .expect("define primitive Debug vtable");
+        let gv = self.module.declare_data_in_func(data_id, self.b.func);
+        Ok(self.b.ins().global_value(PTR, gv))
+    }
+
+    fn declare_primitive_debug_wrapper(&mut self, ty: Ty, span: Span) -> CgResult<FuncId> {
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(PTR));
+        sig.returns.push(AbiParam::new(PTR));
+        let name = format!(
+            "debug_primitive.{}",
+            DATA_CTR.fetch_add(1, Ordering::Relaxed)
+        );
+        let fid = self
+            .module
+            .declare_function(&name, Linkage::Local, &sig)
+            .map_err(|e| {
+                CodegenError::new(span, format!("declare primitive Debug wrapper: {e}"))
+            })?;
+        self.primitive_debug_wrappers
+            .push(PrimitiveDebugWrapperJob {
+                func_id: fid,
+                value_ty: resolve_shallow(self.cx.analysis, ty, &self.subst),
+                subst: self.subst.clone(),
+                span,
+            });
+        Ok(fid)
     }
 
     /// Box `v` into a union/`dynamic` value, unless it is already boxed.

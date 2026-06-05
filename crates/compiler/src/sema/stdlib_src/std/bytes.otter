@@ -78,7 +78,7 @@ extend Bytes {
   function slice(self, start: i64, end: i64): Bytes {
     var out = Bytes.new();
     var i = start;
-    while (i < end && i < self.data.size()) {
+    while(i < end && i < self.data.size()) {
       if i >= 0 {
         var b = self.data.get(i);
         if b is u8 {
@@ -142,7 +142,7 @@ extend Bytes {
   }
 
   function append_utf8_scalar(text: str, scalar: i64): str {
-    text + ((scalar as char) as str)
+    text + ((scalar as char)as str)
   }
 
   function decode_scalar_at(self, i: i64): Utf8Decoded | Utf8Error {
@@ -446,7 +446,7 @@ extend BytesCursor: Hash {
 
 extend BytesCursor: ToStr {
   function to_str(self): str {
-    "BytesCursor { position: " + (self.pos as str) + ", len: " + (self.data.size() as str) + " }"
+    "BytesCursor { position: " + (self.pos as str) + ", len: " + (self.data.size()as str) + " }"
   }
 }
 

@@ -34,5 +34,5 @@ function main() {
   var tx = ends.0;
   var rx = ends.1;
   var worker: JoinHandle<i64> = Thread.spawn(() => { produce(tx); 0 });
-  println(consume(rx));   // drained + closed → "abcdefghi"
+  println(consume(rx)); // drained + closed → "abcdefghi"
 }

@@ -24,15 +24,15 @@ function triple(n: i64): i64 {
 
 function main() {
   var inc = (n: i64): i64 => n + 1;
-  println("inc(41)        = ${inc(41)}");
-  println("apply_twice    = ${apply_twice(inc, 40)}");
+  println("inc(41)        = ${inc(41) }");
+  println("apply_twice    = ${apply_twice(inc, 40) }");
 
   // Captures are by reference (docs/09 §7): mutations inside the closure are
   // visible to the outer scope. Primitives sit in a heap cell; reference types
   // share the same heap object.
   var scale = 3;
   var times = (n: i64): i64 => n * scale;
-  println("times(14)      = ${times(14)}");
+  println("times(14)      = ${times(14) }");
 
   var total = 0;
   [1, 2, 3].each { total = total + it; };
@@ -45,7 +45,7 @@ function main() {
 
   // Higher-order: build specialized closures.
   var add10 = adder(10);
-  println("add10(5)       = ${add10(5)}");
+  println("add10(5)       = ${add10(5) }");
 
   // A list of closures, applied in a loop.
   var ops: List<(i64) => i64> = [adder(1), adder(10), adder(100)];

@@ -23,12 +23,12 @@ import { Future, Pending, AsyncIterator } from "core:async";
 import { TimedOut } from "std:async";
 
 import { yield_now, sleep, timeout } from "std:async";
-function answer(): Future<i64> async {
+function answer(): Future < i64 > async {
   40 + 2
 }
 
 // A managed (str) Output works too; it survives GC across the poll machinery.
-function greet(name: str): Future<str> async {
+function greet(name: str): Future < str > async {
   "hello, " + name
 }
 
@@ -50,7 +50,7 @@ extend Range: AsyncIterator<i64> {
   }
 }
 
-function sum_range(r: Range): Future<i64> async {
+function sum_range(r: Range): Future < i64 > async {
   var total: i64 = 0;
   for await n in r {
     total = total + n;
@@ -59,7 +59,7 @@ function sum_range(r: Range): Future<i64> async {
 }
 
 // `await` chains futures. `compute` awaits two inner futures and combines them.
-function compute(): Future<i64> async {
+function compute(): Future < i64 > async {
   var a: i64 = await answer();
   var b: i64 = await greet_len("world");
   // `await` may appear nested in a larger expression (function arguments,
@@ -72,14 +72,14 @@ function add_two(x: i64, y: i64): i64 {
   x + y
 }
 
-function greet_len(name: str): Future<i64> async {
+function greet_len(name: str): Future < i64 > async {
   var g: str = await greet(name);
   g.size()
 }
 
 // A genuinely-suspending future: `yield_now()` returns Pending once. Looping
 // over it suspends and resumes the state machine repeatedly.
-function tick(n: i64): Future<i64> async {
+function tick(n: i64): Future < i64 > async {
   var sum: i64 = 0;
   var i: i64 = 0;
   while i < n {
@@ -96,12 +96,12 @@ function tick(n: i64): Future<i64> async {
 // operand of `&&`/`||` it is awaited only when the left side does not
 // short-circuit (docs/21 §4). The compiler keeps the suspend point inside the
 // conditional scope, so it never runs more (or less) often than the source says.
-function below(limit: i64, i: i64): Future<bool> async {
+function below(limit: i64, i: i64): Future < bool > async {
   var _ = await yield_now();
   i < limit
 }
 
-function count_to(limit: i64): Future<i64> async {
+function count_to(limit: i64): Future < i64 > async {
   var i: i64 = 0;
   // The condition suspends each iteration until `below` resolves.
   while await below(limit, i) {
@@ -112,10 +112,10 @@ function count_to(limit: i64): Future<i64> async {
 
 // The program entry is itself an async function — the runtime starts the
 // executor and drives this future to completion. No `block_on` in user code.
-function main(): Future<null> async {
+function main(): Future < null > async {
   // Drive an async function directly with `await`.
   var a: i64 = await answer();
-  println("answer = ${a}");
+  println("answer = ${a }");
 
   var g: str = await greet("async world");
   println(g);
@@ -124,47 +124,47 @@ function main(): Future<null> async {
   // captures enclosing locals by value.
   var base: i64 = 100;
   var computed: i64 = await async { base + 42 };
-  println("computed = ${computed}");
+  println("computed = ${computed }");
 
   // An async closure `(p) async => E` returns a future when called; it captures
   // the outer environment (here `base`) and may `await` inside.
-  var scale = (n: i64): Future<i64> async => base * n;
+  var scale = (n: i64): Future < i64 > async => base * n;
   var scaled: i64 = await scale(3);
-  println("scaled = ${scaled}");
+  println("scaled = ${scaled }");
 
   // `await` chaining: answer() = 42, greet_len("world") = len("hello, world") = 12.
   var c: i64 = await compute();
-  println("compute = ${c}");
+  println("compute = ${c }");
 
   // Genuine suspension: 0 + 1 + 2 + 3 = 6, across four park/resume cycles.
   var t: i64 = await tick(4);
-  println("tick = ${t}");
+  println("tick = ${t }");
 
   // `for await` over an async stream: 0 + 1 + 2 + 3 + 4 = 10.
   var r = Range { current: 0, end: 5 };
   var s: i64 = await sum_range(r);
-  println("stream = ${s}");
+  println("stream = ${s }");
 
   // `spawn EXPR` schedules a future on a worker and itself returns a
   // `Future<T>`. We can run two tasks in parallel and `await` each in turn.
   var h: Future<i64> = spawn tick(5);
   var spawned: i64 = await h;
-  println("spawned = ${spawned}");
+  println("spawned = ${spawned }");
 
   // `timeout(fut, ms)` races a future against a deadline, resolving to the
   // value (`T`) or `TimedOut`. `answer()` is instant, so it beats 100ms.
   var t: i64 | TimedOut = await timeout(answer(), 100);
   match t {
-    i64 v    => println("timeout = ${v}"),
+    i64 v => println("timeout = ${v }"),
     TimedOut => println("timeout = timed out"),
   }
 
   // `await` in a `while` condition — polled once per iteration → 3.
   var counted: i64 = await count_to(3);
-  println("counted = ${counted}");
+  println("counted = ${counted }");
 
   // `await` in a short-circuit operand — the left is `false`, so the awaiting
   // right operand is never evaluated and never suspends; `gate` stays false.
   var gate: bool = false && await below(1, 0);
-  println("gate = ${gate}");
+  println("gate = ${gate }");
 }

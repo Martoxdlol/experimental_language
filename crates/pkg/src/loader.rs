@@ -89,14 +89,18 @@ pub fn load_project(entries: &[PathBuf], source_root: &Path) -> ModuleTree {
 /// library entry file, and its source root.
 pub struct DepPackage {
     pub name: String,
+    /// Stable package-instance key from the resolver. Different versions of the
+    /// same package name must load under different keys.
+    pub key: String,
     pub entry: PathBuf,
     pub source_root: PathBuf,
 }
 
 /// Load the project's module tree **and** each resolved dependency package's
 /// module tree, all into one source map. A dependency's modules are keyed under
-/// `["__pkg__", <name>, …]` so the compiler can collect them as the package's
-/// public subtree (`pkg:<name>` resolves there).
+/// `["__pkg__", <package-instance-key>, …]` so the compiler can collect them as
+/// distinct public subtrees even when multiple versions share the same package
+/// name.
 pub fn load_project_with_packages(
     entries: &[PathBuf],
     source_root: &Path,
@@ -105,7 +109,7 @@ pub fn load_project_with_packages(
     let mut loader = Loader::new(/* allow_mod = */ true);
     loader.load_entries(entries);
     for dep in packages {
-        loader.load_package(&dep.name, &dep.entry);
+        loader.load_package(&dep.key, &dep.entry);
     }
     loader.load_file_imports();
     loader.check_reachability(source_root);
@@ -228,18 +232,18 @@ impl Loader {
     }
 
     /// Load a resolved dependency package's module tree under the
-    /// `["__pkg__", <name>]` key prefix (its entry is itself a top-level entry,
-    /// so its `mod` children are siblings).
-    fn load_package(&mut self, name: &str, entry: &Path) {
+    /// `["__pkg__", <package-instance-key>]` key prefix (its entry is itself a
+    /// top-level entry, so its `mod` children are siblings).
+    fn load_package(&mut self, key: &str, entry: &Path) {
         let Some(module) = self.parse_file(entry) else {
             return;
         };
         self.mark_reached(entry);
-        let mut prefix = vec!["__pkg__".to_string(), name.to_string()];
+        let mut prefix = vec!["__pkg__".to_string(), key.to_string()];
         self.file_of.insert(prefix.clone(), entry.to_path_buf());
         self.descend(entry, &module, &mut prefix, /* is_entry = */ true);
         self.externals
-            .insert(vec!["__pkg__".to_string(), name.to_string()], module);
+            .insert(vec!["__pkg__".to_string(), key.to_string()], module);
     }
 
     /// Lex + parse one file, recording its source and any front-end errors.

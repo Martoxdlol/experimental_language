@@ -1,0 +1,529 @@
+@RefCounted
+struct TcpStream {
+  handle: i64,
+}
+
+@RefCounted
+struct TcpListener {
+  handle: i64,
+}
+
+@RefCounted
+struct UdpSocket {
+  handle: i64,
+}
+
+extern function lang_net_resolve(host: str): str;
+extern function lang_net_tcp_connect(addr: str): str;
+extern function lang_net_tcp_stream_release(handle: i64);
+extern function lang_net_tcp_stream_close(handle: i64): str;
+extern function lang_net_tcp_stream_peer_addr(handle: i64): str;
+extern function lang_net_tcp_stream_local_addr(handle: i64): str;
+extern function lang_net_tcp_stream_set_nodelay(handle: i64, on: i64): str;
+extern function lang_net_tcp_stream_read(handle: i64, count: i64): str;
+extern function lang_net_tcp_stream_read_to_end(handle: i64): str;
+extern function lang_net_tcp_stream_write(handle: i64, contents_hex: str): str;
+extern function lang_net_tcp_stream_write_all(handle: i64, contents_hex: str): str;
+extern function lang_net_tcp_stream_flush(handle: i64): str;
+extern function lang_net_tcp_listener_bind(addr: str): str;
+extern function lang_net_tcp_listener_release(handle: i64);
+extern function lang_net_tcp_listener_close(handle: i64): str;
+extern function lang_net_tcp_listener_accept(handle: i64): str;
+extern function lang_net_tcp_listener_local_addr(handle: i64): str;
+extern function lang_net_udp_bind(addr: str): str;
+extern function lang_net_udp_release(handle: i64);
+extern function lang_net_udp_close(handle: i64): str;
+extern function lang_net_udp_local_addr(handle: i64): str;
+extern function lang_net_udp_send_to(handle: i64, contents_hex: str, addr: str): str;
+extern function lang_net_udp_recv_from(handle: i64, count: i64): str;
+
+struct __StdNetField {
+  text: str,
+  next: i64,
+}
+
+function __std_net_io_error(message: str): IoError {
+  IoError { kind: OtherIo {}, message: message }
+}
+
+function __std_net_payload(result: str): str {
+  if result.size() <= 1 { "" } else { result.substring(1, result.size()) }
+}
+
+function __std_net_is_error(result: str): bool {
+  result.size() == 0 || result.substring(0, 1) == "1"
+}
+
+function __std_net_decode_text(result: str): str | IoError {
+  if __std_net_is_error(result) {
+    __std_net_io_error(__std_net_payload(result))
+  } else {
+    __std_net_payload(result)
+  }
+}
+
+function __std_net_decode_unit(result: str): null | IoError {
+  if __std_net_is_error(result) {
+    __std_net_io_error(__std_net_payload(result))
+  } else {
+    null
+  }
+}
+
+function __std_net_digit_at(text: str, index: i64): i64 | IoError {
+  var ch = ' ';
+  for c in text.substring(index, index + 1).chars() {
+    ch = c;
+  }
+  var cp = ch as i64;
+  if cp >= 48 && cp <= 57 {
+    cp - 48
+  } else {
+    __std_net_io_error("malformed std:net provider payload")
+  }
+}
+
+function __std_net_parse_i64(text: str): i64 | IoError {
+  if text == "" {
+    __std_net_io_error("empty decimal value in std:net provider payload")
+  } else {
+    var value = 0;
+    var i = 0;
+    while i < text.size() {
+      var digit = __std_net_digit_at(text, i);
+      if digit is IoError {
+        return digit as IoError;
+      }
+      if value > 922337203685477580 || (value == 922337203685477580 && (digit as i64) > 7) {
+        return __std_net_io_error("decimal value in std:net provider payload overflows i64");
+      }
+      value = value * 10 + (digit as i64);
+      i = i + 1;
+    }
+    value
+  }
+}
+
+function __std_net_decode_i64(result: str): i64 | IoError {
+  var text = __std_net_decode_text(result);
+  if text is IoError {
+    text as IoError
+  } else {
+    __std_net_parse_i64(text as str)
+  }
+}
+
+function __std_net_hex_digit(value: u8): str {
+  var n = value as i64;
+  var cp = if n < 10 { 48 + n } else { 87 + n };
+  (cp as char)as str
+}
+
+function __std_net_bytes_to_hex(data: Bytes): str {
+  var out = "";
+  for b in data.iter() {
+    out = out + __std_net_hex_digit((b / 16u8)as u8) + __std_net_hex_digit((b % 16u8)as u8);
+  }
+  out
+}
+
+function __std_net_hex_value(ch: char): u8 | IoError {
+  var cp = ch as i64;
+  if cp >= 48 && cp <= 57 {
+    (cp - 48)as u8
+  } else if cp >= 97 && cp <= 102 {
+    (cp - 87)as u8
+  } else if cp >= 65 && cp <= 70 {
+    (cp - 55)as u8
+  } else {
+    __std_net_io_error("invalid hexadecimal digit in std:net byte payload")
+  }
+}
+
+function __std_net_hex_char_at(text: str, index: i64): u8 | IoError {
+  var result:
+    u8 |
+    IoError = __std_net_io_error("missing hexadecimal digit in std:net byte payload");
+  for ch in text.substring(index, index + 1).chars() {
+    result = __std_net_hex_value(ch);
+  }
+  result
+}
+
+function __std_net_hex_to_bytes(text: str): Bytes | IoError {
+  if text.size() % 2 != 0 {
+    __std_net_io_error("odd-length std:net byte payload")
+  } else {
+    var out = Bytes.new();
+    var i = 0;
+    while i < text.size() {
+      var hi = __std_net_hex_char_at(text, i);
+      if hi is IoError {
+        return hi as IoError;
+      }
+      var lo = __std_net_hex_char_at(text, i + 1);
+      if lo is IoError {
+        return lo as IoError;
+      }
+      out.push(((hi as u8) * 16u8 + (lo as u8))as u8);
+      i = i + 2;
+    }
+    out
+  }
+}
+
+function __std_net_decode_bytes(result: str): Bytes | IoError {
+  var text = __std_net_decode_text(result);
+  if text is IoError {
+    text as IoError
+  } else {
+    __std_net_hex_to_bytes(text as str)
+  }
+}
+
+function __std_net_read_field(payload: str, start: i64): __StdNetField | IoError {
+  var i = start;
+  var len = 0;
+  var digits = 0;
+  while i<payload.size() && payload.substring(i, i + 1) != ":" {
+    var digit = __std_net_digit_at(payload, i);
+    if digit is IoError {
+      return digit as IoError;
+    }
+    len = len * 10 + (digit as i64);
+    digits = digits + 1;
+    i = i + 1;
+  }
+
+  if digits == 0 || i >= payload.size() {
+    __std_net_io_error("malformed std:net provider payload")
+  } else {
+    var text_start = i + 1;
+    var text_end = text_start + len;
+    if text_end > payload.size() {
+      __std_net_io_error("truncated std:net provider payload")
+    } else {
+      __StdNetField { text: payload.substring(text_start, text_end), next: text_end }
+    }
+  }
+}
+
+function __std_net_parse_socket_addr(text: str): SocketAddr | IoError {
+  var parsed = parse_socket_addr(text);
+  if parsed is ParseError {
+    __std_net_io_error("provider returned invalid socket address: " + (parsed as ParseError).to_str())
+  } else {
+    parsed as SocketAddr
+  }
+}
+
+function __std_net_parse_ip(text: str): IpAddr | IoError {
+  var parsed = if text.contains(":") {
+    parse_ip_v6(text)
+  } else {
+    parse_ip_v4(text)
+  };
+  if parsed is ParseError {
+    __std_net_io_error("provider returned invalid IP address: " + (parsed as ParseError).to_str())
+  } else {
+    parsed as IpAddr
+  }
+}
+
+function resolve(host: str): List<IpAddr> | IoError {
+  var result = lang_net_resolve(host);
+  if __std_net_is_error(result) {
+    __std_net_io_error(__std_net_payload(result))
+  } else {
+    var out = List<IpAddr>();
+    var payload = __std_net_payload(result);
+    var pos = 0;
+    while pos < payload.size() {
+      var field = __std_net_read_field(payload, pos);
+      if field is IoError {
+        return field as IoError;
+      }
+      var ip = __std_net_parse_ip((field as __StdNetField).text);
+      if ip is IoError {
+        return ip as IoError;
+      }
+      out.push(ip as IpAddr);
+      pos = (field as __StdNetField).next;
+    }
+    out
+  }
+}
+
+extend TcpStream {
+  function connect(addr: SocketAddr): TcpStream | IoError {
+    var handle = __std_net_decode_i64(lang_net_tcp_connect(addr.to_str()));
+    if handle is IoError {
+      handle as IoError
+    } else {
+      TcpStream { handle: handle as i64 }
+    }
+  }
+
+  function peer_addr(self): SocketAddr | IoError {
+    var text = __std_net_decode_text(lang_net_tcp_stream_peer_addr(self.handle));
+    if text is IoError {
+      text as IoError
+    } else {
+      __std_net_parse_socket_addr(text as str)
+    }
+  }
+
+  function local_addr(self): SocketAddr | IoError {
+    var text = __std_net_decode_text(lang_net_tcp_stream_local_addr(self.handle));
+    if text is IoError {
+      text as IoError
+    } else {
+      __std_net_parse_socket_addr(text as str)
+    }
+  }
+
+  function set_nodelay(self, on: bool): null | IoError {
+    __std_net_decode_unit(lang_net_tcp_stream_set_nodelay(self.handle, if on { 1 } else { 0 }))
+  }
+
+  function close(self): null | IoError {
+    __std_net_decode_unit(lang_net_tcp_stream_close(self.handle))
+  }
+}
+
+extend TcpStream: Reader {
+  function read(self, buf: Bytes): i64 | IoError {
+    var data = __std_net_decode_bytes(lang_net_tcp_stream_read(self.handle, buf.size()));
+    if data is IoError {
+      data as IoError
+    } else {
+      var chunk = data as Bytes;
+      for b in chunk.iter() {
+        buf.push(b);
+      }
+      chunk.size()
+    }
+  }
+
+  function read_to_end(self, buf: Bytes): i64 | IoError {
+    var data = __std_net_decode_bytes(lang_net_tcp_stream_read_to_end(self.handle));
+    if data is IoError {
+      data as IoError
+    } else {
+      var chunk = data as Bytes;
+      for b in chunk.iter() {
+        buf.push(b);
+      }
+      chunk.size()
+    }
+  }
+}
+
+extend TcpStream: Writer {
+  function write(self, buf: Bytes): i64 | IoError {
+    __std_net_decode_i64(lang_net_tcp_stream_write(self.handle, __std_net_bytes_to_hex(buf)))
+  }
+
+  function write_all(self, buf: Bytes): null | IoError {
+    __std_net_decode_unit(lang_net_tcp_stream_write_all(self.handle, __std_net_bytes_to_hex(buf)))
+  }
+
+  function flush(self): null | IoError {
+    __std_net_decode_unit(lang_net_tcp_stream_flush(self.handle))
+  }
+}
+
+extend TcpStream: Clone {
+  function clone(self): TcpStream { self }
+}
+
+extend TcpStream: Drop {
+  function drop(self) {
+    lang_net_tcp_stream_release(self.handle);
+  }
+}
+
+extend TcpStream: ToStr {
+  function to_str(self): str {
+    var addr = self.peer_addr();
+    if addr is SocketAddr {
+      "TcpStream { peer: " + (addr as SocketAddr).to_str() + " }"
+    } else {
+      "TcpStream { handle: " + (self.handle as str) + " }"
+    }
+  }
+}
+
+extend TcpStream: Debug {
+  function debug(self): str { self.to_str() }
+}
+
+extend TcpListener {
+  function bind(addr: SocketAddr): TcpListener | IoError {
+    var handle = __std_net_decode_i64(lang_net_tcp_listener_bind(addr.to_str()));
+    if handle is IoError {
+      handle as IoError
+    } else {
+      TcpListener { handle: handle as i64 }
+    }
+  }
+
+  function accept(self): (TcpStream, SocketAddr) | IoError {
+    var decoded = __std_net_decode_text(lang_net_tcp_listener_accept(self.handle));
+    if decoded is IoError {
+      decoded as IoError
+    } else {
+      var payload = decoded as str;
+      var handle_field = __std_net_read_field(payload, 0);
+      if handle_field is IoError {
+        return handle_field as IoError;
+      }
+      var addr_field = __std_net_read_field(payload, (handle_field as __StdNetField).next);
+      if addr_field is IoError {
+        return addr_field as IoError;
+      }
+      if(addr_field as __StdNetField).next != payload.size() {
+        return __std_net_io_error("trailing bytes in std:net provider payload");
+      }
+      var handle = __std_net_parse_i64((handle_field as __StdNetField).text);
+      if handle is IoError {
+        return handle as IoError;
+      }
+      var addr = __std_net_parse_socket_addr((addr_field as __StdNetField).text);
+      if addr is IoError {
+        return addr as IoError;
+      }
+      var accepted_pair = (TcpStream { handle: handle as i64 }, addr as SocketAddr);
+      accepted_pair
+    }
+  }
+
+  function local_addr(self): SocketAddr | IoError {
+    var text = __std_net_decode_text(lang_net_tcp_listener_local_addr(self.handle));
+    if text is IoError {
+      text as IoError
+    } else {
+      __std_net_parse_socket_addr(text as str)
+    }
+  }
+
+  function close(self): null | IoError {
+    __std_net_decode_unit(lang_net_tcp_listener_close(self.handle))
+  }
+}
+
+extend TcpListener: Clone {
+  function clone(self): TcpListener { self }
+}
+
+extend TcpListener: Drop {
+  function drop(self) {
+    lang_net_tcp_listener_release(self.handle);
+  }
+}
+
+extend TcpListener: ToStr {
+  function to_str(self): str {
+    var addr = self.local_addr();
+    if addr is SocketAddr {
+      "TcpListener { local: " + (addr as SocketAddr).to_str() + " }"
+    } else {
+      "TcpListener { handle: " + (self.handle as str) + " }"
+    }
+  }
+}
+
+extend TcpListener: Debug {
+  function debug(self): str { self.to_str() }
+}
+
+extend UdpSocket {
+  function bind(addr: SocketAddr): UdpSocket | IoError {
+    var handle = __std_net_decode_i64(lang_net_udp_bind(addr.to_str()));
+    if handle is IoError {
+      handle as IoError
+    } else {
+      UdpSocket { handle: handle as i64 }
+    }
+  }
+
+  function local_addr(self): SocketAddr | IoError {
+    var text = __std_net_decode_text(lang_net_udp_local_addr(self.handle));
+    if text is IoError {
+      text as IoError
+    } else {
+      __std_net_parse_socket_addr(text as str)
+    }
+  }
+
+  function send_to(self, buf: Bytes, addr: SocketAddr): i64 | IoError {
+    __std_net_decode_i64(lang_net_udp_send_to(
+        self.handle,
+        __std_net_bytes_to_hex(buf),
+        addr.to_str()
+      ))
+  }
+
+  function recv_from(self, buf: Bytes): (i64, SocketAddr) | IoError {
+    var decoded = __std_net_decode_text(lang_net_udp_recv_from(self.handle, buf.size()));
+    if decoded is IoError {
+      decoded as IoError
+    } else {
+      var payload = decoded as str;
+      var bytes_field = __std_net_read_field(payload, 0);
+      if bytes_field is IoError {
+        return bytes_field as IoError;
+      }
+      var addr_field = __std_net_read_field(payload, (bytes_field as __StdNetField).next);
+      if addr_field is IoError {
+        return addr_field as IoError;
+      }
+      if(addr_field as __StdNetField).next != payload.size() {
+        return __std_net_io_error("trailing bytes in std:net provider payload");
+      }
+      var data = __std_net_hex_to_bytes((bytes_field as __StdNetField).text);
+      if data is IoError {
+        return data as IoError;
+      }
+      var addr = __std_net_parse_socket_addr((addr_field as __StdNetField).text);
+      if addr is IoError {
+        return addr as IoError;
+      }
+      var chunk = data as Bytes;
+      for b in chunk.iter() {
+        buf.push(b);
+      }
+      var received_pair = (chunk.size(), addr as SocketAddr);
+      received_pair
+    }
+  }
+
+  function close(self): null | IoError {
+    __std_net_decode_unit(lang_net_udp_close(self.handle))
+  }
+}
+
+extend UdpSocket: Clone {
+  function clone(self): UdpSocket { self }
+}
+
+extend UdpSocket: Drop {
+  function drop(self) {
+    lang_net_udp_release(self.handle);
+  }
+}
+
+extend UdpSocket: ToStr {
+  function to_str(self): str {
+    var addr = self.local_addr();
+    if addr is SocketAddr {
+      "UdpSocket { local: " + (addr as SocketAddr).to_str() + " }"
+    } else {
+      "UdpSocket { handle: " + (self.handle as str) + " }"
+    }
+  }
+}
+
+extend UdpSocket: Debug {
+  function debug(self): str { self.to_str() }
+}

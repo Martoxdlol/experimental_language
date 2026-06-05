@@ -18,7 +18,7 @@ extend Point {
 function main() {
   var origin = Point { x: 0, y: 0 };
   var p = origin.shifted(3, -4);
-  println("manhattan = " + (p.manhattan() as str));
+  println("manhattan = " + (p.manhattan()as str));
 
   var alice = Person { name: "Alice", age: 30 };
   println(alice.name + " is " + (alice.age as str));

@@ -8,6 +8,9 @@
 //!   index/   sparse-index cache
 //!   cache/   raw .tar.gz tarballs (by checksum)
 //!   src/     extracted source (by checksum)
+//! ~/.otter_fusion/git/
+//!   cache/   bare mirrors by URL hash
+//!   <url-hash>/<rev>/ checked-out source trees
 //! ```
 //!
 //! The `sha256` recorded in the lockfile is verified on every fetch and
@@ -112,6 +115,19 @@ impl Store {
     }
     pub fn src_dir(&self) -> PathBuf {
         self.root.join("src")
+    }
+    pub fn git_dir(&self) -> PathBuf {
+        self.root
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| self.root.clone())
+            .join("git")
+    }
+    pub fn git_cache_dir(&self) -> PathBuf {
+        self.git_dir().join("cache")
+    }
+    pub fn git_checkout_path(&self, url_hash: &str, rev: &str) -> PathBuf {
+        self.git_dir().join(url_hash).join(rev)
     }
 
     /// The extracted-source directory for a package keyed by its checksum.

@@ -12,21 +12,21 @@ import { sleep } from "std:async";
 
 function joined_value(r: Joined<i64> | Panicked | Cancelled): i64 {
   match r {
-    Joined<i64> j => j.value,
+    Joined < i64 > j => j.value,
     Panicked p => -1,
     Cancelled c => -2,
   }
 }
 
-function main(): Future<null> async {
+function main(): Future < null > async {
   var handles: List<JoinHandle<i64>> = [];
   var i: i64 = 0;
   while i < 1024 {
     var n = i;
-    handles.push(Task.spawn(() async => {
-      var _ = await sleep(1);
-      n
-    }));
+    handles.push(Task.spawn(()async => {
+          var _ = await sleep(1);
+          n
+        }));
     i = i + 1;
   }
 
@@ -37,5 +37,5 @@ function main(): Future<null> async {
     j = j + 1;
   }
 
-  println("total=${total}");
+  println("total=${total }");
 }

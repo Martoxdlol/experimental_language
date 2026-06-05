@@ -6,14 +6,14 @@
 import { println, print } from "std:io";
 import { Future } from "core:prelude";
 import { yield_now } from "std:async";
-function side(tag: str, b: bool): Future<bool> async {
+function side(tag: str, b: bool): Future < bool > async {
   await yield_now();
   print(tag);
   b
 }
-function main(): Future<null> async {
+function main(): Future < null > async {
   var c = true || await side("C", true);
   var d = false || await side("D", true);
   println("");
-  println("c=${c} d=${d}");
+  println("c=${c } d=${d }");
 }

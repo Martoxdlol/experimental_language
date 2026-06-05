@@ -14,19 +14,19 @@ function make_cancelled_receiver(): Receiver<i64> {
   var ends = channel<i64>();
   var tx: Sender<i64> = ends.0;
   var rx: Receiver<i64> = ends.1;
-  var h: JoinHandle<i64> = Task.spawn(() async => {
-    var _ = await sleep(1000);
-    tx.send(1);
-    1
-  });
+  var h: JoinHandle<i64> = Task.spawn(()async => {
+      var _ = await sleep(1000);
+      tx.send(1);
+      1
+    });
   h.cancel();
   rx
 }
 
-function main(): Future<null> async {
+function main(): Future < null > async {
   var rx = make_cancelled_receiver();
   match await rx.recv() {
-    i64 n => println("recv = value ${n}"),
+    i64 n => println("recv = value ${n }"),
     ChannelClosed c => println("recv = closed"),
   };
 }

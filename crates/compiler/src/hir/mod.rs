@@ -878,6 +878,12 @@ pub enum Intrinsic {
     IoStderrWriteAsync,
     IoStdoutFlushAsync,
     IoStderrFlushAsync,
+    /// Private `std:fs.File` marker futures for descriptor-backed file I/O.
+    FsFileReadAsync,
+    FsFileReadToEndAsync,
+    FsFileWriteAsync,
+    FsFileFlushAsync,
+    FsFileSeekAsync,
     /// `std:time.Instant.now()` runtime hook: monotonic nanoseconds.
     TimeMonotonicNanos,
     /// `std:time.SystemTime.now()` runtime hook: Unix epoch nanoseconds.

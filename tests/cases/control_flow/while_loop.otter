@@ -10,5 +10,5 @@ function main() {
     sum = sum + i;
     i = i + 1;
   }
-  println("${sum}");
+  println("${sum }");
 }

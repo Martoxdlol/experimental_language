@@ -16,6 +16,15 @@ struct Output {
   stderr: Bytes,
 }
 
+@RefCounted
+struct Child {
+  handle: i64,
+  process_id: u32,
+  stdin: Writer | null,
+  stdout: Reader | null,
+  stderr: Reader | null,
+}
+
 struct ProcessField {
   text: str,
   next: i64,
@@ -27,6 +36,10 @@ extern function lang_process_env_all(): str;
 extern function lang_process_set_env(name: str, value: str): str;
 extern function lang_process_status(payload: str): str;
 extern function lang_process_output(payload: str): str;
+extern function lang_process_spawn(payload: str): str;
+extern function lang_process_child_wait(handle: i64): str;
+extern function lang_process_child_kill(handle: i64): str;
+extern function lang_process_child_release(handle: i64);
 
 function exit(code: i32) {}
 function abort() {}
@@ -41,6 +54,22 @@ function exit_status(code: i32 | null, signal: i32 | null): ExitStatus {
 
 function output(status: ExitStatus, stdout: Bytes, stderr: Bytes): Output {
   Output { status: status.clone(), stdout: stdout.clone(), stderr: stderr.clone() }
+}
+
+function __process_child(
+  handle: i64,
+  process_id: u32,
+  stdin: Writer | null,
+  stdout: Reader | null,
+  stderr: Reader | null,
+): Child {
+  Child {
+    handle: handle,
+    process_id: process_id,
+    stdin: stdin,
+    stdout: stdout,
+    stderr: stderr,
+  }
 }
 
 function __process_digit_value(ch: str): i64 {
@@ -60,7 +89,7 @@ function __process_digit_value(ch: str): i64 {
 function __process_parse_i64(text: str): i64 {
   if text.size() == 0 {
     panic("malformed process payload");
-    return -1;
+    return-1;
   }
   var value = 0;
   var i = 0;
@@ -68,7 +97,7 @@ function __process_parse_i64(text: str): i64 {
     var digit = __process_digit_value(text.substring(i, i + 1));
     if digit < 0 {
       panic("malformed process payload");
-      return -1;
+      return-1;
     }
     value = value * 10 + digit;
     i = i + 1;
@@ -148,7 +177,7 @@ function __process_read_field(payload: str, start: i64): ProcessField {
 }
 
 function __process_field(text: str): str {
-  (text.size() as str) + ":" + text
+  (text.size()as str) + ":" + text
 }
 
 function __process_i32_from_field(text: str): i32 | IoError {
@@ -157,6 +186,15 @@ function __process_i32_from_field(text: str): i32 | IoError {
     __process_io_error("process status value overflows i32")
   } else {
     value as i32
+  }
+}
+
+function __process_u32_from_field(text: str): u32 | IoError {
+  var value = __process_parse_i64(text);
+  if value > 4294967295 {
+    __process_io_error("process id value overflows u32")
+  } else {
+    value as u32
   }
 }
 
@@ -183,18 +221,20 @@ function __process_status_from_fields(code_text: str, signal_text: str): ExitSta
 function __process_hex_value(ch: char): u8 | IoError {
   var cp = ch as i64;
   if cp >= 48 && cp <= 57 {
-    (cp - 48) as u8
+    (cp - 48)as u8
   } else if cp >= 97 && cp <= 102 {
-    (cp - 87) as u8
+    (cp - 87)as u8
   } else if cp >= 65 && cp <= 70 {
-    (cp - 55) as u8
+    (cp - 55)as u8
   } else {
     __process_io_error("invalid hexadecimal digit in process byte payload")
   }
 }
 
 function __process_hex_at(text: str, index: i64): u8 | IoError {
-  var result: u8 | IoError = __process_io_error("missing hexadecimal digit in process byte payload");
+  var result:
+    u8 |
+    IoError = __process_io_error("missing hexadecimal digit in process byte payload");
   for ch in text.substring(index, index + 1).chars() {
     result = __process_hex_value(ch);
   }
@@ -216,7 +256,7 @@ function __process_hex_to_bytes(text: str): Bytes | IoError {
       if lo is IoError {
         return lo as IoError;
       }
-      out.push(((hi as u8) * 16u8 + (lo as u8)) as u8);
+      out.push(((hi as u8) * 16u8 + (lo as u8))as u8);
       i = i + 2;
     }
     out
@@ -239,6 +279,20 @@ function __process_decode_status_payload(payload: str, start: i64): ProcessStatu
 struct ProcessStatusParse {
   status: ExitStatus,
   next: i64,
+}
+
+function __process_decode_child_payload(payload: str): Child | IoError {
+  var handle_field = __process_read_field(payload, 0);
+  var process_id_field = __process_read_field(payload, handle_field.next);
+  if process_id_field.next != payload.size() {
+    return __process_io_error("malformed process child payload");
+  }
+  var process_id = __process_u32_from_field(process_id_field.text);
+  if process_id is IoError {
+    process_id as IoError
+  } else {
+    __process_child(__process_parse_i64(handle_field.text), process_id as u32, null, null, null)
+  }
 }
 
 function args(): List<str> {
@@ -306,7 +360,7 @@ extend Command {
   function env(self): Map<str, str> | null {
     if self.env is Map<str, str> {
       var out = Map.new<str, str>();
-      for entry in (self.env as Map<str, str>).entries() {
+      for entry in(self.env as Map<str, str>).entries() {
         out[entry.key] = entry.value;
       }
       out
@@ -324,7 +378,7 @@ extend Command {
   }
 
   function has_env_var(self, key: str): bool {
-    self.env_var_value(key) is str
+    self.env_var_value(key)is str
   }
 
   function env_count(self): i64 {
@@ -371,7 +425,7 @@ extend Command {
 
   function env_var(self, key: str, value: str): Command {
     var env = if self.env is Map<str, str> {
-      self.env() as Map<str, str>
+      self.env()as Map<str, str>
     } else {
       Map.new<str, str>()
     };
@@ -400,9 +454,10 @@ extend Command {
       __process_io_error("process command program must not be empty")
     } else if self.env is Map<str, str> {
       var error: IoError | null = null;
-      for entry in (self.env as Map<str, str>).entries() {
+      for entry in(self.env as Map<str, str>).entries() {
         if error is null && !__process_valid_env_key(entry.key) {
-          error = __process_io_error("process command environment keys must not be empty or contain '='");
+          error =
+            __process_io_error("process command environment keys must not be empty or contain '='");
         }
       }
       error
@@ -421,12 +476,12 @@ extend Command {
   }
 
   function is_valid(self): bool {
-    self.validation_error() is null
+    self.validation_error()is null
   }
 
   function payload(self): str {
     var payload = __process_field(self.program);
-    payload = payload + __process_field(self.args.size() as str);
+    payload = payload + __process_field(self.args.size()as str);
     for value in self.args.iter() {
       payload = payload + __process_field(value);
     }
@@ -434,7 +489,7 @@ extend Command {
     if self.env is Map<str, str> {
       var env = self.env as Map<str, str>;
       payload = payload + __process_field("replace");
-      payload = payload + __process_field(env.size() as str);
+      payload = payload + __process_field(env.size()as str);
       for entry in env.entries() {
         payload = payload + __process_field(entry.key);
         payload = payload + __process_field(entry.value);
@@ -497,6 +552,19 @@ extend Command {
         }
         Output.new(status_parse.status, stdout as Bytes, stderr as Bytes)
       }
+    }
+  }
+
+  function spawn(self): Child | IoError {
+    var validation = self.validate();
+    if validation is IoError {
+      return validation as IoError;
+    }
+    var decoded = __process_result(lang_process_spawn(self.payload()));
+    if decoded is IoError {
+      decoded as IoError
+    } else {
+      __process_decode_child_payload(decoded as str)
     }
   }
 
@@ -566,7 +634,7 @@ extend Command {
   function env_hash(self): u64 {
     if self.env is Map<str, str> {
       var out = "command:env:explicit".hash() % 4294967291u64;
-      for entry in (self.env as Map<str, str>).entries() {
+      for entry in(self.env as Map<str, str>).entries() {
         out = __process_hash_add(out, ("env:" + entry.key + "=" + entry.value).hash());
       }
       out
@@ -587,9 +655,9 @@ extend Command {
 extend Command: Eq {
   function eq(self, other: Command): bool {
     self.program == other.program &&
-      self.args_equal(other) &&
-      self.env_equal(other) &&
-      self.cwd_equal(other)
+    self.args_equal(other) &&
+    self.env_equal(other) &&
+    self.cwd_equal(other)
   }
 }
 
@@ -635,7 +703,7 @@ extend Command: Debug {
     var env = if self.env is Map<str, str> {
       var rendered = "{";
       var first_env = true;
-      for entry in (self.env as Map<str, str>).entries() {
+      for entry in(self.env as Map<str, str>).entries() {
         if first_env {
           first_env = false;
         } else {
@@ -652,7 +720,70 @@ extend Command: Debug {
     } else {
       "null"
     };
-    "Command { program: \"" + self.program + "\", args: " + args + ", env: " + env + ", cwd: " + cwd + " }"
+    "Command { program: \""
+      + self.program
+      + "\", args: "
+      + args
+      + ", env: "
+      + env
+      + ", cwd: "
+      + cwd
+      + " }"
+  }
+}
+
+extend Child {
+  function id(self): u32 { self.process_id }
+
+  function stdin(self): Writer | null { self.stdin }
+
+  function stdout(self): Reader | null { self.stdout }
+
+  function stderr(self): Reader | null { self.stderr }
+
+  function wait(self): ExitStatus | IoError {
+    var decoded = __process_result(lang_process_child_wait(self.handle));
+    if decoded is IoError {
+      decoded as IoError
+    } else {
+      var parsed = __process_decode_status_payload(decoded as str, 0);
+      if parsed is IoError {
+        parsed as IoError
+      } else {
+        (parsed as ProcessStatusParse).status
+      }
+    }
+  }
+
+  function kill(self): null | IoError {
+    var decoded = __process_result(lang_process_child_kill(self.handle));
+    if decoded is IoError {
+      decoded as IoError
+    } else {
+      null
+    }
+  }
+}
+
+extend Child: Clone {
+  function clone(self): Child { self }
+}
+
+extend Child: Drop {
+  function drop(self) {
+    lang_process_child_release(self.handle);
+  }
+}
+
+extend Child: ToStr {
+  function to_str(self): str {
+    "Child { id: " + (self.process_id as str) + " }"
+  }
+}
+
+extend Child: Debug {
+  function debug(self): str {
+    "Child { id: " + (self.process_id as str) + ", stdin: null, stdout: null, stderr: null }"
   }
 }
 
@@ -720,9 +851,9 @@ extend ExitStatus: Hash {
   function hash(self): u64 {
     var text = "unknown";
     if self.code is i32 {
-      text = "code:" + ((self.code as i32) as str);
+      text = "code:" + ((self.code as i32)as str);
     } else if self.signal is i32 {
-      text = "signal:" + ((self.signal as i32) as str);
+      text = "signal:" + ((self.signal as i32)as str);
     }
     text.hash()
   }
@@ -731,9 +862,9 @@ extend ExitStatus: Hash {
 extend ExitStatus: ToStr {
   function to_str(self): str {
     if self.code is i32 {
-      "exit status " + ((self.code as i32) as str)
+      "exit status " + ((self.code as i32)as str)
     } else if self.signal is i32 {
-      "signal " + ((self.signal as i32) as str)
+      "signal " + ((self.signal as i32)as str)
     } else {
       "exit status unknown"
     }
@@ -742,8 +873,8 @@ extend ExitStatus: ToStr {
 
 extend ExitStatus: Debug {
   function debug(self): str {
-    var code = if self.code is i32 { (self.code as i32) as str } else { "null" };
-    var signal = if self.signal is i32 { (self.signal as i32) as str } else { "null" };
+    var code = if self.code is i32 { (self.code as i32)as str } else { "null" };
+    var signal = if self.signal is i32 { (self.signal as i32)as str } else { "null" };
     "ExitStatus { code: " + code + ", signal: " + signal + " }"
   }
 }
@@ -782,6 +913,12 @@ extend Output: Hash {
 
 extend Output: Debug {
   function debug(self): str {
-    "Output { status: " + self.status.debug() + ", stdout: " + self.stdout.debug() + ", stderr: " + self.stderr.debug() + " }"
+    "Output { status: "
+      + self.status.debug()
+      + ", stdout: "
+      + self.stdout.debug()
+      + ", stderr: "
+      + self.stderr.debug()
+      + " }"
   }
 }

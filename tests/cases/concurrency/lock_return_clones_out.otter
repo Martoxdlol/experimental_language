@@ -11,7 +11,7 @@ import { Clone } from "core:prelude";
 struct X { value: i64 }
 @Derive(Clone)
 struct Counter { x: X }
-function main(): Future<null> async {
+function main(): Future < null > async {
   var state: Shared<Counter> = Shared.new(Counter { x: X { value: 0 } });
   // Returning a reference detaches it: the value is cloned at the return boundary.
   var got: X = await state.lock((c) => { c.x.value = 5; c.x });

@@ -1,0 +1,9 @@
+//@ kind: panic
+//@ description: AtomicU64 rejects invalid store orderings before runtime atomics
+//@ stderr: invalid atomic store ordering
+import { Acquire, AtomicU64 } from "core:sync/atomic";
+
+function main() {
+  var counter = AtomicU64.new(1u64);
+  counter.store(2u64, Acquire {});
+}

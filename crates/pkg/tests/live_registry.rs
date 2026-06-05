@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use pkg::registry::{HttpRegistry, Registry};
+use pkg::registry::{HttpRegistry, PublishMetadata, Registry};
 use pkg::{server, store};
 
 /// A unique temp dir for one test's registry state.
@@ -18,6 +18,15 @@ fn temp_dir(tag: &str) -> PathBuf {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
+}
+
+fn metadata(name: &str, version: &str) -> PublishMetadata {
+    PublishMetadata {
+        name: name.to_string(),
+        vers: version.to_string(),
+        deps: Vec::new(),
+        features: Default::default(),
+    }
 }
 
 #[test]
@@ -37,8 +46,10 @@ fn full_publish_index_download_search_yank_round_trip() {
     // Publish two versions (the server computes each checksum from the bytes).
     let v1 = b"widget-1.0.0-tarball".to_vec();
     let v2 = b"widget-1.2.0-tarball".to_vec();
-    reg.publish("widget", "1.0.0", &v1).expect("publish 1.0.0");
-    reg.publish("widget", "1.2.0", &v2).expect("publish 1.2.0");
+    reg.publish("widget", "1.0.0", &v1, &metadata("widget", "1.0.0"))
+        .expect("publish 1.0.0");
+    reg.publish("widget", "1.2.0", &v2, &metadata("widget", "1.2.0"))
+        .expect("publish 1.2.0");
 
     // The index now lists both, newest discoverable.
     let entries = reg.index("widget").expect("index after publish");
@@ -93,13 +104,14 @@ fn writes_require_the_token() {
     let bad = HttpRegistry::connect("local", &base, Some("wrong".into())).expect("connect");
     assert!(bad.index("anything").expect("read is open").is_empty());
     assert!(
-        bad.publish("anything", "1.0.0", b"x").is_err(),
+        bad.publish("anything", "1.0.0", b"x", &metadata("anything", "1.0.0"))
+            .is_err(),
         "publish with a bad token must fail"
     );
 
     // The right token succeeds.
     let good = HttpRegistry::connect("local", &base, Some("the-token".into())).expect("connect");
-    good.publish("anything", "1.0.0", b"x")
+    good.publish("anything", "1.0.0", b"x", &metadata("anything", "1.0.0"))
         .expect("publish with valid token");
     assert_eq!(good.index("anything").expect("index").len(), 1);
 

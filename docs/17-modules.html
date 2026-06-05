@@ -825,7 +825,7 @@ pub struct B { a: A }
       <rect x="380" y="208" width="110" height="36" rx="4" fill="#fff" stroke="#6b4ba8"/>
       <text x="435" y="230" text-anchor="middle" font-size="11">core:ffi</text>
       <rect x="498" y="208" width="150" height="36" rx="4" fill="#fff" stroke="#6b4ba8"/>
-      <text x="573" y="230" text-anchor="middle" font-size="11">core:sync:atomic</text>
+      <text x="573" y="230" text-anchor="middle" font-size="11">core:sync/atomic</text>
       <rect x="656" y="208" width="160" height="36" rx="4" fill="#fff" stroke="#6b4ba8"/>
       <text x="736" y="230" text-anchor="middle" font-size="11">core:compiler</text>
       <rect x="40" y="130" width="800" height="32" rx="4" fill="#fff" stroke="#d6d3cd" stroke-dasharray="3 3"/>
@@ -881,7 +881,7 @@ They are resolved through stored toolchain definitions for syntax; to refer to
 an exported item <em>by name</em>, import it from <code>core:prelude</code>.</p>
 
 <ul>
-<li><strong>Core contracts used by operators and containers</strong> — <code>Eq</code>, <code>Ord</code>, and <code>Hash</code>. <code>Ord</code> is the boolean comparison contract; the memory-ordering <code>Ordering</code> value lives separately in <code>core:sync:atomic</code>. Arithmetic and bitwise operator labels such as <code>Add</code> are compiler-recognized method protocols today, not importable <code>core:prelude</code> exports.</li>
+<li><strong>Core contracts used by operators and containers</strong> — <code>Eq</code>, <code>Ord</code>, and <code>Hash</code>. <code>Ord</code> is the boolean comparison contract; the memory-ordering <code>Ordering</code> value lives separately in <code>core:sync/atomic</code>. Arithmetic and bitwise operator labels such as <code>Add</code> are compiler-recognized method protocols today, not importable <code>core:prelude</code> exports.</li>
 <li><strong>Iterator protocol</strong> — <code>Iterator&lt;T&gt;</code>, <code>Item&lt;T&gt;</code>, <code>Done</code>.</li>
 <li><strong>Future protocol</strong> — <code>Future&lt;T&gt;</code>, <code>Ready&lt;T&gt;</code>, <code>Pending</code>, <code>Context</code>.</li>
 <li><strong>Error propagation</strong> — <code>Try&lt;O, R&gt;</code>, <code>FromResidual&lt;R&gt;</code>.</li>
@@ -942,15 +942,16 @@ var ys: List&lt;i64&gt; = List.new()    // …but naming the type List does
 <pre><code>import { Future, Ready, Pending, Context, AsyncIterator } from "core:async"
 </code></pre>
 
-<h3><code>core:sync:atomic</code> — explicit-import atomic primitive contracts</h3>
+<h3><code>core:sync/atomic</code> — explicit-import atomic primitive contracts</h3>
 
 <p><code>Ordering</code> and its <code>Relaxed</code>, <code>Acquire</code>, <code>Release</code>,
-<code>AcqRel</code>, and <code>SeqCst</code> variants live in <code>core:sync:atomic</code>
+<code>AcqRel</code>, and <code>SeqCst</code> variants live in <code>core:sync/atomic</code>
 because atomic operations require compiler/runtime primitive semantics. The
-current implemented slice is the value contract and constructor helpers; atomic
-handle types remain planned.</p>
+current implemented slice includes the value contract, constructor helpers, and
+runtime-backed atomic handles for signed/unsigned integers, booleans, and typed
+raw pointers.</p>
 
-<pre><code>import { Ordering, SeqCst, ordering_seq_cst } from "core:sync:atomic"
+<pre><code>import { Ordering, SeqCst, ordering_seq_cst } from "core:sync/atomic"
 </code></pre>
 
 <h3><code>std:*</code> — explicit-import modules</h3>
@@ -966,16 +967,16 @@ handle types remain planned.</p>
 <tr><td><code>std:thread</code></td><td><code>Thread.spawn</code>, <code>JoinHandle</code>, <code>Joined</code>, <code>Panicked</code></td><td>Official threading API over target worker primitives; <code>Panicked</code> has value semantics.</td></tr>
 <tr><td><code>std:sync</code></td><td><code>Shared&lt;T&gt;</code>, <code>LockBusy</code>, channels (<code>channel</code>, <code>channel_bounded</code>, <code>channel_mpmc</code>, <code>channel_mpmc_bounded</code>), <code>Sender&lt;T&gt;</code>, <code>Receiver&lt;T&gt;</code>, <code>MpmcSender&lt;T&gt;</code>, <code>MpmcReceiver&lt;T&gt;</code>, <code>ChannelClosed</code></td><td>Official synchronization API over target/runtime primitives; marker values have value semantics.</td></tr>
 <tr><td><code>std:async</code></td><td><code>yield_now</code>, <code>sleep</code>, <code>timeout</code>, <code>TimedOut</code>, executor/runtime adapters</td><td>Official executor library; async syntax substrate lives in <code>core:async</code>.</td></tr>
-<tr><td><code>std:time</code></td><td><code>Duration</code>, monotonic <code>Instant</code>, wall-clock <code>SystemTime</code>, <code>TimeZone</code>, <code>DateTime</code>, <code>TimeError</code>, ISO-like formatting/parsing, and <code>sleep</code></td><td>Official time API; portable values and target-backed hooks stay under <code>std:</code>. System-time calendar conversion, local timezone lookup, and timezone databases remain planned.</td></tr>
+<tr><td><code>std:time</code></td><td><code>Duration</code>, monotonic <code>Instant</code>, wall-clock <code>SystemTime</code>, <code>TimeZone</code>, <code>DateTime</code>, <code>TimeError</code>, ISO-like formatting/parsing, UTC/fixed-offset/local system-time conversion, and <code>sleep</code></td><td>Official time API; portable values and target-backed hooks stay under <code>std:</code>. Local conversion uses provider-backed UTC offsets and returns fixed-offset values; timezone databases, named-zone conversion, and leap-second policy remain planned.</td></tr>
 <tr><td><code>std:fs</code></td><td><code>Path</code> values, native separator conversion, target-backed existence/type/metadata/canonicalization queries, binary/text read-write helpers, descriptor-backed <code>File</code> handles with <code>OpenOptions</code>, snapshot <code>read_dir</code>, <code>DirEntry</code>/<code>Metadata</code>/<code>Permissions</code> value shapes, and non-recursive mutation ops</td><td>Official filesystem API for targets that provide one; portable values and target-backed hooks stay under <code>std:</code>, not <code>core:</code>.</td></tr>
 <tr><td><code>std:hash</code></td><td><code>Hasher</code>, <code>DefaultHasher</code>, <code>hash_value</code>, <code>combine_hash</code></td><td>Ordinary deterministic hasher helpers layered over compiler-recognized <code>core:prelude.Hash</code>; <code>DefaultHasher</code> has state value semantics.</td></tr>
 <tr><td><code>std:http</code></td><td>Comparable <code>Method</code>/<code>HttpVersion</code>, standard <code>Status</code> helpers/reason phrases, case-insensitive normalized <code>Headers</code>, <code>HeaderEntry</code>, <code>HttpRequest</code>, <code>HttpResponse</code></td><td>Portable HTTP value types with snapshot accessors, header builders, equality/clone/hash/debug semantics; clients, servers, parsing, and wire I/O live outside this value slice.</td></tr>
 <tr><td><code>std:json</code></td><td><code>Json</code> value tree, constructor/extractor helpers, immutable array/object builders, deep clone/equality/hash, escaped compact and pretty rendering, and debug formatting</td><td>Shared interchange value type; parsers and stricter canonical serializers live in packages.</td></tr>
-<tr><td><code>std:net:types</code></td><td><code>IpAddr</code>, <code>SocketAddr</code>, <code>Uri</code>, <code>Url</code>, <code>ParseError</code>, constructors, IPv4/IPv6 including scoped zone IDs/socket/URI/URL parser helpers including bracketed IPv6 URL hosts, URI/URL accessors, URL builders, and UTF-8 percent component helpers</td><td>Portable network identifier values and parser error shape; sockets and DNS remain in target-backed <code>std:net</code>.</td></tr>
-<tr><td><code>std:process</code></td><td><code>Command</code>, <code>ExitStatus</code>, <code>Output</code>, <code>args</code>, <code>env</code>, <code>env_all</code>, <code>set_env</code>, <code>exit</code>, and <code>abort</code></td><td>Official process API: value records are portable, while argv/environment access and process-control hooks are target-backed std provider behavior.</td></tr>
+<tr><td><code>std:net/types</code></td><td><code>IpAddr</code>, <code>SocketAddr</code>, <code>Uri</code>, <code>Url</code>, <code>ParseError</code>, constructors, IPv4/IPv6 including scoped zone IDs/socket/URI/URL parser helpers including bracketed IPv6 URL hosts, URI/URL accessors, URL builders, and UTF-8 percent component helpers</td><td>Portable network identifier values and parser error shape; target-backed name resolution and future socket operations live in <code>std:net</code>.</td></tr>
+<tr><td><code>std:process</code></td><td><code>Command</code>, live <code>Child</code> handles, <code>ExitStatus</code>, <code>Output</code>, <code>args</code>, <code>env</code>, <code>env_all</code>, <code>set_env</code>, <code>exit</code>, and <code>abort</code></td><td>Official process API: value records are portable, while argv/environment access, process spawning, child wait/kill, and process-control hooks are target-backed std provider behavior.</td></tr>
 <tr><td><code>std:rand</code></td><td><code>Rng</code>, <code>SeededRng</code>, <code>OsRng</code>, <code>ThreadRng</code>, <code>RandomError</code>, integer/f64 range helpers, ratio booleans, choose, and shuffle helpers</td><td>Deterministic reproducible RNG helpers plus OS-backed entropy handles; cryptographic-strength guarantees and richer distributions remain provider work.</td></tr>
 <tr><td><code>std:log</code></td><td><code>Level</code>, <code>Record</code>, <code>LoggerAlreadySet</code>, record accessors/builders, field-map snapshots with field-order-independent equality/hash, level constructors, default and structured line logging helpers</td><td>Ordinary diagnostic library API with value semantics; replaceable logger backends remain planned.</td></tr>
-<tr><td><code>std:net</code></td><td>sockets, TCP, UDP</td><td>Official networking API for targets that provide it.</td></tr>
+<tr><td><code>std:net</code></td><td><code>resolve(host)</code>, <code>TcpStream</code>, <code>TcpListener</code>, <code>UdpSocket</code>; planned async adapters</td><td>Official networking API for targets that provide it. Name resolution, synchronous TCP streams/listeners, and UDP datagrams are provider-backed; async network adapters remain planned.</td></tr>
 </tbody>
 </table>
 

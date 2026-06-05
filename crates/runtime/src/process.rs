@@ -5,7 +5,10 @@
 //! through stable string payloads.
 
 use crate::strings::{LangStr, lang_str_from_utf8, str_bytes};
-use std::process::Command;
+use std::collections::HashMap;
+use std::process::{Child as OsChild, Command};
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::{Condvar, Mutex, OnceLock};
 
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
@@ -187,6 +190,41 @@ fn encode_status(status: std::process::ExitStatus) -> *const LangStr {
     encode_success(&payload)
 }
 
+struct ChildEntry {
+    child: Option<OsChild>,
+    status: Option<std::process::ExitStatus>,
+    waiting: bool,
+}
+
+static NEXT_CHILD_HANDLE: AtomicI64 = AtomicI64::new(1);
+static CHILDREN: OnceLock<(Mutex<HashMap<i64, ChildEntry>>, Condvar)> = OnceLock::new();
+
+fn child_table() -> &'static (Mutex<HashMap<i64, ChildEntry>>, Condvar) {
+    CHILDREN.get_or_init(|| (Mutex::new(HashMap::new()), Condvar::new()))
+}
+
+fn insert_child(child: OsChild) -> i64 {
+    let handle = NEXT_CHILD_HANDLE.fetch_add(1, Ordering::Relaxed);
+    let (children, _) = child_table();
+    let mut children = children.lock().expect("process child table poisoned");
+    children.insert(
+        handle,
+        ChildEntry {
+            child: Some(child),
+            status: None,
+            waiting: false,
+        },
+    );
+    handle
+}
+
+fn encode_child_handle(handle: i64, id: u32) -> *const LangStr {
+    let mut payload = String::new();
+    push_len_field(&mut payload, &handle.to_string());
+    push_len_field(&mut payload, &id.to_string());
+    encode_success(&payload)
+}
+
 /// Snapshot the current process argument vector.
 #[unsafe(no_mangle)]
 pub extern "C" fn lang_process_args() -> *const LangStr {
@@ -288,6 +326,114 @@ pub unsafe extern "C" fn lang_process_output(payload: *const LangStr) -> *const 
     }
 }
 
+/// Spawn a live child process and return a runtime child handle plus provider id.
+///
+/// # Safety
+/// `payload` must be a valid runtime `str` pointer encoded by the Otter
+/// `std:process` layer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lang_process_spawn(payload: *const LangStr) -> *const LangStr {
+    let payload = unsafe { read_lang_str(payload) };
+    match command_from_payload(&payload)
+        .and_then(|mut command| command.spawn().map_err(|err| err.to_string()))
+    {
+        Ok(child) => {
+            let id = child.id();
+            let handle = insert_child(child);
+            encode_child_handle(handle, id)
+        }
+        Err(err) => encode_error(err),
+    }
+}
+
+/// Wait for a live child process, caching the observed exit status.
+#[unsafe(no_mangle)]
+pub extern "C" fn lang_process_child_wait(handle: i64) -> *const LangStr {
+    let mut child = {
+        let (children, ready) = child_table();
+        let mut children = children.lock().expect("process child table poisoned");
+        loop {
+            let Some(entry) = children.get_mut(&handle) else {
+                return encode_error("unknown process child handle");
+            };
+            if let Some(status) = entry.status {
+                return encode_status(status);
+            }
+            if entry.waiting {
+                children = ready
+                    .wait(children)
+                    .expect("process child table poisoned while waiting");
+                continue;
+            }
+            let Some(child) = entry.child.take() else {
+                return encode_error("process child has no live handle");
+            };
+            entry.waiting = true;
+            break child;
+        }
+    };
+
+    let waited = child.wait();
+    let (children, ready) = child_table();
+    let mut children = children.lock().expect("process child table poisoned");
+    let Some(entry) = children.get_mut(&handle) else {
+        ready.notify_all();
+        return match waited {
+            Ok(status) => encode_status(status),
+            Err(err) => encode_error(err),
+        };
+    };
+    entry.waiting = false;
+    let result = match waited {
+        Ok(status) => {
+            entry.status = Some(status);
+            encode_status(status)
+        }
+        Err(err) => {
+            entry.child = Some(child);
+            encode_error(err)
+        }
+    };
+    ready.notify_all();
+    result
+}
+
+/// Kill a live child process. Waiting afterwards observes the target status.
+#[unsafe(no_mangle)]
+pub extern "C" fn lang_process_child_kill(handle: i64) -> *const LangStr {
+    let (children, _) = child_table();
+    let mut children = children.lock().expect("process child table poisoned");
+    let Some(entry) = children.get_mut(&handle) else {
+        return encode_error("unknown process child handle");
+    };
+    if entry.status.is_some() {
+        return encode_success("");
+    }
+    if entry.waiting {
+        return encode_error("process child wait already in progress");
+    }
+    let Some(child) = entry.child.as_mut() else {
+        return encode_error("process child has no live handle");
+    };
+    match child.kill() {
+        Ok(()) => encode_success(""),
+        Err(err) => encode_error(err),
+    }
+}
+
+/// Release a runtime child table entry.
+///
+/// Dropping the Otter handle does not kill the OS process; it mirrors
+/// `std::process::Child` ownership semantics and only releases the runtime
+/// registry entry.
+#[unsafe(no_mangle)]
+pub extern "C" fn lang_process_child_release(handle: i64) {
+    let (children, ready) = child_table();
+    let mut children = children.lock().expect("process child table poisoned");
+    children.remove(&handle);
+    ready.notify_all();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -381,5 +527,76 @@ mod tests {
 
         let output = unsafe { decode(lang_process_output(make_lang_str(&payload))) };
         assert!(output.starts_with('0'), "{output}");
+    }
+
+    #[test]
+    fn spawn_wait_and_release_child_handles() {
+        #[cfg(unix)]
+        let program = "/usr/bin/true".to_string();
+        #[cfg(not(unix))]
+        let program = std::env::current_exe()
+            .expect("current test exe")
+            .to_string_lossy()
+            .into_owned();
+
+        let mut payload = String::new();
+        payload.push_str(&field(&program));
+        payload.push_str(&field("0"));
+        payload.push_str(&field("inherit"));
+        payload.push_str(&field("none"));
+        let spawned = unsafe { decode(lang_process_spawn(make_lang_str(&payload))) };
+        assert!(spawned.starts_with('0'), "{spawned}");
+
+        let mut fields = FieldReader::new(&spawned[1..]);
+        let handle: i64 = fields
+            .read_field()
+            .expect("handle field")
+            .parse()
+            .expect("numeric handle");
+        assert!(handle > 0);
+        let child_id: u32 = fields
+            .read_field()
+            .expect("id field")
+            .parse()
+            .expect("numeric child id");
+        assert!(child_id > 0);
+        fields.finish().expect("exact payload");
+
+        let first_wait = unsafe { decode(lang_process_child_wait(handle)) };
+        assert!(first_wait.starts_with('0'), "{first_wait}");
+        let second_wait = unsafe { decode(lang_process_child_wait(handle)) };
+        assert_eq!(first_wait, second_wait);
+
+        lang_process_child_release(handle);
+        let after_release = unsafe { decode(lang_process_child_wait(handle)) };
+        assert!(after_release.starts_with('1'), "{after_release}");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn kill_live_child_then_waits() {
+        let mut payload = String::new();
+        payload.push_str(&field("/bin/sleep"));
+        payload.push_str(&field("1"));
+        payload.push_str(&field("5"));
+        payload.push_str(&field("inherit"));
+        payload.push_str(&field("none"));
+        let spawned = unsafe { decode(lang_process_spawn(make_lang_str(&payload))) };
+        assert!(spawned.starts_with('0'), "{spawned}");
+
+        let mut fields = FieldReader::new(&spawned[1..]);
+        let handle: i64 = fields
+            .read_field()
+            .expect("handle field")
+            .parse()
+            .expect("numeric handle");
+        let _ = fields.read_field().expect("id field");
+        fields.finish().expect("exact payload");
+
+        let killed = unsafe { decode(lang_process_child_kill(handle)) };
+        assert_eq!(killed, "0");
+        let waited = unsafe { decode(lang_process_child_wait(handle)) };
+        assert!(waited.starts_with('0'), "{waited}");
+        lang_process_child_release(handle);
     }
 }

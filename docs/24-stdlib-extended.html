@@ -113,14 +113,14 @@
     <li><a href="#hash"><code>std:hash</code> — Hasher</a></li>
     <li><a href="#async-core"><code>core:async</code> — shapes</a></li>
     <li><a href="#json"><code>std:json</code> — value type</a></li>
-    <li><a href="#net-types"><code>std:net:types</code></a></li>
+    <li><a href="#net-types"><code>std:net/types</code></a></li>
     <li><a href="#http"><code>std:http</code> — Method · Status · Headers · Request · Response</a></li>
     <li><a href="#io-impl"><code>std:io</code> — concrete handles</a></li>
     <li><a href="#fs"><code>std:fs</code> — files · Path</a></li>
     <li><a href="#net"><code>std:net</code> — TCP · UDP · DNS</a></li>
     <li><a href="#time-std"><code>std:time</code> — Instant · DateTime · TimeZone</a></li>
     <li><a href="#sync-extra"><code>std:sync</code> additions</a></li>
-    <li><a href="#atomic"><code>core:sync:atomic</code></a></li>
+    <li><a href="#atomic"><code>core:sync/atomic</code></a></li>
     <li><a href="#process"><code>std:process</code></a></li>
     <li><a href="#rand"><code>std:rand</code></a></li>
     <li><a href="#log"><code>std:log</code></a></li>
@@ -162,15 +162,15 @@ library APIs move to <code>std:</code>.</p>
       </g>
       <g transform="translate(60, 240)" font-size="10.5">
         <rect width="80" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="40" y="16" text-anchor="middle">std:json</text>
-        <rect x="90" width="130" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="155" y="16" text-anchor="middle">std:net:types</text>
+        <rect x="90" width="130" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="155" y="16" text-anchor="middle">std:net/types</text>
         <rect x="230" width="90" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="275" y="16" text-anchor="middle">std:http</text>
         <rect x="330" width="80" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="370" y="16" text-anchor="middle">core:ffi</text>
-        <rect x="420" width="130" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="485" y="16" text-anchor="middle">core:sync:atomic</text>
+        <rect x="420" width="130" height="22" rx="3" fill="#fff" stroke="#6b4ba8"/><text x="485" y="16" text-anchor="middle">core:sync/atomic</text>
       </g>
 
       <text x="60" y="298" font-size="11" class="small">prelude substrate: syntax protocols · Iterator · Item/Done · Future · Try · numeric primitives</text>
       <text x="60" y="316" font-size="11" class="small">collections (explicit): List · Map · Set · Entry — opt-in to keep prelude small and the GC-heap surface visible at import sites</text>
-      <text x="60" y="334" font-size="11" class="small">core:sync:atomic is primitive substrate; ordinary portable APIs remain std:*.</text>
+      <text x="60" y="334" font-size="11" class="small">core:sync/atomic is primitive substrate; ordinary portable APIs remain std:*.</text>
 
       <!-- OS line -->
       <rect x="40" y="138" width="820" height="24" rx="4" fill="#fff" stroke="#d6d3cd" stroke-dasharray="3 3"/>
@@ -248,9 +248,9 @@ symbols, and implementation kind:</p>
 <table>
   <thead><tr><th>Kind</th><th>Use for</th><th>Examples</th></tr></thead>
   <tbody>
-    <tr><td><code>Otter</code></td><td>Interfaces, value types, adapters, and pure library helpers authored in Otter Fusion.</td><td><code>std:error</code>, <code>std:bytes</code>, <code>std:fmt</code>, <code>std:time.Duration</code>, <code>std:fs.Path</code>, <code>std:net:types</code></td></tr>
+    <tr><td><code>Otter</code></td><td>Interfaces, value types, adapters, and pure library helpers authored in Otter Fusion.</td><td><code>std:error</code>, <code>std:bytes</code>, <code>std:fmt</code>, <code>std:time.Duration</code>, <code>std:fs.Path</code>, <code>std:net/types</code></td></tr>
     <tr><td><code>RustBacked</code></td><td>Runtime/compiler intrinsics with a small importable marker surface.</td><td><code>std:io.print</code>, <code>std:io.eprintln</code>, <code>core:prelude.panic</code>, <code>std:process.exit</code>/<code>abort</code></td></tr>
-    <tr><td><code>Mixed</code></td><td>Otter Fusion API definitions layered over Rust runtime primitives.</td><td><code>core:ffi</code>, <code>std:time.Instant</code>, <code>std:time.SystemTime</code>, <code>std:sync</code>, <code>std:thread</code>, <code>std:task</code>, <code>std:async</code>, <code>std:fs.File</code> handles and file helpers, <code>std:process</code> host environment/execution helpers, <code>std:rand.OsRng</code>/<code>ThreadRng</code></td></tr>
+    <tr><td><code>Mixed</code></td><td>Otter Fusion API definitions layered over Rust runtime primitives.</td><td><code>core:ffi</code>, <code>std:time.Instant</code>, <code>std:time.SystemTime</code>, <code>std:sync</code>, <code>std:thread</code>, <code>std:task</code>, <code>std:async</code>, <code>std:fs.File</code> handles and file helpers, <code>std:process</code> host environment/execution/child helpers, <code>std:rand.OsRng</code>/<code>ThreadRng</code></td></tr>
   </tbody>
 </table>
 
@@ -689,13 +689,16 @@ structures, and passed through generic error code. The pure stdlib value types
 <code>std:bytes.Bytes</code>, <code>std:bytes.Utf8Error</code>,
 <code>std:time.Duration</code>, <code>std:time.Instant</code>,
 <code>std:time.SystemTime</code>, <code>std:fs.Path</code>,
-<code>std:json.Json</code>, <code>std:net:types</code> identifier values, and
+<code>std:json.Json</code>, <code>std:net/types</code> identifier values, and
 struct-shaped <code>std:http</code> values implement <code>Debug</code>.
 Collections implement diagnostic rendering when their contents are renderable:
 <code>List&lt;T: Debug&gt;</code>, <code>Set&lt;T: Eq + Debug&gt;</code>, and
-<code>Map&lt;K: Eq + Hash + ToStr, V: Debug&gt;</code>. Primitive <code>Debug</code>
-remains planned because primitive-to-<code>std:fmt.Debug</code> interface objects need
-compiler/backend intrinsic vtable support.</p>
+<code>Map&lt;K: Eq + Hash + ToStr, V: Debug&gt;</code>. Primitive scalar and
+<code>str</code> values implement <code>Debug</code> through compiler/runtime
+intrinsics, including primitive-to-<code>std:fmt.Debug</code> interface objects and
+generic <code>T: Debug</code> monomorphization. Numeric and boolean values use their
+ordinary string form; <code>char</code> and <code>str</code> render quoted with
+diagnostic escapes.</p>
 
 <div class="callout">
   <strong>Format strings are still out</strong>
@@ -855,6 +858,9 @@ pub struct DateTime {
 }
 
 extend DateTime {
+  function now_utc(): DateTime
+  function now_local(): DateTime
+  function from_system_time_local(t: SystemTime): DateTime | TimeError
   function new(year: i32, month: u8, day: u8,
                hour: u8, minute: u8, second: u8, nanos: u32,
                tz: TimeZone): DateTime | TimeError
@@ -884,12 +890,17 @@ and bracketed named timezone identifiers.
 perform portable UTC and fixed-offset conversions over Unix-epoch nanoseconds.
 Named timezone conversion returns <code>TimeError</code> until provider-backed
 timezone databases exist.
+<code>DateTime.now_utc()</code>, <code>DateTime.now_local()</code>, and
+<code>DateTime.from_system_time_local(t)</code> are implemented over the
+target-backed clock and local-offset hooks. Local conversion captures the
+provider's UTC offset for that timestamp and returns a fixed-offset
+<code>DateTime</code>; it does not resolve a named timezone.
 <code>DateTime.with_timezone(tz)</code> rebuilds the value with the same local
 date/time fields and a cloned replacement timezone.</p>
-<code>TimeError</code> implements <code>std:error.Error</code>, equality, clone, hash, and
+<p><code>TimeError</code> implements <code>std:error.Error</code>, equality, clone, hash, and
 debug rendering. <code>sleep(Duration)</code> is implemented as a mixed stdlib function
 over a Rust-backed runtime sleep hook; non-positive durations are no-ops.
-Local timezone lookup, timezone databases, and leap-second policy remain planned
+Timezone databases, named-zone conversion, and leap-second policy remain planned
 follow-up work.</p>
 
 <!-- =========================================================== -->
@@ -1073,10 +1084,10 @@ remains follow-up library work.
 <em>Parsing</em> a string into <code>Json</code> is a pkg:-tier concern.</p>
 
 <!-- =========================================================== -->
-<h2 id="net-types">14. <code>std:net:types</code> — IP, sockets, URLs <span class="pill spec">spec</span> + <span class="pill planned">planned</span></h2>
+<h2 id="net-types">14. <code>std:net/types</code> — IP, sockets, URLs <span class="pill spec">spec</span> + <span class="pill planned">planned</span></h2>
 
-<p><code>std:net:types</code> provides portable value types for network identifiers.
-It does not open sockets, perform DNS, or read from the network; those target-backed
+<p><code>std:net/types</code> provides portable value types for network identifiers.
+It does not open sockets or read from the network; those target-backed
 operations live in <code>std:net</code>. The implemented surface is constructor-based
 so the representation can evolve without exposing fixed-size array or parser
 internals.</p>
@@ -1144,7 +1155,7 @@ malformed query pairs, non-final IPv4 tails, invalid zone identifiers, or invali
 groups. <code>ParseError</code>
 implements <code>std:error.Error</code>, equality, clone, hash, stringification, and
 <code>std:fmt.Debug</code>. Stricter URI/URL validation, canonical URL normalization,
-IDNA, DNS, sockets, and <code>Display</code> formatting contracts remain planned
+IDNA, sockets, and <code>Display</code> formatting contracts remain planned
 follow-up work.
 <code>percent_encode_component</code> keeps unreserved ASCII characters
 (<code>A-Z</code>, <code>a-z</code>, <code>0-9</code>, <code>-</code>, <code>.</code>,
@@ -1349,7 +1360,8 @@ directory reads, and descriptor-backed <code>File</code> values over Rust runtim
 hooks. <code>OpenOptions</code> provides explicit read/write/append/truncate/create/
 create_new open configuration plus portable validation for descriptor-backed
 files. <code>File</code> implements <code>std:io.Reader</code>,
-<code>std:io.Writer</code>, and <code>std:io.Seeker</code>;
+<code>std:io.Writer</code>, and <code>std:io.Seeker</code>, plus concrete
+reactor-backed async methods for descriptor reads, writes, flushes, and seeks;
 errors surface as ordinary
 <code>std:io.IoError</code> values.</p>
 
@@ -1406,6 +1418,13 @@ extend File {
   function write_string(self, contents: str): null | IoError
   function append_string(self, contents: str): null | IoError
   function close(self): null | IoError
+
+  function read_async(self, buf: Bytes): Future&lt;i64 | IoError&gt;
+  function read_to_end_async(self, buf: Bytes): Future&lt;i64 | IoError&gt;
+  function write_async(self, buf: Bytes): Future&lt;i64 | IoError&gt;
+  function write_all_async(self, buf: Bytes): Future&lt;null | IoError&gt;
+  function flush_async(self): Future&lt;null | IoError&gt;
+  function seek_async(self, pos: SeekFrom): Future&lt;i64 | IoError&gt;
 }
 
 extend File: Reader + Writer + Seeker { ... }
@@ -1552,6 +1571,12 @@ create_new require write or append access. <code>File.open_with</code> returns t
 validation failures as <code>IoError</code> before calling the selected provider hook.
 Existing <code>File.open</code>, <code>File.create</code>, and <code>File.append</code>
 remain convenience constructors over the same provider hook.
+Concrete <code>File</code> async methods run descriptor-backed reads, writes,
+flushes, and seeks through runtime futures that park the executor task, perform
+the target operation on a helper thread, and wake through the shared one-shot
+reactor. They are concrete handle methods rather than generic
+<code>AsyncRead</code>/<code>AsyncWrite</code> protocols; those broader protocols remain planned
+for future network and stream adapters.
 <code>remove(path)</code> removes regular files, symlinks, and empty directories but
 is intentionally non-recursive. <code>read_dir(path)</code> snapshots the selected
 directory into provider-backed <code>DirEntry</code> values and returns a
@@ -1560,9 +1585,11 @@ provider errors as <code>IoError</code>, and iteration over the completed snapsh
 deterministic for that snapshot but follows provider directory ordering.</p>
 
 <!-- =========================================================== -->
-<h2 id="net">18. <code>std:net</code> — TCP · UDP · DNS <span class="pill planned">planned</span></h2>
+<h2 id="net">18. <code>std:net</code> — DNS · TCP · UDP <span class="pill spec">spec</span> + <span class="pill planned">planned</span></h2>
 
-<pre><code>pub struct TcpStream { ... }
+<pre><code>pub function resolve(host: str): List&lt;IpAddr&gt; | IoError
+
+pub struct TcpStream { ... }
 extend TcpStream: Reader + Writer { ... }
 extend TcpStream {
   function connect(addr: SocketAddr): TcpStream | IoError
@@ -1584,17 +1611,39 @@ extend UdpSocket {
   function bind(addr: SocketAddr): UdpSocket | IoError
   function send_to(self, buf: Bytes, addr: SocketAddr): i64 | IoError
   function recv_from(self, buf: Bytes): (i64, SocketAddr) | IoError
-}
+}</code></pre>
 
-pub function resolve(host: str): List&lt;IpAddr&gt; | IoError</code></pre>
+<p><code>resolve(host)</code> is implemented as a mixed stdlib function over the
+selected provider's address resolver. It returns a list of portable
+<code>IpAddr</code> values from <code>std:net/types</code> or an ordinary
+<code>IoError</code> on provider failure. The resolver is target-backed, so address
+ordering and host database behavior follow the selected provider; IP literals
+round-trip deterministically.</p>
+
+<p><code>TcpStream</code> and <code>TcpListener</code> are implemented as mixed
+stdlib handles over provider TCP sockets. They are deterministic
+<code>@RefCounted</code> values backed by opaque runtime handles; cloning preserves
+the shared handle, <code>close()</code> releases it explicitly, and dropping the
+last Otter value releases the runtime registry entry. <code>TcpStream</code>
+implements the synchronous <code>Reader</code>/<code>Writer</code> contracts, while
+<code>TcpListener.accept()</code> returns both the accepted stream and peer
+<code>SocketAddr</code>.</p>
+
+<p><code>UdpSocket</code> is implemented as a mixed stdlib handle over provider
+UDP sockets. It is also a deterministic <code>@RefCounted</code> runtime handle;
+<code>send_to</code> sends one datagram from a <code>Bytes</code> buffer, and
+<code>recv_from</code> appends one received datagram into the caller-provided
+buffer and returns the byte count plus source <code>SocketAddr</code>.</p>
 
 <p>Async network equivalents are planned as <code>std:async</code> adapters
 (<code>AsyncTcpStream</code>, <code>AsyncTcpListener</code>). Their shared
 <code>AsyncRead</code> / <code>AsyncWrite</code> protocols are planned companion contracts;
-they are not part of today's <code>core:async</code> catalog export.</p>
+they are not part of today's <code>core:async</code> catalog export. IDNA,
+richer socket options, and async network adapters remain planned
+target-backed work.</p>
 
 <!-- =========================================================== -->
-<h2 id="time-std">19. <code>std:time</code> — conversions · local time <span class="pill planned">planned</span></h2>
+<h2 id="time-std">19. <code>std:time</code> — local offsets · named zones <span class="pill spec">spec</span> + <span class="pill planned">planned</span></h2>
 
 <pre><code>extend DateTime {
   function now_utc(): DateTime
@@ -1605,10 +1654,12 @@ they are not part of today's <code>core:async</code> catalog export.</p>
 <p><code>Duration</code>, <code>Instant</code>, <code>SystemTime</code>,
 <code>TimeZone</code>, <code>DateTime</code>, <code>TimeError</code>, and
 <code>sleep(Duration)</code> are implemented in the current <code>std:time</code> slice,
-including UTC/fixed-offset <code>SystemTime.to_datetime(tz)</code> and
-<code>DateTime.to_system_time()</code>.
-This planned section is now limited to local timezone lookup, timezone
-databases, named-zone conversion, and leap-second policy.</p>
+including UTC/fixed-offset <code>SystemTime.to_datetime(tz)</code>,
+<code>DateTime.to_system_time()</code>, and provider-backed local offset conversion
+through <code>DateTime.now_local()</code> and
+<code>DateTime.from_system_time_local(t)</code>. Local conversions intentionally return
+fixed-offset <code>DateTime</code> values for the selected timestamp. Timezone
+databases, named-zone conversion, and leap-second policy remain planned.</p>
 
 <!-- =========================================================== -->
 <h2 id="sync-extra">20. <code>std:sync</code> — additions <span class="pill planned">planned</span></h2>
@@ -1636,7 +1687,7 @@ extend&lt;T&gt; Lazy&lt;T&gt; {
 }</code></pre>
 
 <!-- =========================================================== -->
-<h2 id="atomic">21. <code>core:sync:atomic</code> <span class="pill spec">spec</span> + <span class="pill planned">planned</span></h2>
+<h2 id="atomic">21. <code>core:sync/atomic</code> <span class="pill spec">spec</span></h2>
 
 <pre><code>pub struct AtomicI32  { ... }
 pub struct AtomicI64  { ... }
@@ -1664,16 +1715,87 @@ extend AtomicI64 {
   function fetch_sub(self, v: i64, ord: Ordering): i64
 }
 
-// Other Atomic* types mirror this shape.</code></pre>
+extend AtomicI32 {
+  function new(v: i32): AtomicI32
+  function load(self, ord: Ordering): i32
+  function store(self, v: i32, ord: Ordering): null
+  function swap(self, v: i32, ord: Ordering): i32
+  function compare_exchange(self, expected: i32, new: i32,
+                            success: Ordering, failure: Ordering): i32 | i32
+  function fetch_add(self, v: i32, ord: Ordering): i32
+  function fetch_sub(self, v: i32, ord: Ordering): i32
+}
+
+extend AtomicU64 {
+  function new(v: u64): AtomicU64
+  function load(self, ord: Ordering): u64
+  function store(self, v: u64, ord: Ordering): null
+  function swap(self, v: u64, ord: Ordering): u64
+  function compare_exchange(self, expected: u64, new: u64,
+                            success: Ordering, failure: Ordering): u64 | u64
+  function fetch_add(self, v: u64, ord: Ordering): u64
+  function fetch_sub(self, v: u64, ord: Ordering): u64
+}
+
+extend AtomicU32 {
+  function new(v: u32): AtomicU32
+  function load(self, ord: Ordering): u32
+  function store(self, v: u32, ord: Ordering): null
+  function swap(self, v: u32, ord: Ordering): u32
+  function compare_exchange(self, expected: u32, new: u32,
+                            success: Ordering, failure: Ordering): u32 | u32
+  function fetch_add(self, v: u32, ord: Ordering): u32
+  function fetch_sub(self, v: u32, ord: Ordering): u32
+}
+
+extend AtomicBool {
+  function new(v: bool): AtomicBool
+  function load(self, ord: Ordering): bool
+  function store(self, v: bool, ord: Ordering): null
+  function swap(self, v: bool, ord: Ordering): bool
+  function compare_exchange(self, expected: bool, new: bool,
+                            success: Ordering, failure: Ordering): bool
+  function fetch_and(self, v: bool, ord: Ordering): bool
+  function fetch_or(self, v: bool, ord: Ordering): bool
+  function fetch_xor(self, v: bool, ord: Ordering): bool
+}
+
+extend&lt;T&gt; AtomicPtr&lt;T&gt; {
+  function new(v: *T): AtomicPtr&lt;T&gt;
+  function load(self, ord: Ordering): *T
+  function store(self, v: *T, ord: Ordering): null
+  function swap(self, v: *T, ord: Ordering): *T
+  function compare_exchange(self, expected: *T, new: *T,
+                            success: Ordering, failure: Ordering): *T | *T
+}</code></pre>
 
 <p>Atomics live in <code>core:</code> under the revised tier rule: load/store,
 compare-exchange, and fetch operations require compiler/runtime primitive
 semantics and cannot be faithfully implemented as ordinary user-space library
-code. The implemented slice is the portable <code>Ordering</code> value contract.
+code. The implemented slice includes the portable <code>Ordering</code> value contract
+and the runtime-backed handles <code>AtomicI32</code>, <code>AtomicI64</code>,
+<code>AtomicU32</code>, <code>AtomicU64</code>, <code>AtomicBool</code>, and
+<code>AtomicPtr&lt;T&gt;</code>.
 <code>Ordering</code> implements equality, clone, hash, stringification, and
-<code>std:fmt.Debug</code>, with constructor helpers for each memory ordering. The
-atomic handle types and all load/store/swap/compare-exchange/fetch operations
-remain target/runtime work.</p>
+<code>std:fmt.Debug</code>, with constructor helpers for each memory ordering.
+Each atomic handle is an owned <code>@RefCounted</code> wrapper around a native atomic
+cell; assigning, capturing, or cloning the handle shares the same cell, and
+deterministic <code>Drop</code> releases the native allocation at strong-count zero.
+<code>load</code>, <code>store</code>, <code>swap</code>, <code>compare_exchange</code>,
+and each handle's fetch methods map to target atomic operations.
+<code>AtomicI32</code>, <code>AtomicI64</code>, <code>AtomicU32</code>, and
+<code>AtomicU64</code> provide <code>fetch_add</code> and <code>fetch_sub</code>;
+<code>AtomicBool</code> provides <code>fetch_and</code>, <code>fetch_or</code>, and
+<code>fetch_xor</code>. <code>AtomicPtr&lt;T&gt;</code> provides typed raw-pointer
+<code>load</code>, <code>store</code>, <code>swap</code>, and
+<code>compare_exchange</code>; pointer arithmetic is intentionally not part of this
+surface.
+Invalid operation/order combinations such as <code>load(Release)</code> or
+<code>store(Acquire)</code> panic with a language diagnostic before crossing into the
+runtime. <code>compare_exchange</code> returns the observed previous value; callers can
+distinguish success by comparing that value with the expected value. Fetch
+arithmetic uses the target integer atomic operation's two's-complement wrapping
+behavior.</p>
 
 <!-- =========================================================== -->
 <h2 id="process">22. <code>std:process</code> <span class="pill spec">spec</span> + <span class="pill planned">planned</span></h2>
@@ -1718,7 +1840,6 @@ extend Command {
   function status(self): ExitStatus | IoError   // run to completion, no capture
   function output(self): Output | IoError       // run to completion, capture
 
-  // Planned live-child method:
   function spawn(self):  Child  | IoError
 }
 
@@ -1732,6 +1853,9 @@ extend Child {
   function wait(self):    ExitStatus | IoError
   function kill(self):    null       | IoError
   function id(self):      u32
+  function stdin(self):   Writer | null
+  function stdout(self):  Reader | null
+  function stderr(self):  Reader | null
 }
 
 pub struct ExitStatus { pub code: i32 | null, pub signal: i32 | null }
@@ -1778,9 +1902,18 @@ intrinsics. <code>Command.status()</code> runs a command to completion while inh
 the current stdout/stderr streams, and <code>Command.output()</code> runs a command to
 completion while capturing stdout/stderr as <code>Bytes</code>. Both methods decode
 provider launch failures into <code>IoError</code> and preserve the command's
-snapshotting args/env/cwd semantics. Live process spawning, child handles,
-streamed child stdio, and richer target-specific status details remain
-target/provider-backed work.</p>
+snapshotting args/env/cwd semantics. <code>Command.spawn()</code> starts a live
+provider child process and returns a deterministic <code>@RefCounted</code>
+<code>Child</code> handle. Cloned child handles share the same runtime child
+entry; <code>id()</code> exposes the provider process id, <code>wait()</code>
+waits once and caches the observed <code>ExitStatus</code> for repeat callers,
+and <code>kill()</code> requests provider termination before a later
+<code>wait()</code>. Dropping the last <code>Child</code> releases the runtime
+registry entry but does not implicitly kill the OS process. The current
+<code>Command</code> surface has no pipe configuration yet, so child
+<code>stdin()</code>, <code>stdout()</code>, and <code>stderr()</code> return
+<code>null</code>; streamed child stdio and richer target-specific status details
+remain target/provider-backed work.</p>
 
 <!-- =========================================================== -->
 <h2 id="rand">23. <code>std:rand</code> <span class="pill spec">spec</span> + <span class="pill planned">planned</span></h2>
@@ -1967,38 +2100,38 @@ pub function logger(): Logger</code></pre>
         <td><code>Bytes</code>, <code>BytesCursor</code>, <code>from_str</code> UTF-8 encoding, <code>decode_utf8</code> strict UTF-8 decoding, direct set/pop/remove/append/truncate/clear helpers, <code>Utf8Error</code> error/value semantics, byte/cursor clone/equality/hash/diagnostic stringification/debug, in-memory <code>Writer</code>, cursor-backed <code>Reader</code>/<code>Seeker</code>; planned pinned <code>Buffer</code> view</td></tr>
     <tr><td><code>std:io</code></td><td>std</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>
         <td><code>print</code>, <code>println</code>, <code>eprint</code>, <code>eprintln</code>, <code>Reader</code>, <code>Writer</code>, <code>Seeker</code>, <code>SeekFrom</code>, <code>IoError</code>, IO value semantics, stdin <code>Reader</code>, stdout/stderr <code>Writer</code> handles, <code>BufReader</code>/<code>BufWriter</code> interface-object adapters</td></tr>
-    <tr><td><code>std:fmt</code></td><td>std</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>
-        <td><code>Display</code>, <code>Debug</code>, <code>FmtSink</code>, <code>FmtError</code>; <code>FmtError</code> error/value semantics; <code>Debug</code> impls for pure stdlib values and renderable collections; primitive impls planned</td></tr>
+    <tr><td><code>std:fmt</code></td><td>std</td><td><span class="pill spec">spec</span></td>
+        <td><code>Display</code>, <code>Debug</code>, <code>FmtSink</code>, <code>FmtError</code>; <code>FmtError</code> error/value semantics; primitive/string <code>Debug</code> intrinsics; <code>Debug</code> impls for pure stdlib values and renderable collections</td></tr>
     <tr><td><code>std:error</code></td><td>std</td><td><span class="pill spec">spec</span></td>
         <td><code>Error</code> interface, <code>Annotated</code> wrapper, <code>with_context</code>; <code>Annotated</code> debug rendering</td></tr>
     <tr><td><code>std:time</code></td><td>std</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>
-        <td><code>Duration</code>, monotonic <code>Instant</code>, wall-clock <code>SystemTime</code>, <code>TimeZone</code>, <code>DateTime</code>, <code>TimeError</code>, value semantics, ISO-like formatting/parsing, timezone replacement, UTC/fixed-offset system-time conversion, and <code>sleep(Duration)</code>; planned local timezone lookup and timezone databases</td></tr>
+        <td><code>Duration</code>, monotonic <code>Instant</code>, wall-clock <code>SystemTime</code>, <code>TimeZone</code>, <code>DateTime</code>, <code>TimeError</code>, value semantics, ISO-like formatting/parsing, timezone replacement, UTC/fixed-offset/local system-time conversion, <code>DateTime.now_utc()</code>, <code>DateTime.now_local()</code>, and <code>sleep(Duration)</code>; planned timezone databases, named-zone conversion, and leap-second policy</td></tr>
     <tr><td><code>std:hash</code></td><td>std</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>
         <td><code>Hasher</code>, deterministic <code>DefaultHasher</code>, explicit <code>KeyedHasher</code>, byte-stream writes, interface-level <code>Hash</code> writes, state value semantics, <code>hash_value</code>, <code>write_hash</code>, <code>combine_hash</code>, <code>keyed_hasher</code>; planned keyed collection integration</td></tr>
     <tr><td><code>core:async</code></td><td>core</td><td><span class="pill spec">spec</span></td>
         <td><code>Future</code>, <code>Ready</code>, <code>Pending</code>, <code>Context</code>, <code>AsyncIterator</code></td></tr>
     <tr><td><code>std:json</code></td><td>std</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>
         <td><code>Json</code> opaque value tree, scalar/container shape predicates, typed extractors, immutable array/object builders, deep clone/equality/structural hash with order-insensitive object entries, escaped compact and pretty rendering, debug formatting; planned stricter canonicalization; no parser</td></tr>
-    <tr><td><code>std:net:types</code></td><td>std</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>
+    <tr><td><code>std:net/types</code></td><td>std</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>
         <td><code>IpAddr</code>, <code>SocketAddr</code>, <code>Uri</code>, <code>Url</code>, <code>ParseError</code>, constructors, IPv4 / IPv6 including dotted IPv4 tails and scoped zone IDs / socket / URI / URL parsers including bracketed IPv6 URL hosts, URI/URL accessors, immutable URL builders with query-map snapshots, order-insensitive URL query hashing, UTF-8 percent component helpers, lowercase hex IPv6 rendering, equality, hashing, cloning, debug formatting; <code>ParseError</code> error/value semantics; planned stricter URI/URL canonicalization</td></tr>
     <tr><td><code>std:http</code></td><td>std</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>
         <td>Comparable <code>Method</code>/<code>HttpVersion</code>, standard <code>Status</code> helpers/reason phrases and reason builders, case-insensitive normalized <code>Headers</code> with order-insensitive header-name hashing, <code>HeaderEntry</code>, <code>HttpRequest</code>, <code>HttpResponse</code>, value equality/clone/hash, flattened header entries, request/response snapshot accessors and header builders, diagnostic debug rendering; planned parsing/client/server work</td></tr>
     <tr><td><code>std:fs</code></td><td>std</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>
-        <td><code>Path</code> value operations including lexical normalization, native separator conversion, and target-backed existence/type/metadata/canonicalization queries; <code>DirEntry</code>/<code>DirEntries</code>/<code>FileKind</code>, <code>Metadata</code>/<code>Permissions</code>, and <code>OpenOptions</code> value semantics with snapshot constructors/accessors/builders and open-option validation; target-backed binary <code>read</code>/<code>write</code>, text <code>File</code>/<code>read_to_string</code>/<code>write_string</code>/<code>append_string</code>, descriptor-backed <code>File</code> handles implementing <code>Reader</code>/<code>Writer</code>/<code>Seeker</code>, explicit open options, snapshot-backed <code>read_dir</code>, plus non-recursive <code>remove</code>, <code>rename</code>, <code>create_dir</code>, and <code>create_dir_all</code></td></tr>
-    <tr><td><code>std:net</code></td><td>std</td><td><span class="pill planned">planned</span></td>
-        <td><code>TcpStream</code>, <code>TcpListener</code>, <code>UdpSocket</code>, <code>resolve</code></td></tr>
+        <td><code>Path</code> value operations including lexical normalization, native separator conversion, and target-backed existence/type/metadata/canonicalization queries; <code>DirEntry</code>/<code>DirEntries</code>/<code>FileKind</code>, <code>Metadata</code>/<code>Permissions</code>, and <code>OpenOptions</code> value semantics with snapshot constructors/accessors/builders and open-option validation; target-backed binary <code>read</code>/<code>write</code>, text <code>File</code>/<code>read_to_string</code>/<code>write_string</code>/<code>append_string</code>, descriptor-backed <code>File</code> handles implementing <code>Reader</code>/<code>Writer</code>/<code>Seeker</code> plus concrete async methods, explicit open options, snapshot-backed <code>read_dir</code>, plus non-recursive <code>remove</code>, <code>rename</code>, <code>create_dir</code>, and <code>create_dir_all</code></td></tr>
+    <tr><td><code>std:net</code></td><td>std</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>
+        <td>Provider-backed <code>resolve(host): List&lt;IpAddr&gt; | IoError</code>; synchronous <code>TcpStream</code>/<code>TcpListener</code> handles implementing <code>Reader</code>/<code>Writer</code> and accept/local/peer address operations; synchronous <code>UdpSocket</code> datagrams with bind/send_to/recv_from/local address/close; planned async network adapters, IDNA, and richer socket options</td></tr>
     <tr><td><code>std:thread</code></td><td>std</td><td><span class="pill spec">spec</span></td>
         <td><code>Thread.spawn</code>, <code>JoinHandle</code>, <code>Joined</code>, <code>Panicked</code>; <code>Panicked</code> value semantics</td></tr>
     <tr><td><code>std:sync</code></td><td>std</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>
         <td><code>Shared</code> and channels are exported today; <code>ChannelClosed</code>/<code>LockBusy</code> value semantics; <code>RwLock</code>, <code>Once</code>, and <code>Lazy</code> are planned</td></tr>
     <tr><td><code>std:task</code></td><td>std</td><td><span class="pill spec">spec</span></td>
         <td><code>Task.spawn</code> on the M:N executor, executor <code>JoinHandle&lt;R&gt;</code> with <code>join</code>/<code>detach</code>/<code>cancel</code>/<code>abort</code>, <code>Joined&lt;R&gt;</code>, <code>Panicked</code>, and <code>Cancelled</code> value semantics</td></tr>
-    <tr><td><code>core:sync:atomic</code></td><td>core</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>
-        <td><code>Ordering</code> value semantics and constructor helpers; planned <code>AtomicI32/I64/U32/U64/Bool/Ptr</code> operations</td></tr>
+    <tr><td><code>core:sync/atomic</code></td><td>core</td><td><span class="pill spec">spec</span></td>
+        <td><code>Ordering</code> value semantics and constructor helpers; runtime-backed <code>AtomicI32</code>, <code>AtomicI64</code>, <code>AtomicU32</code>, <code>AtomicU64</code>, <code>AtomicBool</code>, and <code>AtomicPtr&lt;T&gt;</code> load/store/swap/compare-exchange operations with integer/bool fetch operations</td></tr>
     <tr><td><code>std:async</code></td><td>std</td><td><span class="pill spec">spec</span></td>
         <td><code>yield_now</code>, <code>sleep</code>, <code>timeout</code>, <code>TimedOut</code> value semantics, executor/runtime adapters</td></tr>
     <tr><td><code>std:process</code></td><td>std</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>
-        <td><code>Command</code>, <code>ExitStatus</code>, captured <code>Output</code>, snapshotting value builders/accessors including args/env/cwd replacement and clearing, direct command validation, structural equality/hash value semantics, host <code>args</code>/<code>env</code>/<code>env_all</code>/<code>set_env</code>, process <code>exit</code>/<code>abort</code>, and run-to-completion <code>Command.status()</code>/<code>output()</code>; planned live process spawning and <code>Child</code></td></tr>
+        <td><code>Command</code>, live <code>Child</code>, <code>ExitStatus</code>, captured <code>Output</code>, snapshotting value builders/accessors including args/env/cwd replacement and clearing, direct command validation, structural equality/hash value semantics, host <code>args</code>/<code>env</code>/<code>env_all</code>/<code>set_env</code>, process <code>exit</code>/<code>abort</code>, run-to-completion <code>Command.status()</code>/<code>output()</code>, and <code>Command.spawn()</code> with child <code>id()</code>/<code>wait()</code>/<code>kill()</code>; planned streamed child stdio and richer target-specific status details</td></tr>
     <tr><td><code>std:rand</code></td><td>std</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>
         <td><code>Rng</code>, deterministic <code>SeededRng</code> with state value semantics, OS-backed <code>OsRng</code>, per-value <code>ThreadRng</code>, <code>RandomError</code>, integer/f64 range helpers, exact byte-buffer helpers, <code>gen_bool</code>, uniform index helpers, <code>choose</code>, <code>shuffle</code>; planned cryptographic-strength guarantees and richer distributions</td></tr>
     <tr><td><code>std:log</code></td><td>std</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>

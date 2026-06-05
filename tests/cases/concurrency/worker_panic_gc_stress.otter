@@ -19,7 +19,7 @@ function churn(id: i64, doom: bool): i64 {
   var xs: List<i64> = [];
   var i: i64 = 0;
   while i < 100 {
-    var s: str = "item ${id} ${i}";
+    var s: str = "item ${id } ${i }";
     if s.size() > 0 { xs.push(i); }
     i = i + 1;
   }
@@ -31,12 +31,12 @@ function churn(id: i64, doom: bool): i64 {
 
 function show(label: str, r: Joined<i64> | Panicked) {
   match r {
-    Joined<i64> j => println(label + " = ok " + (j.value as str)),
-    Panicked p    => println(label + " = panicked: " + p.message),
+    Joined < i64 > j => println(label + " = ok " + (j.value as str)),
+    Panicked p => println(label + " = panicked: " + p.message),
   };
 }
 
-function main(): Future<null> async {
+function main(): Future < null > async {
   var h0: JoinHandle<i64> = Thread.spawn(() => churn(0, true));
   var h1: JoinHandle<i64> = Thread.spawn(() => churn(1, false));
   var h2: JoinHandle<i64> = Thread.spawn(() => churn(2, true));

@@ -1,0 +1,14 @@
+//@ kind: compile-error
+//@ description: std:net follows the near-empty prelude rule; provider network helpers require imports
+//@ stderr: cannot find value `resolve` in scope
+//@ stderr: cannot find type `TcpStream`
+//@ stderr: cannot find type `TcpListener`
+//@ stderr: cannot find type `UdpSocket`
+
+function needs_net(stream: TcpStream, listener: TcpListener, socket: UdpSocket): null {
+  null
+}
+
+function main() {
+  resolve("127.0.0.1");
+}

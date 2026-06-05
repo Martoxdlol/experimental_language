@@ -2,10 +2,17 @@
 //! LSP feature. Each handler recompiles the open document (the front-end is
 //! fast and side-effect-free) and answers from the resulting [`Compiled`].
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use compiler::ast::{ExternItem, ItemKind, ModuleKind, StructKind};
+use compiler::ast::{
+    self, ExprKind as AstExprKind, ExternItem, ImportKind, ItemKind, ModuleKind,
+    PatternKind as AstPatternKind, StmtKind as AstStmtKind, StructKind,
+};
+use compiler::ids::{DefId, ModId};
 use compiler::sema::ValueRes;
+use compiler::sema::resolve_ctx::normalize;
 use compiler::span::Span;
 use dashmap::DashMap;
 use tower_lsp::jsonrpc::Result;
@@ -20,6 +27,15 @@ use crate::analysis::{
 };
 use compiler::sema::symbols::DefKind;
 use compiler::ty::TyKind;
+
+const MAX_WORKSPACE_SCAN_FILES: usize = 2048;
+
+#[derive(Clone, Eq, PartialEq, Hash, Debug)]
+struct SourceSpanKey {
+    path: PathBuf,
+    lo: usize,
+    hi: usize,
+}
 
 /// Map any analysis [`Span`] to an editor [`Location`]: the open document, a
 /// loaded submodule file (resolved through the `SourceMap`), or `None` for a
@@ -44,6 +60,352 @@ fn span_to_location(c: &Compiled, span: Span, doc_uri: &Url) -> Option<Location>
     None
 }
 
+fn span_file_path(c: &Compiled, span: Span, doc_uri: &Url) -> Option<PathBuf> {
+    if span.file == DOC_FILE {
+        return doc_uri.to_file_path().ok().map(|p| normalize(&p));
+    }
+    if (span.file.0 as usize) < c.map.file_count() {
+        return Some(normalize(Path::new(&c.map.file(span.file).name)));
+    }
+    None
+}
+
+fn span_source_key(c: &Compiled, span: Span, doc_uri: &Url) -> Option<SourceSpanKey> {
+    Some(SourceSpanKey {
+        path: span_file_path(c, span, doc_uri)?,
+        lo: span.lo.to_usize(),
+        hi: span.hi.to_usize(),
+    })
+}
+
+fn resolution_def_key(c: &Compiled, res: ValueRes, doc_uri: &Url) -> Option<SourceSpanKey> {
+    let span = c.definition_span(res)?;
+    span_source_key(c, span, doc_uri)
+}
+
+fn resolution_def_name<'a>(c: &'a Compiled, res: ValueRes) -> Option<&'a str> {
+    match res {
+        ValueRes::Function(d)
+        | ValueRes::Method(d)
+        | ValueRes::Global(d)
+        | ValueRes::StructCtor(d) => Some(c.analysis.program.def(d).name.as_str()),
+        ValueRes::Local(_) | ValueRes::Builtin(_) => None,
+    }
+}
+
+fn location_key(loc: &Location) -> (String, u32, u32, u32, u32) {
+    (
+        loc.uri.to_string(),
+        loc.range.start.line,
+        loc.range.start.character,
+        loc.range.end.line,
+        loc.range.end.character,
+    )
+}
+
+fn dedup_locations(locs: &mut Vec<Location>) {
+    let mut seen = HashSet::new();
+    locs.retain(|loc| seen.insert(location_key(loc)));
+    locs.sort_by_key(location_key);
+}
+
+fn target_is_workspace_wide(res: ValueRes) -> bool {
+    matches!(
+        res,
+        ValueRes::Function(_) | ValueRes::Method(_) | ValueRes::Global(_) | ValueRes::StructCtor(_)
+    )
+}
+
+fn def_key(c: &Compiled, def: DefId, doc_uri: &Url) -> Option<SourceSpanKey> {
+    let span = c.def_name_span(def)?;
+    span_source_key(c, span, doc_uri)
+}
+
+fn import_name_spans_for_target(
+    c: &Compiled,
+    doc_uri: &Url,
+    target_key: &SourceSpanKey,
+) -> Vec<Span> {
+    let mut out = Vec::new();
+    let root = c.analysis.program.module(ModId::ROOT);
+    for item in &c.module.items {
+        let ItemKind::Import(import) = &item.kind else {
+            continue;
+        };
+        let ImportKind::Named(names) = &import.kind else {
+            continue;
+        };
+        for name in names {
+            let bound = name.alias.as_ref().unwrap_or(&name.name).name.as_str();
+            let imported = root
+                .imported_values
+                .get(bound)
+                .or_else(|| root.imported_types.get(bound));
+            if imported.and_then(|def| def_key(c, *def, doc_uri)).as_ref() == Some(target_key) {
+                out.push(name.name.span);
+            }
+        }
+    }
+    out
+}
+
+fn dedup_changes(changes: &mut HashMap<Url, Vec<TextEdit>>) {
+    for edits in changes.values_mut() {
+        let mut seen = HashSet::new();
+        edits.retain(|edit| {
+            seen.insert((
+                edit.range.start.line,
+                edit.range.start.character,
+                edit.range.end.line,
+                edit.range.end.character,
+            ))
+        });
+        edits.sort_by_key(|edit| {
+            (
+                edit.range.start.line,
+                edit.range.start.character,
+                edit.range.end.line,
+                edit.range.end.character,
+            )
+        });
+    }
+}
+
+fn read_path_with_documents(documents: &DashMap<Url, String>, path: &Path) -> Option<String> {
+    if let Ok(uri) = Url::from_file_path(path) {
+        if let Some(text) = documents.get(&uri) {
+            return Some(text.clone());
+        }
+    }
+    std::fs::read_to_string(path).ok()
+}
+
+fn compile_text_at_path_with_documents(
+    documents: &DashMap<Url, String>,
+    text: String,
+    path: &Path,
+) -> Compiled {
+    if let (Some(parent), Some(stem)) = (path.parent(), path.file_stem().and_then(|s| s.to_str())) {
+        let read = |p: &Path| -> Option<String> { read_path_with_documents(documents, p) };
+        return Compiled::new_multi(text, parent.to_path_buf(), stem.to_string(), &read);
+    }
+    Compiled::new(text)
+}
+
+fn compile_path_with_documents(documents: &DashMap<Url, String>, path: &Path) -> Option<Compiled> {
+    let text = read_path_with_documents(documents, path)?;
+    Some(compile_text_at_path_with_documents(documents, text, path))
+}
+
+#[derive(Clone)]
+struct CachedCompiled {
+    text: String,
+    compiled: Arc<Compiled>,
+}
+
+fn compile_document_with_cache(
+    documents: &DashMap<Url, String>,
+    cache: &DashMap<Url, CachedCompiled>,
+    uri: &Url,
+) -> Option<Arc<Compiled>> {
+    let text = documents.get(uri)?.clone();
+    if let Some(cached) = cache.get(uri) {
+        if cached.text == text {
+            return Some(cached.compiled.clone());
+        }
+    }
+
+    let compiled = match uri.to_file_path() {
+        Ok(path) => compile_text_at_path_with_documents(documents, text.clone(), &path),
+        Err(_) => Compiled::new(text.clone()),
+    };
+    let compiled = Arc::new(compiled);
+    cache.insert(
+        uri.clone(),
+        CachedCompiled {
+            text,
+            compiled: compiled.clone(),
+        },
+    );
+    Some(compiled)
+}
+
+fn apply_document_changes(
+    mut text: String,
+    changes: Vec<TextDocumentContentChangeEvent>,
+) -> std::result::Result<String, String> {
+    for change in changes {
+        let Some(range) = change.range else {
+            text = change.text;
+            continue;
+        };
+        let start = offset_at(&text, range.start);
+        let end = offset_at(&text, range.end);
+        if start > end {
+            return Err(format!(
+                "invalid incremental edit range: start {:?} is after end {:?}",
+                range.start, range.end
+            ));
+        }
+        if !text.is_char_boundary(start) || !text.is_char_boundary(end) {
+            return Err(format!(
+                "invalid incremental edit range: {:?} is not on UTF-8 character boundaries",
+                range
+            ));
+        }
+        text.replace_range(start..end, &change.text);
+    }
+    Ok(text)
+}
+
+fn workspace_source_root(file: &Path) -> PathBuf {
+    let mut dir = file.parent();
+    while let Some(d) = dir {
+        let manifest = d.join("project.toml");
+        if manifest.is_file() {
+            let src = d.join("src");
+            return if src.is_dir() { src } else { d.to_path_buf() };
+        }
+        dir = d.parent();
+    }
+    file.parent()
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
+}
+
+fn workspace_candidate_paths(
+    documents: &DashMap<Url, String>,
+    current_path: &Path,
+) -> Vec<PathBuf> {
+    let root = workspace_source_root(current_path);
+    let current = normalize(current_path);
+    let mut out = Vec::new();
+    let mut stack = vec![root];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut entries: Vec<_> = entries.filter_map(|entry| entry.ok()).collect();
+        entries.sort_by_key(|e| e.path());
+        for entry in entries {
+            let path = entry.path();
+            let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            if name.starts_with('.') || name == "target" {
+                continue;
+            }
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path.extension().and_then(|s| s.to_str()) == Some("otter") {
+                let normalized = normalize(&path);
+                if normalized != current {
+                    out.push(normalized);
+                }
+                if out.len() >= MAX_WORKSPACE_SCAN_FILES {
+                    return out;
+                }
+            }
+        }
+    }
+    for entry in documents.iter() {
+        let Ok(path) = entry.key().to_file_path() else {
+            continue;
+        };
+        let normalized = normalize(&path);
+        if normalized != current && !out.contains(&normalized) {
+            out.push(normalized);
+            if out.len() >= MAX_WORKSPACE_SCAN_FILES {
+                break;
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn workspace_reference_locations(
+    documents: &DashMap<Url, String>,
+    current_uri: &Url,
+    target_key: &SourceSpanKey,
+) -> Vec<Location> {
+    let Ok(current_path) = current_uri.to_file_path() else {
+        return Vec::new();
+    };
+    let mut locs = Vec::new();
+    for path in workspace_candidate_paths(documents, &current_path) {
+        let Some(compiled) = compile_path_with_documents(documents, &path) else {
+            continue;
+        };
+        let Ok(uri) = Url::from_file_path(&path) else {
+            continue;
+        };
+        if !compiled.diagnostics.is_empty() {
+            continue;
+        }
+        for (span, res) in &compiled.index.resolutions {
+            if resolution_def_key(&compiled, *res, &uri).as_ref() == Some(target_key) {
+                if let Some(loc) = span_to_location(&compiled, *span, &uri) {
+                    locs.push(loc);
+                }
+            }
+        }
+        for span in import_name_spans_for_target(&compiled, &uri, target_key) {
+            if let Some(loc) = span_to_location(&compiled, span, &uri) {
+                locs.push(loc);
+            }
+        }
+    }
+    dedup_locations(&mut locs);
+    locs
+}
+
+fn workspace_rename_edits(
+    documents: &DashMap<Url, String>,
+    current_uri: &Url,
+    target_key: &SourceSpanKey,
+    old_name: &str,
+    new_name: &str,
+) -> HashMap<Url, Vec<TextEdit>> {
+    let Ok(current_path) = current_uri.to_file_path() else {
+        return HashMap::new();
+    };
+    let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+    for path in workspace_candidate_paths(documents, &current_path) {
+        let Some(compiled) = compile_path_with_documents(documents, &path) else {
+            continue;
+        };
+        let Ok(uri) = Url::from_file_path(&path) else {
+            continue;
+        };
+        if !compiled.diagnostics.is_empty() {
+            continue;
+        }
+        for (span, res) in &compiled.index.resolutions {
+            if resolution_def_key(&compiled, *res, &uri).as_ref() == Some(target_key)
+                && compiled.map.slice(*span) == old_name
+            {
+                if let Some(loc) = span_to_location(&compiled, *span, &uri) {
+                    changes.entry(loc.uri).or_default().push(TextEdit {
+                        range: loc.range,
+                        new_text: new_name.to_string(),
+                    });
+                }
+            }
+        }
+        for span in import_name_spans_for_target(&compiled, &uri, target_key) {
+            if let Some(loc) = span_to_location(&compiled, span, &uri) {
+                changes.entry(loc.uri).or_default().push(TextEdit {
+                    range: loc.range,
+                    new_text: new_name.to_string(),
+                });
+            }
+        }
+    }
+    dedup_changes(&mut changes);
+    changes
+}
+
 /// The semantic-token legend, in the exact order of [`TokenClass`]'s numeric
 /// values (the handler emits `class as u32` as the token-type index).
 const TOKEN_TYPES: &[SemanticTokenType] = &[
@@ -66,6 +428,9 @@ pub struct Backend {
     client: Client,
     /// Latest text of every open document, keyed by URI.
     documents: DashMap<Url, String>,
+    /// Cached front-end result for open documents. Cleared on any document
+    /// mutation because open submodules can affect another document's analysis.
+    compiled: DashMap<Url, CachedCompiled>,
 }
 
 impl Backend {
@@ -73,36 +438,33 @@ impl Backend {
         Backend {
             client,
             documents: DashMap::new(),
+            compiled: DashMap::new(),
         }
     }
 
     /// Compile a document's current text, if it is open. When the document has
     /// a filesystem path, its file-backed submodules are loaded too (preferring
     /// open editor buffers over disk) so cross-module imports resolve.
-    fn compile(&self, uri: &Url) -> Option<Compiled> {
-        let text = self.documents.get(uri)?.clone();
-        if let Ok(path) = uri.to_file_path() {
-            if let (Some(parent), Some(stem)) =
-                (path.parent(), path.file_stem().and_then(|s| s.to_str()))
-            {
-                let docs = &self.documents;
-                let read = |p: &std::path::Path| -> Option<String> {
-                    if let Ok(u) = Url::from_file_path(p) {
-                        if let Some(t) = docs.get(&u) {
-                            return Some(t.clone());
-                        }
-                    }
-                    std::fs::read_to_string(p).ok()
-                };
-                return Some(Compiled::new_multi(
-                    text,
-                    parent.to_path_buf(),
-                    stem.to_string(),
-                    &read,
-                ));
-            }
-        }
-        Some(Compiled::new(text))
+    fn compile(&self, uri: &Url) -> Option<Arc<Compiled>> {
+        compile_document_with_cache(&self.documents, &self.compiled, uri)
+    }
+
+    fn workspace_reference_locations(
+        &self,
+        current_uri: &Url,
+        target_key: &SourceSpanKey,
+    ) -> Vec<Location> {
+        workspace_reference_locations(&self.documents, current_uri, target_key)
+    }
+
+    fn workspace_rename_edits(
+        &self,
+        current_uri: &Url,
+        target_key: &SourceSpanKey,
+        old_name: &str,
+        new_name: &str,
+    ) -> HashMap<Url, Vec<TextEdit>> {
+        workspace_rename_edits(&self.documents, current_uri, target_key, old_name, new_name)
     }
 
     /// Recompile and publish diagnostics for `uri`.
@@ -152,8 +514,12 @@ impl LanguageServer for Backend {
                 version: Some(env!("CARGO_PKG_VERSION").into()),
             }),
             capabilities: ServerCapabilities {
-                text_document_sync: Some(TextDocumentSyncCapability::Kind(
-                    TextDocumentSyncKind::FULL,
+                text_document_sync: Some(TextDocumentSyncCapability::Options(
+                    TextDocumentSyncOptions {
+                        open_close: Some(true),
+                        change: Some(TextDocumentSyncKind::INCREMENTAL),
+                        ..Default::default()
+                    },
                 )),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 definition_provider: Some(OneOf::Left(true)),
@@ -175,6 +541,8 @@ impl LanguageServer for Backend {
                 code_lens_provider: Some(CodeLensOptions {
                     resolve_provider: Some(false),
                 }),
+                folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
+                inlay_hint_provider: Some(OneOf::Left(true)),
                 semantic_tokens_provider: Some(
                     SemanticTokensServerCapabilities::SemanticTokensOptions(
                         SemanticTokensOptions {
@@ -203,21 +571,31 @@ impl LanguageServer for Backend {
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let doc = params.text_document;
         self.documents.insert(doc.uri.clone(), doc.text);
+        self.compiled.clear();
         self.publish(doc.uri, Some(doc.version)).await;
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
-        // FULL sync: the last change carries the entire new document text.
-        if let Some(change) = params.content_changes.into_iter().last() {
-            self.documents
-                .insert(params.text_document.uri.clone(), change.text);
-        }
+        let uri = params.text_document.uri.clone();
+        let Some(current) = self.documents.get(&uri).map(|text| text.clone()) else {
+            return;
+        };
+        let new_text = match apply_document_changes(current, params.content_changes) {
+            Ok(text) => text,
+            Err(msg) => {
+                self.client.log_message(MessageType::WARNING, msg).await;
+                return;
+            }
+        };
+        self.documents.insert(uri.clone(), new_text);
+        self.compiled.clear();
         self.publish(params.text_document.uri, Some(params.text_document.version))
             .await;
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         self.documents.remove(&params.text_document.uri);
+        self.compiled.clear();
         // Clear diagnostics for the closed file.
         self.client
             .publish_diagnostics(params.text_document.uri, vec![], None)
@@ -340,6 +718,9 @@ impl LanguageServer for Backend {
         let Some((_, target)) = c.resolution_at(off) else {
             return Ok(None);
         };
+        let target_key = target_is_workspace_wide(target)
+            .then(|| resolution_def_key(&c, target, &uri))
+            .flatten();
 
         let include_decl = params.context.include_declaration;
         // Use sites across *every* analyzed file (the open document plus its
@@ -372,15 +753,22 @@ impl LanguageServer for Backend {
                 }
             }
         }
+        if let Some(target_key) = &target_key {
+            spans.extend(import_name_spans_for_target(&c, &uri, target_key));
+        }
 
         spans.sort_by_key(|s| (s.file.0, s.lo.0, s.hi.0));
         spans.dedup();
         // Map each use site to its own file's location (a virtual-file span — a
         // synthesized node — has no editor location and is dropped).
-        let locs = spans
+        let mut locs: Vec<Location> = spans
             .into_iter()
             .filter_map(|s| span_to_location(&c, s, &uri))
             .collect();
+        if let Some(target_key) = &target_key {
+            locs.extend(self.workspace_reference_locations(&uri, target_key));
+        }
+        dedup_locations(&mut locs);
         Ok(Some(locs))
     }
 
@@ -394,6 +782,12 @@ impl LanguageServer for Backend {
         let Some((_, target)) = c.resolution_at(off) else {
             return Ok(None);
         };
+        let target_key = target_is_workspace_wide(target)
+            .then(|| resolution_def_key(&c, target, &uri))
+            .flatten();
+        let old_name = resolution_def_name(&c, target)
+            .map(str::to_string)
+            .unwrap_or_else(|| c.map.slice(c.resolution_at(off).unwrap().0).to_string());
 
         // Collect every use site plus the declaration, across all analyzed files.
         let mut spans: HashSet<Span> = c
@@ -406,21 +800,33 @@ impl LanguageServer for Backend {
         if let Some(dspan) = c.definition_span(target) {
             spans.insert(dspan);
         }
+        if let Some(target_key) = &target_key {
+            spans.extend(import_name_spans_for_target(&c, &uri, target_key));
+        }
         if spans.is_empty() {
             return Ok(None);
         }
 
         // Group edits by the file (URI) each span belongs to, so a cross-module
         // rename updates every affected document in one `WorkspaceEdit`.
-        let mut changes: std::collections::HashMap<Url, Vec<TextEdit>> =
-            std::collections::HashMap::new();
+        let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
         for s in spans {
+            if target_key.is_some() && c.map.slice(s) != old_name {
+                continue;
+            }
             if let Some(loc) = span_to_location(&c, s, &uri) {
                 changes.entry(loc.uri).or_default().push(TextEdit {
                     range: loc.range,
                     new_text: params.new_name.clone(),
                 });
             }
+        }
+        if let Some(target_key) = &target_key {
+            let extra = self.workspace_rename_edits(&uri, target_key, &old_name, &params.new_name);
+            for (uri, edits) in extra {
+                changes.entry(uri).or_default().extend(edits);
+            }
+            dedup_changes(&mut changes);
         }
         if changes.is_empty() {
             return Ok(None);
@@ -509,6 +915,20 @@ impl LanguageServer for Backend {
             },
             new_text: formatted,
         }]))
+    }
+
+    async fn folding_range(&self, params: FoldingRangeParams) -> Result<Option<Vec<FoldingRange>>> {
+        let Some(c) = self.compile(&params.text_document.uri) else {
+            return Ok(None);
+        };
+        Ok(Some(collect_folding_ranges(&c.text)))
+    }
+
+    async fn inlay_hint(&self, params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
+        let Some(c) = self.compile(&params.text_document.uri) else {
+            return Ok(None);
+        };
+        Ok(Some(collect_inlay_hints(&c, params.range)))
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
@@ -1269,6 +1689,427 @@ fn collect_code_lenses(c: &Compiled, uri: &str) -> Vec<CodeLens> {
     lenses
 }
 
+fn collect_inlay_hints(c: &Compiled, range: Range) -> Vec<InlayHint> {
+    let unannotated = collect_unannotated_var_bindings(&c.module);
+    let mut hints = Vec::new();
+
+    for (local, span) in &c.index.local_decls {
+        if span.file != DOC_FILE || !unannotated.contains(&span_key(*span)) {
+            continue;
+        }
+        let Some(ty) = c.index.local_types.get(local).copied() else {
+            continue;
+        };
+        let position = span_to_range(&c.text, *span).end;
+        if !position_in_range(position, range) {
+            continue;
+        }
+        hints.push(InlayHint {
+            position,
+            label: InlayHintLabel::String(format!(": {}", c.display_ty(ty))),
+            kind: Some(InlayHintKind::TYPE),
+            text_edits: None,
+            tooltip: None,
+            padding_left: Some(false),
+            padding_right: Some(false),
+            data: None,
+        });
+    }
+
+    hints.sort_by_key(|h| (h.position.line, h.position.character));
+    hints
+}
+
+fn position_in_range(position: Position, range: Range) -> bool {
+    range.start <= position && position <= range.end
+}
+
+fn collect_unannotated_var_bindings(module: &ast::Module) -> HashSet<(u32, usize, usize)> {
+    let mut out = HashSet::new();
+    for item in &module.items {
+        collect_unannotated_var_bindings_in_item(item, &mut out);
+    }
+    out
+}
+
+fn collect_unannotated_var_bindings_in_item(
+    item: &ast::Item,
+    out: &mut HashSet<(u32, usize, usize)>,
+) {
+    match &item.kind {
+        ItemKind::Function(function) => collect_unannotated_var_bindings_in_function(function, out),
+        ItemKind::Module(module) => {
+            if let ModuleKind::Inline { items, .. } = &module.kind {
+                for item in items {
+                    collect_unannotated_var_bindings_in_item(item, out);
+                }
+            }
+        }
+        ItemKind::Interface(interface) => {
+            for member in &interface.members {
+                if let Some(body) = &member.default_body {
+                    collect_unannotated_var_bindings_in_block(body, out);
+                }
+            }
+        }
+        ItemKind::Extend(extend) => {
+            for member in &extend.members {
+                collect_unannotated_var_bindings_in_function(&member.function, out);
+            }
+        }
+        ItemKind::Extern(ExternItem::Function(function)) => {
+            collect_unannotated_var_bindings_in_function(function, out)
+        }
+        ItemKind::Test(test) => collect_unannotated_var_bindings_in_block(&test.body, out),
+        ItemKind::Var(_)
+        | ItemKind::Struct(_)
+        | ItemKind::TypeAlias(_)
+        | ItemKind::Extern(_)
+        | ItemKind::Import(_) => {}
+    }
+}
+
+fn collect_unannotated_var_bindings_in_function(
+    function: &ast::FunctionItem,
+    out: &mut HashSet<(u32, usize, usize)>,
+) {
+    if let Some(body) = &function.body {
+        collect_unannotated_var_bindings_in_block(body, out);
+    }
+}
+
+fn collect_unannotated_var_bindings_in_block(
+    block: &ast::Block,
+    out: &mut HashSet<(u32, usize, usize)>,
+) {
+    for stmt in &block.stmts {
+        collect_unannotated_var_bindings_in_stmt(stmt, out);
+    }
+    if let Some(trailing) = &block.trailing {
+        collect_unannotated_var_bindings_in_expr(trailing, out);
+    }
+}
+
+fn collect_unannotated_var_bindings_in_stmt(
+    stmt: &ast::Stmt,
+    out: &mut HashSet<(u32, usize, usize)>,
+) {
+    match &stmt.kind {
+        AstStmtKind::Var(local) => collect_unannotated_var_bindings_in_local(local, out),
+        AstStmtKind::Assign { target, value } => {
+            collect_unannotated_var_bindings_in_expr(target, out);
+            collect_unannotated_var_bindings_in_expr(value, out);
+        }
+        AstStmtKind::Expr(expr) => collect_unannotated_var_bindings_in_expr(expr, out),
+        AstStmtKind::Item(item) => collect_unannotated_var_bindings_in_item(item, out),
+    }
+}
+
+fn collect_unannotated_var_bindings_in_local(
+    local: &ast::LocalVar,
+    out: &mut HashSet<(u32, usize, usize)>,
+) {
+    if local.ty.is_none() {
+        if let AstPatternKind::Binding(name) = &local.pattern.kind {
+            out.insert(span_key(name.span));
+        }
+    }
+    collect_unannotated_var_bindings_in_expr(&local.init, out);
+}
+
+fn collect_unannotated_var_bindings_in_expr(
+    expr: &ast::Expr,
+    out: &mut HashSet<(u32, usize, usize)>,
+) {
+    match &expr.kind {
+        AstExprKind::Tuple(exprs) | AstExprKind::List(exprs) => {
+            for expr in exprs {
+                collect_unannotated_var_bindings_in_expr(expr, out);
+            }
+        }
+        AstExprKind::Paren(expr)
+        | AstExprKind::Try { expr, .. }
+        | AstExprKind::Ref { expr, .. }
+        | AstExprKind::Deref { expr, .. }
+        | AstExprKind::Await { expr, .. }
+        | AstExprKind::Spawn { expr, .. } => collect_unannotated_var_bindings_in_expr(expr, out),
+        AstExprKind::MapLit(entries) => {
+            for entry in entries {
+                match entry {
+                    ast::MapItem::Entry { key, value, .. } => {
+                        collect_unannotated_var_bindings_in_expr(key, out);
+                        collect_unannotated_var_bindings_in_expr(value, out);
+                    }
+                    ast::MapItem::Spread(expr) => {
+                        collect_unannotated_var_bindings_in_expr(expr, out)
+                    }
+                }
+            }
+        }
+        AstExprKind::StructLit { fields, spread, .. } => {
+            for field in fields {
+                if let Some(value) = &field.value {
+                    collect_unannotated_var_bindings_in_expr(value, out);
+                }
+            }
+            if let Some(spread) = spread {
+                collect_unannotated_var_bindings_in_expr(spread, out);
+            }
+        }
+        AstExprKind::Unary { operand, .. } => {
+            collect_unannotated_var_bindings_in_expr(operand, out)
+        }
+        AstExprKind::Binary { left, right, .. } => {
+            collect_unannotated_var_bindings_in_expr(left, out);
+            collect_unannotated_var_bindings_in_expr(right, out);
+        }
+        AstExprKind::Cast { expr, .. } => collect_unannotated_var_bindings_in_expr(expr, out),
+        AstExprKind::Field { receiver, .. } | AstExprKind::TupleIndex { receiver, .. } => {
+            collect_unannotated_var_bindings_in_expr(receiver, out)
+        }
+        AstExprKind::Call {
+            callee,
+            args,
+            trailing_closure,
+            ..
+        } => {
+            collect_unannotated_var_bindings_in_expr(callee, out);
+            for arg in args {
+                collect_unannotated_var_bindings_in_expr(arg, out);
+            }
+            if let Some(trailing_closure) = trailing_closure {
+                collect_unannotated_var_bindings_in_expr(trailing_closure, out);
+            }
+        }
+        AstExprKind::Index { receiver, index } => {
+            collect_unannotated_var_bindings_in_expr(receiver, out);
+            collect_unannotated_var_bindings_in_expr(index, out);
+        }
+        AstExprKind::If {
+            cond,
+            then_block,
+            else_branch,
+        } => {
+            collect_unannotated_var_bindings_in_expr(cond, out);
+            collect_unannotated_var_bindings_in_block(then_block, out);
+            if let Some(else_branch) = else_branch {
+                match else_branch {
+                    ast::ElseBranch::If(expr) => {
+                        collect_unannotated_var_bindings_in_expr(expr, out)
+                    }
+                    ast::ElseBranch::Block(block) => {
+                        collect_unannotated_var_bindings_in_block(block, out)
+                    }
+                }
+            }
+        }
+        AstExprKind::Match { scrutinee, arms } => {
+            collect_unannotated_var_bindings_in_expr(scrutinee, out);
+            for arm in arms {
+                if let Some(guard) = &arm.guard {
+                    collect_unannotated_var_bindings_in_expr(guard, out);
+                }
+                collect_unannotated_var_bindings_in_expr(&arm.body, out);
+            }
+        }
+        AstExprKind::Block(block) | AstExprKind::Loop(block) | AstExprKind::AsyncBlock(block) => {
+            collect_unannotated_var_bindings_in_block(block, out)
+        }
+        AstExprKind::While { cond, body } => {
+            collect_unannotated_var_bindings_in_expr(cond, out);
+            collect_unannotated_var_bindings_in_block(body, out);
+        }
+        AstExprKind::For { iter, body, .. } => {
+            collect_unannotated_var_bindings_in_expr(iter, out);
+            collect_unannotated_var_bindings_in_block(body, out);
+        }
+        AstExprKind::Return(expr) | AstExprKind::Break(expr) => {
+            if let Some(expr) = expr {
+                collect_unannotated_var_bindings_in_expr(expr, out);
+            }
+        }
+        AstExprKind::Closure { body, .. } => collect_unannotated_var_bindings_in_expr(body, out),
+        AstExprKind::AnonFn(function) => {
+            collect_unannotated_var_bindings_in_function(function, out)
+        }
+        AstExprKind::MacroCall { args, block, .. } => {
+            for arg in args {
+                match arg {
+                    ast::AttrArg::Positional(expr) => {
+                        collect_unannotated_var_bindings_in_expr(expr, out)
+                    }
+                    ast::AttrArg::Named { value, .. } => {
+                        collect_unannotated_var_bindings_in_expr(value, out)
+                    }
+                }
+            }
+            if let Some(block) = block {
+                collect_unannotated_var_bindings_in_block(block, out);
+            }
+        }
+        AstExprKind::Int(_)
+        | AstExprKind::Float(_)
+        | AstExprKind::Bool(_)
+        | AstExprKind::Null
+        | AstExprKind::Char(_)
+        | AstExprKind::Str(_)
+        | AstExprKind::Ident(_)
+        | AstExprKind::SelfExpr
+        | AstExprKind::Underscore
+        | AstExprKind::Continue => {}
+    }
+}
+
+fn span_key(span: Span) -> (u32, usize, usize) {
+    (span.file.0, span.lo.to_usize(), span.hi.to_usize())
+}
+
+fn collect_folding_ranges(text: &str) -> Vec<FoldingRange> {
+    #[derive(Clone, Copy)]
+    struct Open {
+        line: u32,
+        character: u32,
+    }
+
+    let bytes = text.as_bytes();
+    let mut ranges = Vec::new();
+    let mut braces: Vec<Open> = Vec::new();
+    let mut block_comments: Vec<Open> = Vec::new();
+    let mut line = 0u32;
+    let mut character = 0u32;
+    let mut i = 0usize;
+
+    while i < bytes.len() {
+        if let Some(start) = block_comments.last().copied() {
+            if bytes[i] == b'\n' {
+                line += 1;
+                character = 0;
+                i += 1;
+                continue;
+            }
+            if i + 1 < bytes.len() && bytes[i] == b'/' && bytes[i + 1] == b'*' {
+                block_comments.push(Open { line, character });
+                i += 2;
+                character += 2;
+                continue;
+            }
+            if i + 1 < bytes.len() && bytes[i] == b'*' && bytes[i + 1] == b'/' {
+                block_comments.pop();
+                if block_comments.is_empty() && line > start.line {
+                    ranges.push(FoldingRange {
+                        start_line: start.line,
+                        start_character: Some(start.character),
+                        end_line: line,
+                        end_character: Some(character + 2),
+                        kind: Some(FoldingRangeKind::Comment),
+                        collapsed_text: None,
+                    });
+                }
+                i += 2;
+                character += 2;
+                continue;
+            }
+            i += 1;
+            character += 1;
+            continue;
+        }
+
+        match bytes[i] {
+            b'\n' => {
+                line += 1;
+                character = 0;
+                i += 1;
+            }
+            b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'/' => {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                    character += 1;
+                }
+            }
+            b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'*' => {
+                block_comments.push(Open { line, character });
+                i += 2;
+                character += 2;
+            }
+            b'"' => {
+                i += 1;
+                character += 1;
+                while i < bytes.len() && bytes[i] != b'"' && bytes[i] != b'\n' {
+                    if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                        i += 2;
+                        character += 2;
+                    } else {
+                        i += 1;
+                        character += 1;
+                    }
+                }
+                if i < bytes.len() && bytes[i] == b'"' {
+                    i += 1;
+                    character += 1;
+                }
+            }
+            b'\'' => {
+                i += 1;
+                character += 1;
+                while i < bytes.len() && bytes[i] != b'\'' && bytes[i] != b'\n' {
+                    if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                        i += 2;
+                        character += 2;
+                    } else {
+                        i += 1;
+                        character += 1;
+                    }
+                }
+                if i < bytes.len() && bytes[i] == b'\'' {
+                    i += 1;
+                    character += 1;
+                }
+            }
+            b'{' => {
+                braces.push(Open { line, character });
+                i += 1;
+                character += 1;
+            }
+            b'}' => {
+                if let Some(start) = braces.pop() {
+                    if line > start.line {
+                        ranges.push(FoldingRange {
+                            start_line: start.line,
+                            start_character: Some(start.character),
+                            end_line: line,
+                            end_character: Some(character + 1),
+                            kind: Some(FoldingRangeKind::Region),
+                            collapsed_text: None,
+                        });
+                    }
+                }
+                i += 1;
+                character += 1;
+            }
+            _ => {
+                i += 1;
+                character += 1;
+            }
+        }
+    }
+
+    ranges.sort_by(|a, b| {
+        (
+            a.start_line,
+            a.start_character.unwrap_or(0),
+            a.end_line,
+            a.end_character.unwrap_or(0),
+        )
+            .cmp(&(
+                b.start_line,
+                b.start_character.unwrap_or(0),
+                b.end_line,
+                b.end_character.unwrap_or(0),
+            ))
+    });
+    ranges
+}
+
 /// Locate the open `(` of the call enclosing `off`, returning the byte offset
 /// inside the callee name and the active parameter (0-based comma count). Skips
 /// nested braces/brackets/parens and stops at semicolons or unmatched closers.
@@ -1469,8 +2310,408 @@ function main() {}
         }
     }
 
+    #[test]
+    fn incremental_document_changes_apply_in_order_with_utf16_positions() {
+        let text = "function main() {\n  var icon = \"🦦\";\n}\n".to_string();
+        let otter_start = text.find("🦦").unwrap();
+        let first = TextDocumentContentChangeEvent {
+            range: Some(Range {
+                start: position_at(&text, otter_start),
+                end: position_at(&text, otter_start + "🦦".len()),
+            }),
+            range_length: None,
+            text: "otter".into(),
+        };
+        let after_first = "function main() {\n  var icon = \"otter\";\n}\n";
+        let insert_at = after_first.find("otter").unwrap() + "otter".len();
+        let second = TextDocumentContentChangeEvent {
+            range: Some(Range {
+                start: position_at(after_first, insert_at),
+                end: position_at(after_first, insert_at),
+            }),
+            range_length: None,
+            text: " fusion".into(),
+        };
+
+        let applied = apply_document_changes(text, vec![first, second]).unwrap();
+        assert_eq!(
+            applied,
+            "function main() {\n  var icon = \"otter fusion\";\n}\n"
+        );
+    }
+
+    #[test]
+    fn full_document_change_replaces_text() {
+        let applied = apply_document_changes(
+            "old".into(),
+            vec![TextDocumentContentChangeEvent {
+                range: None,
+                range_length: None,
+                text: "function main() {}\n".into(),
+            }],
+        )
+        .unwrap();
+        assert_eq!(applied, "function main() {}\n");
+    }
+
+    #[test]
+    fn compiled_document_cache_reuses_until_text_changes() {
+        let docs = DashMap::new();
+        let cache = DashMap::new();
+        let uri = Url::parse("file:///tmp/otter_fusion_lsp_cache_reuse.otter").unwrap();
+        docs.insert(uri.clone(), "function main() {}\n".to_string());
+
+        let first = compile_document_with_cache(&docs, &cache, &uri).unwrap();
+        let second = compile_document_with_cache(&docs, &cache, &uri).unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+
+        docs.insert(
+            uri.clone(),
+            "function main() { var changed = 1; }\n".to_string(),
+        );
+        let third = compile_document_with_cache(&docs, &cache, &uri).unwrap();
+        assert!(!Arc::ptr_eq(&first, &third));
+        assert!(third.diagnostics.is_empty(), "{:?}", third.diagnostics);
+    }
+
+    #[test]
+    fn folding_ranges_cover_multiline_brace_blocks() {
+        let src = "\
+function main() {
+  if true {
+    println(\"x\");
+  }
+}
+";
+        let ranges = collect_folding_ranges(src);
+        let coords = ranges
+            .iter()
+            .map(|r| (r.start_line, r.end_line, r.kind.clone()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            coords,
+            vec![
+                (0, 4, Some(FoldingRangeKind::Region)),
+                (1, 3, Some(FoldingRangeKind::Region)),
+            ]
+        );
+    }
+
+    #[test]
+    fn folding_ranges_include_multiline_block_comments() {
+        let src = "\
+function main() {
+  /*
+   * docs
+   */
+  println(\"done\");
+}
+";
+        let ranges = collect_folding_ranges(src);
+        assert!(
+            ranges.iter().any(|r| {
+                r.start_line == 1 && r.end_line == 3 && r.kind == Some(FoldingRangeKind::Comment)
+            }),
+            "ranges: {ranges:?}"
+        );
+        assert!(
+            ranges.iter().any(|r| {
+                r.start_line == 0 && r.end_line == 5 && r.kind == Some(FoldingRangeKind::Region)
+            }),
+            "ranges: {ranges:?}"
+        );
+    }
+
+    #[test]
+    fn folding_ranges_ignore_braces_in_strings_and_comments() {
+        let src = "\
+function main() {
+  var s = \"not a fold { }\";
+  // not a fold {
+  /* also not a code fold { */
+}
+";
+        let ranges = collect_folding_ranges(src);
+        let code_ranges = ranges
+            .iter()
+            .filter(|r| r.kind == Some(FoldingRangeKind::Region))
+            .map(|r| (r.start_line, r.end_line))
+            .collect::<Vec<_>>();
+        assert_eq!(code_ranges, vec![(0, 4)]);
+    }
+
+    fn hint_label(hint: &InlayHint) -> &str {
+        match &hint.label {
+            InlayHintLabel::String(label) => label,
+            InlayHintLabel::LabelParts(_) => panic!("expected plain string label"),
+        }
+    }
+
+    fn pos_after(text: &str, needle: &str) -> Position {
+        let start = text.find(needle).expect("needle in source");
+        position_at(text, start + needle.len())
+    }
+
+    #[test]
+    fn inlay_hints_show_inferred_local_types() {
+        let src = "\
+function main() {
+  var answer = 41 + 1;
+  var text = \"otter\";
+  println(text);
+}
+";
+        let c = Compiled::new(src.into());
+        let hints = collect_inlay_hints(
+            &c,
+            Range {
+                start: Position::new(0, 0),
+                end: position_at(&c.text, c.text.len()),
+            },
+        );
+        let labels = hints.iter().map(hint_label).collect::<Vec<_>>();
+        assert_eq!(labels, vec![": i64", ": str"]);
+        assert_eq!(hints[0].position, pos_after(&c.text, "answer"));
+        assert_eq!(hints[0].kind, Some(InlayHintKind::TYPE));
+        assert_eq!(hints[1].position, pos_after(&c.text, "text"));
+    }
+
+    #[test]
+    fn inlay_hints_skip_annotated_locals_and_parameters() {
+        let src = "\
+function main(arg: i64) {
+  var typed: i64 = arg;
+  var inferred = arg;
+  println(\"done\");
+}
+";
+        let c = Compiled::new(src.into());
+        let hints = collect_inlay_hints(
+            &c,
+            Range {
+                start: Position::new(0, 0),
+                end: position_at(&c.text, c.text.len()),
+            },
+        );
+        assert_eq!(hints.len(), 1);
+        assert_eq!(hint_label(&hints[0]), ": i64");
+        assert_eq!(hints[0].position, pos_after(&c.text, "inferred"));
+    }
+
+    #[test]
+    fn inlay_hints_cover_nested_var_bindings() {
+        let src = "\
+function main() {
+  var outer = {
+    var inner = 7;
+    inner
+  };
+  println(\"done\");
+}
+";
+        let c = Compiled::new(src.into());
+        let hints = collect_inlay_hints(
+            &c,
+            Range {
+                start: Position::new(0, 0),
+                end: position_at(&c.text, c.text.len()),
+            },
+        );
+        let positions = hints.iter().map(|h| h.position).collect::<Vec<_>>();
+        assert_eq!(
+            positions,
+            vec![pos_after(&c.text, "outer"), pos_after(&c.text, "inner")]
+        );
+        assert_eq!(
+            hints.iter().map(hint_label).collect::<Vec<_>>(),
+            vec![": i64", ": i64"]
+        );
+    }
+
+    #[test]
+    fn inlay_hints_respect_requested_range() {
+        let src = "\
+function main() {
+  var first = 1;
+  var second = 2;
+}
+";
+        let c = Compiled::new(src.into());
+        let hints = collect_inlay_hints(
+            &c,
+            Range {
+                start: Position::new(2, 0),
+                end: Position::new(2, u32::MAX),
+            },
+        );
+        assert_eq!(hints.len(), 1);
+        assert_eq!(hint_label(&hints[0]), ": i64");
+        assert_eq!(hints[0].position, pos_after(&c.text, "second"));
+    }
+
     fn labels(items: &[CompletionItem]) -> Vec<&str> {
         items.iter().map(|i| i.label.as_str()).collect()
+    }
+
+    fn unique_temp_project(name: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "otter_fusion_lsp_{name}_{}_{}",
+            std::process::id(),
+            nanos
+        ))
+    }
+
+    fn write_project(files: &[(&str, &str)]) -> PathBuf {
+        let root = unique_temp_project("reverse_refs");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("project.toml"),
+            "[package]\nname = \"lsp_reverse_refs\"\nentry = \"src/main.otter\"\n",
+        )
+        .unwrap();
+        for (rel, text) in files {
+            let path = root.join(rel);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            std::fs::write(path, text).unwrap();
+        }
+        root
+    }
+
+    fn location_text(loc: &Location) -> String {
+        let path = loc.uri.to_file_path().unwrap();
+        let text = std::fs::read_to_string(path).unwrap();
+        let start = offset_at(&text, loc.range.start);
+        let end = offset_at(&text, loc.range.end);
+        text[start..end].to_string()
+    }
+
+    fn location_file_name(loc: &Location) -> String {
+        loc.uri
+            .to_file_path()
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    #[test]
+    fn workspace_references_include_files_that_import_current_document() {
+        let root = write_project(&[
+            (
+                "src/util.otter",
+                "pub function answer(): i64 { 42 }\n\
+                 function local_use(): i64 { answer() }\n",
+            ),
+            (
+                "src/main.otter",
+                "mod util;\n\
+                 import { answer } from \"self:util\";\n\
+                 function main() { var x = answer(); }\n",
+            ),
+            (
+                "src/alias_user.otter",
+                "mod util;\n\
+                 import { answer as ans } from \"self:util\";\n\
+                 function main() { var x = ans(); }\n",
+            ),
+        ]);
+        let docs = DashMap::new();
+        let util_path = root.join("src/util.otter");
+        let util_uri = Url::from_file_path(&util_path).unwrap();
+        let c = compile_path_with_documents(&docs, &util_path).unwrap();
+        assert!(c.diagnostics.is_empty(), "unexpected: {:?}", c.diagnostics);
+        let off = c.text.rfind("answer()").unwrap();
+        let (_, target) = c.resolution_at(off).expect("target resolution");
+        let target_key = resolution_def_key(&c, target, &util_uri).expect("target key");
+
+        let locs = workspace_reference_locations(&docs, &util_uri, &target_key);
+        let got: Vec<(String, String)> = locs
+            .iter()
+            .map(|loc| (location_file_name(loc), location_text(loc)))
+            .collect();
+        assert!(
+            got.contains(&("main.otter".into(), "answer".into())),
+            "main import/call missing: {got:?}"
+        );
+        assert!(
+            got.contains(&("alias_user.otter".into(), "answer".into())),
+            "aliased import specifier missing: {got:?}"
+        );
+        assert!(
+            got.contains(&("alias_user.otter".into(), "ans".into())),
+            "aliased use missing: {got:?}"
+        );
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn workspace_rename_updates_importers_without_rewriting_alias_uses() {
+        let root = write_project(&[
+            (
+                "src/util.otter",
+                "pub function answer(): i64 { 42 }\n\
+                 function local_use(): i64 { answer() }\n",
+            ),
+            (
+                "src/main.otter",
+                "mod util;\n\
+                 import { answer } from \"self:util\";\n\
+                 function main() { var x = answer(); }\n",
+            ),
+            (
+                "src/alias_user.otter",
+                "mod util;\n\
+                 import { answer as ans } from \"self:util\";\n\
+                 function main() { var x = ans(); }\n",
+            ),
+        ]);
+        let docs = DashMap::new();
+        let util_path = root.join("src/util.otter");
+        let util_uri = Url::from_file_path(&util_path).unwrap();
+        let c = compile_path_with_documents(&docs, &util_path).unwrap();
+        assert!(c.diagnostics.is_empty(), "unexpected: {:?}", c.diagnostics);
+        let off = c.text.rfind("answer()").unwrap();
+        let (_, target) = c.resolution_at(off).expect("target resolution");
+        let target_key = resolution_def_key(&c, target, &util_uri).expect("target key");
+
+        let changes = workspace_rename_edits(&docs, &util_uri, &target_key, "answer", "reply");
+        let edits_for = |file: &str| -> Vec<String> {
+            changes
+                .iter()
+                .filter(|(uri, _)| {
+                    uri.to_file_path()
+                        .unwrap()
+                        .file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        == file
+                })
+                .flat_map(|(uri, edits)| {
+                    let text = std::fs::read_to_string(uri.to_file_path().unwrap()).unwrap();
+                    edits.iter().map(move |edit| {
+                        let start = offset_at(&text, edit.range.start);
+                        let end = offset_at(&text, edit.range.end);
+                        text[start..end].to_string()
+                    })
+                })
+                .collect()
+        };
+        let main_edits = edits_for("main.otter");
+        assert_eq!(main_edits, vec!["answer", "answer"]);
+        let alias_edits = edits_for("alias_user.otter");
+        assert_eq!(
+            alias_edits,
+            vec!["answer"],
+            "the import's source name changes, but the local alias `ans` remains stable"
+        );
+        std::fs::remove_dir_all(root).ok();
     }
 
     #[test]
@@ -1520,6 +2761,209 @@ function main() {
     }
 
     #[test]
+    fn member_completion_lists_std_fs_file_async_methods() {
+        let src = "\
+import { File, Path } from \"std:fs\";
+function main() {
+  var opened = File.create(Path.new(\"/tmp/otter_fusion_lsp_file_async_methods.bin\"));
+  if opened is File {
+    var file = opened as File;
+    file.;
+  }
+}
+";
+        let c = Compiled::new(src.into());
+        let dot = src.find("file.;").unwrap() + 4;
+        let ctx = crate::analysis::dot_completion_context(&c.text, dot + 1).unwrap();
+        let items = member_completions(&c, &ctx);
+        let names = labels(&items);
+        for must in [
+            "read_async",
+            "read_to_end_async",
+            "write_async",
+            "write_all_async",
+            "flush_async",
+            "seek_async",
+        ] {
+            assert!(names.contains(&must), "{must} missing in {names:?}");
+        }
+    }
+
+    #[test]
+    fn member_completion_lists_std_process_child_methods() {
+        let src = "\
+import { Command, Child } from \"std:process\";
+function main() {
+  var spawned = Command.new(\"true\").spawn();
+  if spawned is Child {
+    var child = spawned as Child;
+    child.;
+  }
+}
+";
+        let c = Compiled::new(src.into());
+        let dot = src.find("child.;").unwrap() + 5;
+        let ctx = crate::analysis::dot_completion_context(&c.text, dot + 1).unwrap();
+        let items = member_completions(&c, &ctx);
+        let names = labels(&items);
+        for must in ["id", "stdin", "stdout", "stderr", "wait", "kill"] {
+            assert!(names.contains(&must), "{must} missing in {names:?}");
+        }
+    }
+
+    #[test]
+    fn member_completion_lists_core_atomic_i64_methods() {
+        let src = "\
+import { AtomicI64 } from \"core:sync/atomic\";
+function main() {
+  var atomic = AtomicI64.new(0);
+  atomic.;
+}
+";
+        let c = Compiled::new(src.into());
+        let dot = src.find("atomic.;").unwrap() + 6;
+        let ctx = crate::analysis::dot_completion_context(&c.text, dot + 1).unwrap();
+        let items = member_completions(&c, &ctx);
+        let names = labels(&items);
+        for must in [
+            "load",
+            "store",
+            "swap",
+            "compare_exchange",
+            "fetch_add",
+            "fetch_sub",
+        ] {
+            assert!(names.contains(&must), "{must} missing in {names:?}");
+        }
+    }
+
+    #[test]
+    fn member_completion_lists_core_atomic_i32_methods() {
+        let src = "\
+import { AtomicI32 } from \"core:sync/atomic\";
+function main() {
+  var atomic = AtomicI32.new(0);
+  atomic.;
+}
+";
+        let c = Compiled::new(src.into());
+        let dot = src.find("atomic.;").unwrap() + 6;
+        let ctx = crate::analysis::dot_completion_context(&c.text, dot + 1).unwrap();
+        let items = member_completions(&c, &ctx);
+        let names = labels(&items);
+        for must in [
+            "load",
+            "store",
+            "swap",
+            "compare_exchange",
+            "fetch_add",
+            "fetch_sub",
+        ] {
+            assert!(names.contains(&must), "{must} missing in {names:?}");
+        }
+    }
+
+    #[test]
+    fn member_completion_lists_core_atomic_u64_methods() {
+        let src = "\
+import { AtomicU64 } from \"core:sync/atomic\";
+function main() {
+  var atomic = AtomicU64.new(0u64);
+  atomic.;
+}
+";
+        let c = Compiled::new(src.into());
+        let dot = src.find("atomic.;").unwrap() + 6;
+        let ctx = crate::analysis::dot_completion_context(&c.text, dot + 1).unwrap();
+        let items = member_completions(&c, &ctx);
+        let names = labels(&items);
+        for must in [
+            "load",
+            "store",
+            "swap",
+            "compare_exchange",
+            "fetch_add",
+            "fetch_sub",
+        ] {
+            assert!(names.contains(&must), "{must} missing in {names:?}");
+        }
+    }
+
+    #[test]
+    fn member_completion_lists_core_atomic_u32_methods() {
+        let src = "\
+import { AtomicU32 } from \"core:sync/atomic\";
+function main() {
+  var atomic = AtomicU32.new(0u32);
+  atomic.;
+}
+";
+        let c = Compiled::new(src.into());
+        let dot = src.find("atomic.;").unwrap() + 6;
+        let ctx = crate::analysis::dot_completion_context(&c.text, dot + 1).unwrap();
+        let items = member_completions(&c, &ctx);
+        let names = labels(&items);
+        for must in [
+            "load",
+            "store",
+            "swap",
+            "compare_exchange",
+            "fetch_add",
+            "fetch_sub",
+        ] {
+            assert!(names.contains(&must), "{must} missing in {names:?}");
+        }
+    }
+
+    #[test]
+    fn member_completion_lists_core_atomic_ptr_methods() {
+        let src = "\
+import { AtomicPtr } from \"core:sync/atomic\";
+extern struct Cell { value: i64 }
+function main() {
+  var value = Cell { value: 0 };
+  var atomic = AtomicPtr.new<Cell>((&value) as *Cell);
+  atomic.;
+}
+";
+        let c = Compiled::new(src.into());
+        let dot = src.find("atomic.;").unwrap() + 6;
+        let ctx = crate::analysis::dot_completion_context(&c.text, dot + 1).unwrap();
+        let items = member_completions(&c, &ctx);
+        let names = labels(&items);
+        for must in ["load", "store", "swap", "compare_exchange"] {
+            assert!(names.contains(&must), "{must} missing in {names:?}");
+        }
+    }
+
+    #[test]
+    fn member_completion_lists_core_atomic_bool_methods() {
+        let src = "\
+import { AtomicBool } from \"core:sync/atomic\";
+function main() {
+  var atomic = AtomicBool.new(false);
+  atomic.;
+}
+";
+        let c = Compiled::new(src.into());
+        let dot = src.find("atomic.;").unwrap() + 6;
+        let ctx = crate::analysis::dot_completion_context(&c.text, dot + 1).unwrap();
+        let items = member_completions(&c, &ctx);
+        let names = labels(&items);
+        for must in [
+            "load",
+            "store",
+            "swap",
+            "compare_exchange",
+            "fetch_and",
+            "fetch_or",
+            "fetch_xor",
+        ] {
+            assert!(names.contains(&must), "{must} missing in {names:?}");
+        }
+    }
+
+    #[test]
     fn member_completion_lists_str_intrinsic_methods() {
         let src = "\
 function main() {
@@ -1548,6 +2992,120 @@ function main() {
         for must in ["MIN", "MAX", "wrapping_add", "checked_mul"] {
             assert!(names.contains(&must), "{must} missing in {names:?}");
         }
+    }
+
+    #[test]
+    fn type_namespace_completion_lists_std_time_datetime_static_methods() {
+        let src = "\
+import { DateTime } from \"std:time\";
+function main() {
+  var x = DateTime.;
+}
+";
+        let c = Compiled::new(src.into());
+        let dot = src.find("DateTime.;").unwrap() + 8;
+        let ctx = crate::analysis::dot_completion_context(&c.text, dot + 1).unwrap();
+        let items = member_completions(&c, &ctx);
+        let names = labels(&items);
+        for must in [
+            "new",
+            "parse_iso8601",
+            "now_utc",
+            "now_local",
+            "from_system_time_local",
+        ] {
+            assert!(names.contains(&must), "{must} missing in {names:?}");
+        }
+    }
+
+    #[test]
+    fn analysis_accepts_std_net_resolve_import() {
+        let src = "\
+import { List } from \"core:collections\";
+import { IpAddr } from \"std:net/types\";
+import { resolve } from \"std:net\";
+function main() {
+  var resolved = resolve(\"127.0.0.1\");
+  if resolved is List<IpAddr> {
+    var addrs = resolved as List<IpAddr>;
+  }
+}
+";
+        let c = Compiled::new(src.into());
+        assert!(c.diagnostics.is_empty(), "unexpected: {:?}", c.diagnostics);
+    }
+
+    #[test]
+    fn analysis_accepts_std_fmt_primitive_debug() {
+        let src = "\
+import { Debug } from \"std:fmt\";
+function render(value: Debug): str {
+  value.debug()
+}
+function generic<T: Debug>(value: T): str {
+  value.debug()
+}
+function main() {
+  var number: Debug = 42;
+  var rendered = render(\"hi\");
+  var direct = true.debug();
+  var generic_text = generic('Z');
+}
+";
+        let c = Compiled::new(src.into());
+        assert!(c.diagnostics.is_empty(), "unexpected: {:?}", c.diagnostics);
+    }
+
+    #[test]
+    fn analysis_accepts_std_net_tcp_imports() {
+        let src = "\
+import { IoError } from \"std:io\";
+import { TcpStream, TcpListener } from \"std:net\";
+import { SocketAddr, ip_v4, socket_addr } from \"std:net/types\";
+function main() {
+  var addr: SocketAddr = socket_addr(ip_v4(127u8, 0u8, 0u8, 1u8), 0u16);
+  var listener = TcpListener.bind(addr);
+  if listener is TcpListener {
+    var local = (listener as TcpListener).local_addr();
+  }
+  var stream = TcpStream.connect(addr);
+  if stream is TcpStream {
+    var peer = (stream as TcpStream).peer_addr();
+    var nodelay = (stream as TcpStream).set_nodelay(true);
+  }
+  if stream is IoError {
+    var message = (stream as IoError).message;
+  }
+}
+";
+        let c = Compiled::new(src.into());
+        assert!(c.diagnostics.is_empty(), "unexpected: {:?}", c.diagnostics);
+    }
+
+    #[test]
+    fn analysis_accepts_std_net_udp_imports() {
+        let src = "\
+import { Bytes } from \"std:bytes\";
+import { IoError } from \"std:io\";
+import { UdpSocket } from \"std:net\";
+import { SocketAddr, ip_v4, socket_addr } from \"std:net/types\";
+function main() {
+  var addr: SocketAddr = socket_addr(ip_v4(127u8, 0u8, 0u8, 1u8), 0u16);
+  var socket = UdpSocket.bind(addr);
+  if socket is UdpSocket {
+    var local = (socket as UdpSocket).local_addr();
+    var sent = (socket as UdpSocket).send_to(Bytes.from_str(\"x\"), addr);
+    var buf = Bytes.from_str(\"xxxx\");
+    var received = (socket as UdpSocket).recv_from(buf);
+    var closed = (socket as UdpSocket).close();
+  }
+  if socket is IoError {
+    var message = (socket as IoError).message;
+  }
+}
+";
+        let c = Compiled::new(src.into());
+        assert!(c.diagnostics.is_empty(), "unexpected: {:?}", c.diagnostics);
     }
 
     #[test]

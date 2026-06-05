@@ -14,7 +14,7 @@ import { channel } from "std:sync";
 // now closed for sending.
 function drain(rx: Receiver<i64>): i64 { 0 }
 
-function main(): Future<null> async {
+function main(): Future < null > async {
   var ends = channel<i64>();
   var tx = ends.0;
   var rx = ends.1;
@@ -28,5 +28,5 @@ function main(): Future<null> async {
     ChannelClosed c => { closed = true; },
     null => {},
   }
-  println("closed=${closed}");
+  println("closed=${closed }");
 }

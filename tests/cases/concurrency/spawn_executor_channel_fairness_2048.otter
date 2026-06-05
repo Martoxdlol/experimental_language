@@ -11,7 +11,7 @@ import { List } from "core:collections";
 import { Sender, Receiver, ChannelClosed, channel } from "std:sync";
 import { yield_now } from "std:async";
 
-function send_after_yields(tx: Sender<i64>, n: i64): Future<i64> async {
+function send_after_yields(tx: Sender<i64>, n: i64): Future < i64 > async {
   var rounds: i64 = (n % 7) + 1;
   var r: i64 = 0;
   while r < rounds {
@@ -22,7 +22,7 @@ function send_after_yields(tx: Sender<i64>, n: i64): Future<i64> async {
   n
 }
 
-function main(): Future<null> async {
+function main(): Future < null > async {
   var ends = channel<i64>();
   var tx: Sender<i64> = ends.0;
   var rx: Receiver<i64> = ends.1;
@@ -47,9 +47,9 @@ function main(): Future<null> async {
   var awaited: i64 = 0;
   var j: i64 = 0;
   while j < handles.size() {
-    awaited = awaited + await handles[j];
+    awaited = awaited+await handles[j];
     j = j + 1;
   }
 
-  println("received=${received} awaited=${awaited}");
+  println("received=${received } awaited=${awaited }");
 }

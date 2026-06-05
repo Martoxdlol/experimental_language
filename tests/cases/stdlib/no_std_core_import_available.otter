@@ -3,7 +3,7 @@
 //@ description: project manifest no-std still leaves core substrate imports available
 import { List } from "core:collections";
 import { panic } from "core:prelude";
-import { ordering_seq_cst } from "core:sync:atomic";
+import { ordering_seq_cst } from "core:sync/atomic";
 
 function main() {
   var xs = List<i64>();

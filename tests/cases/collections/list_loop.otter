@@ -8,8 +8,8 @@ function main() {
   var xs = [1, 2, 3];
   var sum = 0;
   for x in xs { sum = sum + x; }
-  println("${sum}");
+  println("${sum }");
   var total = 0;
   xs.each { total = total + it; };
-  println("${total}");
+  println("${total }");
 }

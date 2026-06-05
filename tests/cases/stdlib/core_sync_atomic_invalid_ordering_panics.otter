@@ -1,0 +1,9 @@
+//@ kind: panic
+//@ description: AtomicI64 rejects operation/order pairs that Rust atomics would reject
+//@ stderr: invalid atomic load ordering
+import { AtomicI64, Release } from "core:sync/atomic";
+
+function main() {
+  var atomic = AtomicI64.new(1);
+  atomic.load(Release {});
+}

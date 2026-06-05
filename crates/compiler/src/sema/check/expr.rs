@@ -797,6 +797,8 @@ impl<'a> Checker<'a> {
         // --- payload-free prelude builtins recognized by callee shape -------
         if self.resolution(callee.span).is_none() {
             let head1 = &all[..1.min(all.len())];
+            let head2 = &all[..2.min(all.len())];
+            let head3 = &all[..3.min(all.len())];
             if let ExprKind::Ident(n) = &callee.kind {
                 match n.name.as_str() {
                     "channel" if self.intr_fn_in("channel", &["std", "sync"]) => {
@@ -837,6 +839,27 @@ impl<'a> Checker<'a> {
                         if self.intr_fn("__otter_io_stderr_flush_async") =>
                     {
                         return intrinsic(Intrinsic::IoStderrFlushAsync, &[]);
+                    }
+                    "__otter_fs_file_read_async" if self.intr_fn("__otter_fs_file_read_async") => {
+                        return intrinsic(Intrinsic::FsFileReadAsync, head2);
+                    }
+                    "__otter_fs_file_read_to_end_async"
+                        if self.intr_fn("__otter_fs_file_read_to_end_async") =>
+                    {
+                        return intrinsic(Intrinsic::FsFileReadToEndAsync, head1);
+                    }
+                    "__otter_fs_file_write_async"
+                        if self.intr_fn("__otter_fs_file_write_async") =>
+                    {
+                        return intrinsic(Intrinsic::FsFileWriteAsync, head2);
+                    }
+                    "__otter_fs_file_flush_async"
+                        if self.intr_fn("__otter_fs_file_flush_async") =>
+                    {
+                        return intrinsic(Intrinsic::FsFileFlushAsync, head1);
+                    }
+                    "__otter_fs_file_seek_async" if self.intr_fn("__otter_fs_file_seek_async") => {
+                        return intrinsic(Intrinsic::FsFileSeekAsync, head3);
                     }
                     "__otter_time_monotonic_nanos"
                         if self.intr_fn("__otter_time_monotonic_nanos") =>
@@ -2262,6 +2285,75 @@ impl<'a> Checker<'a> {
                             found: args.len(),
                         },
                     );
+                }
+                return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.str]);
+            }
+            if (name.name == "__otter_fs_file_read_async"
+                && self.intr_fn("__otter_fs_file_read_async"))
+                || (name.name == "__otter_fs_file_write_async"
+                    && self.intr_fn("__otter_fs_file_write_async"))
+            {
+                if args.len() != 2 {
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 2,
+                            found: args.len(),
+                        },
+                    );
+                } else {
+                    let i64t = self.tcx.int(IntTy::I64);
+                    let handle = self.check_expr(&args[0], Some(i64t));
+                    self.expect(handle, i64t, args[0].span);
+                    let second_expected = if name.name == "__otter_fs_file_read_async" {
+                        i64t
+                    } else {
+                        self.tcx.str
+                    };
+                    let second = self.check_expr(&args[1], Some(second_expected));
+                    self.expect(second, second_expected, args[1].span);
+                }
+                return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.str]);
+            }
+            if (name.name == "__otter_fs_file_read_to_end_async"
+                && self.intr_fn("__otter_fs_file_read_to_end_async"))
+                || (name.name == "__otter_fs_file_flush_async"
+                    && self.intr_fn("__otter_fs_file_flush_async"))
+            {
+                if args.len() != 1 {
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 1,
+                            found: args.len(),
+                        },
+                    );
+                } else {
+                    let i64t = self.tcx.int(IntTy::I64);
+                    let handle = self.check_expr(&args[0], Some(i64t));
+                    self.expect(handle, i64t, args[0].span);
+                }
+                return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.str]);
+            }
+            if name.name == "__otter_fs_file_seek_async"
+                && self.intr_fn("__otter_fs_file_seek_async")
+            {
+                if args.len() != 3 {
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 3,
+                            found: args.len(),
+                        },
+                    );
+                } else {
+                    let i64t = self.tcx.int(IntTy::I64);
+                    let handle = self.check_expr(&args[0], Some(i64t));
+                    self.expect(handle, i64t, args[0].span);
+                    let mode = self.check_expr(&args[1], Some(self.tcx.str));
+                    self.expect(mode, self.tcx.str, args[1].span);
+                    let offset = self.check_expr(&args[2], Some(i64t));
+                    self.expect(offset, i64t, args[2].span);
                 }
                 return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.str]);
             }

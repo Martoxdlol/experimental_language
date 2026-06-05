@@ -15,10 +15,10 @@ function make_receiver(): Receiver<i64> {
   rx
 }
 
-function main(): Future<null> async {
+function main(): Future < null > async {
   var rx = make_receiver();
   match await rx.recv() {
-    i64 n => println("recv = value ${n}"),
+    i64 n => println("recv = value ${n }"),
     ChannelClosed c => println("recv = closed"),
   };
 }

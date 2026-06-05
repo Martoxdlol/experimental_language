@@ -987,6 +987,14 @@ fn float_bool_char_to_str() {
 }
 
 #[test]
+fn primitive_debug_interface_dispatch() {
+    let src = "import { Debug } from \"std:fmt\";\n\
+               function render(value: Debug): str { value.debug() }\n\
+               function f(): str { render(\"hi\\n\\\"otter\") + \" \" + render('Z') + \" \" + render(42) }";
+    assert_eq!(run_str(src, "f"), "\"hi\\n\\\"otter\" 'Z' 42");
+}
+
+#[test]
 fn concat_with_stringified_number() {
     assert_eq!(
         run_str("function f(): str { \"n = \" + (42 as str) }", "f"),

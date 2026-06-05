@@ -13,13 +13,13 @@ import { yield_now } from "std:async";
 
 function joined_value(r: Joined<i64> | Panicked | Cancelled): i64 {
   match r {
-    Joined<i64> j => j.value,
+    Joined < i64 > j => j.value,
     Panicked p => -1,
     Cancelled c => -2,
   }
 }
 
-function main(): Future<null> async {
+function main(): Future < null > async {
   var weights: Map<i64, i64> = Map<i64, i64>();
   var handles: List<JoinHandle<i64>> = [];
 
@@ -27,23 +27,23 @@ function main(): Future<null> async {
   while i < 16 {
     var n = i;
     weights.set(i, i * i);
-    handles.push(Task.spawn(() async => {
-      var seen: Map<i64, i64> = Map<i64, i64>();
-      var j: i64 = 0;
-      while j < 6 {
-        seen.set(j, n * 10 + j);
-        var _ = await yield_now();
-        j = j + 1;
-      }
+    handles.push(Task.spawn(()async => {
+          var seen: Map<i64, i64> = Map<i64, i64>();
+          var j: i64 = 0;
+          while j < 6 {
+            seen.set(j, n * 10 + j);
+            var _ = await yield_now();
+            j = j + 1;
+          }
 
-      var total: i64 = 0;
-      var k: i64 = 0;
-      while k < 6 {
-        total = total + seen[k];
-        k = k + 1;
-      }
-      total
-    }));
+          var total: i64 = 0;
+          var k: i64 = 0;
+          while k < 6 {
+            total = total + seen[k];
+            k = k + 1;
+          }
+          total
+        }));
     i = i + 1;
   }
 
@@ -61,5 +61,5 @@ function main(): Future<null> async {
     hi = hi + 1;
   }
 
-  println("weights=${weight_total} joined=${joined}");
+  println("weights=${weight_total } joined=${joined }");
 }

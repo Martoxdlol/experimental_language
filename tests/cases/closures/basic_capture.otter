@@ -6,8 +6,8 @@
 import { println } from "std:io";
 function main() {
   var inc = (n: i64): i64 => n + 1;
-  println("${inc(41)}");
+  println("${inc(41) }");
   var factor = 2;
   var scale = (n: i64): i64 => n * factor;
-  println("${scale(42)}");
+  println("${scale(42) }");
 }

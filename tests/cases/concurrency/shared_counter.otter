@@ -6,8 +6,8 @@
 import { println } from "std:io";
 import { Future } from "core:prelude";
 import { Shared, LockBusy } from "std:sync";
-function main(): Future<null> async {
+function main(): Future < null > async {
   var cell = Shared.new(10);
   var r = await cell.lock((v: i64): i64 => v + 5);
-  println("${r}");
+  println("${r }");
 }

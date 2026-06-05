@@ -43,8 +43,8 @@ extend<T> Box<T> {
 function main() {
   var o: Point = Point.origin();
   var p: Point = Point.at(3, 4);
-  println("origin manhattan = " + (o.manhattan() as str));
-  println("p manhattan = " + (p.manhattan() as str));
+  println("origin manhattan = " + (o.manhattan()as str));
+  println("p manhattan = " + (p.manhattan()as str));
 
   var c: Config = build<Config>();
   println("config level = " + (c.level as str));

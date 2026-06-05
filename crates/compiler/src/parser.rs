@@ -280,7 +280,7 @@ impl<'src> Parser<'src> {
         let kind: ItemKind = match kind_start {
             TokenKind::Kw(Keyword::Var) => ItemKind::Var(self.parse_var_item()?),
             TokenKind::Kw(Keyword::Function) => {
-                ItemKind::Function(self.parse_function_item(false)?)
+                ItemKind::Function(self.parse_function_item(false, false)?)
             }
             TokenKind::Kw(Keyword::Struct) => ItemKind::Struct(self.parse_struct_item(false)?),
             TokenKind::Kw(Keyword::Interface) => ItemKind::Interface(self.parse_interface_item()?),
@@ -449,9 +449,13 @@ impl<'src> Parser<'src> {
         Some(VarItem { name, ty, init })
     }
 
-    fn parse_function_item(&mut self, allow_no_body: bool) -> Option<FunctionItem> {
+    fn parse_function_item(
+        &mut self,
+        allow_no_body: bool,
+        allow_keyword_name: bool,
+    ) -> Option<FunctionItem> {
         self.bump(); // `function`
-        let name = self.expect_ident("function name")?;
+        let name = self.expect_function_name(allow_keyword_name)?;
         let generics = self.parse_optional_generic_params();
         self.expect(TokenKind::LParen, "`(` to start parameter list")?;
         let params = self.parse_param_list();
@@ -672,7 +676,7 @@ impl<'src> Parser<'src> {
             return None;
         }
         self.bump(); // `function`
-        let name = self.expect_ident("method name")?;
+        let name = self.expect_function_name(true)?;
         let generics = self.parse_optional_generic_params();
         self.expect(TokenKind::LParen, "`(`");
         let params = self.parse_param_list();
@@ -814,7 +818,7 @@ impl<'src> Parser<'src> {
             ));
             return None;
         }
-        let function = self.parse_function_item(true)?;
+        let function = self.parse_function_item(true, true)?;
         let end = self
             .tokens
             .get(self.pos.saturating_sub(1))
@@ -833,7 +837,7 @@ impl<'src> Parser<'src> {
         self.bump(); // `extern`
         match self.peek_kind() {
             TokenKind::Kw(Keyword::Function) => {
-                let f = self.parse_function_item(true)?;
+                let f = self.parse_function_item(true, false)?;
                 Some(ExternItem::Function(f))
             }
             TokenKind::Kw(Keyword::Struct) => {
@@ -3306,6 +3310,30 @@ impl<'src> Parser<'src> {
                 span,
             ));
             None
+        }
+    }
+
+    fn expect_function_name(&mut self, allow_keyword_name: bool) -> Option<Ident> {
+        match self.peek_kind() {
+            TokenKind::Ident => {
+                let tok = self.bump();
+                Some(self.ident_from(tok))
+            }
+            TokenKind::Kw(Keyword::Spawn) if allow_keyword_name => {
+                let tok = self.bump();
+                Some(Ident::new("spawn", tok.span))
+            }
+            _ => {
+                let span = self.peek_span();
+                self.error(ParseError::new(
+                    ParseErrorKind::Expected {
+                        expected: vec!["function name"],
+                        found: self.peek_kind(),
+                    },
+                    span,
+                ));
+                None
+            }
         }
     }
 

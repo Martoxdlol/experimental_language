@@ -7,12 +7,12 @@ import { println } from "std:io";
 import { Future } from "core:prelude";
 import { Thread, JoinHandle, Joined, Panicked } from "std:thread";
 function ident(n: i64): i64 { n }
-function main(): Future<null> async {
+function main(): Future < null > async {
   var x = 1;
   // The closure captures `x` by value — a snapshot of `1` taken now.
   var h = Thread.spawn(() => ident(x));
   // Reassigning `x` after the spawn must NOT be observed by the worker.
   x = 99;
   var r: Joined<i64> | Panicked = await h.join();
-  println("${match r { Joined<i64> j => j.value, Panicked p => 0 }}");
+  println("${match r { Joined < i64 > j => j.value, Panicked p => 0 } }");
 }

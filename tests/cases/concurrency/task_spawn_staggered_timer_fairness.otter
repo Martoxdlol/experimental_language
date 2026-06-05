@@ -12,7 +12,7 @@ import { sleep, yield_now } from "std:async";
 
 function joined_value(r: Joined<i64> | Panicked | Cancelled): i64 {
   match r {
-    Joined<i64> j => j.value,
+    Joined < i64 > j => j.value,
     Panicked p => -1,
     Cancelled c => -2,
   }
@@ -24,16 +24,16 @@ function delay_for(n: i64): i64 {
   else { 2 }
 }
 
-function main(): Future<null> async {
+function main(): Future < null > async {
   var handles: List<JoinHandle<i64>> = [];
   var i: i64 = 0;
   while i < 45 {
     var n = i;
-    handles.push(Task.spawn(() async => {
-      var _first = await yield_now();
-      var _second = await sleep(delay_for(n));
-      n
-    }));
+    handles.push(Task.spawn(()async => {
+          var _first = await yield_now();
+          var _second = await sleep(delay_for(n));
+          n
+        }));
     i = i + 1;
   }
 
@@ -44,5 +44,5 @@ function main(): Future<null> async {
     j = j + 1;
   }
 
-  println("total=${total}");
+  println("total=${total }");
 }

@@ -231,6 +231,17 @@ fn intrinsics_cover_every_retired_marker_table() {
         Intrinsic::ThreadJoin { output: t },
         Intrinsic::YieldNow,
         Intrinsic::AsyncSleep,
+        Intrinsic::IoStdinReadAsync,
+        Intrinsic::IoStdinReadToEndAsync,
+        Intrinsic::IoStdoutWriteAsync,
+        Intrinsic::IoStderrWriteAsync,
+        Intrinsic::IoStdoutFlushAsync,
+        Intrinsic::IoStderrFlushAsync,
+        Intrinsic::FsFileReadAsync,
+        Intrinsic::FsFileReadToEndAsync,
+        Intrinsic::FsFileWriteAsync,
+        Intrinsic::FsFileFlushAsync,
+        Intrinsic::FsFileSeekAsync,
         Intrinsic::TimeMonotonicNanos,
         Intrinsic::TimeSystemNanos,
         Intrinsic::FutureCancel,
@@ -242,7 +253,7 @@ fn intrinsics_cover_every_retired_marker_table() {
         Intrinsic::ForeignRealloc,
         Intrinsic::ForeignFlex { ty: t, elem: t },
     ];
-    assert_eq!(kinds.len(), 16);
+    assert_eq!(kinds.len(), 27);
     for intrinsic in kinds {
         let _ = expr(
             ExprKind::Intrinsic {

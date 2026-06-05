@@ -9,17 +9,17 @@ import { Future } from "core:prelude";
 import { Thread, JoinHandle, Joined, Panicked } from "std:thread";
 function work(): f64 { 1.5 }
 function half(): f32 { 0.25 }
-function main(): Future<null> async {
+function main(): Future < null > async {
   var h = Thread.spawn(() => work());
   var r: Joined<f64> | Panicked = await h.join();
   match r {
-    Joined<f64> j => println("${j.value}"),
+    Joined < f64 > j => println("${j.value }"),
     Panicked p => println("panicked"),
   };
   var h2 = Thread.spawn(() => half());
   var r2: Joined<f32> | Panicked = await h2.join();
   match r2 {
-    Joined<f32> j => println("${j.value}"),
+    Joined < f32 > j => println("${j.value }"),
     Panicked p => println("panicked"),
   };
 }

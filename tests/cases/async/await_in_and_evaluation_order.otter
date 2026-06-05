@@ -7,14 +7,14 @@ import { println, print } from "std:io";
 import { Future } from "core:prelude";
 import { yield_now } from "std:async";
 function mark(tag: str, b: bool): bool { print(tag); b }
-function side(tag: str, b: bool): Future<bool> async {
+function side(tag: str, b: bool): Future < bool > async {
   await yield_now();
   print(tag);
   b
 }
-function main(): Future<null> async {
+function main(): Future < null > async {
   var r1 = mark("L", true) && await side("R", true);
   var r2 = mark("M", false) && await side("Q", true);
   println("");
-  println("r1=${r1} r2=${r2}");
+  println("r1=${r1 } r2=${r2 }");
 }

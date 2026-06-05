@@ -49,7 +49,7 @@ extend MacroContext {
     var out = List<ASTNode>();
     var n = __mctx_arg_count(self.ctx);
     var i = 0;
-    while (i < n) {
+    while(i < n) {
       out.push(ASTNode { handle: __mctx_arg(self.ctx, i) });
       i = i + 1;
     }
@@ -60,10 +60,28 @@ extend MacroContext {
   function error(self, span: Span, msg: str) { __mctx_error(self.ctx, span.raw, msg); }
   function warn(self, span: Span, msg: str) { __mctx_warn(self.ctx, span.raw, msg); }
   function note(self, span: Span, msg: str) { __mctx_note(self.ctx, span.raw, msg); }
-  function fresh_ident(self, hint: str): ASTNode { ASTNode { handle: __mctx_fresh_ident(self.ctx, hint) } }
-  function unhygienic(self, name: str): ASTNode { ASTNode { handle: __mctx_unhygienic(self.ctx, name) } }
-  function parse_item(self, src: str): ASTNode { ASTNode { handle: __mctx_parse_item(self.ctx, src) } }
-  function parse_items(self, src: str): ASTNode { ASTNode { handle: __mctx_parse_items(self.ctx, src) } }
-  function parse_expr(self, src: str): ASTNode { ASTNode { handle: __mctx_parse_expr(self.ctx, src) } }
-  function parse_block(self, src: str): ASTNode { ASTNode { handle: __mctx_parse_block(self.ctx, src) } }
+  function fresh_ident(
+    self,
+    hint: str
+  ): ASTNode { ASTNode { handle: __mctx_fresh_ident(self.ctx, hint) } }
+  function unhygienic(
+    self,
+    name: str
+  ): ASTNode { ASTNode { handle: __mctx_unhygienic(self.ctx, name) } }
+  function parse_item(
+    self,
+    src: str
+  ): ASTNode { ASTNode { handle: __mctx_parse_item(self.ctx, src) } }
+  function parse_items(
+    self,
+    src: str
+  ): ASTNode { ASTNode { handle: __mctx_parse_items(self.ctx, src) } }
+  function parse_expr(
+    self,
+    src: str
+  ): ASTNode { ASTNode { handle: __mctx_parse_expr(self.ctx, src) } }
+  function parse_block(
+    self,
+    src: str
+  ): ASTNode { ASTNode { handle: __mctx_parse_block(self.ctx, src) } }
 }

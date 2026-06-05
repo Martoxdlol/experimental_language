@@ -626,6 +626,26 @@ impl<'a> Checker<'a> {
         Some(self.tcx.int(IntTy::U64))
     }
 
+    /// Resolve a builtin `.debug()` on a primitive or `str` receiver. User and
+    /// stdlib value types still resolve through their `Debug` impls; this only
+    /// records the `std:fmt.Debug.debug` interface method so codegen can lower
+    /// the primitive receiver through the intrinsic path.
+    pub(crate) fn check_builtin_debug(&mut self, rty: Ty, callee_span: Span) -> Option<Ty> {
+        if !self.is_primitive_debuggable(rty) {
+            return None;
+        }
+        let iface = self.prog.debug_def;
+        if iface == DefId(0) {
+            return None;
+        }
+        let method = (0..self.prog.defs.len() as u32).map(DefId).find(|&d| {
+            let def = self.prog.def(d);
+            def.kind == DefKind::InterfaceMethod && def.parent == Some(iface) && def.name == "debug"
+        })?;
+        self.record_res(callee_span, ValueRes::Method(method), self.tcx.error);
+        Some(self.tcx.str)
+    }
+
     /// Resolve a builtin `.clone()`. Returns `Some(result type)` for the
     /// receiver kinds the compiler clones intrinsically (recording a
     /// [`CloneKind`] for codegen); `None` for user types, which clone through

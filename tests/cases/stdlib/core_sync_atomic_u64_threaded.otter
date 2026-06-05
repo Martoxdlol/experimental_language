@@ -1,0 +1,39 @@
+//@ kind: run
+//@ serial
+//@ description: AtomicU64 is a shared @RefCounted runtime handle safe across Thread.spawn workers
+//@ stdout:
+//~ atomic-u64-threaded=4000 joins=4
+import { Future } from "core:prelude";
+import { AtomicU64, SeqCst } from "core:sync/atomic";
+import { println } from "std:io";
+import { Thread, JoinHandle, Joined, Panicked } from "std:thread";
+
+function increment(counter: AtomicU64, n: i64): i64 {
+  var i = 0;
+  while i < n {
+    counter.fetch_add(1u64, SeqCst {});
+    i = i + 1;
+  }
+  1
+}
+
+function joined_value(result: Joined<i64> | Panicked): i64 {
+  match result {
+    Joined<i64> ok => ok.value,
+    Panicked p => 0,
+  }
+}
+
+function main(): Future<null> async {
+  var counter = AtomicU64.new(0u64);
+  var a: JoinHandle<i64> = Thread.spawn(() => increment(counter, 1000));
+  var b: JoinHandle<i64> = Thread.spawn(() => increment(counter, 1000));
+  var c: JoinHandle<i64> = Thread.spawn(() => increment(counter, 1000));
+  var d: JoinHandle<i64> = Thread.spawn(() => increment(counter, 1000));
+
+  var joins = joined_value(await a.join()) +
+    joined_value(await b.join()) +
+    joined_value(await c.join()) +
+    joined_value(await d.join());
+  println("atomic-u64-threaded=${counter.load(SeqCst {})} joins=${joins}");
+}
