@@ -7,12 +7,12 @@ import { println } from "std:io";
 import { Future } from "core:prelude";
 import { Task, JoinHandle, Joined, Panicked, Cancelled } from "std:task";
 function int_value(r: Joined<i64> | Panicked | Cancelled): i64 {
-  match r { Joined < i64 > j => j.value, Panicked p => -1, Cancelled c => -2 }
+  match r { Joined<i64> j => j.value, Panicked p => -1, Cancelled c => -2 }
 }
 function float_value(r: Joined<f64> | Panicked | Cancelled): f64 {
-  match r { Joined < f64 > j => j.value, Panicked p => -1.0, Cancelled c => -2.0 }
+  match r { Joined<f64> j => j.value, Panicked p => -1.0, Cancelled c => -2.0 }
 }
-function main(): Future < null > async {
+function main(): Future<null> async {
   var a: JoinHandle<i64> = Task.spawn(() => 42);
   var b: JoinHandle<f64> = Task.spawn(() => 3.5);
   var ai: i64 = int_value(await a.join());

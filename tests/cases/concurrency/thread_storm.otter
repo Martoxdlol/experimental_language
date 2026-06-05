@@ -10,9 +10,9 @@ import { Thread, JoinHandle, Joined, Panicked } from "std:thread";
 function ident(n: i64): i64 { n }
 function spawn_one(n: i64): JoinHandle<i64> { Thread.spawn(() => ident(n)) }
 function value_of(r: Joined<i64> | Panicked): i64 {
-  match r { Joined < i64 > j => j.value, Panicked p => 0 }
+  match r { Joined<i64> j => j.value, Panicked p => 0 }
 }
-function gather(handles: List<JoinHandle<i64>>): Future < i64 > async {
+function gather(handles: List<JoinHandle<i64>>): Future<i64> async {
   var total = 0;
   for h in handles {
     var r: Joined<i64> | Panicked = await h.join();
@@ -20,7 +20,7 @@ function gather(handles: List<JoinHandle<i64>>): Future < i64 > async {
   }
   total
 }
-function main(): Future < null > async {
+function main(): Future<null> async {
   var handles: List<JoinHandle<i64>> = [];
   var i = 0;
   while i < 100 { handles.push(spawn_one(i)); i = i + 1; }

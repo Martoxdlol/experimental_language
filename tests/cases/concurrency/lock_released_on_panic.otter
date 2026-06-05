@@ -10,18 +10,18 @@ import { Shared, LockBusy } from "std:sync";
 import { Thread, JoinHandle, Joined, Panicked } from "std:thread";
 struct X { value: i64 }
 struct Counter { x: X }
-function main(): Future < null > async {
+function main(): Future<null> async {
   var state: Shared<Counter> = Shared.new(Counter { x: X { value: 0 } });
   var s: Shared<Counter> = state.clone();
   // An async worker panics while holding the lock. The panic is isolated to the
   // worker (boundary at its entry), and unwinding drains the held-lock set so
   // the lock is released — never poisoned. The worker surfaces as `Panicked`.
-  var h: JoinHandle < null > = Thread.spawn(()async => {
+  var h: JoinHandle<null> = Thread.spawn(() async => {
       await s.lock((c) => { c.x.value = 1; panic("boom in body"); 0 });
       null
     });
   match await h.join() {
-    Joined < null > j => println("worker = ok"),
+    Joined<null> j => println("worker = ok"),
     Panicked p => println("worker = panicked: " + p.message),
   };
   // The lock must have been released during unwinding. Use try_lock so a

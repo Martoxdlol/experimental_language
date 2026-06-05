@@ -23,12 +23,12 @@ import { Future, Pending, AsyncIterator } from "core:async";
 import { TimedOut } from "std:async";
 
 import { yield_now, sleep, timeout } from "std:async";
-function answer(): Future < i64 > async {
+function answer(): Future<i64> async {
   40 + 2
 }
 
 // A managed (str) Output works too; it survives GC across the poll machinery.
-function greet(name: str): Future < str > async {
+function greet(name: str): Future<str> async {
   "hello, " + name
 }
 
@@ -50,7 +50,7 @@ extend Range: AsyncIterator<i64> {
   }
 }
 
-function sum_range(r: Range): Future < i64 > async {
+function sum_range(r: Range): Future<i64> async {
   var total: i64 = 0;
   for await n in r {
     total = total + n;
@@ -59,7 +59,7 @@ function sum_range(r: Range): Future < i64 > async {
 }
 
 // `await` chains futures. `compute` awaits two inner futures and combines them.
-function compute(): Future < i64 > async {
+function compute(): Future<i64> async {
   var a: i64 = await answer();
   var b: i64 = await greet_len("world");
   // `await` may appear nested in a larger expression (function arguments,
@@ -72,14 +72,14 @@ function add_two(x: i64, y: i64): i64 {
   x + y
 }
 
-function greet_len(name: str): Future < i64 > async {
+function greet_len(name: str): Future<i64> async {
   var g: str = await greet(name);
   g.size()
 }
 
 // A genuinely-suspending future: `yield_now()` returns Pending once. Looping
 // over it suspends and resumes the state machine repeatedly.
-function tick(n: i64): Future < i64 > async {
+function tick(n: i64): Future<i64> async {
   var sum: i64 = 0;
   var i: i64 = 0;
   while i < n {
@@ -96,12 +96,12 @@ function tick(n: i64): Future < i64 > async {
 // operand of `&&`/`||` it is awaited only when the left side does not
 // short-circuit (docs/21 §4). The compiler keeps the suspend point inside the
 // conditional scope, so it never runs more (or less) often than the source says.
-function below(limit: i64, i: i64): Future < bool > async {
+function below(limit: i64, i: i64): Future<bool> async {
   var _ = await yield_now();
   i < limit
 }
 
-function count_to(limit: i64): Future < i64 > async {
+function count_to(limit: i64): Future<i64> async {
   var i: i64 = 0;
   // The condition suspends each iteration until `below` resolves.
   while await below(limit, i) {
@@ -112,7 +112,7 @@ function count_to(limit: i64): Future < i64 > async {
 
 // The program entry is itself an async function — the runtime starts the
 // executor and drives this future to completion. No `block_on` in user code.
-function main(): Future < null > async {
+function main(): Future<null> async {
   // Drive an async function directly with `await`.
   var a: i64 = await answer();
   println("answer = ${a }");
@@ -128,7 +128,7 @@ function main(): Future < null > async {
 
   // An async closure `(p) async => E` returns a future when called; it captures
   // the outer environment (here `base`) and may `await` inside.
-  var scale = (n: i64): Future < i64 > async => base * n;
+  var scale = (n: i64): Future<i64> async => base * n;
   var scaled: i64 = await scale(3);
   println("scaled = ${scaled }");
 

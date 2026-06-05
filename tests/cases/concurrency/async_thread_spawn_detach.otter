@@ -9,7 +9,7 @@ import { Shared } from "std:sync";
 import { Thread, JoinHandle, Joined, Panicked } from "std:thread";
 import { Sender, Receiver, ChannelClosed, channel } from "std:sync";
 struct C { value: i64 }
-function main(): Future < null > async {
+function main(): Future<null> async {
   var state: Shared<C> = Shared.new(C { value: 0 });
   var s: Shared<C> = state.clone();
   var ends = channel<i64>();
@@ -17,7 +17,7 @@ function main(): Future < null > async {
   var rx = ends.1;
   // Detach an async worker: it has no JoinHandle, but still drives its future,
   // locks the Shared, and sends a completion signal over the channel.
-  Thread.spawn(()async => {
+  Thread.spawn(() async => {
       await s.lock((c) => { c.value = 7; 0 });
       tx.send(1);
       0

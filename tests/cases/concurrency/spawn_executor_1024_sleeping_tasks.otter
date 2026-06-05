@@ -9,12 +9,12 @@ import { Future } from "core:prelude";
 import { List } from "core:collections";
 import { sleep } from "std:async";
 
-function work(n: i64): Future < i64 > async {
+function work(n: i64): Future<i64> async {
   var _ = await sleep(1);
   n
 }
 
-function main(): Future < null > async {
+function main(): Future<null> async {
   var handles: List<Future<i64>> = [];
   var i: i64 = 0;
   while i < 1024 {

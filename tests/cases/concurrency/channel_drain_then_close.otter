@@ -21,7 +21,7 @@ function produce(tx: Sender<i64>) {
   tx.send(30);
 }
 
-function main(): Future < null > async {
+function main(): Future<null> async {
   var ends = channel<i64>();
   var tx = ends.0;
   var rx = ends.1;

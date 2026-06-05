@@ -6,11 +6,11 @@ import { println } from "std:io";
 import { Future } from "core:prelude";
 import { List } from "core:collections";
 import { sleep } from "std:async";
-function main(): Future < null > async {
+function main(): Future<null> async {
   var base: i64 = 100;
   var jobs: List<(i64) => Future<i64>> = [];
-  jobs.push(function(x: i64): Future < i64 > async { var _ = await sleep(1); base + x });
-  jobs.push(function(x: i64): Future < i64 > async { base * x });
+  jobs.push(function(x: i64): Future<i64> async { var _ = await sleep(1); base + x });
+  jobs.push(function(x: i64): Future<i64> async { base * x });
   var total: i64 = 0;
   for j in jobs { total = total+await j(2); }
   println("total=${total }");

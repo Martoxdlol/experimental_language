@@ -1151,7 +1151,7 @@ extend File {
     __fs_decode_unit(lang_fs_file_close(self.handle))
   }
 
-  function read_async(self, buf: Bytes): Future < i64 | IoError > async {
+  function read_async(self, buf: Bytes): Future<i64 | IoError> async {
     var raw = await __otter_fs_file_read_async(self.handle, buf.size());
     var data = __fs_decode_bytes(raw);
     if data is IoError {
@@ -1165,7 +1165,7 @@ extend File {
     }
   }
 
-  function read_to_end_async(self, buf: Bytes): Future < i64 | IoError > async {
+  function read_to_end_async(self, buf: Bytes): Future<i64 | IoError> async {
     var raw = await __otter_fs_file_read_to_end_async(self.handle);
     var data = __fs_decode_bytes(raw);
     if data is IoError {
@@ -1179,12 +1179,12 @@ extend File {
     }
   }
 
-  function write_async(self, buf: Bytes): Future < i64 | IoError > async {
+  function write_async(self, buf: Bytes): Future<i64 | IoError> async {
     var raw = await __otter_fs_file_write_async(self.handle, __fs_bytes_to_hex(buf));
     __fs_decode_i64(raw)
   }
 
-  function write_all_async(self, buf: Bytes): Future < null | IoError > async {
+  function write_all_async(self, buf: Bytes): Future<null | IoError> async {
     var written = await self.write_async(buf);
     if written is IoError {
       written as IoError
@@ -1193,12 +1193,12 @@ extend File {
     }
   }
 
-  function flush_async(self): Future < null | IoError > async {
+  function flush_async(self): Future<null | IoError> async {
     var raw = await __otter_fs_file_flush_async(self.handle);
     __fs_decode_unit(raw)
   }
 
-  function seek_async(self, pos: SeekFrom): Future < i64 | IoError > async {
+  function seek_async(self, pos: SeekFrom): Future<i64 | IoError> async {
     if pos is Start {
       var offset = (pos as Start).offset;
       if offset > 9223372036854775807u64 {

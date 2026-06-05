@@ -10,7 +10,7 @@ import { Future } from "core:prelude";
 import { Sender, Receiver, ChannelClosed, channel } from "std:sync";
 import { timeout, TimedOut } from "std:async";
 
-function main(): Future < null > async {
+function main(): Future<null> async {
   var ends = channel<i64>();
   var tx: Sender<i64> = ends.0;
   var rx: Receiver<i64> = ends.1;

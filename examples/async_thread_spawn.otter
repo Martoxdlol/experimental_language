@@ -14,19 +14,19 @@ struct Counter { value: i64 }
 
 function result_of(r: Joined<i64> | Panicked): i64 {
   match r {
-    Joined < i64 > j => j.value,
+    Joined<i64> j => j.value,
     Panicked p => 0 - 1,
   }
 }
 
-function main(): Future < null > async {
+function main(): Future<null> async {
   var state: Shared<Counter> = Shared.new(Counter { value: 0 });
 
   // Spawn an async worker. Each `await s.lock(...)` acquires the async mutex,
   // mutates under exclusive access, and releases — all without parking the OS
   // thread. The handle joins on the awaited `i64`.
   var s: Shared<Counter> = state.clone();
-  var worker: JoinHandle<i64> = Thread.spawn(()async => {
+  var worker: JoinHandle<i64> = Thread.spawn(() async => {
       var i: i64 = 0;
       while i < 100 {
         await s.lock((c) => { c.value = c.value + 1; 0 });

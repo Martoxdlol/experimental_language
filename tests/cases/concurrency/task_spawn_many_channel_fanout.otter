@@ -12,13 +12,13 @@ import { yield_now } from "std:async";
 
 function joined_value(r: Joined<i64> | Panicked | Cancelled): i64 {
   match r {
-    Joined < i64 > j => j.value,
+    Joined<i64> j => j.value,
     Panicked p => -1,
     Cancelled c => -2,
   }
 }
 
-function main(): Future < null > async {
+function main(): Future<null> async {
   var ends = channel<i64>();
   var tx: Sender<i64> = ends.0;
   var rx: Receiver<i64> = ends.1;
@@ -28,7 +28,7 @@ function main(): Future < null > async {
   while i < 200 {
     var tx_i = tx.clone();
     var n = i;
-    handles.push(Task.spawn(()async => {
+    handles.push(Task.spawn(() async => {
           var _ = await yield_now();
           tx_i.send(n);
           n

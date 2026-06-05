@@ -8,9 +8,9 @@ import { Future } from "core:prelude";
 import { Thread, JoinHandle, Joined, Panicked } from "std:thread";
 function sq(n: i64): i64 { n * n }
 function value_of(r: Joined<i64> | Panicked): i64 {
-  match r { Joined < i64 > j => j.value, Panicked p => 0 }
+  match r { Joined<i64> j => j.value, Panicked p => 0 }
 }
-function main(): Future < null > async {
+function main(): Future<null> async {
   var a: JoinHandle<i64> = Thread.spawn(() => sq(3));
   var b: JoinHandle<i64> = Thread.spawn(() => sq(4));
   var ra: Joined<i64> | Panicked = await a.join();

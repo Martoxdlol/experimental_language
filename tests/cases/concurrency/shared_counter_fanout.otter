@@ -10,16 +10,16 @@ import { Shared } from "std:sync";
 struct X { value: i64 }
 struct Counter { x: X }
 // Lock-using workers must be async (`lock` is `await`-only) and run via `spawn`.
-function bump(s: Shared<Counter>, times: i64): Future < null > async {
+function bump(s: Shared<Counter>, times: i64): Future<null> async {
   var i: i64 = 0;
   while i < times {
     await s.lock((c) => { c.x.value = c.x.value + 1; 0 });
     i = i + 1;
   }
 }
-function main(): Future < null > async {
+function main(): Future<null> async {
   var state: Shared<Counter> = Shared.new(Counter { x: X { value: 0 } });
-  var handles: List<Future < null>> = [];
+  var handles: List<Future<null>> = [];
   var t = 0;
   while t < 8 {
     var s: Shared<Counter> = state.clone();

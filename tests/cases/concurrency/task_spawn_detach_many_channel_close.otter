@@ -20,7 +20,7 @@ function spawn_detached_fanout(): Receiver<i64> {
   while i < 1024 {
     var tx_i = tx.clone();
     var n = i;
-    Task.spawn(()async => {
+    Task.spawn(() async => {
         var _a = await yield_now();
         var _b = await yield_now();
         tx_i.send(n);
@@ -32,7 +32,7 @@ function spawn_detached_fanout(): Receiver<i64> {
   rx
 }
 
-function main(): Future < null > async {
+function main(): Future<null> async {
   var rx = spawn_detached_fanout();
   var count: i64 = 0;
   var total: i64 = 0;

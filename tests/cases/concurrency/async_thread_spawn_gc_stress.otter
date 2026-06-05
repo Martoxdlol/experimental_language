@@ -10,13 +10,13 @@ import { Future } from "core:prelude";
 import { Shared } from "std:sync";
 import { Thread, JoinHandle, Joined, Panicked } from "std:thread";
 struct C { value: i64 }
-function main(): Future < null > async {
+function main(): Future<null> async {
   var state: Shared<C> = Shared.new(C { value: 0 });
   var handles: List<JoinHandle<i64>> = [];
   var t = 0;
   while t < 6 {
     var s: Shared<C> = state.clone();
-    handles.push(Thread.spawn(()async => {
+    handles.push(Thread.spawn(() async => {
           var i: i64 = 0;
           while i < 100 {
             // Allocate garbage each iteration to provoke collections mid-drive.

@@ -4,8 +4,8 @@
 //~ g=40
 import { println } from "std:io";
 import { Future } from "core:prelude";
-function main(): Future < null > async {
+function main(): Future<null> async {
   var base: i64 = 10;
-  var g = (n: i64): Future < i64 > async => base * n;
+  var g = (n: i64): Future<i64> async => base * n;
   println("g=${await g(4) }");
 }

@@ -19,7 +19,7 @@ function add_pair(senders: List<Sender<i64>>, receivers: List<Receiver<i64>>): n
   null
 }
 
-function main(): Future < null > async {
+function main(): Future<null> async {
   var senders: List<Sender<i64>> = [];
   var receivers: List<Receiver<i64>> = [];
 

@@ -14,9 +14,9 @@ function sum_to(n: i64): i64 {
   acc
 }
 function value_of(r: Joined<i64> | Panicked): i64 {
-  match r { Joined < i64 > j => j.value, Panicked p => 0 }
+  match r { Joined<i64> j => j.value, Panicked p => 0 }
 }
-function main(): Future < null > async {
+function main(): Future<null> async {
   var h: JoinHandle<i64> = Thread.spawn(() => sum_to(5));
   var other = sum_to(5);
   var r: Joined<i64> | Panicked = await h.join();

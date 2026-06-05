@@ -9,12 +9,12 @@ import { Shared } from "std:sync";
 import { Task, JoinHandle, Joined, Panicked, Cancelled } from "std:task";
 struct C { value: i64 }
 function value_of(r: Joined<i64> | Panicked | Cancelled): i64 {
-  match r { Joined < i64 > j => j.value, Panicked p => -1, Cancelled c => -2 }
+  match r { Joined<i64> j => j.value, Panicked p => -1, Cancelled c => -2 }
 }
-function main(): Future < null > async {
+function main(): Future<null> async {
   var state: Shared<C> = Shared.new(C { value: 0 });
   var s: Shared<C> = state.clone();
-  var h: JoinHandle<i64> = Task.spawn(()async => {
+  var h: JoinHandle<i64> = Task.spawn(() async => {
       var i: i64 = 0;
       while i < 50 {
         await s.lock((c) => { c.value = c.value + 1; 0 });

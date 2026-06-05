@@ -9,14 +9,14 @@ import { Shared } from "std:sync";
 import { Thread, JoinHandle, Joined, Panicked } from "std:thread";
 struct C { value: i64 }
 function value_of(r: Joined<i64> | Panicked): i64 {
-  match r { Joined < i64 > j => j.value, Panicked p => -1 }
+  match r { Joined<i64> j => j.value, Panicked p => -1 }
 }
-function main(): Future < null > async {
+function main(): Future<null> async {
   var state: Shared<C> = Shared.new(C { value: 0 });
   var s: Shared<C> = state.clone();
   // An async worker MAY await and lock — it drives the future with a real
   // executor and waker, unlike a synchronous `Thread.spawn` closure.
-  var h: JoinHandle<i64> = Thread.spawn(()async => {
+  var h: JoinHandle<i64> = Thread.spawn(() async => {
       var i: i64 = 0;
       while i < 50 {
         await s.lock((c) => { c.value = c.value + 1; 0 });

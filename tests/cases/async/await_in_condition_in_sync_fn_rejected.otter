@@ -2,6 +2,6 @@
 //@ description: an `await` in a `&&` operand is still only legal inside an async body — a sync function using it must be rejected, not miscompiled (docs/21 §4)
 //@ stderr: `await` is only allowed inside an `async`
 import { Future } from "core:prelude";
-function tf(): Future < bool > async { true }
+function tf(): Future<bool> async { true }
 function compute(): bool { true && await tf() }
 function main() { var _ = compute(); }

@@ -11,7 +11,7 @@ import { Clone } from "core:prelude";
 struct X { value: i64 }
 @Derive(Clone)
 struct Counter { x: X }
-function main(): Future < null > async {
+function main(): Future<null> async {
   var state: Shared<Counter> = Shared.new(Counter { x: X { value: 0 } });
   // Corrected form of the racy example: escape a *clone*, not a live alias.
   var escaped: X | null = null;

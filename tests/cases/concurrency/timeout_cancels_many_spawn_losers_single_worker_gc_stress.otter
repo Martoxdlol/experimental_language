@@ -12,13 +12,13 @@ import { List } from "core:collections";
 import { Sender, Receiver, ChannelClosed, channel } from "std:sync";
 import { sleep, timeout, TimedOut } from "std:async";
 
-function send_after_long_sleep(tx: Sender<i64>, n: i64): Future < i64 > async {
+function send_after_long_sleep(tx: Sender<i64>, n: i64): Future<i64> async {
   var _ = await sleep(10000);
   tx.send(n);
   n
 }
 
-function make_timed_out_receiver(n: i64): Future < (Receiver<i64>, i64) > async {
+function make_timed_out_receiver(n: i64): Future<(Receiver<i64>, i64)> async {
   var ends = channel<i64>();
   var tx = ends.0;
   var fut: Future<i64> = spawn send_after_long_sleep(tx, n);
@@ -30,7 +30,7 @@ function make_timed_out_receiver(n: i64): Future < (Receiver<i64>, i64) > async 
   (ends.1, timed_out)
 }
 
-function main(): Future < null > async {
+function main(): Future<null> async {
   var receivers: List<Receiver<i64>> = [];
   var timed_out: i64 = 0;
 

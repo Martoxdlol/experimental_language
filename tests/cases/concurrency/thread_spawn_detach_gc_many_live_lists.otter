@@ -21,7 +21,7 @@ function spawn_detached_thread_fanout(): Receiver<i64> {
   while i < 64 {
     var tx_i = tx.clone();
     var n = i;
-    Thread.spawn(()async => {
+    Thread.spawn(() async => {
         var local: i64 = 0;
         var round: i64 = 0;
         while round < 3 {
@@ -39,7 +39,7 @@ function spawn_detached_thread_fanout(): Receiver<i64> {
   rx
 }
 
-function main(): Future < null > async {
+function main(): Future<null> async {
   var rx = spawn_detached_thread_fanout();
   var count: i64 = 0;
   var total: i64 = 0;

@@ -8,10 +8,10 @@
 import { println } from "std:io";
 import { Future } from "core:prelude";
 import { sleep } from "std:async";
-function main(): Future < null > async {
+function main(): Future<null> async {
   var counter: i64 = 0;
   var s: str = "seed";
-  var bump = function(tag: str): Future < str > async {
+  var bump = function(tag: str): Future<str> async {
     var _ = await sleep(1);
     counter = counter + 1;
     s = s + "-" + tag;

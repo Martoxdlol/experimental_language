@@ -10,7 +10,7 @@ import { Future } from "core:prelude";
 import { List, Map } from "core:collections";
 import { yield_now } from "std:async";
 
-function work(n: i64): Future < i64 > async {
+function work(n: i64): Future<i64> async {
   var seen: Map<i64, i64> = Map<i64, i64>();
   var j: i64 = 0;
   while j < 6 {
@@ -28,7 +28,7 @@ function work(n: i64): Future < i64 > async {
   total
 }
 
-function main(): Future < null > async {
+function main(): Future<null> async {
   var weights: Map<i64, i64> = Map<i64, i64>();
   var handles: List<Future<i64>> = [];
 

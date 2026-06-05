@@ -15,19 +15,19 @@ import { Sender, Receiver, ChannelClosed, channel } from "std:sync";
 
 function joined_value(r: Joined<i64> | Panicked | Cancelled): i64 {
   match r {
-    Joined < i64 > j => j.value,
+    Joined<i64> j => j.value,
     Panicked p => -1,
     Cancelled c => -2,
   }
 }
 
-function wait_on(h: JoinHandle<i64>, ready: Sender<i64>, index: i64): Future < i64 > async {
+function wait_on(h: JoinHandle<i64>, ready: Sender<i64>, index: i64): Future<i64> async {
   ready.send(index);
   joined_value(await h.join())
 }
 
-function main(): Future < null > async {
-  var h: JoinHandle<i64> = Task.spawn(()async => {
+function main(): Future<null> async {
+  var h: JoinHandle<i64> = Task.spawn(() async => {
       var _ = await sleep(60000);
       42
     });

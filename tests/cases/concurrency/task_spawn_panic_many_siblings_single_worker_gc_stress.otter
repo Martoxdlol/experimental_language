@@ -12,12 +12,12 @@ import { List } from "core:collections";
 import { Task, JoinHandle, Joined, Panicked, Cancelled } from "std:task";
 import { yield_now } from "std:async";
 
-function main(): Future < null > async {
+function main(): Future<null> async {
   var handles: List<JoinHandle<i64>> = [];
   var i: i64 = 0;
   while i < 128 {
     var n = i;
-    handles.push(Task.spawn(()async => {
+    handles.push(Task.spawn(() async => {
           var r: i64 = 0;
           while r < ((n % 5) + 1) {
             var junk: List<i64> = [n, r, n + r];
@@ -39,7 +39,7 @@ function main(): Future < null > async {
   var sum: i64 = 0;
   for h in handles {
     match await h.join() {
-      Joined < i64 > j => {
+      Joined<i64> j => {
         joined = joined + 1;
         sum = sum + j.value;
       },

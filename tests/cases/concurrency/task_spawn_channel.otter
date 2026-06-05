@@ -19,17 +19,17 @@ function produce(tx: Sender<i64>, n: i64) {
 
 function value_of(r: Joined<i64> | Panicked | Cancelled): i64 {
   match r {
-    Joined < i64 > j => j.value,
+    Joined<i64> j => j.value,
     Panicked p => -1,
     Cancelled c => -2,
   }
 }
 
-function main(): Future < null > async {
+function main(): Future<null> async {
   var ends = channel<i64>();
   var tx = ends.0;
   var rx = ends.1;
-  var worker: JoinHandle<i64> = Task.spawn(()async => {
+  var worker: JoinHandle<i64> = Task.spawn(() async => {
       var total = 0;
       var run = true;
       while run {

@@ -11,8 +11,8 @@ import { sleep, timeout, TimedOut } from "std:async";
 
 struct C { value: i64 }
 
-function hold_lock(state: Shared<C>): Future < i64 > async {
-  await state.lock((c)async => {
+function hold_lock(state: Shared<C>): Future<i64> async {
+  await state.lock((c) async => {
       c.value = 1;
       var _ = await sleep(1000);
       c.value = 2;
@@ -20,7 +20,7 @@ function hold_lock(state: Shared<C>): Future < i64 > async {
     })
 }
 
-function main(): Future < null > async {
+function main(): Future<null> async {
   var state: Shared<C> = Shared.new(C { value: 0 });
   var s: Shared<C> = state.clone();
   var fut: Future<i64> = spawn hold_lock(s);

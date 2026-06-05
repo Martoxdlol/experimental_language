@@ -9,13 +9,13 @@ import { Future } from "core:prelude";
 import { List } from "core:collections";
 import { yield_now } from "std:async";
 
-function work(n: i64): Future < i64 > async {
+function work(n: i64): Future<i64> async {
   var _a = await yield_now();
   var _b = await yield_now();
   n
 }
 
-function main(): Future < null > async {
+function main(): Future<null> async {
   var handles: List<Future<i64>> = [];
   var i: i64 = 0;
   while i < 16384 {

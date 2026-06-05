@@ -15,9 +15,9 @@ extend Range: AsyncIterator<i64> {
     }
   }
 }
-function main(): Future < null > async {
+function main(): Future<null> async {
   var bonus: i64 = 1000;
-  var run = function(n: i64): Future < i64 > async {
+  var run = function(n: i64): Future<i64> async {
     var r = Range { current: 0, end: n };
     var total: i64 = bonus;
     for await x in r { total = total + x; }

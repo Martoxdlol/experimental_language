@@ -12,15 +12,15 @@ function produce(tx: Sender<i64>, n: i64) {
   while i <= n { tx.send(i * i); i = i + 1; }
 }
 function value_of(r: Joined<i64> | Panicked): i64 {
-  match r { Joined < i64 > j => j.value, Panicked p => -1 }
+  match r { Joined<i64> j => j.value, Panicked p => -1 }
 }
-function main(): Future < null > async {
+function main(): Future<null> async {
   var ends = channel<i64>();
   var tx = ends.0;
   var rx = ends.1;
   // The async worker awaits each recv; when the synchronous producer drops its
   // sender the channel closes and the worker returns its accumulated sum.
-  var worker: JoinHandle<i64> = Thread.spawn(()async => {
+  var worker: JoinHandle<i64> = Thread.spawn(() async => {
       var total = 0;
       var run = true;
       while run {
@@ -32,7 +32,7 @@ function main(): Future < null > async {
       }
       total
     });
-  var feeder: JoinHandle < null > = Thread.spawn(() => produce(tx, 4));
+  var feeder: JoinHandle<null> = Thread.spawn(() => produce(tx, 4));
   var _ = await feeder.join();
   var r: Joined<i64> | Panicked = await worker.join();
   println("sum=${value_of(r) }");

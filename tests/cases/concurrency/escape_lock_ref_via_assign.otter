@@ -5,7 +5,7 @@ import { Future } from "core:prelude";
 import { Shared } from "std:sync";
 struct X { value: i64 }
 struct Counter { x: X }
-function main(): Future < null > async {
+function main(): Future<null> async {
   var state: Shared<Counter> = Shared.new(Counter { x: X { value: 0 } });
   var escaped: X | null = null;
   // `c.x` is a live reference into the locked cell; storing it in `escaped`
