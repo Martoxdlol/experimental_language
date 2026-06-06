@@ -6794,6 +6794,39 @@ fn fmt_wraps_logical_chains() {
 }
 
 #[test]
+fn fmt_wraps_single_logical_expressions() {
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!("lang_fmt_single_logical_expr_{}.otter", nonce()));
+    std::fs::write(
+        &path,
+        "function f() {\nvar ok=combine(alpha_beta&&gamma_delta,epsilon_zeta)&&lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n",
+    )
+    .unwrap();
+
+    let mut chk_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk = output_with_timeout(&mut chk_cmd, cli_test_timeout()).unwrap();
+    assert!(!chk.status.success());
+
+    let mut fix_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    fix_cmd.arg("fmt").arg(&path);
+    let fix = output_with_timeout(&mut fix_cmd, cli_test_timeout()).unwrap();
+    assert!(fix.status.success());
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        after,
+        "function f() {\n  var ok = combine(alpha_beta && gamma_delta, epsilon_zeta)\n    && lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n"
+    );
+
+    let mut chk2_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk2_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk2 = output_with_timeout(&mut chk2_cmd, cli_test_timeout()).unwrap();
+    assert!(chk2.status.success());
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn fmt_wraps_comparison_expressions() {
     let dir = std::env::temp_dir();
     let path = dir.join(format!("lang_fmt_comparison_expr_{}.otter", nonce()));
@@ -7655,6 +7688,39 @@ fn fmt_wraps_module_bodies() {
 }
 
 #[test]
+fn fmt_wraps_module_member_lists() {
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!("lang_fmt_module_members_{}.otter", nonce()));
+    std::fs::write(
+        &path,
+        "mod api { function start(): i64; function stop(): i64; struct Packet { value: i64 } type PacketId = i64; function configure(alpha: Alpha, beta: Beta): i64; }\n",
+    )
+    .unwrap();
+
+    let mut chk_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk = output_with_timeout(&mut chk_cmd, cli_test_timeout()).unwrap();
+    assert!(!chk.status.success());
+
+    let mut fix_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    fix_cmd.arg("fmt").arg(&path);
+    let fix = output_with_timeout(&mut fix_cmd, cli_test_timeout()).unwrap();
+    assert!(fix.status.success());
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        after,
+        "mod api {\n  function start(): i64;\n  function stop(): i64;\n  struct Packet { value: i64 }\n  type PacketId = i64;\n  function configure(alpha: Alpha, beta: Beta): i64;\n}\n"
+    );
+
+    let mut chk2_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk2_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk2 = output_with_timeout(&mut chk2_cmd, cli_test_timeout()).unwrap();
+    assert!(chk2.status.success());
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn fmt_wraps_await_and_spawn_operands() {
     let dir = std::env::temp_dir();
     let path = dir.join(format!("lang_fmt_await_spawn_{}.otter", nonce()));
@@ -7848,6 +7914,111 @@ fn fmt_wraps_single_argument_attributes() {
     assert_eq!(
         after,
         "@Symbol(\n  \"very_very_long_symbol_name_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron\"\n)\nextern function inflate_init(code: i32);\n"
+    );
+
+    let mut chk2_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk2_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk2 = output_with_timeout(&mut chk2_cmd, cli_test_timeout()).unwrap();
+    assert!(chk2.status.success());
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn fmt_wraps_multi_argument_attributes() {
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!(
+        "lang_fmt_multi_argument_attribute_{}.otter",
+        nonce()
+    ));
+    std::fs::write(
+        &path,
+        "@Derive(Eq,Clone,Hash,Debug,Display,Serialize,Deserialize,Ord,PartialOrd,Default,Trace,Visit,Encode,Decode)\nstruct Packet { value: i64 }\n",
+    )
+    .unwrap();
+
+    let mut chk_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk = output_with_timeout(&mut chk_cmd, cli_test_timeout()).unwrap();
+    assert!(!chk.status.success());
+
+    let mut fix_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    fix_cmd.arg("fmt").arg(&path);
+    let fix = output_with_timeout(&mut fix_cmd, cli_test_timeout()).unwrap();
+    assert!(fix.status.success());
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        after,
+        "@Derive(\n  Eq,\n  Clone,\n  Hash,\n  Debug,\n  Display,\n  Serialize,\n  Deserialize,\n  Ord,\n  PartialOrd,\n  Default,\n  Trace,\n  Visit,\n  Encode,\n  Decode\n)\nstruct Packet { value: i64 }\n"
+    );
+
+    let mut chk2_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk2_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk2 = output_with_timeout(&mut chk2_cmd, cli_test_timeout()).unwrap();
+    assert!(chk2.status.success());
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn fmt_wraps_inline_attribute_items() {
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!("lang_fmt_inline_attribute_item_{}.otter", nonce()));
+    std::fs::write(
+        &path,
+        "@Symbol(\"very_very_long_symbol_name_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron\") extern function inflate_init(code: i32);\n",
+    )
+    .unwrap();
+
+    let mut chk_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk = output_with_timeout(&mut chk_cmd, cli_test_timeout()).unwrap();
+    assert!(!chk.status.success());
+
+    let mut fix_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    fix_cmd.arg("fmt").arg(&path);
+    let fix = output_with_timeout(&mut fix_cmd, cli_test_timeout()).unwrap();
+    assert!(fix.status.success());
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        after,
+        "@Symbol(\n  \"very_very_long_symbol_name_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron\"\n)\nextern function inflate_init(code: i32);\n"
+    );
+
+    let mut chk2_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk2_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk2 = output_with_timeout(&mut chk2_cmd, cli_test_timeout()).unwrap();
+    assert!(chk2.status.success());
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn fmt_wraps_stacked_inline_attribute_items() {
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!(
+        "lang_fmt_stacked_inline_attribute_item_{}.otter",
+        nonce()
+    ));
+    std::fs::write(
+        &path,
+        "@Derive(Clone) @JsonSerializable @Route(\"/api/users\",method=\"GET\",auth=true) pub struct Config { value: i64 }\n",
+    )
+    .unwrap();
+
+    let mut chk_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk = output_with_timeout(&mut chk_cmd, cli_test_timeout()).unwrap();
+    assert!(!chk.status.success());
+
+    let mut fix_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    fix_cmd.arg("fmt").arg(&path);
+    let fix = output_with_timeout(&mut fix_cmd, cli_test_timeout()).unwrap();
+    assert!(fix.status.success());
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        after,
+        "@Derive(Clone)\n@JsonSerializable\n@Route(\"/api/users\", method = \"GET\", auth = true)\npub struct Config { value: i64 }\n"
     );
 
     let mut chk2_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
@@ -8156,6 +8327,75 @@ fn fmt_wraps_additive_chains() {
 }
 
 #[test]
+fn fmt_wraps_single_additive_expressions() {
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!("lang_fmt_single_additive_expr_{}.otter", nonce()));
+    std::fs::write(
+        &path,
+        "function f() {\nvar total=alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa+lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n",
+    )
+    .unwrap();
+
+    let mut chk_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk = output_with_timeout(&mut chk_cmd, cli_test_timeout()).unwrap();
+    assert!(!chk.status.success());
+
+    let mut fix_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    fix_cmd.arg("fmt").arg(&path);
+    let fix = output_with_timeout(&mut fix_cmd, cli_test_timeout()).unwrap();
+    assert!(fix.status.success());
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        after,
+        "function f() {\n  var total = alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa\n    + lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n"
+    );
+
+    let mut chk2_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk2_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk2 = output_with_timeout(&mut chk2_cmd, cli_test_timeout()).unwrap();
+    assert!(chk2.status.success());
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn fmt_wraps_single_multiplicative_expressions() {
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!(
+        "lang_fmt_single_multiplicative_expr_{}.otter",
+        nonce()
+    ));
+    std::fs::write(
+        &path,
+        "function f() {\nvar total=alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa*lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n",
+    )
+    .unwrap();
+
+    let mut chk_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk = output_with_timeout(&mut chk_cmd, cli_test_timeout()).unwrap();
+    assert!(!chk.status.success());
+
+    let mut fix_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    fix_cmd.arg("fmt").arg(&path);
+    let fix = output_with_timeout(&mut fix_cmd, cli_test_timeout()).unwrap();
+    assert!(fix.status.success());
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        after,
+        "function f() {\n  var total = alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa\n    * lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n"
+    );
+
+    let mut chk2_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk2_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk2 = output_with_timeout(&mut chk2_cmd, cli_test_timeout()).unwrap();
+    assert!(chk2.status.success());
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn fmt_wraps_multiplicative_chains() {
     let dir = std::env::temp_dir();
     let path = dir.join(format!("lang_fmt_multiplicative_chain_{}.otter", nonce()));
@@ -8222,6 +8462,39 @@ fn fmt_wraps_shift_chains() {
 }
 
 #[test]
+fn fmt_wraps_single_shift_expressions() {
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!("lang_fmt_single_shift_expr_{}.otter", nonce()));
+    std::fs::write(
+        &path,
+        "function f() {\nvar shifted=alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa<<lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n",
+    )
+    .unwrap();
+
+    let mut chk_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk = output_with_timeout(&mut chk_cmd, cli_test_timeout()).unwrap();
+    assert!(!chk.status.success());
+
+    let mut fix_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    fix_cmd.arg("fmt").arg(&path);
+    let fix = output_with_timeout(&mut fix_cmd, cli_test_timeout()).unwrap();
+    assert!(fix.status.success());
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        after,
+        "function f() {\n  var shifted = alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa\n    << lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n"
+    );
+
+    let mut chk2_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk2_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk2 = output_with_timeout(&mut chk2_cmd, cli_test_timeout()).unwrap();
+    assert!(chk2.status.success());
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn fmt_wraps_cast_chains() {
     let dir = std::env::temp_dir();
     let path = dir.join(format!("lang_fmt_cast_chain_{}.otter", nonce()));
@@ -8277,6 +8550,42 @@ fn fmt_wraps_bitwise_and_chains() {
     assert_eq!(
         after,
         "function f() {\n  var mask = alpha\n    & beta\n    & gamma\n    & delta\n    & epsilon\n    & zeta\n    & eta\n    & theta\n    & iota\n    & kappa\n    & lambda\n    & mu\n    & nu\n    & xi\n    & omicron\n    & pi;\n}\n"
+    );
+
+    let mut chk2_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk2_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk2 = output_with_timeout(&mut chk2_cmd, cli_test_timeout()).unwrap();
+    assert!(chk2.status.success());
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn fmt_wraps_single_bitwise_and_expressions() {
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!(
+        "lang_fmt_single_bitwise_and_expr_{}.otter",
+        nonce()
+    ));
+    std::fs::write(
+        &path,
+        "function f() {\nvar mask=alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa&lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n",
+    )
+    .unwrap();
+
+    let mut chk_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk = output_with_timeout(&mut chk_cmd, cli_test_timeout()).unwrap();
+    assert!(!chk.status.success());
+
+    let mut fix_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    fix_cmd.arg("fmt").arg(&path);
+    let fix = output_with_timeout(&mut fix_cmd, cli_test_timeout()).unwrap();
+    assert!(fix.status.success());
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        after,
+        "function f() {\n  var mask = alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa\n    & lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n"
     );
 
     let mut chk2_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));

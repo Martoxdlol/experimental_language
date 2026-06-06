@@ -2059,6 +2059,13 @@ struct ModuleBodyWrap {
     lbrace_idx: usize,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ModuleMemberWrap {
+    lbrace_idx: usize,
+    rbrace_idx: usize,
+    member_ranges: Vec<(usize, usize)>,
+}
+
 struct ExternTypeWrap {
     type_idx: usize,
     semi_idx: usize,
@@ -2085,6 +2092,12 @@ struct NamedImportPathWrap {
 struct AttributeArgListWrap {
     lparen_idx: usize,
     rparen_idx: usize,
+    comma_indices: Vec<usize>,
+}
+
+struct InlineAttributeItemWrap {
+    attr_ranges: Vec<(usize, usize)>,
+    item_start: usize,
 }
 
 struct CastChainWrap {
@@ -2256,6 +2269,9 @@ fn wrap_long_line(line: &str, base_indent: &str, state: LineState) -> String {
     if let Some(body) = find_module_body_wrap(&tokens, &angle_roles) {
         return wrap_module_body_line(line, base_indent, &tokens, &body);
     }
+    if let Some(members) = find_module_member_wrap(&tokens, &angle_roles) {
+        return wrap_module_member_line(line, base_indent, &tokens, &members);
+    }
     if let Some(header) = find_module_decl_header_wrap(&tokens) {
         return wrap_module_decl_header_line(line, base_indent, &tokens, &header);
     }
@@ -2270,6 +2286,9 @@ fn wrap_long_line(line: &str, base_indent: &str, state: LineState) -> String {
     }
     if let Some(import) = find_import_path_wrap(&tokens) {
         return wrap_import_path_line(line, base_indent, &tokens, &import);
+    }
+    if let Some(attribute) = find_inline_attribute_item_wrap(line, &tokens) {
+        return wrap_inline_attribute_item_line(line, base_indent, &attribute);
     }
     if let Some(pair) = find_delimited_wrap(&tokens, &angle_roles) {
         return wrap_delimited_line(line, base_indent, &tokens, &pair);
@@ -3605,6 +3624,44 @@ fn wrap_module_body_line(
     format!("{prefix}\n{continuation_indent}{rest}")
 }
 
+fn wrap_module_member_line(
+    line: &str,
+    base_indent: &str,
+    tokens: &[&Token],
+    members: &ModuleMemberWrap,
+) -> String {
+    let brace_end = tokens[members.lbrace_idx].span.range().end;
+    let close_start = tokens[members.rbrace_idx].span.range().start;
+    let continuation_indent = format!("{base_indent}{INDENT}");
+
+    let mut out = String::new();
+    out.push_str(&line[..brace_end]);
+
+    let mut covered_until = brace_end;
+    for (start, end) in &members.member_ranges {
+        if !line[covered_until..*start].trim().is_empty() {
+            return line.to_string();
+        }
+        let member = line[*start..*end].trim();
+        if member.is_empty() {
+            return line.to_string();
+        }
+        out.push('\n');
+        out.push_str(&continuation_indent);
+        out.push_str(member);
+        covered_until = *end;
+    }
+
+    if !line[covered_until..close_start].trim().is_empty() {
+        return line.to_string();
+    }
+
+    out.push('\n');
+    out.push_str(base_indent);
+    out.push_str(&line[close_start..]);
+    out
+}
+
 fn wrap_extern_type_line(
     line: &str,
     base_indent: &str,
@@ -3702,16 +3759,77 @@ fn wrap_attribute_arg_list_line(
     let open_end = tokens[attribute.lparen_idx].span.range().end;
     let close_start = tokens[attribute.rparen_idx].span.range().start;
     let prefix = line[..open_end].trim_end();
-    let arg = normalize_code_spacing(line[open_end..close_start].trim());
-    if prefix.trim().is_empty() || arg.is_empty() {
+    if prefix.trim().is_empty() {
         return line.to_string();
     }
 
     let continuation_indent = format!("{base_indent}{INDENT}");
-    format!(
-        "{prefix}\n{continuation_indent}{arg}\n{base_indent}{}",
-        &line[close_start..]
-    )
+    if attribute.comma_indices.is_empty() {
+        let arg = normalize_code_spacing(line[open_end..close_start].trim());
+        if arg.is_empty() {
+            return line.to_string();
+        }
+        return format!(
+            "{prefix}\n{continuation_indent}{arg}\n{base_indent}{}",
+            &line[close_start..]
+        );
+    }
+
+    let mut out = String::new();
+    out.push_str(prefix);
+    let mut item_start = open_end;
+    for comma_idx in &attribute.comma_indices {
+        let comma_range = tokens[*comma_idx].span.range();
+        let item = normalize_code_spacing(line[item_start..comma_range.start].trim());
+        if item.is_empty() {
+            return line.to_string();
+        }
+        out.push('\n');
+        out.push_str(&continuation_indent);
+        out.push_str(&item);
+        out.push(',');
+        item_start = comma_range.end;
+    }
+
+    let last = normalize_code_spacing(line[item_start..close_start].trim());
+    if last.is_empty() {
+        return line.to_string();
+    }
+    out.push('\n');
+    out.push_str(&continuation_indent);
+    out.push_str(&last);
+    out.push('\n');
+    out.push_str(base_indent);
+    out.push_str(&line[close_start..]);
+    out
+}
+
+fn wrap_inline_attribute_item_line(
+    line: &str,
+    base_indent: &str,
+    attribute: &InlineAttributeItemWrap,
+) -> String {
+    let rest = line[attribute.item_start..].trim();
+    if rest.is_empty() {
+        return line.to_string();
+    }
+
+    let mut out = String::new();
+    for (idx, (start, end)) in attribute.attr_ranges.iter().enumerate() {
+        let attr = line[*start..*end].trim();
+        if attr.is_empty() {
+            return line.to_string();
+        }
+        if idx > 0 {
+            out.push('\n');
+            out.push_str(base_indent);
+        }
+        out.push_str(&wrap_long_line(attr, base_indent, LineState::default()));
+    }
+    out.push('\n');
+    out.push_str(base_indent);
+    out.push_str(rest);
+    out
 }
 
 fn normalize_import_path_rest_spacing(rest: &str) -> String {
@@ -7195,6 +7313,51 @@ fn find_module_body_wrap_from(
     })
 }
 
+fn find_module_member_wrap(
+    tokens: &[&Token],
+    angle_roles: &[AngleRole],
+) -> Option<ModuleMemberWrap> {
+    let mod_idx = match tokens.first().map(|token| token.kind) {
+        Some(TokenKind::Kw(Keyword::Mod)) => 0,
+        Some(TokenKind::Kw(Keyword::Pub))
+            if tokens.get(1).map(|token| token.kind) == Some(TokenKind::Kw(Keyword::Mod)) =>
+        {
+            1
+        }
+        _ => return None,
+    };
+    if tokens.get(mod_idx + 1).map(|token| token.kind) != Some(TokenKind::Ident) {
+        return None;
+    }
+
+    let mut lbrace_idx = None;
+    for idx in (mod_idx + 2)..tokens.len() {
+        match tokens[idx].kind {
+            TokenKind::LBrace => {
+                lbrace_idx = Some(idx);
+                break;
+            }
+            TokenKind::Semi => return None,
+            _ => {}
+        }
+    }
+
+    let lbrace_idx = lbrace_idx?;
+    let rbrace_idx = matching_brace_close(tokens, lbrace_idx)?;
+    if rbrace_idx + 1 != tokens.len() {
+        return None;
+    }
+    let member_ranges = top_level_module_member_ranges(tokens, angle_roles, lbrace_idx, rbrace_idx);
+    if member_ranges.len() < 2 {
+        return None;
+    }
+    Some(ModuleMemberWrap {
+        lbrace_idx,
+        rbrace_idx,
+        member_ranges,
+    })
+}
+
 fn find_extern_type_wrap(tokens: &[&Token]) -> Option<ExternTypeWrap> {
     let extern_idx = match tokens.first().map(|token| token.kind) {
         Some(TokenKind::Kw(Keyword::Extern)) => 0,
@@ -7436,14 +7599,84 @@ fn find_attribute_arg_list_wrap(
     if rparen_idx <= lparen_idx + 1 {
         return None;
     }
-    if !top_level_commas_in_delimited(tokens, angle_roles, lparen_idx, rparen_idx).is_empty() {
-        return None;
-    }
+    let comma_indices = top_level_commas_in_delimited(tokens, angle_roles, lparen_idx, rparen_idx);
 
     Some(AttributeArgListWrap {
         lparen_idx,
         rparen_idx,
+        comma_indices,
     })
+}
+
+fn find_inline_attribute_item_wrap(
+    line: &str,
+    tokens: &[&Token],
+) -> Option<InlineAttributeItemWrap> {
+    let mut attr_ranges = Vec::new();
+    let mut idx = 0usize;
+    while tokens.get(idx).map(|token| token.kind) == Some(TokenKind::At) {
+        let attr_start = tokens[idx].span.range().start;
+        let attr_end_idx = attribute_end_idx(tokens, idx)?;
+        let attr_end = tokens[attr_end_idx].span.range().end;
+        attr_ranges.push((attr_start, attr_end));
+        idx = attr_end_idx + 1;
+    }
+    if attr_ranges.is_empty() {
+        return None;
+    }
+
+    let item_idx = idx;
+    if item_idx >= tokens.len() || !is_attribute_item_start(line, tokens, item_idx) {
+        return None;
+    }
+
+    Some(InlineAttributeItemWrap {
+        attr_ranges,
+        item_start: tokens[item_idx].span.range().start,
+    })
+}
+
+fn attribute_end_idx(tokens: &[&Token], at_idx: usize) -> Option<usize> {
+    if tokens.get(at_idx).map(|token| token.kind) != Some(TokenKind::At)
+        || tokens.get(at_idx + 1).map(|token| token.kind) != Some(TokenKind::Ident)
+    {
+        return None;
+    }
+    if tokens.get(at_idx + 2).map(|token| token.kind) == Some(TokenKind::LParen) {
+        matching_paren_close(tokens, at_idx + 2)
+    } else {
+        Some(at_idx + 1)
+    }
+}
+
+fn is_attribute_item_start(line: &str, tokens: &[&Token], idx: usize) -> bool {
+    match tokens.get(idx).map(|token| token.kind) {
+        Some(TokenKind::Kw(Keyword::Pub)) => tokens
+            .get(idx + 1)
+            .is_some_and(|token| is_item_start_keyword(token.kind)),
+        Some(TokenKind::Ident) if matches!(tok_text(line, tokens[idx]), "test" | "bench") => {
+            tokens.get(idx + 1).map(|token| token.kind) == Some(TokenKind::StrStart)
+        }
+        Some(kind) => is_item_start_keyword(kind),
+        None => false,
+    }
+}
+
+fn is_item_start_keyword(kind: TokenKind) -> bool {
+    matches!(
+        kind,
+        TokenKind::Kw(
+            Keyword::Var
+                | Keyword::Function
+                | Keyword::Struct
+                | Keyword::Interface
+                | Keyword::Type
+                | Keyword::Mod
+                | Keyword::Extend
+                | Keyword::Extern
+                | Keyword::Import
+        )
+    )
 }
 
 fn token_text_eq(line: &str, token: &Token, expected: &str) -> bool {
@@ -7757,7 +7990,7 @@ fn find_logical_chain_wrap(
     angle_roles: &[AngleRole],
 ) -> Option<LogicalChainWrap> {
     let operator_indices = top_level_logical_chain_operators(tokens, angle_roles);
-    (operator_indices.len() >= 2).then_some(LogicalChainWrap { operator_indices })
+    (!operator_indices.is_empty()).then_some(LogicalChainWrap { operator_indices })
 }
 
 fn top_level_logical_chain_operators(tokens: &[&Token], angle_roles: &[AngleRole]) -> Vec<usize> {
@@ -7944,7 +8177,7 @@ fn find_additive_chain_wrap(
         return None;
     }
     let operator_indices = top_level_additive_chain_operators(tokens, angle_roles);
-    (operator_indices.len() >= 2).then_some(AdditiveChainWrap { operator_indices })
+    (!operator_indices.is_empty()).then_some(AdditiveChainWrap { operator_indices })
 }
 
 fn top_level_additive_chain_operators(tokens: &[&Token], angle_roles: &[AngleRole]) -> Vec<usize> {
@@ -8102,7 +8335,7 @@ fn find_multiplicative_chain_wrap(
         return None;
     }
     let operator_indices = top_level_multiplicative_chain_operators(tokens, angle_roles);
-    (operator_indices.len() >= 2).then_some(MultiplicativeChainWrap { operator_indices })
+    (!operator_indices.is_empty()).then_some(MultiplicativeChainWrap { operator_indices })
 }
 
 fn top_level_multiplicative_chain_operators(
@@ -8248,7 +8481,7 @@ fn find_shift_chain_wrap(tokens: &[&Token], angle_roles: &[AngleRole]) -> Option
         return None;
     }
     let operator_indices = top_level_shift_chain_operators(tokens, angle_roles);
-    (operator_indices.len() >= 2).then_some(ShiftChainWrap { operator_indices })
+    (!operator_indices.is_empty()).then_some(ShiftChainWrap { operator_indices })
 }
 
 fn top_level_shift_chain_operators(tokens: &[&Token], angle_roles: &[AngleRole]) -> Vec<usize> {
@@ -8387,7 +8620,7 @@ fn find_bitwise_and_chain_wrap(
         return None;
     }
     let operator_indices = top_level_bitwise_and_chain_operators(tokens, angle_roles);
-    (operator_indices.len() >= 2).then_some(BitwiseAndChainWrap { operator_indices })
+    (!operator_indices.is_empty()).then_some(BitwiseAndChainWrap { operator_indices })
 }
 
 fn top_level_bitwise_and_chain_operators(
@@ -9270,6 +9503,87 @@ fn top_level_interface_member_ranges(
     }
 
     ranges
+}
+
+fn top_level_module_member_ranges(
+    tokens: &[&Token],
+    angle_roles: &[AngleRole],
+    open_idx: usize,
+    close_idx: usize,
+) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    let mut member_start = None;
+    let mut member_has_item = false;
+    let mut paren_depth = 0usize;
+    let mut bracket_depth = 0usize;
+    let mut brace_depth = 0usize;
+    let mut angle_depth = 0usize;
+
+    for idx in open_idx + 1..close_idx {
+        let top_level =
+            paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 && angle_depth == 0;
+
+        if top_level && member_start.is_none() {
+            member_start = Some(tokens[idx].span.range().start);
+        }
+        if top_level && is_module_member_item_keyword(tokens[idx].kind) {
+            member_has_item = true;
+        }
+
+        match tokens[idx].kind {
+            TokenKind::LParen => paren_depth += 1,
+            TokenKind::RParen => paren_depth = paren_depth.saturating_sub(1),
+            TokenKind::LBracket => bracket_depth += 1,
+            TokenKind::RBracket => bracket_depth = bracket_depth.saturating_sub(1),
+            TokenKind::LBrace => brace_depth += 1,
+            TokenKind::RBrace if brace_depth > 0 => {
+                brace_depth -= 1;
+                if brace_depth == 0
+                    && paren_depth == 0
+                    && bracket_depth == 0
+                    && angle_depth == 0
+                    && member_has_item
+                {
+                    if let Some(start) = member_start.take() {
+                        ranges.push((start, tokens[idx].span.range().end));
+                    }
+                    member_has_item = false;
+                }
+            }
+            TokenKind::Semi if top_level && member_has_item => {
+                if let Some(start) = member_start.take() {
+                    ranges.push((start, tokens[idx].span.range().end));
+                }
+                member_has_item = false;
+            }
+            _ => {}
+        }
+
+        match angle_roles[idx] {
+            AngleRole::GenericOpen => angle_depth += 1,
+            AngleRole::GenericClose => angle_depth = angle_depth.saturating_sub(1),
+            AngleRole::GenericCloseClose => angle_depth = angle_depth.saturating_sub(2),
+            AngleRole::None => {}
+        }
+    }
+
+    ranges
+}
+
+fn is_module_member_item_keyword(kind: TokenKind) -> bool {
+    matches!(
+        kind,
+        TokenKind::Kw(
+            Keyword::Function
+                | Keyword::Struct
+                | Keyword::Interface
+                | Keyword::Type
+                | Keyword::Mod
+                | Keyword::Extend
+                | Keyword::Extern
+                | Keyword::Import
+        )
+    )
 }
 
 fn top_level_commas_in_delimited(
@@ -10776,6 +11090,18 @@ mod tests {
     }
 
     #[test]
+    fn wraps_single_long_additive_expressions() {
+        let src = "function f(){\nvar total=alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa+lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n";
+        let out = format_source(src);
+        assert_eq!(
+            out,
+            "function f() {\n  var total = alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa\n    + lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n"
+        );
+        assert_eq!(format_source(&out), out);
+        assert!(token_stream_preserved(src, &out));
+    }
+
+    #[test]
     fn wraps_long_multiplicative_chains() {
         let src = "function f(){\nvar total=alpha*beta/gamma%delta*epsilon/zeta*eta/theta%iota*kappa/lambda*mu/nu%xi*omicron;\n}\n";
         let out = format_source(src);
@@ -10788,12 +11114,36 @@ mod tests {
     }
 
     #[test]
-    fn leaves_multiplicative_terms_with_top_level_addition_unwrapped() {
-        let src = "function f(){\nvar total=alpha+beta*gamma*delta*epsilon*zeta*eta*theta*iota*kappa*lambda*mu*nu*xi*omicron*pi;\n}\n";
+    fn wraps_single_long_multiplicative_expressions() {
+        let src = "function f(){\nvar total=alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa*lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n";
         let out = format_source(src);
         assert_eq!(
             out,
-            "function f() {\n  var total = alpha + beta * gamma * delta * epsilon * zeta * eta * theta * iota * kappa * lambda * mu * nu * xi * omicron * pi;\n}\n"
+            "function f() {\n  var total = alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa\n    * lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n"
+        );
+        assert_eq!(format_source(&out), out);
+        assert!(token_stream_preserved(src, &out));
+    }
+
+    #[test]
+    fn wraps_single_multiplicative_expressions_without_splitting_nested_operands() {
+        let src = "function f(){\nvar total=alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa*combine(beta*gamma, delta%epsilon);\n}\n";
+        let out = format_source(src);
+        assert_eq!(
+            out,
+            "function f() {\n  var total = alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa\n    * combine(beta * gamma, delta % epsilon);\n}\n"
+        );
+        assert_eq!(format_source(&out), out);
+        assert!(token_stream_preserved(src, &out));
+    }
+
+    #[test]
+    fn wraps_single_additive_expressions_without_splitting_multiplicative_operands() {
+        let src = "function f(){\nvar total=alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa+beta*gamma*delta*epsilon*zeta*eta;\n}\n";
+        let out = format_source(src);
+        assert_eq!(
+            out,
+            "function f() {\n  var total = alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa\n    + beta * gamma * delta * epsilon * zeta * eta;\n}\n"
         );
         assert_eq!(format_source(&out), out);
         assert!(token_stream_preserved(src, &out));
@@ -10812,6 +11162,30 @@ mod tests {
     }
 
     #[test]
+    fn wraps_single_long_shift_expressions() {
+        let src = "function f(){\nvar shifted=alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa<<lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n";
+        let out = format_source(src);
+        assert_eq!(
+            out,
+            "function f() {\n  var shifted = alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa\n    << lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n"
+        );
+        assert_eq!(format_source(&out), out);
+        assert!(token_stream_preserved(src, &out));
+    }
+
+    #[test]
+    fn wraps_single_shift_expressions_without_splitting_nested_operands() {
+        let src = "function f(){\nvar shifted=alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa<<compute<Bits>(beta<<gamma);\n}\n";
+        let out = format_source(src);
+        assert_eq!(
+            out,
+            "function f() {\n  var shifted = alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa\n    << compute<Bits>(beta << gamma);\n}\n"
+        );
+        assert_eq!(format_source(&out), out);
+        assert!(token_stream_preserved(src, &out));
+    }
+
+    #[test]
     fn wraps_shift_chains_before_additive_operands() {
         let src = "function f(){\nvar shifted=alpha+beta<<gamma-delta>>epsilon+zeta<<eta-theta>>iota+kappa<<lambda-mu>>nu+xi<<omicron-pi;\n}\n";
         let out = format_source(src);
@@ -10824,12 +11198,12 @@ mod tests {
     }
 
     #[test]
-    fn leaves_shift_terms_with_top_level_bitwise_and_unwrapped() {
+    fn wraps_single_bitwise_and_expressions_with_shift_operands() {
         let src = "function f(){\nvar mask=alpha&beta<<gamma<<delta<<epsilon<<zeta<<eta<<theta<<iota<<kappa<<lambda<<mu<<nu<<xi<<omicron;\n}\n";
         let out = format_source(src);
         assert_eq!(
             out,
-            "function f() {\n  var mask = alpha & beta << gamma << delta << epsilon << zeta << eta << theta << iota << kappa << lambda << mu << nu << xi << omicron;\n}\n"
+            "function f() {\n  var mask = alpha\n    & beta << gamma << delta << epsilon << zeta << eta << theta << iota << kappa << lambda << mu << nu << xi << omicron;\n}\n"
         );
         assert_eq!(format_source(&out), out);
         assert!(token_stream_preserved(src, &out));
@@ -10878,6 +11252,30 @@ mod tests {
         assert_eq!(
             out,
             "function f() {\n  var mask = alpha\n    & beta\n    & gamma\n    & delta\n    & epsilon\n    & zeta\n    & eta\n    & theta\n    & iota\n    & kappa\n    & lambda\n    & mu\n    & nu\n    & xi\n    & omicron\n    & pi;\n}\n"
+        );
+        assert_eq!(format_source(&out), out);
+        assert!(token_stream_preserved(src, &out));
+    }
+
+    #[test]
+    fn wraps_single_long_bitwise_and_expressions() {
+        let src = "function f(){\nvar mask=alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa&lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n";
+        let out = format_source(src);
+        assert_eq!(
+            out,
+            "function f() {\n  var mask = alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa\n    & lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n"
+        );
+        assert_eq!(format_source(&out), out);
+        assert!(token_stream_preserved(src, &out));
+    }
+
+    #[test]
+    fn wraps_single_bitwise_and_expressions_without_splitting_nested_operands() {
+        let src = "function f(){\nvar mask=alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu&combine<Mask>(beta&gamma);\n}\n";
+        let out = format_source(src);
+        assert_eq!(
+            out,
+            "function f() {\n  var mask = alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu\n    & combine<Mask>(beta & gamma);\n}\n"
         );
         assert_eq!(format_source(&out), out);
         assert!(token_stream_preserved(src, &out));
@@ -11217,6 +11615,30 @@ mod tests {
     }
 
     #[test]
+    fn wraps_long_module_member_lists() {
+        let src = "mod api { function start(): i64; function stop(): i64; struct Packet { value: i64 } type PacketId = i64; function configure(alpha: Alpha, beta: Beta): i64; }\n";
+        let out = format_source(src);
+        assert_eq!(
+            out,
+            "mod api {\n  function start(): i64;\n  function stop(): i64;\n  struct Packet { value: i64 }\n  type PacketId = i64;\n  function configure(alpha: Alpha, beta: Beta): i64;\n}\n"
+        );
+        assert_eq!(format_source(&out), out);
+        assert!(token_stream_preserved(src, &out));
+    }
+
+    #[test]
+    fn wraps_module_members_without_splitting_function_bodies() {
+        let src = "mod api { function start(): i64 { var code = 1; code } function stop(): i64 { var code = 2; code } function reset(): i64 { var code = 3; code } }\n";
+        let out = format_source(src);
+        assert_eq!(
+            out,
+            "mod api {\n  function start(): i64 { var code = 1; code }\n  function stop(): i64 { var code = 2; code }\n  function reset(): i64 { var code = 3; code }\n}\n"
+        );
+        assert_eq!(format_source(&out), out);
+        assert!(token_stream_preserved(src, &out));
+    }
+
+    #[test]
     fn wraps_long_await_operands_as_fallback() {
         let src = "function f(){\nawait generated_future_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron;\n}\n";
         let out = format_source(src);
@@ -11373,108 +11795,108 @@ mod tests {
     }
 
     #[test]
-    fn leaves_single_long_logical_for_iterator_unwrapped() {
+    fn wraps_single_long_logical_for_iterators() {
         let src = "function f(){\nfor item in alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa&&lambda_mu_nu_xi_omicron_pi_rho_sigma_tau {}\n}\n";
         let out = format_source(src);
         assert_eq!(
             out,
-            "function f() {\n  for item in alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa && lambda_mu_nu_xi_omicron_pi_rho_sigma_tau {}\n}\n"
+            "function f() {\n  for item in alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa\n    && lambda_mu_nu_xi_omicron_pi_rho_sigma_tau {}\n}\n"
         );
         assert_eq!(format_source(&out), out);
         assert!(token_stream_preserved(src, &out));
     }
 
     #[test]
-    fn leaves_single_long_logical_while_condition_unwrapped() {
+    fn wraps_single_long_logical_while_conditions() {
         let src = "function f(){\nwhile alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa&&lambda_mu_nu_xi_omicron_pi_rho_sigma_tau {}\n}\n";
         let out = format_source(src);
         assert_eq!(
             out,
-            "function f() {\n  while alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa && lambda_mu_nu_xi_omicron_pi_rho_sigma_tau {}\n}\n"
+            "function f() {\n  while alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa\n    && lambda_mu_nu_xi_omicron_pi_rho_sigma_tau {}\n}\n"
         );
         assert_eq!(format_source(&out), out);
         assert!(token_stream_preserved(src, &out));
     }
 
     #[test]
-    fn leaves_single_long_logical_if_condition_unwrapped() {
+    fn wraps_single_long_logical_if_conditions() {
         let src = "function f(){\nif alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa&&lambda_mu_nu_xi_omicron_pi_rho_sigma_tau {}\n}\n";
         let out = format_source(src);
         assert_eq!(
             out,
-            "function f() {\n  if alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa && lambda_mu_nu_xi_omicron_pi_rho_sigma_tau {}\n}\n"
+            "function f() {\n  if alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa\n    && lambda_mu_nu_xi_omicron_pi_rho_sigma_tau {}\n}\n"
         );
         assert_eq!(format_source(&out), out);
         assert!(token_stream_preserved(src, &out));
     }
 
     #[test]
-    fn leaves_single_long_logical_match_scrutinee_unwrapped() {
+    fn wraps_single_long_logical_match_scrutinees() {
         let src = "function f(){\nvar out=match alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa&&lambda_mu_nu_xi_omicron_pi_rho_sigma_tau {_=>1};\n}\n";
         let out = format_source(src);
         assert_eq!(
             out,
-            "function f() {\n  var out = match alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa && lambda_mu_nu_xi_omicron_pi_rho_sigma_tau { _ => 1 };\n}\n"
+            "function f() {\n  var out = match alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa\n    && lambda_mu_nu_xi_omicron_pi_rho_sigma_tau { _ => 1 };\n}\n"
         );
         assert_eq!(format_source(&out), out);
         assert!(token_stream_preserved(src, &out));
     }
 
     #[test]
-    fn leaves_single_long_logical_match_guard_unwrapped() {
+    fn wraps_single_long_logical_match_guards() {
         let src = "function f(){\nvar out=match kind {\n0 if alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa&&lambda_mu_nu_xi_omicron_pi_rho_sigma_tau=>alpha,\n_=>omega\n};\n}\n";
         let out = format_source(src);
         assert_eq!(
             out,
-            "function f() {\n  var out = match kind {\n    0 if alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa && lambda_mu_nu_xi_omicron_pi_rho_sigma_tau => alpha,\n    _ => omega\n  };\n}\n"
+            "function f() {\n  var out = match kind {\n    0 if alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa\n      && lambda_mu_nu_xi_omicron_pi_rho_sigma_tau => alpha,\n    _ => omega\n  };\n}\n"
         );
         assert_eq!(format_source(&out), out);
         assert!(token_stream_preserved(src, &out));
     }
 
     #[test]
-    fn leaves_single_long_logical_break_expression_unwrapped() {
+    fn wraps_single_long_logical_break_expressions() {
         let src = "function f(){\nloop {\nbreak alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa&&lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n}\n";
         let out = format_source(src);
         assert_eq!(
             out,
-            "function f() {\n  loop {\n    break alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa && lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n  }\n}\n"
+            "function f() {\n  loop {\n    break alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa\n      && lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n  }\n}\n"
         );
         assert_eq!(format_source(&out), out);
         assert!(token_stream_preserved(src, &out));
     }
 
     #[test]
-    fn leaves_single_long_logical_await_operand_unwrapped() {
+    fn wraps_single_long_logical_await_operands() {
         let src = "function f(){\nawait alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa&&lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n";
         let out = format_source(src);
         assert_eq!(
             out,
-            "function f() {\n  await alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa && lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n"
+            "function f() {\n  await alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa\n    && lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n"
         );
         assert_eq!(format_source(&out), out);
         assert!(token_stream_preserved(src, &out));
     }
 
     #[test]
-    fn leaves_single_long_logical_assignment_expression_unwrapped() {
+    fn wraps_single_long_logical_assignment_expressions() {
         let src = "function f(){\ngenerated=alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa&&lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n";
         let out = format_source(src);
         assert_eq!(
             out,
-            "function f() {\n  generated = alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa && lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n"
+            "function f() {\n  generated = alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa\n    && lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n"
         );
         assert_eq!(format_source(&out), out);
         assert!(token_stream_preserved(src, &out));
     }
 
     #[test]
-    fn leaves_single_long_logical_return_expression_unwrapped() {
+    fn wraps_single_long_logical_return_expressions() {
         let src = "function f(){\nreturn alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa&&lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n";
         let out = format_source(src);
         assert_eq!(
             out,
-            "function f() {\n  return alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa && lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n"
+            "function f() {\n  return alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa\n    && lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n"
         );
         assert_eq!(format_source(&out), out);
         assert!(token_stream_preserved(src, &out));
@@ -11559,6 +11981,90 @@ mod tests {
         assert_eq!(
             out,
             "@Symbol(\n  \"very_very_long_symbol_name_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron\"\n)\nextern function inflate_init(code: i32);\n"
+        );
+        assert_eq!(format_source(&out), out);
+        assert!(token_stream_preserved(src, &out));
+    }
+
+    #[test]
+    fn wraps_long_multi_argument_attributes() {
+        let src = "@Derive(Eq,Clone,Hash,Debug,Display,Serialize,Deserialize,Ord,PartialOrd,Default,Trace,Visit,Encode,Decode)\nstruct Packet { value: i64 }\n";
+        let out = format_source(src);
+        assert_eq!(
+            out,
+            "@Derive(\n  Eq,\n  Clone,\n  Hash,\n  Debug,\n  Display,\n  Serialize,\n  Deserialize,\n  Ord,\n  PartialOrd,\n  Default,\n  Trace,\n  Visit,\n  Encode,\n  Decode\n)\nstruct Packet { value: i64 }\n"
+        );
+        assert_eq!(format_source(&out), out);
+        assert!(token_stream_preserved(src, &out));
+    }
+
+    #[test]
+    fn wraps_attribute_args_without_splitting_nested_commas() {
+        let src = "@Meta(pair(AlphaValueWithLongName,BetaValueWithLongName),Map { left: alpha, right: beta },List<AlphaValueWithLongName,BetaValueWithLongName>,\"literal\")\nstruct Packet { value: i64 }\n";
+        let out = format_source(src);
+        assert_eq!(
+            out,
+            "@Meta(\n  pair(AlphaValueWithLongName, BetaValueWithLongName),\n  Map { left: alpha, right: beta },\n  List<AlphaValueWithLongName, BetaValueWithLongName>,\n  \"literal\"\n)\nstruct Packet { value: i64 }\n"
+        );
+        assert_eq!(format_source(&out), out);
+        assert!(token_stream_preserved(src, &out));
+    }
+
+    #[test]
+    fn wraps_inline_attribute_items_after_wrapping_long_attribute() {
+        let src = "@Symbol(\"very_very_long_symbol_name_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron\") extern function inflate_init(code: i32);\n";
+        let out = format_source(src);
+        assert_eq!(
+            out,
+            "@Symbol(\n  \"very_very_long_symbol_name_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron\"\n)\nextern function inflate_init(code: i32);\n"
+        );
+        assert_eq!(format_source(&out), out);
+        assert!(token_stream_preserved(src, &out));
+    }
+
+    #[test]
+    fn wraps_inline_multi_argument_attribute_items() {
+        let src = "@Derive(Eq,Clone,Hash,Debug,Display,Serialize,Deserialize,Ord,PartialOrd,Default,Trace,Visit,Encode,Decode) struct Packet { value: i64 }\n";
+        let out = format_source(src);
+        assert_eq!(
+            out,
+            "@Derive(\n  Eq,\n  Clone,\n  Hash,\n  Debug,\n  Display,\n  Serialize,\n  Deserialize,\n  Ord,\n  PartialOrd,\n  Default,\n  Trace,\n  Visit,\n  Encode,\n  Decode\n)\nstruct Packet { value: i64 }\n"
+        );
+        assert_eq!(format_source(&out), out);
+        assert!(token_stream_preserved(src, &out));
+    }
+
+    #[test]
+    fn wraps_inline_no_argument_attribute_items() {
+        let src = "@TraceGeneratedFormatterDecoratorAlphaBetaGammaDeltaEpsilonZetaEtaThetaIotaKappaLambda function f(): i64;\n";
+        let out = format_source(src);
+        assert_eq!(
+            out,
+            "@TraceGeneratedFormatterDecoratorAlphaBetaGammaDeltaEpsilonZetaEtaThetaIotaKappaLambda\nfunction f(): i64;\n"
+        );
+        assert_eq!(format_source(&out), out);
+        assert!(token_stream_preserved(src, &out));
+    }
+
+    #[test]
+    fn wraps_stacked_inline_attribute_items() {
+        let src = "@Derive(Clone) @JsonSerializable @Route(\"/api/users\",method=\"GET\",auth=true) pub struct Config { value: i64 }\n";
+        let out = format_source(src);
+        assert_eq!(
+            out,
+            "@Derive(Clone)\n@JsonSerializable\n@Route(\"/api/users\", method = \"GET\", auth = true)\npub struct Config { value: i64 }\n"
+        );
+        assert_eq!(format_source(&out), out);
+        assert!(token_stream_preserved(src, &out));
+    }
+
+    #[test]
+    fn wraps_stacked_inline_attribute_items_with_long_first_attribute() {
+        let src = "@Derive(Eq,Clone,Hash,Debug,Display,Serialize,Deserialize,Ord,PartialOrd,Default,Trace,Visit,Encode,Decode) @JsonSerializable pub struct Config { value: i64 }\n";
+        let out = format_source(src);
+        assert_eq!(
+            out,
+            "@Derive(\n  Eq,\n  Clone,\n  Hash,\n  Debug,\n  Display,\n  Serialize,\n  Deserialize,\n  Ord,\n  PartialOrd,\n  Default,\n  Trace,\n  Visit,\n  Encode,\n  Decode\n)\n@JsonSerializable\npub struct Config { value: i64 }\n"
         );
         assert_eq!(format_source(&out), out);
         assert!(token_stream_preserved(src, &out));
@@ -11709,12 +12215,24 @@ mod tests {
     }
 
     #[test]
-    fn leaves_single_long_logical_expression_unwrapped_as_non_chain() {
+    fn wraps_single_long_logical_expressions() {
         let src = "function f() {\nvar ok=alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa&&lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n";
         let out = format_source(src);
         assert_eq!(
             out,
-            "function f() {\n  var ok = alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa && lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n"
+            "function f() {\n  var ok = alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa\n    && lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n"
+        );
+        assert_eq!(format_source(&out), out);
+        assert!(token_stream_preserved(src, &out));
+    }
+
+    #[test]
+    fn wraps_single_logical_expressions_without_splitting_nested_operands() {
+        let src = "function f() {\nvar ok=combine(alpha_beta&&gamma_delta,epsilon_zeta)&&lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n";
+        let out = format_source(src);
+        assert_eq!(
+            out,
+            "function f() {\n  var ok = combine(alpha_beta && gamma_delta, epsilon_zeta)\n    && lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n"
         );
         assert_eq!(format_source(&out), out);
         assert!(token_stream_preserved(src, &out));

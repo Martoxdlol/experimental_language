@@ -2471,6 +2471,18 @@ interface Service {\n  function start(self): i64;\n  function stop(self): i64;\n
     }
 
     #[test]
+    fn formatting_wraps_single_logical_expressions() {
+        let src = "function f() {\nvar ok=combine(alpha_beta&&gamma_delta,epsilon_zeta)&&lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  var ok = combine(alpha_beta && gamma_delta, epsilon_zeta)\n    && lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
     fn formatting_wraps_comparison_expressions() {
         let src = "function f() {\nvar ok=compute<Alpha,Beta>(first_value,second_value,third_value)>other<Gamma,Delta>(fourth_value,fifth_value,sixth_value);\n}\n";
         let c = Compiled::new(src.into());
@@ -2783,6 +2795,18 @@ interface Service {\n  function start(self): i64;\n  function stop(self): i64;\n
     }
 
     #[test]
+    fn formatting_wraps_module_member_lists() {
+        let src = "mod api { function start(): i64; function stop(): i64; struct Packet { value: i64 } type PacketId = i64; function configure(alpha: Alpha, beta: Beta): i64; }\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "mod api {\n  function start(): i64;\n  function stop(): i64;\n  struct Packet { value: i64 }\n  type PacketId = i64;\n  function configure(alpha: Alpha, beta: Beta): i64;\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
     fn formatting_wraps_await_and_spawn_operands() {
         let src = "function f() {\nawait generated_future_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron;\nspawn generated_worker_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron;\n}\n";
         let c = Compiled::new(src.into());
@@ -2850,6 +2874,42 @@ interface Service {\n  function start(self): i64;\n  function stop(self): i64;\n
         assert_eq!(
             formatted,
             "@Symbol(\n  \"very_very_long_symbol_name_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron\"\n)\nextern function inflate_init(code: i32);\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_multi_argument_attributes() {
+        let src = "@Derive(Eq,Clone,Hash,Debug,Display,Serialize,Deserialize,Ord,PartialOrd,Default,Trace,Visit,Encode,Decode)\nstruct Packet { value: i64 }\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "@Derive(\n  Eq,\n  Clone,\n  Hash,\n  Debug,\n  Display,\n  Serialize,\n  Deserialize,\n  Ord,\n  PartialOrd,\n  Default,\n  Trace,\n  Visit,\n  Encode,\n  Decode\n)\nstruct Packet { value: i64 }\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_inline_attribute_items() {
+        let src = "@Symbol(\"very_very_long_symbol_name_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron\") extern function inflate_init(code: i32);\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "@Symbol(\n  \"very_very_long_symbol_name_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron\"\n)\nextern function inflate_init(code: i32);\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_stacked_inline_attribute_items() {
+        let src = "@Derive(Clone) @JsonSerializable @Route(\"/api/users\",method=\"GET\",auth=true) pub struct Config { value: i64 }\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "@Derive(Clone)\n@JsonSerializable\n@Route(\"/api/users\", method = \"GET\", auth = true)\npub struct Config { value: i64 }\n"
         );
         assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
     }
@@ -2963,6 +3023,18 @@ interface Service {\n  function start(self): i64;\n  function stop(self): i64;\n
     }
 
     #[test]
+    fn formatting_wraps_single_additive_expressions() {
+        let src = "function f() {\nvar total=alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa+lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  var total = alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa\n    + lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
     fn formatting_wraps_multiplicative_chains() {
         let src = "function f() {\nvar total=alpha*beta/gamma%delta*epsilon/zeta*eta/theta%iota*kappa/lambda*mu/nu%xi*omicron;\n}\n";
         let c = Compiled::new(src.into());
@@ -2975,6 +3047,18 @@ interface Service {\n  function start(self): i64;\n  function stop(self): i64;\n
     }
 
     #[test]
+    fn formatting_wraps_single_multiplicative_expressions() {
+        let src = "function f() {\nvar total=alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa*lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  var total = alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa\n    * lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
     fn formatting_wraps_shift_chains() {
         let src = "function f() {\nvar shifted=alpha<<beta>>gamma<<delta>>epsilon<<zeta>>eta<<theta>>iota<<kappa>>lambda<<mu>>nu<<xi>>omicron;\n}\n";
         let c = Compiled::new(src.into());
@@ -2982,6 +3066,18 @@ interface Service {\n  function start(self): i64;\n  function stop(self): i64;\n
         assert_eq!(
             formatted,
             "function f() {\n  var shifted = alpha\n    << beta\n    >> gamma\n    << delta\n    >> epsilon\n    << zeta\n    >> eta\n    << theta\n    >> iota\n    << kappa\n    >> lambda\n    << mu\n    >> nu\n    << xi\n    >> omicron;\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_single_shift_expressions() {
+        let src = "function f() {\nvar shifted=alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa<<lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  var shifted = alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa\n    << lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n"
         );
         assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
     }
@@ -3006,6 +3102,18 @@ interface Service {\n  function start(self): i64;\n  function stop(self): i64;\n
         assert_eq!(
             formatted,
             "function f() {\n  var mask = alpha\n    & beta\n    & gamma\n    & delta\n    & epsilon\n    & zeta\n    & eta\n    & theta\n    & iota\n    & kappa\n    & lambda\n    & mu\n    & nu\n    & xi\n    & omicron\n    & pi;\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_single_bitwise_and_expressions() {
+        let src = "function f() {\nvar mask=alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa&lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  var mask = alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa\n    & lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n"
         );
         assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
     }
