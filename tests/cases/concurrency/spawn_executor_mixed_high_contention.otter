@@ -4,8 +4,8 @@
 //@ description: hundreds of spawn keyword futures yield, contend on Shared, send over channels, and await deterministically on the M:N executor
 //@ stdout:
 //~ shared=3072 received=784896 awaited=784896
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { List } from "core:collections";
 import { Shared, Sender, Receiver, ChannelClosed, channel } from "std:sync";
 import { yield_now } from "std:async";
@@ -56,5 +56,6 @@ function main(): Future<null> async {
   }
 
   var shared_total: i64 = await state.lock((c) => c.value);
-  println("shared=${shared_total } received=${received } awaited=${awaited }");
+  await println("shared=${shared_total} received=${received} awaited=${awaited}");
+  null
 }

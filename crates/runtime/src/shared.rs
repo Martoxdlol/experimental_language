@@ -428,9 +428,9 @@ unsafe fn finish_busy(data: *mut u8, ready_tid: i64) -> *mut u8 {
     bx
 }
 
-/// Run the body closure under the (just-acquired) lock and finish, driving an
-/// async body's future to completion first. Shared by the `lock` and `try_lock`
-/// acquisition paths.
+/// Run the body closure under the (just-acquired) lock and finish, polling an
+/// async body's future until it resolves first. Shared by the `lock` and
+/// `try_lock` acquisition paths.
 unsafe fn run_body(data: *mut u8, id: u64, cell: &Cell, ready_tid: i64) -> *mut u8 {
     let value_bits = runtime_lock(&cell.state).value;
     let env = unsafe { ((data as usize + 16) as *const usize).read() } as *mut u8;
@@ -438,7 +438,7 @@ unsafe fn run_body(data: *mut u8, id: u64, cell: &Cell, ready_tid: i64) -> *mut 
     let body: extern "C" fn(*mut u8, i64) -> i64 = unsafe { std::mem::transmute(fn_ptr) };
     let ret = body(env, value_bits);
     if unsafe { ((data as usize + 40) as *const i64).read() } == 0 {
-        // Synchronous body: `ret` is `R`.
+        // Non-async body: `ret` is `R`.
         return unsafe { finish_locked(data, id, ret, ready_tid) };
     }
     // Async body: store its future and mark running; the caller drives phase 2.
@@ -453,8 +453,8 @@ unsafe fn run_body(data: *mut u8, id: u64, cell: &Cell, ready_tid: i64) -> *mut 
 /// FIFO, non-barging, suspending the task — never the thread — while contended;
 /// `try_lock`: a single non-suspending attempt, resolving to `LockBusy` on
 /// failure). On acquisition it runs the body closure under the lock. A
-/// synchronous body finishes immediately; an `async` body's future is driven to
-/// completion in phase 2 *with the lock still held* across its suspension points.
+/// non-async body finishes immediately; an `async` body's future is polled until
+/// it resolves in phase 2 *with the lock still held* across its suspension points.
 /// The lock is released only once the body's value is ready and cloned out.
 extern "C" fn lock_poll(data: *mut u8, ctx: *mut Context) -> *mut u8 {
     let state = unsafe { (data as *const i64).read() };
@@ -519,7 +519,7 @@ extern "C" fn lock_poll(data: *mut u8, ctx: *mut Context) -> *mut u8 {
         }
     }
 
-    // Phase 2: drive the async body future while holding the lock.
+    // Phase 2: poll the async body future while holding the lock.
     let inner = unsafe { ((data as usize + 24) as *const usize).read() } as *mut u8;
     let vtable = unsafe { (inner as *const usize).read() } as *const usize;
     let poll: extern "C" fn(*mut u8, *mut Context) -> *mut u8 =
@@ -539,7 +539,7 @@ extern "C" fn lock_poll(data: *mut u8, ctx: *mut Context) -> *mut u8 {
 /// (`docs/20` §4). The returned future acquires the lock (suspending the task
 /// while contended for `lock`; resolving to `LockBusy` on a failed `try_lock`),
 /// runs `env` (the body closure, called as `fn(env, value) -> R`) under the lock
-/// — driving it to completion if `body_is_async` — clones `R` out via `clone_fn`
+/// — polling it until it resolves if `body_is_async` — clones `R` out via `clone_fn`
 /// (0 if `R` needs no clone), releases, and resolves to `R` (or `R | LockBusy`).
 ///
 /// # Safety
@@ -731,6 +731,28 @@ mod tests {
         unsafe { lang_shared_release(id) };
         assert_eq!(unsafe { lang_shared_try_acquire(id) }, 1);
         unsafe { lang_shared_release(id) };
+    }
+
+    #[test]
+    fn shared_runtime_mutex_waits_use_runtime_native_no_roots_boundary() {
+        let source = include_str!("shared.rs");
+        let helper = source
+            .split("fn runtime_lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T>")
+            .nth(1)
+            .and_then(|rest| rest.split("static NEXT_ID").next())
+            .expect("runtime_lock should remain in shared.rs");
+        assert!(
+            helper.contains("gc::enter_runtime_native_no_roots();"),
+            "Shared runtime mutex contention must publish runtime-native/no-root state before waiting"
+        );
+        assert!(
+            helper.contains("mutex.lock().unwrap_or_else(|err| err.into_inner())"),
+            "Shared runtime mutex contention must use the host mutex wait only inside the helper"
+        );
+        assert!(
+            helper.contains("gc::leave_native();"),
+            "Shared runtime mutex contention must leave native state after the wait returns"
+        );
     }
 
     #[test]

@@ -180,6 +180,13 @@
   <div class="cmd build"><span class="name">otter_fusion clean</span><span class="desc">delete build artifacts</span></div>
 </div>
 
+<p><code>otter_fusion clean [project]</code> discovers a project from the current
+directory, a project directory, or <code>project.toml</code>, then removes that
+project's <code>target/</code> directory. <code>--dry-run</code> reports the directory that
+would be removed without deleting any artifacts. Fine-grained selectors such as
+<code>--profile</code>, <code>--target</code>, <code>--package</code>, and <code>--doc</code> remain planned
+follow-ups.</p>
+
 <h3>Code quality &amp; introspection</h3>
 <div class="cmd-grid">
   <div class="cmd tools"><span class="name">otter_fusion fmt</span><span class="desc">format files</span></div>
@@ -197,19 +204,40 @@
 <p><code>otter_fusion fmt</code> is conservative by design: it normalizes
 indentation, common intra-line spacing (commas, colons, assignments,
 comparisons including <code>&lt;</code>/<code>&gt;</code>, generic/type angle
-spacing, logical operators, and clearly binary arithmetic), trailing whitespace,
+spacing in annotations, async return types, and generic function-type returns,
+async closure-arrow spacing,
+control-keyword spacing before parenthesized expressions and unary
+condition/scrutinee starts such as <code>if !done</code>, statement-keyword
+unary operand spacing such as <code>return -1</code> and <code>await !ready</code>, <code>as</code>/<code>is</code>
+cast and type-test spacing, iterator <code>in (</code> spacing, interpolation
+delimiter edges, logical operators,
+and clearly binary arithmetic), trailing whitespace outside ordinary comment trivia,
 blank-line runs, and the final newline, then verifies that both parser tokens
 and ordinary comment trivia are identical. That safety gate lets format-on-save
 keep <code>//</code> and nested <code>/* ... */</code> comments intact while
 also normalizing code around balanced inline block comments and multi-line
-block-comment boundary lines. String/char-adjacent spacing is normalized without
+block-comment boundary lines. Brace bodies nested under call/index delimiters,
+including multiline async closures such as <code>Task.spawn(() async =&gt; { ... })</code>,
+async blocks passed to calls, and plain block expressions such as <code>drive({ ... })</code>,
+plus block-form macro invocations such as <code>drive(@Trace("op") { ... })</code>,
+indent from the opened brace instead of keeping the outer call delimiter as an
+extra body indentation level. String/char-adjacent spacing is normalized without
 changing literal contents. Long parenthesized, bracketed, type-led brace,
 generic-angle, named-import brace, named-import paths, named-import closing paths, single-argument attributes, attribute argument lists, inline attribute item forms, stacked inline attribute item forms, macro block bodies, map-literal brace, match-arm brace,
 record-declaration brace comma lists, ambient/namespace import paths, extern type declarations, extern var declarations, extern function declarations, function declaration headers, function bodies, module declaration headers, module bodies, module body member lists, interface/extend declaration headers, struct declaration headers, type-alias declaration headers, return expressions, break expressions, await/spawn operand expressions, test/bench declaration headers, test/bench bodies, assignment expressions, for iterator headers, for bodies, while condition headers, if/else-if condition headers, match scrutinee headers, match guard headers, unguarded match arm bodies, top-level parenthesized arrow closure bodies, explicit trailing closure bodies, implicit trailing closure bodies, anonymous function expression headers, async block bodies, block expression bodies, loop bodies, else bodies, if bodies, while bodies, type-alias union pipe lists, var initializer
 expressions, var type-annotation
 union pipe lists, record field type-annotation union pipe lists, parameter type-annotation union pipe lists including full multi-parameter layouts, function return union pipe lists, arrow closure return union pipe lists, interface/extend
-bound plus lists, interface/extend body member lists, generic type-parameter bound plus lists including full multi-parameter layouts, cast chains, method chains, logical chains, single logical expressions, comparison expressions, additive chains, single additive expressions, multiplicative chains, single multiplicative expressions, shift chains, single shift expressions, bitwise-AND chains, single bitwise-AND expressions, bitwise-XOR chains, and bitwise-OR chains wrap at conservative token boundaries;
-broader wrapping remains planned formatter work.</p>
+bound plus lists, interface/extend body member lists, generic type-parameter bound plus lists including full multi-parameter layouts, cast chains, single cast expressions, method chains, single method expressions, logical chains, single logical expressions, comparison expressions, single comparison expressions, additive chains, single additive expressions, multiplicative chains, single multiplicative expressions, shift chains, single shift expressions, bitwise-AND chains, single bitwise-AND expressions, bitwise-XOR chains, single bitwise-XOR expressions, bitwise-OR chains, and single bitwise-OR expressions wrap at conservative token boundaries;
+long parenthesized call/argument-list code with a trailing <code>//</code>
+comment or balanced trailing <code>/* ... */</code> block comment can wrap while
+preserving the exact comment text on the final wrapped line;
+broader wrapping remains planned formatter work. By default
+<code>otter_fusion fmt &lt;file|dir&gt;</code> rewrites files in place, recursively
+formatting directories while skipping hidden and <code>target</code> directories.
+<code>--check</code> is the CI gate: it reports files that would change without
+writing them. <code>--emit stdout</code> is the editor path: it requires a single
+<code>.otter</code> file, prints only the formatted source to stdout, and leaves the
+file untouched.</p>
 
 <h3>Dependencies</h3>
 <div class="cmd-grid">
@@ -221,6 +249,16 @@ broader wrapping remains planned formatter work.</p>
   <div class="cmd deps"><span class="name">otter_fusion vendor</span><span class="desc">copy deps into project</span></div>
   <div class="cmd deps"><span class="name">otter_fusion lock</span><span class="desc">regenerate / validate lockfile</span></div>
 </div>
+
+<p><code>otter_fusion remove &lt;name&gt; --dry-run</code> validates that the named
+dependency exists and reports the manifest edit that would happen without
+rewriting <code>project.toml</code>. Running without <code>--dry-run</code> applies the
+same parsed manifest edit in place. <code>otter_fusion vendor --dry-run</code>
+resolves the dependency graph and reports how many packages would be copied into
+<code>vendor/</code>, but it does not delete or copy any vendor directory contents.
+<code>otter_fusion update --dry-run --verbose</code> re-resolves dependencies,
+reports whether <code>project.lock</code> would change, and prints a deterministic
+line diff without writing the lockfile.</p>
 
 <h3>Registry</h3>
 <div class="cmd-grid">
@@ -730,7 +768,7 @@ targets = ["x86_64-linux-gnu", "aarch64-apple-darwin"]</code></pre>
     <li><strong>Color env vars</strong>: respect <code>NO_COLOR</code>, <code>CLICOLOR</code>, <code>CLICOLOR_FORCE</code>.</li>
     <li><strong>CI-friendly output</strong>: <code>--message-format short|json|human</code>; no ANSI in non-TTY unless <code>--color always</code>.</li>
     <li><strong>Editor format-on-save</strong>: <code>otter_fusion fmt --check</code> for CI, <code>otter_fusion fmt --emit stdout</code> for editors.</li>
-    <li><strong><code>--dry-run</code></strong> on every destructive command (<code>publish</code>, <code>update</code>, <code>clean</code>, <code>vendor</code>, <code>remove</code>).</li>
+    <li><strong><code>--dry-run</code></strong> on destructive commands (<code>publish</code>, <code>update</code>, <code>clean</code>, <code>vendor</code>, <code>remove</code>); future destructive commands inherit this rule.</li>
     <li><strong><code>otter_fusion clean</code> granularity</strong>: <code>--profile</code>, <code>--target</code>, <code>--package</code>, <code>--doc</code>.</li>
     <li><strong>External subcommands</strong>: <code>otter_fusion foo</code> → <code>otter_fusion-foo</code> on PATH. Community tools without core changes.</li>
     <li><strong>Hook points</strong>: build scripts vs proc macros vs plugins — three distinct, documented mechanisms.</li>

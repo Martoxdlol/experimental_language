@@ -1,10 +1,10 @@
 //@ kind: run
-//@ description: a sync `for` over a Map inside an async body with an `await` in the body — the keys snapshot, map handle and index all survive suspends
+//@ description: an ordinary `for` over a Map inside an async body with an `await` in the body — the keys snapshot, map handle and index all survive suspends
 //@ stdout:
 //~ 6
+import { Future } from "core:prelude";
 import { Map, Entry } from "core:collections";
 import { println } from "std:io";
-import { Future } from "core:prelude";
 import { yield_now } from "std:async";
 function sumv(m: Map<str, i64>): Future<i64> async {
   var total = 0;
@@ -16,5 +16,6 @@ function sumv(m: Map<str, i64>): Future<i64> async {
 }
 function main(): Future<null> async {
   var m = {"a": 1, "b": 2, "c": 3};
-  println("${await sumv(m)}");
+  await println("${await sumv(m)}");
+  null
 }

@@ -3,6 +3,10 @@ import { Future } from "core:async";
 import { JoinHandle } from "std:thread";
 
 import { Thread } from "std:thread";
+
+// CPU-heavy work can use one OS thread per worker. This example intentionally
+// uses Thread.spawn rather than Task.spawn so executor workers stay available
+// for lightweight async tasks and explicit async I/O.
 function hard_work(n: i64): i64 {
   var acc: i64 = 0;
   var i: i64 = 0;

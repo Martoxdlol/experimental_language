@@ -2,19 +2,34 @@
 //@ description: .clone() on a @RefCounted value is an independent deep copy (own count), not an alias
 //@ stdout:
 //~ a=1 b=99
-//~ drop 99
-//~ drop 1
+//~ drops=99001
+import { Future } from "core:prelude";
 import { println } from "std:io";
 import { Drop, Clone } from "core:prelude";
+import { AtomicI64, SeqCst } from "core:sync/atomic";
 
 @RefCounted
 @Derive(Clone)
-struct Res { id: i64 }
-extend Res: Drop { function drop(self) { println("drop ${self.id}"); } }
+struct Res { id: i64, events: AtomicI64 }
+extend Res: Drop { function drop(self) { record(self.events, self.id); } }
 
-function main() {
-  var a: Res = Res { id: 1 };
+function record(events: AtomicI64, code: i64): null {
+  var prior = events.load(SeqCst {});
+  events.store((prior * 1000) + code, SeqCst {});
+  null
+}
+
+function scenario(events: AtomicI64): Future<null> async {
+  var a: Res = Res { id: 1, events: events };
   var b: Res = a.clone();   // independent object, strong count 1
   b.id = 99;                // mutating the copy does not affect the original
-  println("a=${a.id} b=${b.id}");
+  await println("a=${a.id} b=${b.id}");
+  null
+}
+
+function main(): Future<null> async {
+  var events = AtomicI64.new(0);
+  await scenario(events);
+  await println("drops=${events.load(SeqCst {})}");
+  null
 }

@@ -1,0 +1,12 @@
+//@ kind: compile-error
+//@ description: std:fs remove returns Future<null | IoError> and must be awaited before use
+//@ stderr: expected `null | IoError`, found `Future<null | IoError>`
+
+import { Future } from "core:prelude";
+import { IoError } from "std:io";
+import { Path, remove } from "std:fs";
+
+function main(): Future<null> async {
+  var _removed: null | IoError = remove(Path.new("target/tmp/otter_fusion_remove_requires_await.tmp"));
+  null
+}

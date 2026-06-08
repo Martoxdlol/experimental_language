@@ -1,0 +1,12 @@
+//@ kind: compile-error
+//@ description: std:fs Path.metadata returns Future<Metadata | IoError> and must be awaited before use
+//@ stderr: found `Future<
+
+import { Future } from "core:prelude";
+import { IoError } from "std:io";
+import { Metadata, Path } from "std:fs";
+
+function main(): Future<null> async {
+  var _metadata: Metadata | IoError = Path.new(".").metadata();
+  null
+}

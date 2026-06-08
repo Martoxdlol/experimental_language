@@ -5,6 +5,7 @@
 //~ sums union=5 inter=2 diff=3 iter=7
 //~ helpers list=2 insert_all_size=3 insert_all_sum=6 subset=true/false super=true/false disjoint=true/false
 //~ values eq=true hash=true str=Set{1,2} clone_eq=true clone_size=3 original_size=2
+import { Future } from "core:prelude";
 import { Set } from "core:collections";
 import { println } from "std:io";
 
@@ -16,14 +17,14 @@ function sum_set(values: Set<i64>): i64 {
   total
 }
 
-function main() {
+function main(): Future<null> async {
   var a = Set<i64>();
   var inserted = a.insert(1);
   a.insert(2);
   var dup = a.insert(2);
   var removed = a.remove(1);
   var missing = a.remove(9);
-  println("size=${a.size()} empty=${a.is_empty()} inserted=${inserted} dup=${dup} removed=${removed} missing=${missing} has1=${a.contains(1)} has2=${a.contains(2)}");
+  await println("size=${a.size()} empty=${a.is_empty()} inserted=${inserted} dup=${dup} removed=${removed} missing=${missing} has1=${a.contains(1)} has2=${a.contains(2)}");
 
   var b = Set<i64>();
   b.insert(2);
@@ -32,7 +33,7 @@ function main() {
   var unioned = a.union(b);
   var intersected = a.intersect(b);
   var diffed = b.difference(a);
-  println("sums union=${sum_set(unioned)} inter=${sum_set(intersected)} diff=${sum_set(diffed)} iter=${sum_set(a) + sum_set(b)}");
+  await println("sums union=${sum_set(unioned)} inter=${sum_set(intersected)} diff=${sum_set(diffed)} iter=${sum_set(a) + sum_set(b)}");
 
   var listed = a.to_list();
   var extended = Set<i64>();
@@ -43,7 +44,7 @@ function main() {
   small.insert(2);
   var outside = Set<i64>();
   outside.insert(99);
-  println("helpers list=${listed[0]} insert_all_size=${extended.size()} insert_all_sum=${sum_set(extended)} subset=${small.is_subset(extended)}/${outside.is_subset(extended)} super=${extended.is_superset(small)}/${small.is_superset(extended)} disjoint=${outside.is_disjoint(extended)}/${small.is_disjoint(extended)}");
+  await println("helpers list=${listed[0]} insert_all_size=${extended.size()} insert_all_sum=${sum_set(extended)} subset=${small.is_subset(extended)}/${outside.is_subset(extended)} super=${extended.is_superset(small)}/${small.is_superset(extended)} disjoint=${outside.is_disjoint(extended)}/${small.is_disjoint(extended)}");
 
   var ordered = Set<i64>();
   ordered.insert(1);
@@ -53,5 +54,6 @@ function main() {
   reversed.insert(1);
   var cloned = ordered.clone();
   cloned.insert(3);
-  println("values eq=${ordered == reversed} hash=${ordered.hash() == reversed.hash()} str=${ordered.to_str()} clone_eq=${ordered == reversed.clone()} clone_size=${cloned.size()} original_size=${ordered.size()}");
+  await println("values eq=${ordered == reversed} hash=${ordered.hash() == reversed.hash()} str=${ordered.to_str()} clone_eq=${ordered == reversed.clone()} clone_size=${cloned.size()} original_size=${ordered.size()}");
+  null
 }

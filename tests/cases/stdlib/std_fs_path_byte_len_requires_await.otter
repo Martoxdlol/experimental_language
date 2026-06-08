@@ -1,0 +1,12 @@
+//@ kind: compile-error
+//@ description: std:fs Path.byte_len returns Future<u64 | IoError> and must be awaited before use
+//@ stderr: expected `u64 | IoError`, found `Future<u64 | IoError>`
+
+import { Future } from "core:prelude";
+import { IoError } from "std:io";
+import { Path } from "std:fs";
+
+function main(): Future<null> async {
+  var _len: u64 | IoError = Path.new(".").byte_len();
+  null
+}

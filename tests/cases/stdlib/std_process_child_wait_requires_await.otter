@@ -1,0 +1,15 @@
+//@ kind: compile-error
+//@ description: std:process Child.wait returns a Future and cannot be used as an immediate status value
+//@ stderr: Future<
+
+import { Future } from "core:prelude";
+import { Command, Child, ExitStatus } from "std:process";
+import { IoError } from "std:io";
+
+function main(): Future<null> async {
+  var spawned = await Command.new("true").spawn();
+  if spawned is Child {
+    var status: ExitStatus | IoError = (spawned as Child).wait();
+  }
+  null
+}

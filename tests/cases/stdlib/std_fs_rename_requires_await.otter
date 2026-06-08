@@ -1,0 +1,12 @@
+//@ kind: compile-error
+//@ description: std:fs rename returns Future<null | IoError> and must be awaited before use
+//@ stderr: expected `null | IoError`, found `Future<null | IoError>`
+
+import { Future } from "core:prelude";
+import { IoError } from "std:io";
+import { Path, rename } from "std:fs";
+
+function main(): Future<null> async {
+  var _renamed: null | IoError = rename(Path.new("/tmp/otter_fusion_requires_await_from"), Path.new("/tmp/otter_fusion_requires_await_to"));
+  null
+}

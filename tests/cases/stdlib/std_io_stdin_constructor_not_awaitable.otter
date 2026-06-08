@@ -1,0 +1,11 @@
+//@ kind: compile-error
+//@ description: std:io stdin() constructs an ordinary Stdin handle; await the handle's read/read_to_end methods instead
+//@ stderr: `await` requires a `Future`
+
+import { Future } from "core:prelude";
+import { stdin } from "std:io";
+
+function main(): Future<null> async {
+  var _input = await stdin();
+  null
+}

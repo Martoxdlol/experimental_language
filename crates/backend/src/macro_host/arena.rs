@@ -8,9 +8,9 @@
 //! into the per-thread [`MacroState`] defined here. The language never sees a
 //! raw Rust AST; it only ever holds `i64` handles.
 //!
-//! The state is thread-local because the macro JIT runs synchronously on the
-//! calling thread and the host functions are invoked re-entrantly during that
-//! call. One [`MacroCtx`] is active per running macro invocation.
+//! The state is thread-local because macro expansion runs on the calling thread
+//! and the host functions are invoked re-entrantly during that expansion. One
+//! [`MacroCtx`] is active per running macro invocation.
 
 use compiler::ast::*;
 use compiler::span::{BytePos, FileId, Span};

@@ -44,37 +44,32 @@ struct OpenOptions {
   create_new: bool,
 }
 
-extern function lang_fs_read_text(path: str): str;
-extern function lang_fs_write_text(path: str, contents: str): str;
-extern function lang_fs_append_text(path: str, contents: str): str;
-extern function lang_fs_read_bytes(path: str): str;
-extern function lang_fs_write_bytes(path: str, contents_hex: str): str;
-extern function lang_fs_file_open(path: str, mode: str): str;
-extern function lang_fs_file_close(handle: i64): str;
-extern function lang_fs_file_read(handle: i64, count: i64): str;
-extern function lang_fs_file_read_to_end(handle: i64): str;
-extern function lang_fs_file_write(handle: i64, contents_hex: str): str;
-extern function lang_fs_file_flush(handle: i64): str;
-extern function lang_fs_file_seek(handle: i64, mode: str, offset: i64): str;
+extern function __otter_fs_read_text_async(path: str): Future<str>;
+extern function __otter_fs_write_text_async(path: str, contents: str): Future<str>;
+extern function __otter_fs_append_text_async(path: str, contents: str): Future<str>;
+extern function __otter_fs_read_bytes_async(path: str): Future<str>;
+extern function __otter_fs_write_bytes_async(path: str, contents_hex: str): Future<str>;
+extern function __otter_fs_exists_async(path: str): Future<str>;
+extern function __otter_fs_is_file_async(path: str): Future<str>;
+extern function __otter_fs_is_dir_async(path: str): Future<str>;
+extern function __otter_fs_kind_async(path: str): Future<str>;
+extern function __otter_fs_len_async(path: str): Future<str>;
+extern function __otter_fs_read_only_async(path: str): Future<str>;
+extern function __otter_fs_executable_async(path: str): Future<str>;
+extern function __otter_fs_remove_async(path: str): Future<str>;
+extern function __otter_fs_rename_async(from: str, to: str): Future<str>;
+extern function __otter_fs_create_dir_async(path: str): Future<str>;
+extern function __otter_fs_create_dir_all_async(path: str): Future<str>;
+extern function __otter_fs_canonicalize_async(path: str): Future<str>;
+extern function __otter_fs_read_dir_async(path: str): Future<str>;
+extern function __otter_fs_file_open_async(path: str, mode: str): Future<str>;
+extern function __otter_fs_file_close_async(handle: i64): Future<str>;
 extern function __otter_fs_file_read_async(handle: i64, count: i64): Future<str>;
 extern function __otter_fs_file_read_to_end_async(handle: i64): Future<str>;
 extern function __otter_fs_file_write_async(handle: i64, contents_hex: str): Future<str>;
 extern function __otter_fs_file_flush_async(handle: i64): Future<str>;
 extern function __otter_fs_file_seek_async(handle: i64, mode: str, offset: i64): Future<str>;
-extern function lang_fs_exists(path: str): str;
-extern function lang_fs_is_file(path: str): str;
-extern function lang_fs_is_dir(path: str): str;
-extern function lang_fs_kind(path: str): str;
-extern function lang_fs_len(path: str): str;
-extern function lang_fs_read_only(path: str): str;
-extern function lang_fs_executable(path: str): str;
-extern function lang_fs_remove(path: str): str;
-extern function lang_fs_rename(from: str, to: str): str;
-extern function lang_fs_create_dir(path: str): str;
-extern function lang_fs_create_dir_all(path: str): str;
-extern function lang_fs_canonicalize(path: str): str;
 extern function lang_fs_native_separator(): str;
-extern function lang_fs_read_dir(path: str): str;
 
 function regular_file(): FileKind { RegularFile {} }
 function directory(): FileKind { Directory {} }
@@ -151,7 +146,7 @@ function __fs_decode_kind(result: str): FileKind | IoError {
 function __fs_digit(ch: char): u64 | IoError {
   var cp = ch as i64;
   if cp >= 48 && cp <= 57 {
-    (cp - 48)as u64
+    (cp - 48) as u64
   } else {
     __fs_io_error("invalid decimal digit in filesystem metadata")
   }
@@ -209,13 +204,13 @@ function __fs_decode_i64(result: str): i64 | IoError {
 function __fs_hex_digit(value: u8): str {
   var n = value as i64;
   var cp = if n < 10 { 48 + n } else { 87 + n };
-  (cp as char)as str
+  (cp as char) as str
 }
 
 function __fs_bytes_to_hex(data: Bytes): str {
   var out = "";
   for b in data.iter() {
-    out = out + __fs_hex_digit((b / 16u8)as u8) + __fs_hex_digit((b % 16u8)as u8);
+    out = out + __fs_hex_digit((b / 16u8) as u8) + __fs_hex_digit((b % 16u8) as u8);
   }
   out
 }
@@ -223,11 +218,11 @@ function __fs_bytes_to_hex(data: Bytes): str {
 function __fs_hex_value(ch: char): u8 | IoError {
   var cp = ch as i64;
   if cp >= 48 && cp <= 57 {
-    (cp - 48)as u8
+    (cp - 48) as u8
   } else if cp >= 97 && cp <= 102 {
-    (cp - 87)as u8
+    (cp - 87) as u8
   } else if cp >= 65 && cp <= 70 {
-    (cp - 55)as u8
+    (cp - 55) as u8
   } else {
     __fs_io_error("invalid hexadecimal digit in filesystem byte payload")
   }
@@ -256,7 +251,7 @@ function __fs_hex_to_bytes(text: str): Bytes | IoError {
       if lo is IoError {
         return lo as IoError;
       }
-      out.push(((hi as u8) * 16u8 + (lo as u8))as u8);
+      out.push(((hi as u8) * 16u8 + (lo as u8)) as u8);
       i = i + 2;
     }
     out
@@ -286,8 +281,9 @@ function __fs_options_can_write(options: OpenOptions): bool {
   options.write || options.append
 }
 
-function __fs_open_file(path: Path, mode: str, append_mode: bool): File | IoError {
-  var handle = __fs_decode_i64(lang_fs_file_open(path.as_str(), mode));
+function __fs_open_file(path: Path, mode: str, append_mode: bool): Future<File | IoError> async {
+  var raw = await __otter_fs_file_open_async(path.as_str(), mode);
+  var handle = __fs_decode_i64(raw);
   if handle is IoError {
     handle as IoError
   } else {
@@ -295,12 +291,12 @@ function __fs_open_file(path: Path, mode: str, append_mode: bool): File | IoErro
   }
 }
 
-function __fs_open_file_options(path: Path, options: OpenOptions): File | IoError {
+function __fs_open_file_options(path: Path, options: OpenOptions): Future<File | IoError> async {
   var validation = options.validate();
   if validation is IoError {
     return validation as IoError;
   }
-  __fs_open_file(path, __fs_options_mode(options), options.append)
+  await __fs_open_file(path, __fs_options_mode(options), options.append)
 }
 
 struct FsReadDirField {
@@ -385,20 +381,24 @@ function __fs_decode_read_dir(payload: str): List<DirEntry> | IoError {
   entries
 }
 
-function read_to_string(path: Path): str | IoError {
-  __fs_decode_text(lang_fs_read_text(path.as_str()))
+function read_to_string(path: Path): Future<str | IoError> async {
+  var raw = await __otter_fs_read_text_async(path.as_str());
+  __fs_decode_text(raw)
 }
 
-function write_string(path: Path, contents: str): null | IoError {
-  __fs_decode_unit(lang_fs_write_text(path.as_str(), contents))
+function write_string(path: Path, contents: str): Future<null | IoError> async {
+  var raw = await __otter_fs_write_text_async(path.as_str(), contents);
+  __fs_decode_unit(raw)
 }
 
-function append_string(path: Path, contents: str): null | IoError {
-  __fs_decode_unit(lang_fs_append_text(path.as_str(), contents))
+function append_string(path: Path, contents: str): Future<null | IoError> async {
+  var raw = await __otter_fs_append_text_async(path.as_str(), contents);
+  __fs_decode_unit(raw)
 }
 
-function read(path: Path): Bytes | IoError {
-  var result = __fs_decode_text(lang_fs_read_bytes(path.as_str()));
+function read(path: Path): Future<Bytes | IoError> async {
+  var raw = await __otter_fs_read_bytes_async(path.as_str());
+  var result = __fs_decode_text(raw);
   if result is IoError {
     result as IoError
   } else {
@@ -406,28 +406,34 @@ function read(path: Path): Bytes | IoError {
   }
 }
 
-function write(path: Path, data: Bytes): null | IoError {
-  __fs_decode_unit(lang_fs_write_bytes(path.as_str(), __fs_bytes_to_hex(data)))
+function write(path: Path, data: Bytes): Future<null | IoError> async {
+  var raw = await __otter_fs_write_bytes_async(path.as_str(), __fs_bytes_to_hex(data));
+  __fs_decode_unit(raw)
 }
 
-function remove(path: Path): null | IoError {
-  __fs_decode_unit(lang_fs_remove(path.as_str()))
+function remove(path: Path): Future<null | IoError> async {
+  var raw = await __otter_fs_remove_async(path.as_str());
+  __fs_decode_unit(raw)
 }
 
-function rename(from: Path, to: Path): null | IoError {
-  __fs_decode_unit(lang_fs_rename(from.as_str(), to.as_str()))
+function rename(from: Path, to: Path): Future<null | IoError> async {
+  var raw = await __otter_fs_rename_async(from.as_str(), to.as_str());
+  __fs_decode_unit(raw)
 }
 
-function create_dir(path: Path): null | IoError {
-  __fs_decode_unit(lang_fs_create_dir(path.as_str()))
+function create_dir(path: Path): Future<null | IoError> async {
+  var raw = await __otter_fs_create_dir_async(path.as_str());
+  __fs_decode_unit(raw)
 }
 
-function create_dir_all(path: Path): null | IoError {
-  __fs_decode_unit(lang_fs_create_dir_all(path.as_str()))
+function create_dir_all(path: Path): Future<null | IoError> async {
+  var raw = await __otter_fs_create_dir_all_async(path.as_str());
+  __fs_decode_unit(raw)
 }
 
-function __fs_canonicalize_path(path: Path): Path | IoError {
-  var result = __fs_decode_text(lang_fs_canonicalize(path.as_str()));
+function __fs_canonicalize_path(path: Path): Future<Path | IoError> async {
+  var raw = await __otter_fs_canonicalize_async(path.as_str());
+  var result = __fs_decode_text(raw);
   if result is IoError {
     result as IoError
   } else {
@@ -435,12 +441,13 @@ function __fs_canonicalize_path(path: Path): Path | IoError {
   }
 }
 
-function canonicalize(path: Path): Path | IoError {
-  __fs_canonicalize_path(path)
+function canonicalize(path: Path): Future<Path | IoError> async {
+  await __fs_canonicalize_path(path)
 }
 
-function read_dir(path: Path): DirEntries | IoError {
-  var result = __fs_decode_text(lang_fs_read_dir(path.as_str()));
+function read_dir(path: Path): Future<DirEntries | IoError> async {
+  var raw = await __otter_fs_read_dir_async(path.as_str());
+  var result = __fs_decode_text(raw);
   if result is IoError {
     result as IoError
   } else {
@@ -486,32 +493,39 @@ extend Path {
     }
   }
 
-  function exists(self): bool | IoError {
-    __fs_decode_bool(lang_fs_exists(self.raw))
+  function exists(self): Future<bool | IoError> async {
+    var raw = await __otter_fs_exists_async(self.raw);
+    __fs_decode_bool(raw)
   }
 
-  function is_file(self): bool | IoError {
-    __fs_decode_bool(lang_fs_is_file(self.raw))
+  function is_file(self): Future<bool | IoError> async {
+    var raw = await __otter_fs_is_file_async(self.raw);
+    __fs_decode_bool(raw)
   }
 
-  function is_dir(self): bool | IoError {
-    __fs_decode_bool(lang_fs_is_dir(self.raw))
+  function is_dir(self): Future<bool | IoError> async {
+    var raw = await __otter_fs_is_dir_async(self.raw);
+    __fs_decode_bool(raw)
   }
 
-  function file_kind(self): FileKind | IoError {
-    __fs_decode_kind(lang_fs_kind(self.raw))
+  function file_kind(self): Future<FileKind | IoError> async {
+    var raw = await __otter_fs_kind_async(self.raw);
+    __fs_decode_kind(raw)
   }
 
-  function byte_len(self): u64 | IoError {
-    __fs_decode_u64(lang_fs_len(self.raw))
+  function byte_len(self): Future<u64 | IoError> async {
+    var raw = await __otter_fs_len_async(self.raw);
+    __fs_decode_u64(raw)
   }
 
-  function permissions(self): Permissions | IoError {
-    var read_only = __fs_decode_bool(lang_fs_read_only(self.raw));
+  function permissions(self): Future<Permissions | IoError> async {
+    var read_only_raw = await __otter_fs_read_only_async(self.raw);
+    var read_only = __fs_decode_bool(read_only_raw);
     if read_only is IoError {
       read_only as IoError
     } else {
-      var executable = __fs_decode_bool(lang_fs_executable(self.raw));
+      var executable_raw = await __otter_fs_executable_async(self.raw);
+      var executable = __fs_decode_bool(executable_raw);
       if executable is IoError {
         executable as IoError
       } else {
@@ -520,16 +534,16 @@ extend Path {
     }
   }
 
-  function metadata(self): Metadata | IoError {
-    var kind = self.file_kind();
+  function metadata(self): Future<Metadata | IoError> async {
+    var kind = await self.file_kind();
     if kind is IoError {
       kind as IoError
     } else {
-      var len = self.byte_len();
+      var len = await self.byte_len();
       if len is IoError {
         len as IoError
       } else {
-        var perms = self.permissions();
+        var perms = await self.permissions();
         if perms is IoError {
           perms as IoError
         } else {
@@ -543,8 +557,8 @@ extend Path {
     }
   }
 
-  function canonicalize(self): Path | IoError {
-    __fs_canonicalize_path(self)
+  function canonicalize(self): Future<Path | IoError> async {
+    await __fs_canonicalize_path(self)
   }
 
   function join(self, segment: str): Path {
@@ -577,7 +591,7 @@ extend Path {
       } else if part == ".." {
         if stack.size() > 0 && stack[stack.size() - 1] != ".." {
           stack.pop();
-        } else if!absolute {
+        } else if !absolute {
           stack.push(part);
         }
       } else {
@@ -666,7 +680,7 @@ extend Path {
   function strip_prefix(self, base: Path): Path | null {
     var path = self.normalize();
     var prefix = base.normalize();
-    if!path.starts_with(prefix) {
+    if !path.starts_with(prefix) {
       null
     } else {
       var path_parts = path.components();
@@ -1022,7 +1036,7 @@ extend OpenOptions {
   }
 
   function validation_error(self): IoError | null {
-    if!self.read && !self.write && !self.append {
+    if !self.read && !self.write && !self.append {
       __fs_io_error("filesystem open options must enable read, write, or append")
     } else if self.truncate && !__fs_options_can_write(self) {
       __fs_io_error("filesystem open options using truncate require write or append access")
@@ -1045,7 +1059,7 @@ extend OpenOptions {
   }
 
   function is_valid(self): bool {
-    self.validation_error()is null
+    self.validation_error() is null
   }
 }
 
@@ -1108,21 +1122,21 @@ extend OpenOptions: Debug {
   }
 }
 
-extend File {
-  function open(path: Path): File | IoError {
-    __fs_open_file(path, "open", false)
+extend File: AsyncReader + AsyncWriter {
+  function open(path: Path): Future<File | IoError> async {
+    await __fs_open_file(path, "open", false)
   }
 
-  function create(path: Path): File | IoError {
-    __fs_open_file(path, "create", false)
+  function create(path: Path): Future<File | IoError> async {
+    await __fs_open_file(path, "create", false)
   }
 
-  function append(path: Path): File | IoError {
-    __fs_open_file(path, "append", true)
+  function append(path: Path): Future<File | IoError> async {
+    await __fs_open_file(path, "append", true)
   }
 
-  function open_with(path: Path, options: OpenOptions): File | IoError {
-    __fs_open_file_options(path, options)
+  function open_with(path: Path, options: OpenOptions): Future<File | IoError> async {
+    await __fs_open_file_options(path, options)
   }
 
   function path(self): Path { self.path.clone() }
@@ -1131,24 +1145,25 @@ extend File {
 
   function handle_id(self): i64 { self.handle }
 
-  function read_to_string(self): str | IoError {
-    read_to_string(self.path)
+  function read_to_string(self): Future<str | IoError> async {
+    await read_to_string(self.path)
   }
 
-  function write_string(self, contents: str): null | IoError {
+  function write_string(self, contents: str): Future<null | IoError> async {
     if self.append_mode {
-      append_string(self.path, contents)
+      await append_string(self.path, contents)
     } else {
-      write_string(self.path, contents)
+      await write_string(self.path, contents)
     }
   }
 
-  function append_string(self, contents: str): null | IoError {
-    append_string(self.path, contents)
+  function append_string(self, contents: str): Future<null | IoError> async {
+    await append_string(self.path, contents)
   }
 
-  function close(self): null | IoError {
-    __fs_decode_unit(lang_fs_file_close(self.handle))
+  function close(self): Future<null | IoError> async {
+    var raw = await __otter_fs_file_close_async(self.handle);
+    __fs_decode_unit(raw)
   }
 
   function read_async(self, buf: Bytes): Future<i64 | IoError> async {
@@ -1217,67 +1232,29 @@ extend File {
   }
 }
 
-extend File: Reader {
-  function read(self, buf: Bytes): i64 | IoError {
-    var data = __fs_decode_bytes(lang_fs_file_read(self.handle, buf.size()));
-    if data is IoError {
-      data as IoError
-    } else {
-      var chunk = data as Bytes;
-      for b in chunk.iter() {
-        buf.push(b);
-      }
-      chunk.size()
-    }
+extend File {
+  function read(self, buf: Bytes): Future<i64 | IoError> async {
+    await self.read_async(buf)
   }
 
-  function read_to_end(self, buf: Bytes): i64 | IoError {
-    var data = __fs_decode_bytes(lang_fs_file_read_to_end(self.handle));
-    if data is IoError {
-      data as IoError
-    } else {
-      var chunk = data as Bytes;
-      for b in chunk.iter() {
-        buf.push(b);
-      }
-      chunk.size()
-    }
-  }
-}
-
-extend File: Writer {
-  function write(self, buf: Bytes): i64 | IoError {
-    __fs_decode_i64(lang_fs_file_write(self.handle, __fs_bytes_to_hex(buf)))
+  function read_to_end(self, buf: Bytes): Future<i64 | IoError> async {
+    await self.read_to_end_async(buf)
   }
 
-  function write_all(self, buf: Bytes): null | IoError {
-    var written = self.write(buf);
-    if written is IoError {
-      written as IoError
-    } else {
-      null
-    }
+  function write(self, buf: Bytes): Future<i64 | IoError> async {
+    await self.write_async(buf)
   }
 
-  function flush(self): null | IoError {
-    __fs_decode_unit(lang_fs_file_flush(self.handle))
+  function write_all(self, buf: Bytes): Future<null | IoError> async {
+    await self.write_all_async(buf)
   }
-}
 
-extend File: Seeker {
-  function seek(self, pos: SeekFrom): i64 | IoError {
-    if pos is Start {
-      var offset = (pos as Start).offset;
-      if offset > 9223372036854775807u64 {
-        __fs_io_error("invalid seek")
-      } else {
-        __fs_decode_i64(lang_fs_file_seek(self.handle, "start", offset as i64))
-      }
-    } else if pos is Current {
-      __fs_decode_i64(lang_fs_file_seek(self.handle, "current", (pos as Current).offset))
-    } else {
-      __fs_decode_i64(lang_fs_file_seek(self.handle, "end", (pos as End).offset))
-    }
+  function flush(self): Future<null | IoError> async {
+    await self.flush_async()
+  }
+
+  function seek(self, pos: SeekFrom): Future<i64 | IoError> async {
+    await self.seek_async(pos)
   }
 }
 

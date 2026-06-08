@@ -1,0 +1,12 @@
+//@ kind: compile-error
+//@ description: std:fs read_to_string returns Future<str | IoError> and must be awaited before use
+//@ stderr: expected `str | IoError`, found `Future<str | IoError>`
+
+import { Future } from "core:prelude";
+import { IoError } from "std:io";
+import { Path, read_to_string } from "std:fs";
+
+function main(): Future<null> async {
+  var _text: str | IoError = read_to_string(Path.new("missing.txt"));
+  null
+}

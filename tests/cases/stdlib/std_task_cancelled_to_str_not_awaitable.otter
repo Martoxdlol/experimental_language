@@ -1,0 +1,12 @@
+//@ kind: compile-error
+//@ description: std:task Cancelled.to_str is ordinary marker value rendering, not an async task operation
+//@ stderr: `await` requires a `Future`
+
+import { Future } from "core:prelude";
+import { Cancelled } from "std:task";
+
+function main(): Future<null> async {
+  var cancelled = Cancelled {};
+  var _text = await cancelled.to_str();
+  null
+}

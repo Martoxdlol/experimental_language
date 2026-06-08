@@ -36,6 +36,14 @@ extend Bytes {
     }
   }
   function push(self, b: u8) { self.data.push(b); }
+  function insert(self, i: i64, b: u8): bool {
+    if i < 0 || i > self.data.size() {
+      false
+    } else {
+      self.data.insert(i, b);
+      true
+    }
+  }
   function pop(self): u8 | null {
     if self.data.is_empty() {
       null
@@ -69,6 +77,25 @@ extend Bytes {
       }
     }
   }
+  function resize(self, len: i64, fill: u8) {
+    if len <= 0 {
+      self.clear();
+    } else {
+      while self.data.size() > len {
+        self.data.remove(self.data.size() - 1);
+      }
+      while self.data.size() < len {
+        self.data.push(fill);
+      }
+    }
+  }
+  function fill(self, value: u8) {
+    var i = 0;
+    while i < self.data.size() {
+      self.data[i] = value;
+      i = i + 1;
+    }
+  }
   function clear(self) { self.data.clear(); }
   function append_iter(self, it: Iterator<u8>) {
     for b in it {
@@ -78,7 +105,7 @@ extend Bytes {
   function slice(self, start: i64, end: i64): Bytes {
     var out = Bytes.new();
     var i = start;
-    while(i < end && i < self.data.size()) {
+    while (i < end && i < self.data.size()) {
       if i >= 0 {
         var b = self.data.get(i);
         if b is u8 {
@@ -116,6 +143,78 @@ extend Bytes {
       same
     }
   }
+  function index_of(self, needle: u8): i64 | null {
+    var i = 0;
+    while i < self.data.size() {
+      if self.data[i] == needle {
+        return i;
+      }
+      i = i + 1;
+    }
+    null
+  }
+  function last_index_of(self, needle: u8): i64 | null {
+    var i = self.data.size() - 1;
+    while i >= 0 {
+      if self.data[i] == needle {
+        return i;
+      }
+      i = i - 1;
+    }
+    null
+  }
+  function contains(self, needle: u8): bool {
+    self.index_of(needle) is i64
+  }
+  function starts_with_at(self, start: i64, needle: Bytes): bool {
+    if start < 0 || start + needle.size() > self.size() {
+      false
+    } else {
+      var same = true;
+      var i = 0;
+      while same && i < needle.size() {
+        same = self.data[start + i] == needle.data[i];
+        i = i + 1;
+      }
+      same
+    }
+  }
+  function index_of_bytes(self, needle: Bytes): i64 | null {
+    if needle.is_empty() {
+      0
+    } else if needle.size() > self.size() {
+      null
+    } else {
+      var i = 0;
+      var limit = self.size() - needle.size();
+      while i <= limit {
+        if self.starts_with_at(i, needle) {
+          return i;
+        }
+        i = i + 1;
+      }
+      null
+    }
+  }
+  function last_index_of_bytes(self, needle: Bytes): i64 | null {
+    if needle.is_empty() {
+      self.size()
+    } else if needle.size() > self.size() {
+      null
+    } else {
+      var i = self.size() - needle.size();
+      while i >= 0 {
+        if self.starts_with_at(i, needle) {
+          return i;
+        }
+        i = i - 1;
+      }
+      null
+    }
+  }
+  function contains_bytes(self, needle: Bytes): bool {
+    self.index_of_bytes(needle) is i64
+  }
   function iter(self): Iterator<u8> { self.data.iter() }
   function cursor(self): BytesCursor { BytesCursor.new(self) }
 
@@ -142,7 +241,7 @@ extend Bytes {
   }
 
   function append_utf8_scalar(text: str, scalar: i64): str {
-    text + ((scalar as char)as str)
+    text + ((scalar as char) as str)
   }
 
   function decode_scalar_at(self, i: i64): Utf8Decoded | Utf8Error {
@@ -446,7 +545,7 @@ extend BytesCursor: Hash {
 
 extend BytesCursor: ToStr {
   function to_str(self): str {
-    "BytesCursor { position: " + (self.pos as str) + ", len: " + (self.data.size()as str) + " }"
+    "BytesCursor { position: " + (self.pos as str) + ", len: " + (self.data.size() as str) + " }"
   }
 }
 

@@ -1,0 +1,10 @@
+//@ kind: compile-error
+//@ description: std:net AsyncTcpListener.ttl returns a Future and must be awaited
+//@ stderr: found `Future<
+
+import { IoError } from "std:io";
+import { AsyncTcpListener } from "std:net";
+
+function requires_await(listener: AsyncTcpListener) {
+  var _ttl: u32 | IoError = listener.ttl();
+}

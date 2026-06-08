@@ -2,12 +2,14 @@
 //@ description: fold over a list built in a loop
 //@ stdout:
 //~ 4950
+import { Future } from "core:prelude";
 import { List } from "core:collections";
 import { println } from "std:io";
-function main() {
+function main(): Future<null> async {
   var xs: List<i64> = [];
   var i = 0;
   while i < 100 { xs.push(i); i = i + 1; }
   var sum = xs.fold(0, (acc: i64, x: i64): i64 => acc + x);
-  println("${sum}");
+  await println("${sum}");
+  null
 }

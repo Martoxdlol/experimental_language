@@ -1,0 +1,139 @@
+//@ kind: run
+//@ serial
+//@ description: timing out AsyncTcpStream.read_async removes the reactor wait, discards the late read, and leaves the stream usable
+//@ stdout:
+//~ tcp-read-timeout=true keep 1 0
+
+import { Future } from "core:prelude";
+import { Bytes } from "std:bytes";
+import { sleep, TimedOut, timeout } from "std:async";
+import { println, IoError } from "std:io";
+import { AsyncTcpStream, TcpListener, TcpStream } from "std:net";
+import { SocketAddr, ip_v4, socket_addr } from "std:net/types";
+import { Thread, JoinHandle, Joined, Panicked } from "std:thread";
+
+function trim_read_buffer(buf: Bytes, request_len: i64): Bytes {
+  var i = 0;
+  while i < request_len {
+    var _ = buf.remove_at(0);
+    i = i + 1;
+  }
+  buf
+}
+
+function decode_appended(buf: Bytes, request_len: i64): str {
+  var decoded = trim_read_buffer(buf, request_len).decode_utf8();
+  if decoded is str { decoded as str } else { "utf8-error" }
+}
+
+function filled_buffer(len: i64): Bytes {
+  var buf = Bytes.new();
+  var i = 0;
+  while i < len {
+    buf.push(0u8);
+    i = i + 1;
+  }
+  buf
+}
+
+function read_text(stream: TcpStream, len: i64): Future<str> async {
+  var buf = filled_buffer(len);
+  var read = await stream.read(buf);
+  if read is IoError || (read as i64) != len {
+    "read-error"
+  } else {
+    decode_appended(buf, len)
+  }
+}
+
+function serve(data_listener: TcpListener, control_listener: TcpListener): Future<i64> async {
+  var accepted_data = await data_listener.accept();
+  if accepted_data is IoError {
+    return -1;
+  }
+
+  var accepted_control = await control_listener.accept();
+  if accepted_control is IoError {
+    return -2;
+  }
+
+  var data_pair = accepted_data as (TcpStream, SocketAddr);
+  var control_pair = accepted_control as (TcpStream, SocketAddr);
+  var data_stream = data_pair.0;
+  var control_stream = control_pair.0;
+  var stale_signal = await read_text(control_stream, 1);
+  var stale_wrote = await data_stream.write_all(Bytes.from_str("drop"));
+  var stale_flushed = await data_stream.flush();
+  var fresh_signal = await read_text(control_stream, 1);
+  var fresh_wrote = await data_stream.write_all(Bytes.from_str("keep"));
+  var fresh_flushed = await data_stream.flush();
+  var data_closed = await data_stream.close();
+  var control_closed = await control_stream.close();
+  var data_listener_closed = await data_listener.close();
+  var control_listener_closed = await control_listener.close();
+  if stale_signal != "a" || fresh_signal != "b" {
+    -3
+  } else if stale_wrote is IoError || stale_flushed is IoError || fresh_wrote is IoError || fresh_flushed is IoError || data_closed is IoError || control_closed is IoError || data_listener_closed is IoError || control_listener_closed is IoError {
+    -4
+  } else {
+    1
+  }
+}
+
+function joined_value(result: Joined<i64> | Panicked): i64 {
+  match result {
+    Joined<i64> joined => joined.value,
+    Panicked panic => -99,
+  }
+}
+
+function async_read_text(stream: AsyncTcpStream, len: i64): Future<str> async {
+  var buf = filled_buffer(len);
+  var read = await stream.read_async(buf);
+  if read is IoError || (read as i64) != len {
+    "read-error"
+  } else {
+    decode_appended(buf, len)
+  }
+}
+
+function main(): Future<null> async {
+  var bound_data = await TcpListener.bind(socket_addr(ip_v4(127u8, 0u8, 0u8, 1u8), 0u16));
+  var bound_control = await TcpListener.bind(socket_addr(ip_v4(127u8, 0u8, 0u8, 1u8), 0u16));
+  if bound_data is IoError || bound_control is IoError {
+    await println("tcp-read-timeout=false bind-error -1 -1");
+    return null;
+  }
+
+  var data_listener = bound_data as TcpListener;
+  var control_listener = bound_control as TcpListener;
+  var data_local = await data_listener.local_addr();
+  var control_local = await control_listener.local_addr();
+  if data_local is IoError || control_local is IoError {
+    await println("tcp-read-timeout=false addr-error -1 -1");
+    return null;
+  }
+
+  var worker: JoinHandle<i64> = Thread.spawn(() async => await serve(data_listener.clone(), control_listener.clone()));
+  var connected_data = await AsyncTcpStream.connect(data_local as SocketAddr);
+  var connected_control = await AsyncTcpStream.connect(control_local as SocketAddr);
+  if connected_data is IoError || connected_control is IoError {
+    await println("tcp-read-timeout=false connect-error -1 -1");
+    return null;
+  }
+
+  var client = connected_data as AsyncTcpStream;
+  var control = connected_control as AsyncTcpStream;
+  var stale_buf = filled_buffer(4);
+  var timed = await timeout(client.read_async(stale_buf), 1);
+  var timed_out = timed is TimedOut;
+  var stale_signal = await control.write_async(Bytes.from_str("a"));
+  var _settled = await sleep(30);
+  var fresh_signal = await control.write_async(Bytes.from_str("b"));
+  var fresh = await async_read_text(client, 4);
+  var client_closed = await client.close();
+  var control_closed = await control.close();
+  var joined = await worker.join();
+  await println("tcp-read-timeout=${timed_out && stale_signal is i64 && fresh_signal is i64} ${fresh} ${joined_value(joined)} ${if client_closed is IoError || control_closed is IoError { 1 } else { 0 }}");
+  null
+}

@@ -1,0 +1,15 @@
+//@ kind: compile-error
+//@ description: std:fs File.close returns Future<null | IoError> and must be awaited before use
+//@ stderr: found `Future<
+
+import { Future } from "core:prelude";
+import { File, Path } from "std:fs";
+import { IoError } from "std:io";
+
+function main(): Future<null> async {
+  var file = await File.create(Path.new("/tmp/otter_fusion_requires_await.txt"));
+  if file is File {
+    var _closed: null | IoError = (file as File).close();
+  }
+  null
+}

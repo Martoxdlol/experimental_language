@@ -404,11 +404,11 @@ methods that take closures. They subsume <code>initState</code>/<code>didUpdateW
 
 <pre><code>@Component
 function Clock() {
-  var now = state(Instant.now())
+  var now = state(Instant.from_nanos(0))
   ctx.launched([]) {
     while true {
       var _ = await sleep(Duration.ms(1000));
-      now = Instant.now()                      // marks only the Text scope below
+      now = await Instant.now()                // marks only the Text scope below
     }
   }                                            // the task is cancelled when Clock leaves the tree
   Text("now: ${now}")

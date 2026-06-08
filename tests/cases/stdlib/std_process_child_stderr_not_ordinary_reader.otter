@@ -1,0 +1,15 @@
+//@ kind: compile-error
+//@ description: std:process Child.stderr is an async-stream-or-null accessor, not an ordinary in-memory Reader contract
+//@ stderr: expected `null | Reader`, found `null | AsyncReader`
+
+import { Future } from "core:prelude";
+import { Child, Command } from "std:process";
+import { Reader } from "std:io";
+
+function main(): Future<null> async {
+  var spawned = await Command.new("true").spawn();
+  if spawned is Child {
+    var _stderr: Reader | null = (spawned as Child).stderr();
+  }
+  null
+}

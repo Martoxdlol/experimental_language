@@ -191,20 +191,20 @@ the new type fits the declared (or inferred) type.</p>
         <rect width="770" height="100" rx="6" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
         <text x="14" y="22" font-weight="700" fill="#2a6f4d">inner scope { }</text>
         <text x="14" y="50" font-size="12">var x = 2        // shadows outer x</text>
-        <text x="14" y="70" font-size="12">print(x as str)  // 2</text>
+        <text x="14" y="70" font-size="12">await print(x as str)  // 2</text>
       </g>
 
-      <text x="14" y="184" font-size="12">print(x as str)  // 1 — outer x restored</text>
+      <text x="14" y="184" font-size="12">await print(x as str)  // 1 — outer x restored</text>
     </g>
   </svg>
   <div class="diagram-caption">Shadowing only crosses block boundaries. Two <code>var</code>s with the same name in the <em>same</em> block is an error.</div>
 </div>
 
-<pre><code>function example() {
+<pre><code>function example(): Future&lt;null&gt; async {
   var x: i64 = 5
   if x &gt; 0 {
     var x: str = "positive"   // shadows; type can differ
-    print(x)
+    await print(x)
   }
   // x is still i64 here
 }</code></pre>
@@ -356,11 +356,11 @@ var Pair(a, b) = pair</code></pre>
 <pre><code>var a = Person { name: "Alice", age: 30 }
 var b = a             // b refers to the same heap object as a
 b.age = 31
-print(a.age as str)   // 31 — a and b alias
+await print(a.age as str)   // 31 — a and b alias
 
 var c = a.clone()     // independent copy (requires Clone)
 c.age = 32
-print(a.age as str)   // 31 — c is independent</code></pre>
+await print(a.age as str)   // 31 — c is independent</code></pre>
 
 <div class="callout">
   <strong>Memory model</strong>

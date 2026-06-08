@@ -3,8 +3,8 @@
 //@ description: capturing a `Shared<T>` directly into a `spawn` async worker (no explicit `.clone()`) deep-clones the HANDLE, so all workers lock the same inner cell (docs/20 §4 / §6, docs/21 §7) — two locked increments deterministically yield 2
 //@ stdout:
 //~ counter after 2 increments = 2
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { Shared } from "std:sync";
 struct X { value: i64 }
 struct Counter { x: X }
@@ -22,5 +22,6 @@ function main(): Future<null> async {
   await h1;
   await h2;
   var total: i64 = await state.lock((c) => c.x.value);
-  println("counter after 2 increments = " + (total as str));
+  await println("counter after 2 increments = " + (total as str));
+  null
 }

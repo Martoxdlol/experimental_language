@@ -4,6 +4,7 @@
 //~ i=7
 //~ s=hi
 //~ pair=7
+import { Future } from "core:prelude";
 import { println } from "std:io";
 
 // `dup` carries a default whose body and signature mention the interface's
@@ -30,11 +31,12 @@ extend Pair: Boxed<i64> {
   function dup(self): i64 { self.a + self.b - self.b }
 }
 
-function main() {
+function main(): Future<null> async {
   var i: IntCell = IntCell { v: 7 };
   var s: StrCell = StrCell { v: "hi" };
   var p: Pair = Pair { a: 7, b: 2 };
-  println("i=${i.dup()}");
-  println("s=${s.dup()}");
-  println("pair=${p.dup()}");
+  await println("i=${i.dup()}");
+  await println("s=${s.dup()}");
+  await println("pair=${p.dup()}");
+  null
 }

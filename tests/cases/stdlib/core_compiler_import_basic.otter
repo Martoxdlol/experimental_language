@@ -2,6 +2,7 @@
 //@ description: core:compiler macro-authoring handle types are importable core substrate but not auto-imported
 //@ stdout:
 //~ compiler-surface-imported
+import { Future } from "core:prelude";
 import { println } from "std:io";
 import { ASTNode, MacroContext, Span } from "core:compiler";
 
@@ -17,6 +18,7 @@ function accepts_span(span: Span): Span {
   span
 }
 
-function main() {
-  println("compiler-surface-imported");
+function main(): Future<null> async {
+  await println("compiler-surface-imported");
+  null
 }

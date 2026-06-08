@@ -1,3 +1,4 @@
+import { Future } from "core:prelude";
 // Foreign Function Interface — extern structs, raw pointers, layout decorators
 // (docs/19). Run: otter_fusion run examples/ffi.otter
 //
@@ -7,6 +8,7 @@
 
 // An extern struct is C-laid-out and header-less; it lives on the stack.
 import { println } from "std:io";
+import { List } from "core:collections";
 
 import { Foreign, CString, CStr, Buffer } from "core:ffi";
 extern struct Pair { a: i64, b: i64 }
@@ -60,38 +62,39 @@ extern struct Usage { utime: Timeval, stime: Timeval, maxrss: i64 }
 struct Count(i32)
 extern function abs(n: Count): i32;
 
-function main() {
+function main(): Future<null> async {
+  var lines: List<str> = [];
   // `&value` is the address of the stack-allocated struct (no pin needed for a
   // stack value); a C function writes into it via the out-pointer.
   var src = Pair { a: 111, b: 222 };
   var dst = Pair { a: 0, b: 0 };
-  memcpy((&dst)as*u8, (&src)as*u8, 16u64);
-  println("copied: a=${dst.a } b=${dst.b }");
+  memcpy((&dst) as *u8, (&src) as *u8, 16u64);
+  lines.push("copied: a=${dst.a} b=${dst.b}");
 
   // Field mutation writes back into the same block.
   dst.a = 999;
-  println("mutated: a=${dst.a }");
+  lines.push("mutated: a=${dst.a}");
 
   // A raw pointer reinterpret aliases the first field as a scalar; `*p` reads
   // and `*p = v` writes through the pointer.
-  var pi = (&dst)as*i64;
-  println("via *p: ${*pi }");
+  var pi = (&dst) as *i64;
+  lines.push("via *p: ${*pi}");
   *pi = 7;
-  println("after *p = 7: a=${dst.a }");
+  lines.push("after *p = 7: a=${dst.a}");
 
   // @Union: write the float, read the IEEE-754 bits.
   var fb = FloatBits { f: 1.0f32 };
-  println("bits of 1.0f32 = ${fb.i }");
+  lines.push("bits of 1.0f32 = ${fb.i}");
 
   // @Packed vs natural layout, observed over identical source bytes.
   var bytes = Pair { a: 0x0807060504030201, b: 0 };
   var p = Packed { x: 0, y: 0 };
-  memcpy((&p)as*u8, (&bytes)as*u8, 8u64);
-  println("packed y (offset 1) = ${p.y }");
+  memcpy((&p) as *u8, (&bytes) as *u8, 8u64);
+  lines.push("packed y (offset 1) = ${p.y}");
 
   // @Align(64): the address is a multiple of 64.
   var c = CacheLine { v: 0 };
-  println("cache line 64-aligned: ${((&c)as usize) % 64usize == 0usize }");
+  lines.push("cache line 64-aligned: ${((&c) as usize) % 64usize == 0usize}");
 
   // A fixed-size array field `[T; N]` (only valid in extern positions). An
   // omitted field zero-inits the whole C block; `arr[i]` reads/writes elements;
@@ -101,17 +104,17 @@ function main() {
   buf.data[1] = 0u8;
   buf.data[2] = 0u8;
   buf.data[3] = 1u8;
-  println("sockaddr: family=${buf.family } ${buf.data[0] }.${buf.data[1] }.${buf.data[2] }.${buf.data[3] }");
-  memcpy((&buf.data[4])as*u8, (&bytes)as*u8, 4u64);
-  println("after memcpy into &data[4]: ${buf.data[4] } ${buf.data[5] } ${buf.data[6] } ${buf.data[7] }");
+  lines.push("sockaddr: family=${buf.family} ${buf.data[0]}.${buf.data[1]}.${buf.data[2]}.${buf.data[3]}");
+  memcpy((&buf.data[4]) as *u8, (&bytes) as *u8, 4u64);
+  lines.push("after memcpy into &data[4]: ${buf.data[4]} ${buf.data[5]} ${buf.data[6]} ${buf.data[7]}");
 
   // A nullable pointer from C: `malloc` returns `*Sockaddr | null` (NPO, a raw
   // pointer); narrow it with `if p is null`.
   var heap = malloc(16usize);
   if heap is null {
-    println("malloc failed");
+    lines.push("malloc failed");
   } else {
-    println("malloc ok: ${!(heap is null) }");
+    lines.push("malloc ok: ${!(heap is null)}");
     free(heap);
   }
 
@@ -119,11 +122,11 @@ function main() {
   // a raw `*T | null`; write fields through `*p`, then `Foreign.free`.
   var cell = Foreign.alloc<Pair>();
   if cell is null {
-    println("foreign alloc failed");
+    lines.push("foreign alloc failed");
   } else {
     (*cell).a = 314;
     (*cell).b = 159;
-    println("foreign cell: a=${(*cell).a } b=${(*cell).b }");
+    lines.push("foreign cell: a=${(*cell).a} b=${(*cell).b}");
     Foreign.free(cell);
   }
 
@@ -132,27 +135,27 @@ function main() {
   // (it implements `Drop`) — no manual `Foreign.free`. Hand its raw `*u8` to C
   // with `as_ptr`; recover a managed `str` with `to_str`.
   var cs = CString.from_str("otter");
-  println("strlen=${strlen(cs.as_ptr()) } byte_len=${cs.byte_len() }");
-  println("round-trip=${cs.to_str() }");
+  lines.push("strlen=${strlen(cs.as_ptr())} byte_len=${cs.byte_len()}");
+  lines.push("round-trip=${cs.to_str()}");
 
   // `CStr` is a *borrowed* NUL-terminated view over a `*u8` the caller keeps
   // alive — here the bytes `cs` owns. No allocation, no free.
   var view = CStr.from_ptr(cs.as_ptr());
-  println("view=${view.to_str() } (len ${view.byte_len() })");
+  lines.push("view=${view.to_str()} (len ${view.byte_len()})");
 
   // `Buffer` is an `extern struct { data: *u8, size: u64 }` (docs/18 §9): a
   // foreign-heap byte region with *manual* lifetime. `alloc` is fallible
   // (`Buffer | null` on OOM); `get`/`set` are bounds-checked; `free` releases it.
   var maybe = Buffer.alloc(4u64);
   if maybe is null {
-    println("buffer alloc failed");
+    lines.push("buffer alloc failed");
   } else {
     var buf = maybe as Buffer;
     buf.set(0u64, 79u8); // 'O'
     buf.set(1u64, 75u8); // 'K'
     var b0 = buf.get(0u64);
     var oob = buf.get(99u64); // out of range → null
-    println("buffer[0]=${if b0 is null { 0u8 } else { b0 as u8 } } oob_is_null=${oob is null } size=${buf.size }");
+    lines.push("buffer[0]=${if b0 is null { 0u8 } else { b0 as u8 }} oob_is_null=${oob is null} size=${buf.size}");
     buf.free();
   }
 
@@ -162,22 +165,26 @@ function main() {
     stime: Timeval { sec: 1, usec: 590 },
     maxrss: 4096,
   };
-  println("utime=${usage.utime.sec }.${usage.utime.usec } maxrss=${usage.maxrss }");
+  lines.push("utime=${usage.utime.sec}.${usage.utime.usec} maxrss=${usage.maxrss}");
 
   // @Transparent: `Count(-9)` is just an i32 across the C ABI.
-  println("abs=${abs(Count(-9i32)) }");
+  lines.push("abs=${abs(Count(-9i32))}");
 
   // @Variadic: snprintf formats a mix of int, C string, and double into a
   // buffer; the variadic arguments are passed through libffi (docs/19 §13).
   var m = Buffer.alloc(64u64);
   if m is null {
-    println("oom");
+    lines.push("oom");
   } else {
     var b = m as Buffer;
     var fmt = CString.from_str("n=%d who=%s pi=%.2f");
     var who = CString.from_str("otter");
     var len = snprintf(b.data, 64u64, fmt.as_ptr(), 7i32, who.as_ptr(), 3.14159f64);
-    println("snprintf(${len }): ${CStr.from_ptr(b.data).to_str() }");
+    lines.push("snprintf(${len}): ${CStr.from_ptr(b.data).to_str()}");
     b.free();
   }
+  for line in lines {
+    await println(line);
+  }
+  null
 }

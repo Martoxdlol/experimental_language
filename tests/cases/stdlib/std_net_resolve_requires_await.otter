@@ -1,0 +1,12 @@
+//@ kind: compile-error
+//@ description: std:net resolve returns a Future and must be awaited before using DNS results
+//@ stderr: expected `IoError | List<IpAddr>`, found `Future<IoError | List<IpAddr>>`
+
+import { List } from "core:collections";
+import { IpAddr } from "std:net/types";
+import { IoError } from "std:io";
+import { resolve } from "std:net";
+
+function main() {
+  var _addrs: List<IpAddr> | IoError = resolve("127.0.0.1");
+}

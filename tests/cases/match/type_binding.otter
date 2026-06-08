@@ -4,6 +4,7 @@
 //~ int 42
 //~ string hi
 //~ nothing
+import { Future } from "core:prelude";
 import { println } from "std:io";
 function describe(x: i64 | str | null): str {
   match x {
@@ -12,8 +13,9 @@ function describe(x: i64 | str | null): str {
     null  => "nothing",
   }
 }
-function main() {
-  println(describe(42));
-  println(describe("hi"));
-  println(describe(null));
+function main(): Future<null> async {
+  await println(describe(42));
+  await println(describe("hi"));
+  await println(describe(null));
+  null
 }

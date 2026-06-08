@@ -1,0 +1,14 @@
+//@ kind: run
+//@ description: example for awaiting std:time.sleep(Duration) as an async timer Future
+//@ stdout:
+//~ std-time-sleep
+
+import { Future } from "core:prelude";
+import { println } from "std:io";
+import { Duration, sleep } from "std:time";
+
+function main(): Future<null> async {
+  var _ = await sleep(Duration.from_millis(1));
+  await println("std-time-sleep");
+  null
+}

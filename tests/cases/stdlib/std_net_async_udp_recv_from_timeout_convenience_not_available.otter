@@ -1,0 +1,19 @@
+//@ kind: compile-error
+//@ description: AsyncUdpSocket address-aware receive deadlines use std:async.timeout today; no copied recv_from_timeout_async convenience exists
+//@ stderr: no method `recv_from_timeout_async`
+
+import { Future } from "core:prelude";
+import { Bytes } from "std:bytes";
+import { AsyncUdpSocket } from "std:net";
+import { ip_v4, socket_addr } from "std:net/types";
+import { Duration } from "std:time";
+
+function main(): Future<null> async {
+  var bound = await AsyncUdpSocket.bind(socket_addr(ip_v4(127u8, 0u8, 0u8, 1u8), 0u16));
+  if bound is AsyncUdpSocket {
+    var socket = bound as AsyncUdpSocket;
+    var buf = Bytes.new();
+    var _received = await socket.recv_from_timeout_async(buf, Duration.from_millis(1));
+  }
+  null
+}

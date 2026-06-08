@@ -3,6 +3,7 @@
 //@ description: single-threaded allocation throughput workloads (struct graph + list + string churn) — the deterministic e2e companion to examples/gc_bench.otter; exercises the per-thread TLAB + per-thread object registry under aggressive GC
 //@ stdout:
 //~ structs=5000 lists=10000 strings=17000
+import { Future } from "core:prelude";
 import { println } from "std:io";
 import { List } from "core:collections";
 
@@ -18,7 +19,7 @@ function build_and_walk(n: i64): i64 {
   len
 }
 
-function main() {
+function main(): Future<null> async {
   var structs = 0;
   var k = 0;
   while k < 100 { structs = structs + build_and_walk(50); k = k + 1; }
@@ -45,5 +46,6 @@ function main() {
     k = k + 1;
   }
 
-  println("structs=${structs} lists=${lists} strings=${strings}");
+  await println("structs=${structs} lists=${lists} strings=${strings}");
+  null
 }

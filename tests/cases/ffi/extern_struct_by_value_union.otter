@@ -3,14 +3,16 @@
 //@ stdout:
 //~ a=5,10
 //~ b null
+import { Future } from "core:prelude";
 import { println } from "std:io";
 extern struct Pt { x: i64, y: i64 }
 function pick(n: i64): Pt | null {
   if n < 0 { null } else { Pt { x: n, y: n * 2 } }
 }
-function main() {
+function main(): Future<null> async {
   var a = pick(5);
   var b = pick(-1);
-  if a is null { println("a null"); } else { var p = a as Pt; println("a=${p.x},${p.y}"); }
-  if b is null { println("b null"); } else { println("b not null"); }
+  if a is null { await println("a null"); } else { var p = a as Pt; await println("a=${p.x},${p.y}"); }
+  if b is null { await println("b null"); } else { await println("b not null"); }
+  null
 }

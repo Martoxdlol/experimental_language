@@ -3,6 +3,7 @@
 //@ env: OTTER_FUSION_GC=stress
 //@ description: heavy concurrent allocation exercises true concurrent reclamation (world-barrier STW)
 //@ stdout:
+import { Future } from "core:prelude";
 // Each worker builds and discards many lists/strings in a loop, producing
 // garbage the collector reclaims mid-run while other workers keep mutating.
 // Before the world barrier this deterministically use-after-freed (SIGSEGV);
@@ -10,7 +11,6 @@
 //~ 31740
 import { println } from "std:io";
 import { List } from "core:collections";
-import { Future } from "core:prelude";
 import { Thread, JoinHandle, Joined, Panicked } from "std:thread";
 
 function churn(seed: i64): i64 {
@@ -20,7 +20,7 @@ function churn(seed: i64): i64 {
     var xs: List<i64> = [];
     var j = 0;
     while j < 10 { xs.push(i + j + seed); j = j + 1; }
-    var s = "v=${xs.size() }-${i }";
+    var s = "v=${xs.size()}-${i}";
     acc = acc + xs.size() + s.size();
     i = i + 1;
   }
@@ -47,5 +47,6 @@ function main(): Future<null> async {
   // deterministic regardless of scheduling: 6 workers × churn(_) .
   while i < 6 { handles.push(Thread.spawn(() => churn(0))); i = i + 1; }
   var total: i64 = await gather(handles);
-  println("${total }");
+  await println("${total}");
+  null
 }

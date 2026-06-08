@@ -3,9 +3,11 @@
 //@ description: exit(n) terminates with the given code after output
 //@ stdout:
 //~ bye
+import { Future } from "core:prelude";
 import { println } from "std:io";
 import { exit } from "std:process";
-function main() {
-  println("bye");
+function main(): Future<null> async {
+  await println("bye");
   exit(3);
+  null
 }

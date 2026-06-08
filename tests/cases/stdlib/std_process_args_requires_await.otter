@@ -1,0 +1,10 @@
+//@ kind: compile-error
+//@ description: std:process args returns a Future and cannot be used as an immediate argv snapshot
+//@ stderr: Future<
+
+import { List } from "core:collections";
+import { args } from "std:process";
+
+function main() {
+  var argv: List<str> = args();
+}

@@ -1,0 +1,13 @@
+//@ kind: compile-error
+//@ description: std:net TcpStream.connect_timeout returns a Future and must be awaited before using the stream
+//@ stderr: expected `TcpStream | IoError`, found `Future<TcpStream | IoError>`
+
+import { TcpStream } from "std:net";
+import { IoError } from "std:io";
+import { ip_v4, socket_addr } from "std:net/types";
+import { Duration } from "std:time";
+
+function main() {
+  var addr = socket_addr(ip_v4(127u8, 0u8, 0u8, 1u8), 9u16);
+  var _connected: TcpStream | IoError = TcpStream.connect_timeout(addr, Duration.from_secs(1));
+}

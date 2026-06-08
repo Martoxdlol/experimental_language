@@ -1,0 +1,11 @@
+//@ kind: compile-error
+//@ description: std:net TcpListener.local_addr returns a Future and must be awaited
+//@ stderr: found `Future<
+
+import { IoError } from "std:io";
+import { TcpListener } from "std:net";
+import { SocketAddr } from "std:net/types";
+
+function requires_await(listener: TcpListener) {
+  var _addr: SocketAddr | IoError = listener.local_addr();
+}

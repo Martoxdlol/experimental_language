@@ -3,8 +3,8 @@
 //@ description: Task.spawn JoinHandle.abort is a cooperative cancellation alias that joins as Cancelled
 //@ stdout:
 //~ abort = cancelled
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { Task, JoinHandle, Joined, Panicked, Cancelled } from "std:task";
 import { sleep } from "std:async";
 
@@ -16,8 +16,9 @@ function main(): Future<null> async {
   var _started = await sleep(20);
   h.abort();
   match await h.join() {
-    Joined<i64> j => println("abort = joined ${j.value }"),
-    Panicked p => println("abort = panicked"),
-    Cancelled c => println("abort = cancelled"),
+    Joined<i64> j => await println("abort = joined ${j.value}"),
+    Panicked p => await println("abort = panicked"),
+    Cancelled c => await println("abort = cancelled"),
   };
+  null
 }

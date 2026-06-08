@@ -7,12 +7,14 @@
 //~ 7
 //~ A
 //~ 65
+import { Future } from "core:prelude";
 import { println } from "std:io";
-function main() {
-  println("${300 as i8 }");
-  println("${256 as u8 }");
-  println("${3.9 as i64 }");
-  println("${7 as f64 }");
-  println("${65 as char }");
-  println("${'A'as i64 }");
+function main(): Future<null> async {
+  await println("${300 as i8}");
+  await println("${256 as u8}");
+  await println("${3.9 as i64}");
+  await println("${7 as f64}");
+  await println("${65 as char}");
+  await println("${'A' as i64}");
+  null
 }

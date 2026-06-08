@@ -84,8 +84,8 @@ fn register_runtime_symbols(b: &mut JITBuilder) {
         runtime::gc::lang_gc_register_drop as *const u8,
     );
     b.symbol(
-        "lang_block_on",
-        runtime::async_rt::lang_block_on as *const u8,
+        "lang_drive_root_future",
+        runtime::async_rt::lang_drive_root_future as *const u8,
     );
     b.symbol(
         "lang_async_yield",
@@ -158,10 +158,6 @@ fn register_runtime_symbols(b: &mut JITBuilder) {
     b.symbol(
         "lang_chan_try_recv",
         runtime::channels::lang_chan_try_recv as *const u8,
-    );
-    b.symbol(
-        "lang_chan_recv_blocking",
-        runtime::channels::lang_chan_recv_blocking as *const u8,
     );
     b.symbol(
         "lang_chan_sender_acquire",
@@ -508,34 +504,6 @@ fn register_runtime_symbols(b: &mut JITBuilder) {
     b.symbol("lang_char_to_str", runtime::lang_char_to_str as *const u8);
     b.symbol("lang_debug_str", runtime::lang_debug_str as *const u8);
     b.symbol("lang_debug_char", runtime::lang_debug_char as *const u8);
-    b.symbol("lang_print", runtime::lang_print as *const u8);
-    b.symbol("lang_println", runtime::lang_println as *const u8);
-    b.symbol("lang_eprint", runtime::lang_eprint as *const u8);
-    b.symbol("lang_eprintln", runtime::lang_eprintln as *const u8);
-    b.symbol(
-        "lang_io_stdin_read",
-        runtime::lang_io_stdin_read as *const u8,
-    );
-    b.symbol(
-        "lang_io_stdin_read_to_end",
-        runtime::lang_io_stdin_read_to_end as *const u8,
-    );
-    b.symbol(
-        "lang_io_stdout_write",
-        runtime::lang_io_stdout_write as *const u8,
-    );
-    b.symbol(
-        "lang_io_stderr_write",
-        runtime::lang_io_stderr_write as *const u8,
-    );
-    b.symbol(
-        "lang_io_stdout_flush",
-        runtime::lang_io_stdout_flush as *const u8,
-    );
-    b.symbol(
-        "lang_io_stderr_flush",
-        runtime::lang_io_stderr_flush as *const u8,
-    );
     b.symbol(
         "lang_io_stdin_read_async",
         runtime::async_rt::lang_io_stdin_read_async as *const u8,
@@ -581,239 +549,400 @@ fn register_runtime_symbols(b: &mut JITBuilder) {
         runtime::async_rt::lang_fs_file_seek_async as *const u8,
     );
     b.symbol(
-        "lang_fs_read_text",
-        runtime::fs::lang_fs_read_text as *const u8,
+        "lang_fs_file_open_async",
+        runtime::async_rt::lang_fs_file_open_async as *const u8,
     );
     b.symbol(
-        "lang_fs_write_text",
-        runtime::fs::lang_fs_write_text as *const u8,
+        "lang_fs_file_close_async",
+        runtime::async_rt::lang_fs_file_close_async as *const u8,
     );
     b.symbol(
-        "lang_fs_append_text",
-        runtime::fs::lang_fs_append_text as *const u8,
+        "lang_net_resolve_async",
+        runtime::async_rt::lang_net_resolve_async as *const u8,
     );
     b.symbol(
-        "lang_fs_read_bytes",
-        runtime::fs::lang_fs_read_bytes as *const u8,
+        "lang_net_tcp_connect_async",
+        runtime::async_rt::lang_net_tcp_connect_async as *const u8,
     );
     b.symbol(
-        "lang_fs_write_bytes",
-        runtime::fs::lang_fs_write_bytes as *const u8,
+        "lang_net_tcp_connect_timeout_async",
+        runtime::async_rt::lang_net_tcp_connect_timeout_async as *const u8,
     );
     b.symbol(
-        "lang_fs_file_open",
-        runtime::fs::lang_fs_file_open as *const u8,
+        "lang_net_tcp_stream_read_async",
+        runtime::async_rt::lang_net_tcp_stream_read_async as *const u8,
     );
     b.symbol(
-        "lang_fs_file_close",
-        runtime::fs::lang_fs_file_close as *const u8,
+        "lang_net_tcp_stream_read_to_end_async",
+        runtime::async_rt::lang_net_tcp_stream_read_to_end_async as *const u8,
     );
     b.symbol(
-        "lang_fs_file_read",
-        runtime::fs::lang_fs_file_read as *const u8,
+        "lang_net_tcp_stream_write_async",
+        runtime::async_rt::lang_net_tcp_stream_write_async as *const u8,
     );
     b.symbol(
-        "lang_fs_file_read_to_end",
-        runtime::fs::lang_fs_file_read_to_end as *const u8,
+        "lang_net_tcp_stream_write_all_async",
+        runtime::async_rt::lang_net_tcp_stream_write_all_async as *const u8,
     );
     b.symbol(
-        "lang_fs_file_write",
-        runtime::fs::lang_fs_file_write as *const u8,
+        "lang_net_tcp_stream_flush_async",
+        runtime::async_rt::lang_net_tcp_stream_flush_async as *const u8,
     );
     b.symbol(
-        "lang_fs_file_flush",
-        runtime::fs::lang_fs_file_flush as *const u8,
+        "lang_net_tcp_stream_peek_async",
+        runtime::async_rt::lang_net_tcp_stream_peek_async as *const u8,
     );
     b.symbol(
-        "lang_fs_file_seek",
-        runtime::fs::lang_fs_file_seek as *const u8,
-    );
-    b.symbol("lang_fs_exists", runtime::fs::lang_fs_exists as *const u8);
-    b.symbol("lang_fs_is_file", runtime::fs::lang_fs_is_file as *const u8);
-    b.symbol("lang_fs_is_dir", runtime::fs::lang_fs_is_dir as *const u8);
-    b.symbol("lang_fs_kind", runtime::fs::lang_fs_kind as *const u8);
-    b.symbol("lang_fs_len", runtime::fs::lang_fs_len as *const u8);
-    b.symbol(
-        "lang_fs_read_only",
-        runtime::fs::lang_fs_read_only as *const u8,
+        "lang_net_tcp_listener_bind_async",
+        runtime::async_rt::lang_net_tcp_listener_bind_async as *const u8,
     );
     b.symbol(
-        "lang_fs_executable",
-        runtime::fs::lang_fs_executable as *const u8,
-    );
-    b.symbol("lang_fs_remove", runtime::fs::lang_fs_remove as *const u8);
-    b.symbol("lang_fs_rename", runtime::fs::lang_fs_rename as *const u8);
-    b.symbol(
-        "lang_fs_create_dir",
-        runtime::fs::lang_fs_create_dir as *const u8,
+        "lang_net_tcp_listener_close_async",
+        runtime::async_rt::lang_net_tcp_listener_close_async as *const u8,
     );
     b.symbol(
-        "lang_fs_create_dir_all",
-        runtime::fs::lang_fs_create_dir_all as *const u8,
+        "lang_net_tcp_listener_accept_async",
+        runtime::async_rt::lang_net_tcp_listener_accept_async as *const u8,
     );
     b.symbol(
-        "lang_fs_canonicalize",
-        runtime::fs::lang_fs_canonicalize as *const u8,
+        "lang_net_tcp_listener_local_addr_async",
+        runtime::async_rt::lang_net_tcp_listener_local_addr_async as *const u8,
+    );
+    b.symbol(
+        "lang_net_tcp_listener_take_error_async",
+        runtime::async_rt::lang_net_tcp_listener_take_error_async as *const u8,
+    );
+    b.symbol(
+        "lang_net_tcp_listener_set_nonblocking_async",
+        runtime::async_rt::lang_net_tcp_listener_set_nonblocking_async as *const u8,
+    );
+    b.symbol(
+        "lang_net_tcp_listener_ttl_async",
+        runtime::async_rt::lang_net_tcp_listener_ttl_async as *const u8,
+    );
+    b.symbol(
+        "lang_net_tcp_listener_set_ttl_async",
+        runtime::async_rt::lang_net_tcp_listener_set_ttl_async as *const u8,
+    );
+    b.symbol(
+        "lang_net_udp_send_async",
+        runtime::async_rt::lang_net_udp_send_async as *const u8,
+    );
+    b.symbol(
+        "lang_net_udp_recv_async",
+        runtime::async_rt::lang_net_udp_recv_async as *const u8,
+    );
+    b.symbol(
+        "lang_net_udp_peek_async",
+        runtime::async_rt::lang_net_udp_peek_async as *const u8,
+    );
+    b.symbol(
+        "lang_net_udp_send_to_async",
+        runtime::async_rt::lang_net_udp_send_to_async as *const u8,
+    );
+    b.symbol(
+        "lang_net_udp_recv_from_async",
+        runtime::async_rt::lang_net_udp_recv_from_async as *const u8,
+    );
+    b.symbol(
+        "lang_net_udp_peek_from_async",
+        runtime::async_rt::lang_net_udp_peek_from_async as *const u8,
+    );
+    b.symbol(
+        "lang_fs_read_text_async",
+        runtime::async_rt::lang_fs_read_text_async as *const u8,
+    );
+    b.symbol(
+        "lang_fs_write_text_async",
+        runtime::async_rt::lang_fs_write_text_async as *const u8,
+    );
+    b.symbol(
+        "lang_fs_append_text_async",
+        runtime::async_rt::lang_fs_append_text_async as *const u8,
+    );
+    b.symbol(
+        "lang_fs_read_bytes_async",
+        runtime::async_rt::lang_fs_read_bytes_async as *const u8,
+    );
+    b.symbol(
+        "lang_fs_write_bytes_async",
+        runtime::async_rt::lang_fs_write_bytes_async as *const u8,
+    );
+    b.symbol(
+        "lang_fs_exists_async",
+        runtime::async_rt::lang_fs_exists_async as *const u8,
+    );
+    b.symbol(
+        "lang_fs_is_file_async",
+        runtime::async_rt::lang_fs_is_file_async as *const u8,
+    );
+    b.symbol(
+        "lang_fs_is_dir_async",
+        runtime::async_rt::lang_fs_is_dir_async as *const u8,
+    );
+    b.symbol(
+        "lang_fs_kind_async",
+        runtime::async_rt::lang_fs_kind_async as *const u8,
+    );
+    b.symbol(
+        "lang_fs_len_async",
+        runtime::async_rt::lang_fs_len_async as *const u8,
+    );
+    b.symbol(
+        "lang_fs_read_only_async",
+        runtime::async_rt::lang_fs_read_only_async as *const u8,
+    );
+    b.symbol(
+        "lang_fs_executable_async",
+        runtime::async_rt::lang_fs_executable_async as *const u8,
+    );
+    b.symbol(
+        "lang_fs_remove_async",
+        runtime::async_rt::lang_fs_remove_async as *const u8,
+    );
+    b.symbol(
+        "lang_fs_rename_async",
+        runtime::async_rt::lang_fs_rename_async as *const u8,
+    );
+    b.symbol(
+        "lang_fs_create_dir_async",
+        runtime::async_rt::lang_fs_create_dir_async as *const u8,
+    );
+    b.symbol(
+        "lang_fs_create_dir_all_async",
+        runtime::async_rt::lang_fs_create_dir_all_async as *const u8,
+    );
+    b.symbol(
+        "lang_fs_canonicalize_async",
+        runtime::async_rt::lang_fs_canonicalize_async as *const u8,
+    );
+    b.symbol(
+        "lang_fs_read_dir_async",
+        runtime::async_rt::lang_fs_read_dir_async as *const u8,
     );
     b.symbol(
         "lang_fs_native_separator",
         runtime::fs::lang_fs_native_separator as *const u8,
     );
     b.symbol(
-        "lang_fs_read_dir",
-        runtime::fs::lang_fs_read_dir as *const u8,
+        "lang_process_args_async",
+        runtime::async_rt::lang_process_args_async as *const u8,
     );
     b.symbol(
-        "lang_process_args",
-        runtime::process::lang_process_args as *const u8,
+        "lang_process_env_async",
+        runtime::async_rt::lang_process_env_async as *const u8,
     );
     b.symbol(
-        "lang_process_env",
-        runtime::process::lang_process_env as *const u8,
+        "lang_process_env_all_async",
+        runtime::async_rt::lang_process_env_all_async as *const u8,
     );
     b.symbol(
-        "lang_process_env_all",
-        runtime::process::lang_process_env_all as *const u8,
+        "lang_process_set_env_async",
+        runtime::async_rt::lang_process_set_env_async as *const u8,
     );
     b.symbol(
-        "lang_process_set_env",
-        runtime::process::lang_process_set_env as *const u8,
+        "lang_process_status_async",
+        runtime::async_rt::lang_process_status_async as *const u8,
     );
     b.symbol(
-        "lang_process_status",
-        runtime::process::lang_process_status as *const u8,
+        "lang_process_output_async",
+        runtime::async_rt::lang_process_output_async as *const u8,
     );
     b.symbol(
-        "lang_process_output",
-        runtime::process::lang_process_output as *const u8,
+        "lang_process_spawn_async",
+        runtime::async_rt::lang_process_spawn_async as *const u8,
     );
     b.symbol(
-        "lang_process_spawn",
-        runtime::process::lang_process_spawn as *const u8,
+        "lang_process_child_wait_async",
+        runtime::async_rt::lang_process_child_wait_async as *const u8,
     );
     b.symbol(
-        "lang_process_child_wait",
-        runtime::process::lang_process_child_wait as *const u8,
-    );
-    b.symbol(
-        "lang_process_child_kill",
-        runtime::process::lang_process_child_kill as *const u8,
+        "lang_process_child_kill_async",
+        runtime::async_rt::lang_process_child_kill_async as *const u8,
     );
     b.symbol(
         "lang_process_child_release",
         runtime::process::lang_process_child_release as *const u8,
     );
     b.symbol(
-        "lang_net_resolve",
-        runtime::net::lang_net_resolve as *const u8,
-    );
-    b.symbol(
-        "lang_net_tcp_connect",
-        runtime::net::lang_net_tcp_connect as *const u8,
-    );
-    b.symbol(
         "lang_net_tcp_stream_release",
         runtime::net::lang_net_tcp_stream_release as *const u8,
     );
     b.symbol(
-        "lang_net_tcp_stream_close",
-        runtime::net::lang_net_tcp_stream_close as *const u8,
+        "lang_net_tcp_stream_close_async",
+        runtime::async_rt::lang_net_tcp_stream_close_async as *const u8,
     );
     b.symbol(
-        "lang_net_tcp_stream_peer_addr",
-        runtime::net::lang_net_tcp_stream_peer_addr as *const u8,
+        "lang_net_tcp_stream_peer_addr_async",
+        runtime::async_rt::lang_net_tcp_stream_peer_addr_async as *const u8,
     );
     b.symbol(
-        "lang_net_tcp_stream_local_addr",
-        runtime::net::lang_net_tcp_stream_local_addr as *const u8,
+        "lang_net_tcp_stream_local_addr_async",
+        runtime::async_rt::lang_net_tcp_stream_local_addr_async as *const u8,
     );
     b.symbol(
-        "lang_net_tcp_stream_set_nodelay",
-        runtime::net::lang_net_tcp_stream_set_nodelay as *const u8,
+        "lang_net_tcp_stream_take_error_async",
+        runtime::async_rt::lang_net_tcp_stream_take_error_async as *const u8,
     );
     b.symbol(
-        "lang_net_tcp_stream_read",
-        runtime::net::lang_net_tcp_stream_read as *const u8,
+        "lang_net_tcp_stream_set_nodelay_async",
+        runtime::async_rt::lang_net_tcp_stream_set_nodelay_async as *const u8,
     );
     b.symbol(
-        "lang_net_tcp_stream_read_to_end",
-        runtime::net::lang_net_tcp_stream_read_to_end as *const u8,
+        "lang_net_tcp_stream_nodelay_async",
+        runtime::async_rt::lang_net_tcp_stream_nodelay_async as *const u8,
     );
     b.symbol(
-        "lang_net_tcp_stream_write",
-        runtime::net::lang_net_tcp_stream_write as *const u8,
+        "lang_net_tcp_stream_set_nonblocking_async",
+        runtime::async_rt::lang_net_tcp_stream_set_nonblocking_async as *const u8,
     );
     b.symbol(
-        "lang_net_tcp_stream_write_all",
-        runtime::net::lang_net_tcp_stream_write_all as *const u8,
+        "lang_net_tcp_stream_read_timeout_async",
+        runtime::async_rt::lang_net_tcp_stream_read_timeout_async as *const u8,
     );
     b.symbol(
-        "lang_net_tcp_stream_flush",
-        runtime::net::lang_net_tcp_stream_flush as *const u8,
+        "lang_net_tcp_stream_set_read_timeout_async",
+        runtime::async_rt::lang_net_tcp_stream_set_read_timeout_async as *const u8,
     );
     b.symbol(
-        "lang_net_tcp_listener_bind",
-        runtime::net::lang_net_tcp_listener_bind as *const u8,
+        "lang_net_tcp_stream_write_timeout_async",
+        runtime::async_rt::lang_net_tcp_stream_write_timeout_async as *const u8,
+    );
+    b.symbol(
+        "lang_net_tcp_stream_set_write_timeout_async",
+        runtime::async_rt::lang_net_tcp_stream_set_write_timeout_async as *const u8,
+    );
+    b.symbol(
+        "lang_net_tcp_stream_ttl_async",
+        runtime::async_rt::lang_net_tcp_stream_ttl_async as *const u8,
+    );
+    b.symbol(
+        "lang_net_tcp_stream_set_ttl_async",
+        runtime::async_rt::lang_net_tcp_stream_set_ttl_async as *const u8,
     );
     b.symbol(
         "lang_net_tcp_listener_release",
         runtime::net::lang_net_tcp_listener_release as *const u8,
     );
     b.symbol(
-        "lang_net_tcp_listener_close",
-        runtime::net::lang_net_tcp_listener_close as *const u8,
-    );
-    b.symbol(
-        "lang_net_tcp_listener_accept",
-        runtime::net::lang_net_tcp_listener_accept as *const u8,
-    );
-    b.symbol(
-        "lang_net_tcp_listener_local_addr",
-        runtime::net::lang_net_tcp_listener_local_addr as *const u8,
-    );
-    b.symbol(
-        "lang_net_udp_bind",
-        runtime::net::lang_net_udp_bind as *const u8,
-    );
-    b.symbol(
         "lang_net_udp_release",
         runtime::net::lang_net_udp_release as *const u8,
     );
     b.symbol(
-        "lang_net_udp_close",
-        runtime::net::lang_net_udp_close as *const u8,
+        "lang_net_udp_bind_async",
+        runtime::async_rt::lang_net_udp_bind_async as *const u8,
     );
     b.symbol(
-        "lang_net_udp_local_addr",
-        runtime::net::lang_net_udp_local_addr as *const u8,
+        "lang_net_udp_close_async",
+        runtime::async_rt::lang_net_udp_close_async as *const u8,
     );
     b.symbol(
-        "lang_net_udp_send_to",
-        runtime::net::lang_net_udp_send_to as *const u8,
+        "lang_net_udp_connect_async",
+        runtime::async_rt::lang_net_udp_connect_async as *const u8,
     );
     b.symbol(
-        "lang_net_udp_recv_from",
-        runtime::net::lang_net_udp_recv_from as *const u8,
+        "lang_net_udp_local_addr_async",
+        runtime::async_rt::lang_net_udp_local_addr_async as *const u8,
     );
     b.symbol(
-        "lang_rand_os_u32",
-        runtime::rand::lang_rand_os_u32 as *const u8,
+        "lang_net_udp_peer_addr_async",
+        runtime::async_rt::lang_net_udp_peer_addr_async as *const u8,
     );
     b.symbol(
-        "lang_time_monotonic_nanos",
-        runtime::time::lang_time_monotonic_nanos as *const u8,
+        "lang_net_udp_take_error_async",
+        runtime::async_rt::lang_net_udp_take_error_async as *const u8,
     );
     b.symbol(
-        "lang_time_system_nanos",
-        runtime::time::lang_time_system_nanos as *const u8,
+        "lang_net_udp_set_nonblocking_async",
+        runtime::async_rt::lang_net_udp_set_nonblocking_async as *const u8,
     );
     b.symbol(
-        "lang_time_local_offset_seconds",
-        runtime::time::lang_time_local_offset_seconds as *const u8,
+        "lang_net_udp_read_timeout_async",
+        runtime::async_rt::lang_net_udp_read_timeout_async as *const u8,
     );
     b.symbol(
-        "lang_time_sleep_nanos",
-        runtime::time::lang_time_sleep_nanos as *const u8,
+        "lang_net_udp_set_read_timeout_async",
+        runtime::async_rt::lang_net_udp_set_read_timeout_async as *const u8,
+    );
+    b.symbol(
+        "lang_net_udp_write_timeout_async",
+        runtime::async_rt::lang_net_udp_write_timeout_async as *const u8,
+    );
+    b.symbol(
+        "lang_net_udp_set_write_timeout_async",
+        runtime::async_rt::lang_net_udp_set_write_timeout_async as *const u8,
+    );
+    b.symbol(
+        "lang_net_udp_ttl_async",
+        runtime::async_rt::lang_net_udp_ttl_async as *const u8,
+    );
+    b.symbol(
+        "lang_net_udp_set_ttl_async",
+        runtime::async_rt::lang_net_udp_set_ttl_async as *const u8,
+    );
+    b.symbol(
+        "lang_net_udp_broadcast_async",
+        runtime::async_rt::lang_net_udp_broadcast_async as *const u8,
+    );
+    b.symbol(
+        "lang_net_udp_set_broadcast_async",
+        runtime::async_rt::lang_net_udp_set_broadcast_async as *const u8,
+    );
+    b.symbol(
+        "lang_net_udp_multicast_loop_v4_async",
+        runtime::async_rt::lang_net_udp_multicast_loop_v4_async as *const u8,
+    );
+    b.symbol(
+        "lang_net_udp_set_multicast_loop_v4_async",
+        runtime::async_rt::lang_net_udp_set_multicast_loop_v4_async as *const u8,
+    );
+    b.symbol(
+        "lang_net_udp_multicast_loop_v6_async",
+        runtime::async_rt::lang_net_udp_multicast_loop_v6_async as *const u8,
+    );
+    b.symbol(
+        "lang_net_udp_set_multicast_loop_v6_async",
+        runtime::async_rt::lang_net_udp_set_multicast_loop_v6_async as *const u8,
+    );
+    b.symbol(
+        "lang_net_udp_multicast_ttl_v4_async",
+        runtime::async_rt::lang_net_udp_multicast_ttl_v4_async as *const u8,
+    );
+    b.symbol(
+        "lang_net_udp_set_multicast_ttl_v4_async",
+        runtime::async_rt::lang_net_udp_set_multicast_ttl_v4_async as *const u8,
+    );
+    b.symbol(
+        "lang_net_udp_join_multicast_v4_async",
+        runtime::async_rt::lang_net_udp_join_multicast_v4_async as *const u8,
+    );
+    b.symbol(
+        "lang_net_udp_leave_multicast_v4_async",
+        runtime::async_rt::lang_net_udp_leave_multicast_v4_async as *const u8,
+    );
+    b.symbol(
+        "lang_net_udp_join_multicast_v6_async",
+        runtime::async_rt::lang_net_udp_join_multicast_v6_async as *const u8,
+    );
+    b.symbol(
+        "lang_net_udp_leave_multicast_v6_async",
+        runtime::async_rt::lang_net_udp_leave_multicast_v6_async as *const u8,
+    );
+    b.symbol(
+        "lang_rand_os_bytes_async",
+        runtime::async_rt::lang_rand_os_bytes_async as *const u8,
+    );
+    b.symbol(
+        "lang_time_monotonic_nanos_async",
+        runtime::async_rt::lang_time_monotonic_nanos_async as *const u8,
+    );
+    b.symbol(
+        "lang_time_system_nanos_async",
+        runtime::async_rt::lang_time_system_nanos_async as *const u8,
+    );
+    b.symbol(
+        "lang_time_local_offset_seconds_async",
+        runtime::async_rt::lang_time_local_offset_seconds_async as *const u8,
     );
     // Variadic `extern function` calls (`docs/19` §13) route through `libffi`.
     b.symbol(
@@ -852,8 +981,8 @@ pub struct Jit {
     /// Language function name → its Cranelift id.
     funcs: HashMap<String, FuncId>,
     /// The `Pending` type id (`docs/21`), if the program reached the async
-    /// runtime — recorded so a top-level driver can call `lang_block_on` on an
-    /// `async main`'s root future without crossing back into the analysis.
+    /// runtime — recorded so a top-level driver can call the private root-future
+    /// driver on an `async main` future without crossing back into the analysis.
     pending_tid: Option<i64>,
     /// Whether the user `main` is an `async function` (`docs/21` §6 — async
     /// `main`): the compiled symbol returns a `Future<…>` box instead of
@@ -879,10 +1008,10 @@ impl Jit {
             .map(|id| self.module.get_finalized_function(*id))
     }
 
-    /// Run the program's `main` — calling it directly if sync, or driving its
-    /// root future via the runtime executor if it is an `async function`
+    /// Run the program's `main` — calling it directly if non-async, or driving
+    /// its root future via the runtime executor if it is an `async function`
     /// (`docs/21` §6). The user does not (cannot) call the executor entry
-    /// `lang_block_on` themselves.
+    /// themselves.
     ///
     /// # Safety
     /// `main` must exist with the standard zero-arg signature; for async main
@@ -896,9 +1025,9 @@ impl Jit {
             let ctor: extern "C" fn() -> *mut u8 = unsafe { std::mem::transmute(ptr) };
             let fut = ctor();
             // The future graph isn't reachable from any scanned stack until the
-            // executor reads it; pin it across the cross-thread handoff inside
-            // the runtime drives the future to completion.
-            unsafe { runtime::async_rt::lang_block_on(fut, pending_tid) };
+            // executor reads it; pin it across the private runtime root-driver
+            // window until the future resolves.
+            unsafe { runtime::async_rt::lang_drive_root_future(fut, pending_tid) };
         } else {
             let main: extern "C" fn() = unsafe { std::mem::transmute(ptr) };
             main();
@@ -1526,16 +1655,16 @@ fn emit_native_entry<M: Module>(
         .expect("declare set_enabled");
 
     // The executor entry — used internally by the program entry when `main`
-    // is an `async function` (`docs/21`): drive the root future to completion.
-    let block_on_id = if main_is_async {
+    // is an `async function` (`docs/21`): poll the root future until it resolves.
+    let root_driver_id = if main_is_async {
         let mut bo_sig = module.make_signature();
         bo_sig.params.push(AbiParam::new(PTR)); // fut
         bo_sig.params.push(AbiParam::new(types::I64)); // pending_tid
         bo_sig.returns.push(AbiParam::new(types::I64));
         Some(
             module
-                .declare_function("lang_block_on", Linkage::Import, &bo_sig)
-                .expect("declare lang_block_on"),
+                .declare_function("lang_drive_root_future", Linkage::Import, &bo_sig)
+                .expect("declare lang_drive_root_future"),
         )
     } else {
         None
@@ -1582,10 +1711,10 @@ fn emit_native_entry<M: Module>(
         let main_ref = module.declare_func_in_func(user_main, b.func);
         if main_is_async {
             // Async `main`: calling the symbol just builds the root future.
-            // Do that before enabling GC: until `lang_block_on` starts, the
+            // Do that before enabling GC: until the private root driver starts, the
             // returned future is only a native-entry temporary and is not yet
             // pinned or reachable from a generated stack map. No user body has
-            // run at this point; `lang_block_on` pins the future before polling.
+            // run at this point; the root driver pins the future before polling.
             let call = b.ins().call(main_ref, &[]);
             let fut = b.inst_results(call)[0];
             let en_ref = module.declare_func_in_func(en_id, b.func);
@@ -1593,7 +1722,7 @@ fn emit_native_entry<M: Module>(
             b.ins().call(en_ref, &[on]);
             let ptid = b.ins().iconst(types::I64, pending_tid);
             let bo_ref = module.declare_func_in_func(
-                block_on_id.expect("block_on declared when main is async"),
+                root_driver_id.expect("root driver declared when main is async"),
                 b.func,
             );
             b.ins().call(bo_ref, &[fut, ptid]);
@@ -3246,8 +3375,9 @@ struct FnGen<'a, 'b, 'f, M: Module> {
     /// `let`-bound locals whose type is a `@RefCounted` struct. Each holds one
     /// strong reference (`+1`); `emit_return` releases them on every return path
     /// (reverse order), and re-binding/assigning one releases its prior value
-    /// first. The last release of an object runs its `Drop` synchronously and
-    /// frees it — deterministic finalization without waiting for a collection.
+    /// first. The last release of an object runs its `Drop` immediately as
+    /// non-waiting cleanup and frees it — deterministic finalization without
+    /// waiting for a collection.
     rc_owned: Vec<LocalId>,
 }
 

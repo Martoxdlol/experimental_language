@@ -1,0 +1,14 @@
+//@ kind: compile-error
+//@ description: Task JoinHandle.abort is an immediate cancellation request, not an async join operation
+//@ stderr: `await` requires a `Future`
+
+import { Future } from "core:prelude";
+import { Task } from "std:task";
+
+function main(): Future<null> async {
+  var handle = Task.spawn(() async => {
+    null
+  });
+  var _aborted = await handle.abort();
+  null
+}

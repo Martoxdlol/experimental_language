@@ -13,29 +13,102 @@ struct UdpSocket {
   handle: i64,
 }
 
-extern function lang_net_resolve(host: str): str;
-extern function lang_net_tcp_connect(addr: str): str;
+struct AsyncUdpSocket {
+  socket: UdpSocket,
+}
+
+struct AsyncTcpStream {
+  stream: TcpStream,
+}
+
+struct AsyncTcpListener {
+  listener: TcpListener,
+}
+
+extern function __otter_net_resolve_async(host: str): Future<str>;
+extern function __otter_net_tcp_connect_async(addr: str): Future<str>;
+extern function __otter_net_tcp_connect_timeout_async(addr: str, nanos: i64): Future<str>;
 extern function lang_net_tcp_stream_release(handle: i64);
-extern function lang_net_tcp_stream_close(handle: i64): str;
-extern function lang_net_tcp_stream_peer_addr(handle: i64): str;
-extern function lang_net_tcp_stream_local_addr(handle: i64): str;
-extern function lang_net_tcp_stream_set_nodelay(handle: i64, on: i64): str;
-extern function lang_net_tcp_stream_read(handle: i64, count: i64): str;
-extern function lang_net_tcp_stream_read_to_end(handle: i64): str;
-extern function lang_net_tcp_stream_write(handle: i64, contents_hex: str): str;
-extern function lang_net_tcp_stream_write_all(handle: i64, contents_hex: str): str;
-extern function lang_net_tcp_stream_flush(handle: i64): str;
-extern function lang_net_tcp_listener_bind(addr: str): str;
+extern function __otter_net_tcp_stream_close_async(handle: i64): Future<str>;
+extern function __otter_net_tcp_stream_peer_addr_async(handle: i64): Future<str>;
+extern function __otter_net_tcp_stream_local_addr_async(handle: i64): Future<str>;
+extern function __otter_net_tcp_stream_take_error_async(handle: i64): Future<str>;
+extern function __otter_net_tcp_stream_nodelay_async(handle: i64): Future<str>;
+extern function __otter_net_tcp_stream_set_nodelay_async(handle: i64, on: i64): Future<str>;
+extern function __otter_net_tcp_stream_set_nonblocking_async(handle: i64, on: i64): Future<str>;
+extern function __otter_net_tcp_stream_read_timeout_async(handle: i64): Future<str>;
+extern function __otter_net_tcp_stream_set_read_timeout_async(
+  handle: i64,
+  nanos: i64,
+  present: i64
+): Future<str>;
+extern function __otter_net_tcp_stream_write_timeout_async(handle: i64): Future<str>;
+extern function __otter_net_tcp_stream_set_write_timeout_async(
+  handle: i64,
+  nanos: i64,
+  present: i64
+): Future<str>;
+extern function __otter_net_tcp_stream_ttl_async(handle: i64): Future<str>;
+extern function __otter_net_tcp_stream_set_ttl_async(handle: i64, ttl: i64): Future<str>;
+extern function __otter_net_tcp_stream_read_async(handle: i64, count: i64): Future<str>;
+extern function __otter_net_tcp_stream_read_to_end_async(handle: i64): Future<str>;
+extern function __otter_net_tcp_stream_write_async(handle: i64, contents_hex: str): Future<str>;
+extern function __otter_net_tcp_stream_write_all_async(handle: i64, contents_hex: str): Future<str>;
+extern function __otter_net_tcp_stream_flush_async(handle: i64): Future<str>;
+extern function __otter_net_tcp_stream_peek_async(handle: i64, count: i64): Future<str>;
 extern function lang_net_tcp_listener_release(handle: i64);
-extern function lang_net_tcp_listener_close(handle: i64): str;
-extern function lang_net_tcp_listener_accept(handle: i64): str;
-extern function lang_net_tcp_listener_local_addr(handle: i64): str;
-extern function lang_net_udp_bind(addr: str): str;
+extern function __otter_net_tcp_listener_bind_async(addr: str): Future<str>;
+extern function __otter_net_tcp_listener_close_async(handle: i64): Future<str>;
+extern function __otter_net_tcp_listener_accept_async(handle: i64): Future<str>;
+extern function __otter_net_tcp_listener_local_addr_async(handle: i64): Future<str>;
+extern function __otter_net_tcp_listener_take_error_async(handle: i64): Future<str>;
+extern function __otter_net_tcp_listener_set_nonblocking_async(handle: i64, on: i64): Future<str>;
+extern function __otter_net_tcp_listener_ttl_async(handle: i64): Future<str>;
+extern function __otter_net_tcp_listener_set_ttl_async(handle: i64, ttl: i64): Future<str>;
 extern function lang_net_udp_release(handle: i64);
-extern function lang_net_udp_close(handle: i64): str;
-extern function lang_net_udp_local_addr(handle: i64): str;
-extern function lang_net_udp_send_to(handle: i64, contents_hex: str, addr: str): str;
-extern function lang_net_udp_recv_from(handle: i64, count: i64): str;
+extern function __otter_net_udp_bind_async(addr: str): Future<str>;
+extern function __otter_net_udp_close_async(handle: i64): Future<str>;
+extern function __otter_net_udp_connect_async(handle: i64, addr: str): Future<str>;
+extern function __otter_net_udp_local_addr_async(handle: i64): Future<str>;
+extern function __otter_net_udp_peer_addr_async(handle: i64): Future<str>;
+extern function __otter_net_udp_take_error_async(handle: i64): Future<str>;
+extern function __otter_net_udp_set_nonblocking_async(handle: i64, on: i64): Future<str>;
+extern function __otter_net_udp_read_timeout_async(handle: i64): Future<str>;
+extern function __otter_net_udp_set_read_timeout_async(
+  handle: i64,
+  nanos: i64,
+  present: i64
+): Future<str>;
+extern function __otter_net_udp_write_timeout_async(handle: i64): Future<str>;
+extern function __otter_net_udp_set_write_timeout_async(
+  handle: i64,
+  nanos: i64,
+  present: i64
+): Future<str>;
+extern function __otter_net_udp_ttl_async(handle: i64): Future<str>;
+extern function __otter_net_udp_set_ttl_async(handle: i64, ttl: i64): Future<str>;
+extern function __otter_net_udp_broadcast_async(handle: i64): Future<str>;
+extern function __otter_net_udp_set_broadcast_async(handle: i64, on: i64): Future<str>;
+extern function __otter_net_udp_multicast_loop_v4_async(handle: i64): Future<str>;
+extern function __otter_net_udp_set_multicast_loop_v4_async(handle: i64, on: i64): Future<str>;
+extern function __otter_net_udp_multicast_loop_v6_async(handle: i64): Future<str>;
+extern function __otter_net_udp_set_multicast_loop_v6_async(handle: i64, on: i64): Future<str>;
+extern function __otter_net_udp_multicast_ttl_v4_async(handle: i64): Future<str>;
+extern function __otter_net_udp_set_multicast_ttl_v4_async(handle: i64, ttl: i64): Future<str>;
+extern function __otter_net_udp_join_multicast_v4_async(handle: i64, group: str, iface: str): Future<str>;
+extern function __otter_net_udp_leave_multicast_v4_async(handle: i64, group: str, iface: str): Future<str>;
+extern function __otter_net_udp_join_multicast_v6_async(handle: i64, group: str, iface: i64): Future<str>;
+extern function __otter_net_udp_leave_multicast_v6_async(handle: i64, group: str, iface: i64): Future<str>;
+extern function __otter_net_udp_send_async(handle: i64, contents_hex: str): Future<str>;
+extern function __otter_net_udp_recv_async(handle: i64, count: i64): Future<str>;
+extern function __otter_net_udp_peek_async(handle: i64, count: i64): Future<str>;
+extern function __otter_net_udp_send_to_async(
+  handle: i64,
+  contents_hex: str,
+  addr: str
+): Future<str>;
+extern function __otter_net_udp_recv_from_async(handle: i64, count: i64): Future<str>;
+extern function __otter_net_udp_peek_from_async(handle: i64, count: i64): Future<str>;
 
 struct __StdNetField {
   text: str,
@@ -67,6 +140,21 @@ function __std_net_decode_unit(result: str): null | IoError {
     __std_net_io_error(__std_net_payload(result))
   } else {
     null
+  }
+}
+
+function __std_net_decode_optional_error(result: str): IoError | null {
+  if __std_net_is_error(result) {
+    __std_net_io_error(__std_net_payload(result))
+  } else {
+    var payload = __std_net_payload(result);
+    if payload == "0" {
+      null
+    } else if payload.size() > 0 && payload.substring(0, 1) == "1" {
+      __std_net_io_error(__std_net_payload(payload))
+    } else {
+      __std_net_io_error("malformed std:net provider payload")
+    }
   }
 }
 
@@ -113,16 +201,60 @@ function __std_net_decode_i64(result: str): i64 | IoError {
   }
 }
 
+function __std_net_decode_bool(result: str): bool | IoError {
+  var value = __std_net_decode_i64(result);
+  if value is IoError {
+    value as IoError
+  } else {
+    (value as i64) != 0
+  }
+}
+
+function __std_net_decode_u32(result: str): u32 | IoError {
+  var value = __std_net_decode_i64(result);
+  if value is IoError {
+    value as IoError
+  } else if (value as i64) < 0 || (value as i64) > 4294967295 {
+    __std_net_io_error("u32 value in std:net provider payload is out of range")
+  } else {
+    (value as i64) as u32
+  }
+}
+
+function __std_net_decode_optional_duration(result: str): Duration | null | IoError {
+  var text = __std_net_decode_text(result);
+  if text is IoError {
+    text as IoError
+  } else if (text as str) == "n" {
+    null
+  } else {
+    var nanos = __std_net_parse_i64(text as str);
+    if nanos is IoError {
+      nanos as IoError
+    } else {
+      Duration.from_nanos(nanos as i64)
+    }
+  }
+}
+
+function __std_net_duration_nanos_or_zero(timeout: Duration | null): i64 {
+  if timeout is Duration { (timeout as Duration).as_nanos() } else { 0 }
+}
+
+function __std_net_duration_present(timeout: Duration | null): i64 {
+  if timeout is Duration { 1 } else { 0 }
+}
+
 function __std_net_hex_digit(value: u8): str {
   var n = value as i64;
   var cp = if n < 10 { 48 + n } else { 87 + n };
-  (cp as char)as str
+  (cp as char) as str
 }
 
 function __std_net_bytes_to_hex(data: Bytes): str {
   var out = "";
   for b in data.iter() {
-    out = out + __std_net_hex_digit((b / 16u8)as u8) + __std_net_hex_digit((b % 16u8)as u8);
+    out = out + __std_net_hex_digit((b / 16u8) as u8) + __std_net_hex_digit((b % 16u8) as u8);
   }
   out
 }
@@ -130,11 +262,11 @@ function __std_net_bytes_to_hex(data: Bytes): str {
 function __std_net_hex_value(ch: char): u8 | IoError {
   var cp = ch as i64;
   if cp >= 48 && cp <= 57 {
-    (cp - 48)as u8
+    (cp - 48) as u8
   } else if cp >= 97 && cp <= 102 {
-    (cp - 87)as u8
+    (cp - 87) as u8
   } else if cp >= 65 && cp <= 70 {
-    (cp - 55)as u8
+    (cp - 55) as u8
   } else {
     __std_net_io_error("invalid hexadecimal digit in std:net byte payload")
   }
@@ -165,7 +297,7 @@ function __std_net_hex_to_bytes(text: str): Bytes | IoError {
       if lo is IoError {
         return lo as IoError;
       }
-      out.push(((hi as u8) * 16u8 + (lo as u8))as u8);
+      out.push(((hi as u8) * 16u8 + (lo as u8)) as u8);
       i = i + 2;
     }
     out
@@ -217,6 +349,40 @@ function __std_net_parse_socket_addr(text: str): SocketAddr | IoError {
   }
 }
 
+function __std_net_decode_datagram(result: str, buf: Bytes): (i64, SocketAddr) | IoError {
+  var decoded = __std_net_decode_text(result);
+  if decoded is IoError {
+    decoded as IoError
+  } else {
+    var payload = decoded as str;
+    var bytes_field = __std_net_read_field(payload, 0);
+    if bytes_field is IoError {
+      return bytes_field as IoError;
+    }
+    var addr_field = __std_net_read_field(payload, (bytes_field as __StdNetField).next);
+    if addr_field is IoError {
+      return addr_field as IoError;
+    }
+    if (addr_field as __StdNetField).next != payload.size() {
+      return __std_net_io_error("trailing bytes in std:net provider payload");
+    }
+    var data = __std_net_hex_to_bytes((bytes_field as __StdNetField).text);
+    if data is IoError {
+      return data as IoError;
+    }
+    var addr = __std_net_parse_socket_addr((addr_field as __StdNetField).text);
+    if addr is IoError {
+      return addr as IoError;
+    }
+    var chunk = data as Bytes;
+    for b in chunk.iter() {
+      buf.push(b);
+    }
+    var received_pair = (chunk.size(), addr as SocketAddr);
+    received_pair
+  }
+}
+
 function __std_net_parse_ip(text: str): IpAddr | IoError {
   var parsed = if text.contains(":") {
     parse_ip_v6(text)
@@ -230,8 +396,8 @@ function __std_net_parse_ip(text: str): IpAddr | IoError {
   }
 }
 
-function resolve(host: str): List<IpAddr> | IoError {
-  var result = lang_net_resolve(host);
+function resolve(host: str): Future<List<IpAddr> | IoError> async {
+  var result = await __otter_net_resolve_async(host);
   if __std_net_is_error(result) {
     __std_net_io_error(__std_net_payload(result))
   } else {
@@ -255,8 +421,9 @@ function resolve(host: str): List<IpAddr> | IoError {
 }
 
 extend TcpStream {
-  function connect(addr: SocketAddr): TcpStream | IoError {
-    var handle = __std_net_decode_i64(lang_net_tcp_connect(addr.to_str()));
+  function connect(addr: SocketAddr): Future<TcpStream | IoError> async {
+    var raw = await __otter_net_tcp_connect_async(addr.to_str());
+    var handle = __std_net_decode_i64(raw);
     if handle is IoError {
       handle as IoError
     } else {
@@ -264,8 +431,22 @@ extend TcpStream {
     }
   }
 
-  function peer_addr(self): SocketAddr | IoError {
-    var text = __std_net_decode_text(lang_net_tcp_stream_peer_addr(self.handle));
+  function connect_timeout(addr: SocketAddr, timeout: Duration): Future<TcpStream | IoError> async {
+    var raw = await __otter_net_tcp_connect_timeout_async(
+        addr.to_str(),
+        timeout.as_nanos()
+      );
+    var handle = __std_net_decode_i64(raw);
+    if handle is IoError {
+      handle as IoError
+    } else {
+      TcpStream { handle: handle as i64 }
+    }
+  }
+
+  function peer_addr(self): Future<SocketAddr | IoError> async {
+    var raw = await __otter_net_tcp_stream_peer_addr_async(self.handle);
+    var text = __std_net_decode_text(raw);
     if text is IoError {
       text as IoError
     } else {
@@ -273,8 +454,9 @@ extend TcpStream {
     }
   }
 
-  function local_addr(self): SocketAddr | IoError {
-    var text = __std_net_decode_text(lang_net_tcp_stream_local_addr(self.handle));
+  function local_addr(self): Future<SocketAddr | IoError> async {
+    var raw = await __otter_net_tcp_stream_local_addr_async(self.handle);
+    var text = __std_net_decode_text(raw);
     if text is IoError {
       text as IoError
     } else {
@@ -282,18 +464,72 @@ extend TcpStream {
     }
   }
 
-  function set_nodelay(self, on: bool): null | IoError {
-    __std_net_decode_unit(lang_net_tcp_stream_set_nodelay(self.handle, if on { 1 } else { 0 }))
+  function nodelay(self): Future<bool | IoError> async {
+    var raw = await __otter_net_tcp_stream_nodelay_async(self.handle);
+    __std_net_decode_bool(raw)
   }
 
-  function close(self): null | IoError {
-    __std_net_decode_unit(lang_net_tcp_stream_close(self.handle))
+  function take_error(self): Future<IoError | null> async {
+    var raw = await __otter_net_tcp_stream_take_error_async(self.handle);
+    __std_net_decode_optional_error(raw)
   }
-}
 
-extend TcpStream: Reader {
-  function read(self, buf: Bytes): i64 | IoError {
-    var data = __std_net_decode_bytes(lang_net_tcp_stream_read(self.handle, buf.size()));
+  function set_nodelay(self, on: bool): Future<null | IoError> async {
+    var raw = await __otter_net_tcp_stream_set_nodelay_async(self.handle, if on { 1 } else { 0 });
+    __std_net_decode_unit(raw)
+  }
+
+  function set_nonblocking(self, on: bool): Future<null | IoError> async {
+    var raw = await __otter_net_tcp_stream_set_nonblocking_async(self.handle, if on { 1 } else { 0 });
+    __std_net_decode_unit(raw)
+  }
+
+  function read_timeout(self): Future<Duration | null | IoError> async {
+    var raw = await __otter_net_tcp_stream_read_timeout_async(self.handle);
+    __std_net_decode_optional_duration(raw)
+  }
+
+  function set_read_timeout(self, timeout: Duration | null): Future<null | IoError> async {
+    var raw = await __otter_net_tcp_stream_set_read_timeout_async(
+        self.handle,
+        __std_net_duration_nanos_or_zero(timeout),
+        __std_net_duration_present(timeout)
+      );
+    __std_net_decode_unit(raw)
+  }
+
+  function write_timeout(self): Future<Duration | null | IoError> async {
+    var raw = await __otter_net_tcp_stream_write_timeout_async(self.handle);
+    __std_net_decode_optional_duration(raw)
+  }
+
+  function set_write_timeout(self, timeout: Duration | null): Future<null | IoError> async {
+    var raw = await __otter_net_tcp_stream_set_write_timeout_async(
+        self.handle,
+        __std_net_duration_nanos_or_zero(timeout),
+        __std_net_duration_present(timeout)
+      );
+    __std_net_decode_unit(raw)
+  }
+
+  function ttl(self): Future<u32 | IoError> async {
+    var raw = await __otter_net_tcp_stream_ttl_async(self.handle);
+    __std_net_decode_u32(raw)
+  }
+
+  function set_ttl(self, ttl: u32): Future<null | IoError> async {
+    var raw = await __otter_net_tcp_stream_set_ttl_async(self.handle, ttl as i64);
+    __std_net_decode_unit(raw)
+  }
+
+  function close(self): Future<null | IoError> async {
+    var raw = await __otter_net_tcp_stream_close_async(self.handle);
+    __std_net_decode_unit(raw)
+  }
+
+  function peek(self, buf: Bytes): Future<i64 | IoError> async {
+    var raw = await __otter_net_tcp_stream_peek_async(self.handle, buf.size());
+    var data = __std_net_decode_bytes(raw);
     if data is IoError {
       data as IoError
     } else {
@@ -305,8 +541,9 @@ extend TcpStream: Reader {
     }
   }
 
-  function read_to_end(self, buf: Bytes): i64 | IoError {
-    var data = __std_net_decode_bytes(lang_net_tcp_stream_read_to_end(self.handle));
+  function read(self, buf: Bytes): Future<i64 | IoError> async {
+    var raw = await __otter_net_tcp_stream_read_async(self.handle, buf.size());
+    var data = __std_net_decode_bytes(raw);
     if data is IoError {
       data as IoError
     } else {
@@ -317,19 +554,40 @@ extend TcpStream: Reader {
       chunk.size()
     }
   }
-}
 
-extend TcpStream: Writer {
-  function write(self, buf: Bytes): i64 | IoError {
-    __std_net_decode_i64(lang_net_tcp_stream_write(self.handle, __std_net_bytes_to_hex(buf)))
+  function read_to_end(self, buf: Bytes): Future<i64 | IoError> async {
+    var raw = await __otter_net_tcp_stream_read_to_end_async(self.handle);
+    var data = __std_net_decode_bytes(raw);
+    if data is IoError {
+      data as IoError
+    } else {
+      var chunk = data as Bytes;
+      for b in chunk.iter() {
+        buf.push(b);
+      }
+      chunk.size()
+    }
   }
 
-  function write_all(self, buf: Bytes): null | IoError {
-    __std_net_decode_unit(lang_net_tcp_stream_write_all(self.handle, __std_net_bytes_to_hex(buf)))
+  function write(self, buf: Bytes): Future<i64 | IoError> async {
+    var raw = await __otter_net_tcp_stream_write_async(
+        self.handle,
+        __std_net_bytes_to_hex(buf)
+      );
+    __std_net_decode_i64(raw)
   }
 
-  function flush(self): null | IoError {
-    __std_net_decode_unit(lang_net_tcp_stream_flush(self.handle))
+  function write_all(self, buf: Bytes): Future<null | IoError> async {
+    var raw = await __otter_net_tcp_stream_write_all_async(
+        self.handle,
+        __std_net_bytes_to_hex(buf)
+      );
+    __std_net_decode_unit(raw)
+  }
+
+  function flush(self): Future<null | IoError> async {
+    var raw = await __otter_net_tcp_stream_flush_async(self.handle);
+    __std_net_decode_unit(raw)
   }
 }
 
@@ -345,12 +603,7 @@ extend TcpStream: Drop {
 
 extend TcpStream: ToStr {
   function to_str(self): str {
-    var addr = self.peer_addr();
-    if addr is SocketAddr {
-      "TcpStream { peer: " + (addr as SocketAddr).to_str() + " }"
-    } else {
-      "TcpStream { handle: " + (self.handle as str) + " }"
-    }
+    "TcpStream { handle: " + (self.handle as str) + " }"
   }
 }
 
@@ -358,9 +611,140 @@ extend TcpStream: Debug {
   function debug(self): str { self.to_str() }
 }
 
+extend AsyncTcpStream: AsyncReader + AsyncWriter {
+  function connect(addr: SocketAddr): Future<AsyncTcpStream | IoError> async {
+    var raw = await __otter_net_tcp_connect_async(addr.to_str());
+    var handle = __std_net_decode_i64(raw);
+    if handle is IoError {
+      handle as IoError
+    } else {
+      AsyncTcpStream { stream: TcpStream { handle: handle as i64 } }
+    }
+  }
+
+  function connect_timeout(addr: SocketAddr, timeout: Duration): Future<AsyncTcpStream | IoError> async {
+    var raw = await __otter_net_tcp_connect_timeout_async(addr.to_str(), timeout.as_nanos());
+    var handle = __std_net_decode_i64(raw);
+    if handle is IoError {
+      handle as IoError
+    } else {
+      AsyncTcpStream { stream: TcpStream { handle: handle as i64 } }
+    }
+  }
+
+  function from_stream(stream: TcpStream): AsyncTcpStream {
+    AsyncTcpStream { stream: stream.clone() }
+  }
+
+  function into_stream(self): TcpStream {
+    self.stream.clone()
+  }
+
+  function peer_addr(self): Future<SocketAddr | IoError> async {
+    await self.stream.peer_addr()
+  }
+
+  function local_addr(self): Future<SocketAddr | IoError> async {
+    await self.stream.local_addr()
+  }
+
+  function close(self): Future<null | IoError> async {
+    await self.stream.close()
+  }
+
+  function peek_async(self, buf: Bytes): Future<i64 | IoError> async {
+    var raw = await __otter_net_tcp_stream_peek_async(
+        self.stream.handle,
+        buf.size()
+      );
+    var data = __std_net_decode_bytes(raw);
+    if data is IoError {
+      data as IoError
+    } else {
+      var chunk = data as Bytes;
+      for b in chunk.iter() {
+        buf.push(b);
+      }
+      chunk.size()
+    }
+  }
+
+  function read_async(self, buf: Bytes): Future<i64 | IoError> async {
+    var raw = await __otter_net_tcp_stream_read_async(
+        self.stream.handle,
+        buf.size()
+      );
+    var data = __std_net_decode_bytes(raw);
+    if data is IoError {
+      data as IoError
+    } else {
+      var chunk = data as Bytes;
+      for b in chunk.iter() {
+        buf.push(b);
+      }
+      chunk.size()
+    }
+  }
+
+  function write_async(self, buf: Bytes): Future<i64 | IoError> async {
+    var raw = await __otter_net_tcp_stream_write_async(
+        self.stream.handle,
+        __std_net_bytes_to_hex(buf)
+      );
+    __std_net_decode_i64(raw)
+  }
+}
+
+extend AsyncTcpStream: Clone {
+  function clone(self): AsyncTcpStream {
+    AsyncTcpStream { stream: self.stream.clone() }
+  }
+}
+
+extend AsyncTcpStream: ToStr {
+  function to_str(self): str {
+    "Async" + self.stream.to_str()
+  }
+}
+
+extend AsyncTcpStream: Debug {
+  function debug(self): str { self.to_str() }
+}
+
+function __std_net_decode_accept(result: str): (TcpStream, SocketAddr) | IoError {
+  var decoded = __std_net_decode_text(result);
+  if decoded is IoError {
+    decoded as IoError
+  } else {
+    var payload = decoded as str;
+    var handle_field = __std_net_read_field(payload, 0);
+    if handle_field is IoError {
+      return handle_field as IoError;
+    }
+    var addr_field = __std_net_read_field(payload, (handle_field as __StdNetField).next);
+    if addr_field is IoError {
+      return addr_field as IoError;
+    }
+    if (addr_field as __StdNetField).next != payload.size() {
+      return __std_net_io_error("trailing bytes in std:net provider payload");
+    }
+    var handle = __std_net_parse_i64((handle_field as __StdNetField).text);
+    if handle is IoError {
+      return handle as IoError;
+    }
+    var addr = __std_net_parse_socket_addr((addr_field as __StdNetField).text);
+    if addr is IoError {
+      return addr as IoError;
+    }
+    var accepted_pair = (TcpStream { handle: handle as i64 }, addr as SocketAddr);
+    accepted_pair
+  }
+}
+
 extend TcpListener {
-  function bind(addr: SocketAddr): TcpListener | IoError {
-    var handle = __std_net_decode_i64(lang_net_tcp_listener_bind(addr.to_str()));
+  function bind(addr: SocketAddr): Future<TcpListener | IoError> async {
+    var raw = await __otter_net_tcp_listener_bind_async(addr.to_str());
+    var handle = __std_net_decode_i64(raw);
     if handle is IoError {
       handle as IoError
     } else {
@@ -368,38 +752,14 @@ extend TcpListener {
     }
   }
 
-  function accept(self): (TcpStream, SocketAddr) | IoError {
-    var decoded = __std_net_decode_text(lang_net_tcp_listener_accept(self.handle));
-    if decoded is IoError {
-      decoded as IoError
-    } else {
-      var payload = decoded as str;
-      var handle_field = __std_net_read_field(payload, 0);
-      if handle_field is IoError {
-        return handle_field as IoError;
-      }
-      var addr_field = __std_net_read_field(payload, (handle_field as __StdNetField).next);
-      if addr_field is IoError {
-        return addr_field as IoError;
-      }
-      if(addr_field as __StdNetField).next != payload.size() {
-        return __std_net_io_error("trailing bytes in std:net provider payload");
-      }
-      var handle = __std_net_parse_i64((handle_field as __StdNetField).text);
-      if handle is IoError {
-        return handle as IoError;
-      }
-      var addr = __std_net_parse_socket_addr((addr_field as __StdNetField).text);
-      if addr is IoError {
-        return addr as IoError;
-      }
-      var accepted_pair = (TcpStream { handle: handle as i64 }, addr as SocketAddr);
-      accepted_pair
-    }
+  function accept(self): Future<(TcpStream, SocketAddr) | IoError> async {
+    var raw = await __otter_net_tcp_listener_accept_async(self.handle);
+    __std_net_decode_accept(raw)
   }
 
-  function local_addr(self): SocketAddr | IoError {
-    var text = __std_net_decode_text(lang_net_tcp_listener_local_addr(self.handle));
+  function local_addr(self): Future<SocketAddr | IoError> async {
+    var raw = await __otter_net_tcp_listener_local_addr_async(self.handle);
+    var text = __std_net_decode_text(raw);
     if text is IoError {
       text as IoError
     } else {
@@ -407,8 +767,32 @@ extend TcpListener {
     }
   }
 
-  function close(self): null | IoError {
-    __std_net_decode_unit(lang_net_tcp_listener_close(self.handle))
+  function take_error(self): Future<IoError | null> async {
+    var raw = await __otter_net_tcp_listener_take_error_async(self.handle);
+    __std_net_decode_optional_error(raw)
+  }
+
+  function set_nonblocking(self, on: bool): Future<null | IoError> async {
+    var raw = await __otter_net_tcp_listener_set_nonblocking_async(
+        self.handle,
+        if on { 1 } else { 0 }
+      );
+    __std_net_decode_unit(raw)
+  }
+
+  function ttl(self): Future<u32 | IoError> async {
+    var raw = await __otter_net_tcp_listener_ttl_async(self.handle);
+    __std_net_decode_u32(raw)
+  }
+
+  function set_ttl(self, ttl: u32): Future<null | IoError> async {
+    var raw = await __otter_net_tcp_listener_set_ttl_async(self.handle, ttl as i64);
+    __std_net_decode_unit(raw)
+  }
+
+  function close(self): Future<null | IoError> async {
+    var raw = await __otter_net_tcp_listener_close_async(self.handle);
+    __std_net_decode_unit(raw)
   }
 }
 
@@ -424,12 +808,7 @@ extend TcpListener: Drop {
 
 extend TcpListener: ToStr {
   function to_str(self): str {
-    var addr = self.local_addr();
-    if addr is SocketAddr {
-      "TcpListener { local: " + (addr as SocketAddr).to_str() + " }"
-    } else {
-      "TcpListener { handle: " + (self.handle as str) + " }"
-    }
+    "TcpListener { handle: " + (self.handle as str) + " }"
   }
 }
 
@@ -437,9 +816,76 @@ extend TcpListener: Debug {
   function debug(self): str { self.to_str() }
 }
 
+extend AsyncTcpListener {
+  function bind(addr: SocketAddr): Future<AsyncTcpListener | IoError> async {
+    var listener = await TcpListener.bind(addr);
+    if listener is IoError {
+      listener as IoError
+    } else {
+      AsyncTcpListener { listener: listener as TcpListener }
+    }
+  }
+
+  function from_listener(listener: TcpListener): AsyncTcpListener {
+    AsyncTcpListener { listener: listener.clone() }
+  }
+
+  function into_listener(self): TcpListener {
+    self.listener.clone()
+  }
+
+  function local_addr(self): Future<SocketAddr | IoError> async {
+    await self.listener.local_addr()
+  }
+
+  function take_error(self): Future<IoError | null> async {
+    await self.listener.take_error()
+  }
+
+  function ttl(self): Future<u32 | IoError> async {
+    await self.listener.ttl()
+  }
+
+  function set_ttl(self, ttl: u32): Future<null | IoError> async {
+    await self.listener.set_ttl(ttl)
+  }
+
+  function close(self): Future<null | IoError> async {
+    await self.listener.close()
+  }
+
+  function accept_async(self): Future<(AsyncTcpStream, SocketAddr) | IoError> async {
+    var accepted = await self.listener.accept();
+    if accepted is IoError {
+      accepted as IoError
+    } else {
+      var pair = accepted as (TcpStream, SocketAddr);
+      var async_pair = (AsyncTcpStream.from_stream(pair.0), pair.1);
+      async_pair
+    }
+  }
+}
+
+extend AsyncTcpListener: Clone {
+  function clone(self): AsyncTcpListener {
+    AsyncTcpListener { listener: self.listener.clone() }
+  }
+}
+
+extend AsyncTcpListener: ToStr {
+  function to_str(self): str {
+    "Async" + self.listener.to_str()
+  }
+}
+
+extend AsyncTcpListener: Debug {
+  function debug(self): str { self.to_str() }
+}
+
 extend UdpSocket {
-  function bind(addr: SocketAddr): UdpSocket | IoError {
-    var handle = __std_net_decode_i64(lang_net_udp_bind(addr.to_str()));
+  function bind(addr: SocketAddr): Future<UdpSocket | IoError> async {
+    var raw = await __otter_net_udp_bind_async(addr.to_str());
+    var handle = __std_net_decode_i64(raw);
     if handle is IoError {
       handle as IoError
     } else {
@@ -447,8 +893,9 @@ extend UdpSocket {
     }
   }
 
-  function local_addr(self): SocketAddr | IoError {
-    var text = __std_net_decode_text(lang_net_udp_local_addr(self.handle));
+  function local_addr(self): Future<SocketAddr | IoError> async {
+    var raw = await __otter_net_udp_local_addr_async(self.handle);
+    var text = __std_net_decode_text(raw);
     if text is IoError {
       text as IoError
     } else {
@@ -456,51 +903,366 @@ extend UdpSocket {
     }
   }
 
-  function send_to(self, buf: Bytes, addr: SocketAddr): i64 | IoError {
-    __std_net_decode_i64(lang_net_udp_send_to(
+  function connect(self, addr: SocketAddr): Future<null | IoError> async {
+    var raw = await __otter_net_udp_connect_async(self.handle, addr.to_str());
+    __std_net_decode_unit(raw)
+  }
+
+  function peer_addr(self): Future<SocketAddr | IoError> async {
+    var raw = await __otter_net_udp_peer_addr_async(self.handle);
+    var text = __std_net_decode_text(raw);
+    if text is IoError {
+      text as IoError
+    } else {
+      __std_net_parse_socket_addr(text as str)
+    }
+  }
+
+  function ttl(self): Future<u32 | IoError> async {
+    var raw = await __otter_net_udp_ttl_async(self.handle);
+    __std_net_decode_u32(raw)
+  }
+
+  function take_error(self): Future<IoError | null> async {
+    var raw = await __otter_net_udp_take_error_async(self.handle);
+    __std_net_decode_optional_error(raw)
+  }
+
+  function set_nonblocking(self, on: bool): Future<null | IoError> async {
+    var raw = await __otter_net_udp_set_nonblocking_async(self.handle, if on { 1 } else { 0 });
+    __std_net_decode_unit(raw)
+  }
+
+  function read_timeout(self): Future<Duration | null | IoError> async {
+    var raw = await __otter_net_udp_read_timeout_async(self.handle);
+    __std_net_decode_optional_duration(raw)
+  }
+
+  function set_read_timeout(self, timeout: Duration | null): Future<null | IoError> async {
+    var raw = await __otter_net_udp_set_read_timeout_async(
+        self.handle,
+        __std_net_duration_nanos_or_zero(timeout),
+        __std_net_duration_present(timeout)
+      );
+    __std_net_decode_unit(raw)
+  }
+
+  function write_timeout(self): Future<Duration | null | IoError> async {
+    var raw = await __otter_net_udp_write_timeout_async(self.handle);
+    __std_net_decode_optional_duration(raw)
+  }
+
+  function set_write_timeout(self, timeout: Duration | null): Future<null | IoError> async {
+    var raw = await __otter_net_udp_set_write_timeout_async(
+        self.handle,
+        __std_net_duration_nanos_or_zero(timeout),
+        __std_net_duration_present(timeout)
+      );
+    __std_net_decode_unit(raw)
+  }
+
+  function set_ttl(self, ttl: u32): Future<null | IoError> async {
+    var raw = await __otter_net_udp_set_ttl_async(self.handle, ttl as i64);
+    __std_net_decode_unit(raw)
+  }
+
+  function broadcast(self): Future<bool | IoError> async {
+    var raw = await __otter_net_udp_broadcast_async(self.handle);
+    __std_net_decode_bool(raw)
+  }
+
+  function set_broadcast(self, on: bool): Future<null | IoError> async {
+    var raw = await __otter_net_udp_set_broadcast_async(self.handle, if on { 1 } else { 0 });
+    __std_net_decode_unit(raw)
+  }
+
+  function multicast_loop_v4(self): Future<bool | IoError> async {
+    var raw = await __otter_net_udp_multicast_loop_v4_async(self.handle);
+    __std_net_decode_bool(raw)
+  }
+
+  function set_multicast_loop_v4(self, on: bool): Future<null | IoError> async {
+    var raw = await __otter_net_udp_set_multicast_loop_v4_async(self.handle, if on { 1 } else { 0 });
+    __std_net_decode_unit(raw)
+  }
+
+  function multicast_loop_v6(self): Future<bool | IoError> async {
+    var raw = await __otter_net_udp_multicast_loop_v6_async(self.handle);
+    __std_net_decode_bool(raw)
+  }
+
+  function set_multicast_loop_v6(self, on: bool): Future<null | IoError> async {
+    var raw = await __otter_net_udp_set_multicast_loop_v6_async(self.handle, if on { 1 } else { 0 });
+    __std_net_decode_unit(raw)
+  }
+
+  function multicast_ttl_v4(self): Future<u32 | IoError> async {
+    var raw = await __otter_net_udp_multicast_ttl_v4_async(self.handle);
+    __std_net_decode_u32(raw)
+  }
+
+  function set_multicast_ttl_v4(self, ttl: u32): Future<null | IoError> async {
+    var raw = await __otter_net_udp_set_multicast_ttl_v4_async(self.handle, ttl as i64);
+    __std_net_decode_unit(raw)
+  }
+
+  function join_multicast_v4(self, group: IpAddr, iface: IpAddr): Future<null | IoError> async {
+    var raw = await __otter_net_udp_join_multicast_v4_async(
+        self.handle,
+        group.to_str(),
+        iface.to_str()
+      );
+    __std_net_decode_unit(raw)
+  }
+
+  function leave_multicast_v4(self, group: IpAddr, iface: IpAddr): Future<null | IoError> async {
+    var raw = await __otter_net_udp_leave_multicast_v4_async(
+        self.handle,
+        group.to_str(),
+        iface.to_str()
+      );
+    __std_net_decode_unit(raw)
+  }
+
+  function join_multicast_v6(self, group: IpAddr, iface: u32): Future<null | IoError> async {
+    var raw = await __otter_net_udp_join_multicast_v6_async(self.handle, group.to_str(), iface as i64);
+    __std_net_decode_unit(raw)
+  }
+
+  function leave_multicast_v6(self, group: IpAddr, iface: u32): Future<null | IoError> async {
+    var raw = await __otter_net_udp_leave_multicast_v6_async(
+        self.handle,
+        group.to_str(),
+        iface as i64
+      );
+    __std_net_decode_unit(raw)
+  }
+
+  function send_to(self, buf: Bytes, addr: SocketAddr): Future<i64 | IoError> async {
+    var raw = await __otter_net_udp_send_to_async(
         self.handle,
         __std_net_bytes_to_hex(buf),
         addr.to_str()
-      ))
+      );
+    __std_net_decode_i64(raw)
   }
 
-  function recv_from(self, buf: Bytes): (i64, SocketAddr) | IoError {
-    var decoded = __std_net_decode_text(lang_net_udp_recv_from(self.handle, buf.size()));
-    if decoded is IoError {
-      decoded as IoError
+  function send(self, buf: Bytes): Future<i64 | IoError> async {
+    var raw = await __otter_net_udp_send_async(
+        self.handle,
+        __std_net_bytes_to_hex(buf)
+      );
+    __std_net_decode_i64(raw)
+  }
+
+  function recv(self, buf: Bytes): Future<i64 | IoError> async {
+    var raw = await __otter_net_udp_recv_async(self.handle, buf.size());
+    var data = __std_net_decode_bytes(raw);
+    if data is IoError {
+      data as IoError
     } else {
-      var payload = decoded as str;
-      var bytes_field = __std_net_read_field(payload, 0);
-      if bytes_field is IoError {
-        return bytes_field as IoError;
-      }
-      var addr_field = __std_net_read_field(payload, (bytes_field as __StdNetField).next);
-      if addr_field is IoError {
-        return addr_field as IoError;
-      }
-      if(addr_field as __StdNetField).next != payload.size() {
-        return __std_net_io_error("trailing bytes in std:net provider payload");
-      }
-      var data = __std_net_hex_to_bytes((bytes_field as __StdNetField).text);
-      if data is IoError {
-        return data as IoError;
-      }
-      var addr = __std_net_parse_socket_addr((addr_field as __StdNetField).text);
-      if addr is IoError {
-        return addr as IoError;
-      }
       var chunk = data as Bytes;
       for b in chunk.iter() {
         buf.push(b);
       }
-      var received_pair = (chunk.size(), addr as SocketAddr);
-      received_pair
+      chunk.size()
     }
   }
 
-  function close(self): null | IoError {
-    __std_net_decode_unit(lang_net_udp_close(self.handle))
+  function peek(self, buf: Bytes): Future<i64 | IoError> async {
+    var raw = await __otter_net_udp_peek_async(self.handle, buf.size());
+    var data = __std_net_decode_bytes(raw);
+    if data is IoError {
+      data as IoError
+    } else {
+      var chunk = data as Bytes;
+      for b in chunk.iter() {
+        buf.push(b);
+      }
+      chunk.size()
+    }
   }
+
+  function recv_from(self, buf: Bytes): Future<(i64, SocketAddr) | IoError> async {
+    var raw = await __otter_net_udp_recv_from_async(self.handle, buf.size());
+    __std_net_decode_datagram(raw, buf)
+  }
+
+  function peek_from(self, buf: Bytes): Future<(i64, SocketAddr) | IoError> async {
+    var raw = await __otter_net_udp_peek_from_async(self.handle, buf.size());
+    __std_net_decode_datagram(raw, buf)
+  }
+
+  function close(self): Future<null | IoError> async {
+    var raw = await __otter_net_udp_close_async(self.handle);
+    __std_net_decode_unit(raw)
+  }
+}
+
+extend AsyncUdpSocket {
+  function bind(addr: SocketAddr): Future<AsyncUdpSocket | IoError> async {
+    var socket = await UdpSocket.bind(addr);
+    if socket is IoError {
+      socket as IoError
+    } else {
+      AsyncUdpSocket { socket: socket as UdpSocket }
+    }
+  }
+
+  function from_socket(socket: UdpSocket): AsyncUdpSocket {
+    AsyncUdpSocket { socket: socket.clone() }
+  }
+
+  function into_socket(self): UdpSocket {
+    self.socket.clone()
+  }
+
+  function local_addr(self): Future<SocketAddr | IoError> async {
+    await self.socket.local_addr()
+  }
+
+  function connect(self, addr: SocketAddr): Future<null | IoError> async {
+    await self.socket.connect(addr)
+  }
+
+  function peer_addr(self): Future<SocketAddr | IoError> async {
+    await self.socket.peer_addr()
+  }
+
+  function ttl(self): Future<u32 | IoError> async {
+    await self.socket.ttl()
+  }
+
+  function take_error(self): Future<IoError | null> async {
+    await self.socket.take_error()
+  }
+
+  function set_ttl(self, ttl: u32): Future<null | IoError> async {
+    await self.socket.set_ttl(ttl)
+  }
+
+  function broadcast(self): Future<bool | IoError> async {
+    await self.socket.broadcast()
+  }
+
+  function set_broadcast(self, on: bool): Future<null | IoError> async {
+    await self.socket.set_broadcast(on)
+  }
+
+  function multicast_loop_v4(self): Future<bool | IoError> async {
+    await self.socket.multicast_loop_v4()
+  }
+
+  function set_multicast_loop_v4(self, on: bool): Future<null | IoError> async {
+    await self.socket.set_multicast_loop_v4(on)
+  }
+
+  function multicast_loop_v6(self): Future<bool | IoError> async {
+    await self.socket.multicast_loop_v6()
+  }
+
+  function set_multicast_loop_v6(self, on: bool): Future<null | IoError> async {
+    await self.socket.set_multicast_loop_v6(on)
+  }
+
+  function multicast_ttl_v4(self): Future<u32 | IoError> async {
+    await self.socket.multicast_ttl_v4()
+  }
+
+  function set_multicast_ttl_v4(self, ttl: u32): Future<null | IoError> async {
+    await self.socket.set_multicast_ttl_v4(ttl)
+  }
+
+  function join_multicast_v4(self, group: IpAddr, iface: IpAddr): Future<null | IoError> async {
+    await self.socket.join_multicast_v4(group, iface)
+  }
+
+  function leave_multicast_v4(self, group: IpAddr, iface: IpAddr): Future<null | IoError> async {
+    await self.socket.leave_multicast_v4(group, iface)
+  }
+
+  function join_multicast_v6(self, group: IpAddr, iface: u32): Future<null | IoError> async {
+    await self.socket.join_multicast_v6(group, iface)
+  }
+
+  function leave_multicast_v6(self, group: IpAddr, iface: u32): Future<null | IoError> async {
+    await self.socket.leave_multicast_v6(group, iface)
+  }
+
+  function send_to_async(self, buf: Bytes, addr: SocketAddr): Future<i64 | IoError> async {
+    var raw = await __otter_net_udp_send_to_async(
+        self.socket.handle,
+        __std_net_bytes_to_hex(buf),
+        addr.to_str()
+      );
+    __std_net_decode_i64(raw)
+  }
+
+  function send_async(self, buf: Bytes): Future<i64 | IoError> async {
+    var raw = await __otter_net_udp_send_async(
+        self.socket.handle,
+        __std_net_bytes_to_hex(buf)
+      );
+    __std_net_decode_i64(raw)
+  }
+
+  function recv_async(self, buf: Bytes): Future<i64 | IoError> async {
+    var raw = await __otter_net_udp_recv_async(self.socket.handle, buf.size());
+    var data = __std_net_decode_bytes(raw);
+    if data is IoError {
+      data as IoError
+    } else {
+      var chunk = data as Bytes;
+      for b in chunk.iter() {
+        buf.push(b);
+      }
+      chunk.size()
+    }
+  }
+
+  function peek_async(self, buf: Bytes): Future<i64 | IoError> async {
+    var raw = await __otter_net_udp_peek_async(self.socket.handle, buf.size());
+    var data = __std_net_decode_bytes(raw);
+    if data is IoError {
+      data as IoError
+    } else {
+      var chunk = data as Bytes;
+      for b in chunk.iter() {
+        buf.push(b);
+      }
+      chunk.size()
+    }
+  }
+
+  function recv_from_async(self, buf: Bytes): Future<(i64, SocketAddr) | IoError> async {
+    var raw = await __otter_net_udp_recv_from_async(self.socket.handle, buf.size());
+    __std_net_decode_datagram(raw, buf)
+  }
+
+  function peek_from_async(self, buf: Bytes): Future<(i64, SocketAddr) | IoError> async {
+    var raw = await __otter_net_udp_peek_from_async(self.socket.handle, buf.size());
+    __std_net_decode_datagram(raw, buf)
+  }
+
+  function close(self): Future<null | IoError> async {
+    await self.socket.close()
+  }
+}
+
+extend AsyncUdpSocket: Clone {
+  function clone(self): AsyncUdpSocket {
+    AsyncUdpSocket { socket: self.socket.clone() }
+  }
+}
+
+extend AsyncUdpSocket: ToStr {
+  function to_str(self): str {
+    "Async" + self.socket.to_str()
+  }
+}
+
+extend AsyncUdpSocket: Debug {
+  function debug(self): str { self.to_str() }
 }
 
 extend UdpSocket: Clone {
@@ -515,12 +1277,7 @@ extend UdpSocket: Drop {
 
 extend UdpSocket: ToStr {
   function to_str(self): str {
-    var addr = self.local_addr();
-    if addr is SocketAddr {
-      "UdpSocket { local: " + (addr as SocketAddr).to_str() + " }"
-    } else {
-      "UdpSocket { handle: " + (self.handle as str) + " }"
-    }
+    "UdpSocket { handle: " + (self.handle as str) + " }"
   }
 }
 

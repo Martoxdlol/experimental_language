@@ -1,6 +1,6 @@
 //@ kind: run
 //@ serial
-//@ description: example program — async `Thread.spawn` workers that await and lock a `Shared`, plus a detached async worker signalling over a channel (docs/20 §1/§4, docs/21 §6)
+//@ description: example program — async `Thread.spawn` workers that await and lock a `Shared`, plus a detached async worker signalling a result over a channel (docs/20 §1/§4, docs/21 §6)
 //@ stdout:
 //~ worker observed: 100
 //~ final total = 1100
@@ -47,6 +47,7 @@ function main(): Future<null> async {
   var _signal: i64 | ChannelClosed = await rx.recv();
 
   var total: i64 = await state.lock((c) => c.value);
-  println("worker observed: " + (worker_saw as str));
-  println("final total = " + (total as str));
+  await println("worker observed: " + (worker_saw as str));
+  await println("final total = " + (total as str));
+  null
 }

@@ -4,24 +4,24 @@
 //~ instant-now=true true
 //~ system-now=true true
 //~ sleep=true true
+import { Future } from "core:prelude";
 import { println } from "std:io";
-import "std:async" as Async;
 import { Duration, Instant, SystemTime, sleep } from "std:time";
 
-function main() {
-  var before = Instant.now();
-  var after = Instant.now();
-  println("instant-now=${after >= before} ${after.duration_since(before).as_nanos() >= 0}");
+function main(): Future<null> async {
+  var before = await Instant.now();
+  var after = await Instant.now();
+  await println("instant-now=${after >= before} ${after.duration_since(before).as_nanos() >= 0}");
 
-  var now = SystemTime.now();
+  var now = await SystemTime.now();
   var epoch = SystemTime.unix_epoch();
-  println("system-now=${now > epoch} ${now.duration_since_unix_epoch().as_secs() > 0}");
+  await println("system-now=${now > epoch} ${now.duration_since_unix_epoch().as_secs() > 0}");
 
-  var sleep_start = Instant.now();
-  sleep(Duration.from_millis(1));
-  var sleep_end = Instant.now();
-  sleep(Duration.from_nanos(0));
-  sleep(Duration.from_nanos(-1));
-  Async.sleep(0);
-  println("sleep=${sleep_end >= sleep_start} ${sleep_end.duration_since(sleep_start).as_nanos() >= 0}");
+  var sleep_start = await Instant.now();
+  var _slept = await sleep(Duration.from_millis(1));
+  var sleep_end = await Instant.now();
+  var _zero = await sleep(Duration.from_nanos(0));
+  var _negative = await sleep(Duration.from_nanos(-1));
+  await println("sleep=${sleep_end >= sleep_start} ${sleep_end.duration_since(sleep_start).as_nanos() >= 0}");
+  null
 }

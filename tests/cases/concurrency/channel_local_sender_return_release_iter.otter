@@ -1,9 +1,10 @@
 //@ kind: run
 //@ serial
-//@ description: returning a Receiver releases a local Sender endpoint and a blocking iterator terminates
+//@ description: returning a Receiver releases a local Sender endpoint and async channel iteration terminates
 //@ stdout:
 //~ done
 
+import { Future } from "core:prelude";
 import { println } from "std:io";
 import { Receiver, channel } from "std:sync";
 
@@ -14,10 +15,11 @@ function make_receiver(): Receiver<i64> {
   rx
 }
 
-function main() {
+function main(): Future<null> async {
   var rx = make_receiver();
-  for n in rx {
-    println("value ${n }");
+  for await n in rx {
+    await println("value ${n}");
   }
-  println("done");
+  await println("done");
+  null
 }

@@ -1,0 +1,16 @@
+//@ kind: compile-error
+//@ description: target-backed std:io stdout exposes Future-returning writes and cannot satisfy the ordinary in-memory Writer contract
+//@ stderr: type `Stdout` does not implement `Writer`
+
+import { Future } from "core:prelude";
+import { Bytes } from "std:bytes";
+import { IoError, Writer, stdout } from "std:io";
+
+function write_in_memory<T: Writer>(writer: T): null | IoError {
+  writer.write_all(Bytes.from_str("x"))
+}
+
+function main(): Future<null> async {
+  var _ = write_in_memory(stdout());
+  null
+}

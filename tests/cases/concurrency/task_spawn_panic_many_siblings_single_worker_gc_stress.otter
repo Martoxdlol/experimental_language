@@ -26,7 +26,7 @@ function main(): Future<null> async {
             r = r + 1;
           }
           if n % 8 == 0 {
-            panic("task boom ${n }");
+            panic("task boom ${n}");
           }
           n
         }));
@@ -48,5 +48,6 @@ function main(): Future<null> async {
     }
   }
 
-  println("joined=${joined } panicked=${panicked } cancelled=${cancelled } sum=${sum }");
+  await println("joined=${joined} panicked=${panicked} cancelled=${cancelled} sum=${sum}");
+  null
 }

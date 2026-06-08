@@ -2,8 +2,8 @@
 //@ description: a while loop with an await suspending each iteration must save/restore every live local (two interleaved accumulators) — Fibonacci would corrupt if save/restore mis-ordered
 //@ stdout:
 //~ 55
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { yield_now } from "std:async";
 function fib_async(): Future<i64> async {
   var a = 1;
@@ -19,5 +19,6 @@ function fib_async(): Future<i64> async {
   b
 }
 function main(): Future<null> async {
-  println("${await fib_async()}");
+  await println("${await fib_async()}");
+  null
 }

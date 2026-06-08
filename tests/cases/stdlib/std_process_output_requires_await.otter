@@ -1,0 +1,10 @@
+//@ kind: compile-error
+//@ description: std:process Command.output returns a Future and cannot be used as an immediate output value
+//@ stderr: Future<
+
+import { Command, Output } from "std:process";
+import { IoError } from "std:io";
+
+function main() {
+  var output: Output | IoError = Command.new("true").output();
+}

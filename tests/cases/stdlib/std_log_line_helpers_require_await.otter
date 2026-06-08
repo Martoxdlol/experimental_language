@@ -1,0 +1,10 @@
+//@ kind: compile-error
+//@ description: std:log line helpers return Future<null> because they write through async std:io println
+//@ stderr: expected `null`, found `Future<null>`
+
+import { info, info_with, empty_fields } from "std:log";
+
+function main() {
+  var _plain: null = info("hello");
+  var _fields: null = info_with("hello", empty_fields());
+}

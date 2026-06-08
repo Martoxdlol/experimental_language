@@ -2,6 +2,7 @@
 //@ description: methods from a super-interface are available through a sub-interface generic bound and monomorphize through the concrete impl
 //@ stdout:
 //~ thing#7
+import { Future } from "core:prelude";
 import { println } from "std:io";
 import { ToStr } from "core:prelude";
 
@@ -15,6 +16,7 @@ function render<T: Named>(value: T): str {
   value.to_str()
 }
 
-function main() {
-  println(render(Thing { id: 7 }));
+function main(): Future<null> async {
+  await println(render(Thing { id: 7 }));
+  null
 }

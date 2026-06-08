@@ -1,0 +1,16 @@
+//@ kind: compile-error
+//@ description: std:net AsyncTcpListener.into_listener is an ordinary listener conversion helper, not a Future
+//@ stderr: `await` requires a `Future`
+
+import { Future } from "core:prelude";
+import { AsyncTcpListener, TcpListener } from "std:net";
+import { ip_v4, socket_addr } from "std:net/types";
+
+function main(): Future<null> async {
+  var bound = await TcpListener.bind(socket_addr(ip_v4(127u8, 0u8, 0u8, 1u8), 0u16));
+  if bound is TcpListener {
+    var async_listener = AsyncTcpListener.from_listener(bound as TcpListener);
+    var _listener = await async_listener.into_listener();
+  }
+  null
+}

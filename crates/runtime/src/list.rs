@@ -369,7 +369,7 @@ mod tests {
         assert!(freed > 0, "unrooted list should be reclaimed");
 
         let mut got = -1;
-        let _ = unsafe { crate::channels::lang_chan_recv_blocking(id, &mut got) };
+        let _ = unsafe { crate::channels::chan_recv_native_wait_for_runtime_tests(id, &mut got) };
         assert_eq!(got, 0, "dead list released its last sender endpoint");
 
         unsafe { crate::channels::lang_chan_receiver_release(id) };

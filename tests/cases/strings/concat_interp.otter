@@ -4,12 +4,14 @@
 //~ hello, world
 //~ 1 + 2 = 3
 //~ x=7 y=8
+import { Future } from "core:prelude";
 import { println } from "std:io";
-function main() {
+function main(): Future<null> async {
   var who = "world";
-  println("hello, " + who);
-  println("1 + 2 = ${1 + 2}");
+  await println("hello, " + who);
+  await println("1 + 2 = ${1 + 2}");
   var x = 7;
   var y = 8;
-  println("x=$x y=$y");
+  await println("x=$x y=$y");
+  null
 }

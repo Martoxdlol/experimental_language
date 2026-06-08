@@ -28,12 +28,13 @@
 //~ [true,"x"]
 //~ pretty-fallback=true true
 
+import { Future } from "core:prelude";
 import { List, Map } from "core:collections";
 import { Clone, Eq, Hash, ToStr } from "core:prelude";
 import { println } from "std:io";
 import { Json, json_array, json_bool, json_null, json_number, json_object, json_string } from "std:json";
 
-function main() {
+function main(): Future<null> async {
   var items = List<Json>();
   items.push(json_string("Ada"));
   items.push(json_bool(false));
@@ -44,30 +45,30 @@ function main() {
   fields.set("none", json_null());
 
   var value = json_object(fields);
-  println("${json_null().is_null()}");
+  await println("${json_null().is_null()}");
   match value.get_str("name") {
-    str s => println(s),
-    null => println("missing"),
+    str s => await println(s),
+    null => await println("missing"),
   }
 
   match value.get_array("items") {
-    List<Json> list => println("${list.size()}"),
-    null => println("not-list"),
+    List<Json> list => await println("${list.size()}"),
+    null => await println("not-list"),
   }
 
   var array = json_array(items);
   match array.at_bool(1) {
-    bool flag => println("${flag}"),
-    null => println("not-bool"),
+    bool flag => await println("${flag}"),
+    null => await println("not-bool"),
   }
 
   if value.get_is_null("none") {
-    println("none");
+    await println("none");
   } else {
-    println("not-none");
+    await println("not-none");
   }
-  println("typed-miss=${value.get_bool("name") is null} ${value.get_number("missing") is null} ${value.get_array("name") is null} ${value.get_object("name") is null} ${value.get_is_null("missing")} ${array.at_str(99) is null} ${array.at_number(-1) is null} ${array.at_object(0) is null} ${array.at_is_null(99)} ${json_string("Ada").get_is_null("none")}");
-  println("scalar-shape=${json_bool(true).is_bool()}/${json_number(1.5).is_number()}/${json_string("Ada").is_str()}/${json_null().is_bool()}/${array.is_str()}");
+  await println("typed-miss=${value.get_bool("name") is null} ${value.get_number("missing") is null} ${value.get_array("name") is null} ${value.get_object("name") is null} ${value.get_is_null("missing")} ${array.at_str(99) is null} ${array.at_number(-1) is null} ${array.at_object(0) is null} ${array.at_is_null(99)} ${json_string("Ada").get_is_null("none")}");
+  await println("scalar-shape=${json_bool(true).is_bool()}/${json_number(1.5).is_number()}/${json_string("Ada").is_str()}/${json_null().is_bool()}/${array.is_str()}");
 
   var key_text = "";
   var first_key = true;
@@ -93,13 +94,13 @@ function main() {
   }
   keys.push("mutated");
   values.push(json_string("mutated"));
-  println("shape=${value.is_object()}/${array.is_array()}/${value.is_array()}/${json_null().is_object()} len=${value.len()}/${array.len()}/${json_string("Ada").len()} has=${value.contains_key("name")}/${value.contains_key("none")}/${value.contains_key("missing")}/${array.contains_key("name")} keys=${key_text} values=${value_text} snapshots=${keys.size()}/${values.size()}");
+  await println("shape=${value.is_object()}/${array.is_array()}/${value.is_array()}/${json_null().is_object()} len=${value.len()}/${array.len()}/${json_string("Ada").len()} has=${value.contains_key("name")}/${value.contains_key("none")}/${value.contains_key("missing")}/${array.contains_key("name")} keys=${key_text} values=${value_text} snapshots=${keys.size()}/${values.size()}");
 
   var copy = value.clone();
-  println("${copy == value}");
-  println("${copy.hash() == value.hash()}");
+  await println("${copy == value}");
+  await println("${copy.hash() == value.hash()}");
   fields.set("name", json_string("Grace"));
-  println("${copy == value}");
+  await println("${copy == value}");
 
   var order_a = Map.new<str, Json>();
   order_a.set("a", json_number(1.0));
@@ -115,7 +116,7 @@ function main() {
   var arr_ba_items = List<Json>();
   arr_ba_items.push(json_string("b"));
   arr_ba_items.push(json_string("a"));
-  println("hash-order=${obj_a == obj_b} ${obj_a.hash() == obj_b.hash()} array-order=${json_array(arr_ab_items) == json_array(arr_ba_items)}");
+  await println("hash-order=${obj_a == obj_b} ${obj_a.hash() == obj_b.hash()} array-order=${json_array(arr_ab_items) == json_array(arr_ba_items)}");
 
   var extracted_array = value.get_array("items");
   var array_snapshot_text = "missing";
@@ -144,13 +145,13 @@ function main() {
       item_snapshot_text = (item_snapshot as Json).render();
     }
   }
-  println("source_snapshot=${value.render()} array_snapshot=${array_snapshot_text} object_snapshot=${object_snapshot_text} item_snapshot=${item_snapshot_text}");
+  await println("source_snapshot=${value.render()} array_snapshot=${array_snapshot_text} object_snapshot=${object_snapshot_text} item_snapshot=${item_snapshot_text}");
 
-  println(json_string("Ada").to_str());
+  await println(json_string("Ada").to_str());
   var rendered_items = List<Json>();
   rendered_items.push(json_bool(true));
   rendered_items.push(json_string("otter"));
-  println(json_array(rendered_items).to_str());
+  await println(json_array(rendered_items).to_str());
 
   var replacement_items = List<Json>();
   replacement_items.push(json_string("Ada"));
@@ -170,19 +171,20 @@ function main() {
   var appended = array.append(json_string("tail"));
   var set = array.set_at(1, json_bool(true)).set_at(99, json_string("ignored"));
   var scalar = json_string("Ada").append(json_bool(true)).with_key("ignored", json_bool(true));
-  println("builders=${rebuilt.render()} original=${value.render()} nested=${nested_text} removed=${removed.render()} appended=${appended.render()} set=${set.render()} scalar=${scalar.render()}");
+  await println("builders=${rebuilt.render()} original=${value.render()} nested=${nested_text} removed=${removed.render()} appended=${appended.render()} set=${set.render()} scalar=${scalar.render()}");
 
-  println(json_string("quote: \" slash: \\ tab:\t newline:\n").render());
+  await println(json_string("quote: \" slash: \\ tab:\t newline:\n").render());
   var escaped_fields = Map.new<str, Json>();
   escaped_fields.set("line\nkey", json_string("snow é"));
-  println(json_object(escaped_fields).render());
+  await println(json_object(escaped_fields).render());
 
   var pretty_items = List<Json>();
   pretty_items.push(json_bool(true));
   pretty_items.push(json_string("x"));
   var pretty_fields = Map.new<str, Json>();
   pretty_fields.set("items", json_array(pretty_items));
-  println(json_object(pretty_fields).pretty(2));
-  println(json_array(pretty_items).pretty(0));
-  println("pretty-fallback=${json_array(pretty_items).pretty(0) == json_array(pretty_items).render()} ${json_array(pretty_items).pretty(-1) == json_array(pretty_items).render()}");
+  await println(json_object(pretty_fields).pretty(2));
+  await println(json_array(pretty_items).pretty(0));
+  await println("pretty-fallback=${json_array(pretty_items).pretty(0) == json_array(pretty_items).render()} ${json_array(pretty_items).pretty(-1) == json_array(pretty_items).render()}");
+  null
 }

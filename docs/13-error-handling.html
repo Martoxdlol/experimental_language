@@ -95,10 +95,12 @@ function divide(a: f64, b: f64): f64 | Error {
   }
 }
 
-var r = divide(10.0, 2.0)
-match r {
-  f64 v   =&gt; print("ok: " + (v as str)),
-  Error e =&gt; print("err: " + e.message),
+function main(): Future&lt;null&gt; async {
+  var r = divide(10.0, 2.0)
+  match r {
+    f64 v   =&gt; await print("ok: " + (v as str)),
+    Error e =&gt; await print("err: " + e.message),
+  }
 }</code></pre>
 
 <!-- =========================================================== -->

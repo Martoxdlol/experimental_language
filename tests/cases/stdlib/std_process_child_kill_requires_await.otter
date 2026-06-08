@@ -1,0 +1,15 @@
+//@ kind: compile-error
+//@ description: std:process Child.kill returns a Future and cannot be used as an immediate control value
+//@ stderr: Future<
+
+import { Future } from "core:prelude";
+import { Command, Child } from "std:process";
+import { IoError } from "std:io";
+
+function main(): Future<null> async {
+  var spawned = await Command.new("true").spawn();
+  if spawned is Child {
+    var killed: null | IoError = (spawned as Child).kill();
+  }
+  null
+}

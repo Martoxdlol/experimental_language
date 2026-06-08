@@ -9,7 +9,7 @@
 //! [`boundary_active`] and, on a worker thread, captures the message and
 //! `longjmp`s back to the boundary installed at the worker's entry. The
 //! `longjmp` abandons the worker's in-flight frames without running their
-//! destructors — exactly the documented "no synchronous drop on unwind"
+//! destructors — exactly the documented "no Drop calls while abandoning frames"
 //! contract (`docs/16`) — so the boundary explicitly restores the two
 //! invariants that matter: held `Shared` locks are released and transient GC
 //! pins are dropped (see [`run_under_boundary`]).

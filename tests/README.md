@@ -35,7 +35,8 @@ exact expected stdout (one per line).
 //@ stdout:
 //~ 7
 import { println } from "std:io";
-function main() { println("${1 + 2 * 3}"); }
+import { Future } from "core:async";
+function main(): Future<null> async { await println("${1 + 2 * 3}"); }
 ```
 
 Directives:
@@ -112,7 +113,7 @@ gap has been resolved and its case promoted into the matching category:
 
 Note: the previously-observed intermittent abort in thread-spawning programs
 was **fixed** — it was not GC or contention but an async-state-machine bug
-(a sync `for` loop with an `await` in its body lost its iteration state across
+(an ordinary `for` loop with an `await` in its body lost its iteration state across
 the suspend; see `iterators/for_await_in_body_*`). GC reclamation is still
 gated to a single mutator (a separate, deliberate memory-safety measure; see
 `ROADMAP.md` GC §). Thread-spawning cases run `serial` to keep cross-process

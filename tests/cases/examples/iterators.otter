@@ -7,6 +7,7 @@
 //~ squares  = 1 4 9 16 25 
 //~ picked   = 012456
 
+import { Future } from "core:prelude";
 // The Iterator protocol (docs/18 §7-8). Any type with a
 // `next(self): Item<T> | Done` method drives a `for` loop. `Item<T>` and `Done`
 // come from the prelude; `Item { value: v }` infers its type argument.
@@ -53,22 +54,22 @@ function sum_all<T: Iterator<i64>>(it: T): i64 {
   total
 }
 
-function main() {
+function main(): Future<null> async {
   var total = 0;
   for x in (Range { current: 1, end: 6 }) {
     total = total + x;
   }
-  println("sum 1..6 = ${total}");        // 15
+  await println("sum 1..6 = ${total}");        // 15
 
-  println("bounded  = ${sum_all(Range { current: 1, end: 4 })}");  // 6
+  await println("bounded  = ${sum_all(Range { current: 1, end: 4 })}");  // 6
   var dynit: Iterator<i64> = Range { current: 100, end: 103 };
-  println("dyn iter = ${sum_all(dynit)}");                         // dispatched via vtable: 303
+  await println("dyn iter = ${sum_all(dynit)}");                         // dispatched via vtable: 303
 
   var line = "";
   for s in (Squares { i: 1, n: 5 }) {
     line = line + "${s} ";
   }
-  println("squares  = ${line}");          // 1 4 9 16 25
+  await println("squares  = ${line}");          // 1 4 9 16 25
 
   // break / continue work inside the protocol loop.
   var picked = "";
@@ -77,5 +78,6 @@ function main() {
     if n == 7 { break; }
     picked = picked + "${n}";
   }
-  println("picked   = ${picked}");        // 012456
+  await println("picked   = ${picked}");        // 012456
+  null
 }

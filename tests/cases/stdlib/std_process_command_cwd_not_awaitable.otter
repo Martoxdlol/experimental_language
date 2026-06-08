@@ -1,0 +1,12 @@
+//@ kind: compile-error
+//@ description: std:process Command.cwd is an immediate pure command working-directory accessor
+//@ stderr: `await` requires a `Future`
+
+import { Future } from "core:prelude";
+import { Path } from "std:fs";
+import { Command } from "std:process";
+
+function main(): Future<null> async {
+  var _cwd = await Command.new("true").with_cwd(Path.new("tmp")).cwd();
+  null
+}

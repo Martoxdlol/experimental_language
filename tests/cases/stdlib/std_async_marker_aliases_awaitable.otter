@@ -1,0 +1,20 @@
+//@ kind: run
+//@ description: std:async marker aliases await and lower through the async runtime intrinsics
+//@ stdout: async-aliases=7
+
+import { println } from "std:io";
+import { Future } from "core:async";
+import { TimedOut, sleep as nap, timeout as race, yield_now as pause } from "std:async";
+
+function fast(): Future<i64> async { 7 }
+
+function main(): Future<null> async {
+  await pause();
+  await nap(1);
+  var result = await race(fast(), 100);
+  match result {
+    i64 value => await println("async-aliases=${value}"),
+    TimedOut => await println("async-aliases=timed-out"),
+  }
+  null
+}

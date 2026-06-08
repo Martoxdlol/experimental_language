@@ -91,6 +91,11 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         match self.cx_clty(elem) {
             Some(c) if c == types::I64 => Ok(v),
             Some(c) if c.is_int() => Ok(self.b.ins().uextend(types::I64, v)),
+            Some(c) if c == types::F64 => Ok(self.b.ins().bitcast(types::I64, MemFlags::new(), v)),
+            Some(c) if c == types::F32 => {
+                let raw = self.b.ins().bitcast(types::I32, MemFlags::new(), v);
+                Ok(self.b.ins().uextend(types::I64, raw))
+            }
             _ => Err(CodegenError::new(
                 span,
                 "this element type is not yet storable in a List",
@@ -108,6 +113,11 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         match self.cx_clty(elem) {
             Some(c) if c == types::I64 => Ok(Some(v)),
             Some(c) if c.is_int() => Ok(Some(self.b.ins().ireduce(c, v))),
+            Some(c) if c == types::F64 => Ok(Some(self.b.ins().bitcast(c, MemFlags::new(), v))),
+            Some(c) if c == types::F32 => {
+                let raw = self.b.ins().ireduce(types::I32, v);
+                Ok(Some(self.b.ins().bitcast(c, MemFlags::new(), raw)))
+            }
             None => Ok(None),
             _ => Err(CodegenError::new(
                 span,

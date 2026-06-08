@@ -50,7 +50,7 @@ impl ServerHandle {
         format!("http://{}", self.addr)
     }
 
-    /// Block until the server thread exits. Since the accept loop only stops on
+    /// Wait until the server thread exits. Since the accept loop only stops on
     /// [`ServerHandle::shutdown`] or a fatal listener error, this parks the
     /// caller for the server's lifetime — the right behavior for a foreground
     /// `otter_fusion serve` process (terminate it with a signal).
@@ -109,7 +109,7 @@ pub fn serve_on(bind: &str, dir: PathBuf, token: Option<String>) -> std::io::Res
             }
             match listener.accept() {
                 Ok((mut stream, _peer)) => {
-                    // Honor blocking I/O for the duration of this request.
+                    // Use per-connection stream mode for this request.
                     let _ = stream.set_nonblocking(false);
                     let ctx = ctx.clone();
                     // Serve sequentially: registry traffic is light and

@@ -59,6 +59,76 @@ fn clif_section<'a>(clif: &'a str, label: &str) -> &'a str {
 }
 
 #[test]
+fn backend_wait_capable_stdlib_hooks_stay_async_in_jit_and_native_lowering() {
+    let jit_registry = include_str!("lib.rs");
+    let native_lowering = include_str!("gen_hir.rs");
+
+    for required in [
+        "lang_io_stdin_read_async",
+        "lang_io_stdout_write_async",
+        "lang_io_stdout_flush_async",
+        "lang_fs_file_open_async",
+        "lang_fs_file_close_async",
+        "lang_fs_read_text_async",
+        "lang_fs_read_dir_async",
+        "lang_net_resolve_async",
+        "lang_net_tcp_connect_async",
+        "lang_net_tcp_listener_accept_async",
+        "lang_net_udp_recv_from_async",
+        "lang_process_status_async",
+        "lang_process_output_async",
+        "lang_process_spawn_async",
+        "lang_process_child_wait_async",
+        "lang_process_child_kill_async",
+        "lang_rand_os_bytes_async",
+        "lang_time_monotonic_nanos_async",
+        "lang_time_system_nanos_async",
+        "lang_time_local_offset_seconds_async",
+    ] {
+        assert!(
+            jit_registry.contains(required),
+            "JIT runtime symbol registry must include async stdlib hook `{required}`"
+        );
+        assert!(
+            native_lowering.contains(required),
+            "native intrinsic lowering must import async stdlib hook `{required}`"
+        );
+    }
+
+    for retired in [
+        "lang_io_stdin_read",
+        "lang_io_stdout_write",
+        "lang_io_stdout_flush",
+        "lang_fs_file_open",
+        "lang_fs_file_close",
+        "lang_fs_read_text",
+        "lang_fs_read_dir",
+        "lang_net_resolve",
+        "lang_net_tcp_connect",
+        "lang_net_tcp_listener_accept",
+        "lang_net_udp_recv_from",
+        "lang_process_status",
+        "lang_process_output",
+        "lang_process_spawn",
+        "lang_process_child_wait",
+        "lang_process_child_kill",
+        "lang_rand_os_bytes",
+        "lang_time_monotonic_nanos",
+        "lang_time_system_nanos",
+        "lang_time_local_offset_seconds",
+    ] {
+        assert!(
+            !jit_registry.contains(&format!("\"{retired}\"")),
+            "JIT runtime symbol registry must not expose retired ordinary-result wait hook `{retired}`"
+        );
+        assert!(
+            !native_lowering.contains(&format!("\"{retired}\"")),
+            "native intrinsic lowering must not import retired ordinary-result wait hook `{retired}`"
+        );
+    }
+}
+
+#[test]
 fn returns_constant() {
     assert_eq!(run("function answer(): i64 { 42 }", "answer"), 42);
 }
@@ -1342,6 +1412,26 @@ fn list_sum_with_while() {
 fn list_indexed_assignment() {
     let src = "function f(): i64 { var xs = [1, 2, 3]; xs[1] = 40; xs[0] + xs[1] + xs[2] }";
     assert_eq!(run(src, "f"), 44);
+}
+
+#[test]
+fn list_of_f64_values_round_trips_slots() {
+    let src = "function f(): i64 {\n\
+                     var xs: List<f64> = [1.25, 2.5, 4.0];\n\
+                     xs[1] = xs[0] + xs[2];\n\
+                     if xs[1] == 5.25 { 42 } else { 0 }\n\
+                   }";
+    assert_eq!(run(src, "f"), 42);
+}
+
+#[test]
+fn list_of_f32_values_round_trips_slots() {
+    let src = "function f(): i64 {\n\
+                     var xs: List<f32> = [1.25f32, 2.5f32, 4.0f32];\n\
+                     xs[1] = xs[0] + xs[2];\n\
+                     if xs[1] == 5.25f32 { 42 } else { 0 }\n\
+                   }";
+    assert_eq!(run(src, "f"), 42);
 }
 
 #[test]
@@ -3063,6 +3153,36 @@ fn hir_list_index_store() {
 }
 
 #[test]
+fn hir_list_of_f64_values_round_trips_slots() {
+    assert_eq!(
+        run_hir(
+            "function f(): i64 {\n\
+               var xs: List<f64> = [1.25, 2.5, 4.0];\n\
+               xs[1] = xs[0] + xs[2];\n\
+               if xs[1] == 5.25 { 42 } else { 0 }\n\
+             }",
+            "f"
+        ),
+        42
+    );
+}
+
+#[test]
+fn hir_list_of_f32_values_round_trips_slots() {
+    assert_eq!(
+        run_hir(
+            "function f(): i64 {\n\
+               var xs: List<f32> = [1.25f32, 2.5f32, 4.0f32];\n\
+               xs[1] = xs[0] + xs[2];\n\
+               if xs[1] == 5.25f32 { 42 } else { 0 }\n\
+             }",
+            "f"
+        ),
+        42
+    );
+}
+
+#[test]
 fn hir_map_literal_index_and_store() {
     assert_eq!(
         run_hir(
@@ -3465,9 +3585,9 @@ fn hir_channel_new_and_shared_new_build() {
 
 #[test]
 fn hir_channel_send_and_try_recv() {
-    // `channel<T>()` + `send` + `try_recv` are all synchronous (no await),
-    // so they exercise the HIR ChannelNew intrinsic and Sender/Receiver
-    // builtin methods. `try_recv()` yields `T | null`.
+    // `channel<T>()` + `send` + `try_recv` are immediate value operations
+    // (no await), so they exercise the HIR ChannelNew intrinsic and
+    // Sender/Receiver builtin methods. `try_recv()` yields `T | null`.
     let src = "function f(): i64 {\n\
                      var pair: (Sender<i64>, Receiver<i64>) = channel<i64>();\n\
                      var tx = pair.0;\n\
@@ -3593,8 +3713,8 @@ fn first_closure(b: &compiler::hir::Block) -> &compiler::hir::Expr {
 }
 
 #[test]
-fn async_closure_desugars_to_sync_closure_over_async_block() {
-    // `sema::anf` rewrites an async closure `(x) async => E` into a *sync*
+fn async_closure_desugars_to_non_async_closure_over_async_block() {
+    // `sema::anf` rewrites an async closure `(x) async => E` into a non-async
     // closure returning a bare async block — `(x) => async { E }` (`docs/21`
     // §7). The closure carries the parameters; the async block is always
     // zero-arg. This is the invariant the codegen `is_async`/`params`
@@ -3636,7 +3756,7 @@ fn async_closure_desugars_to_sync_closure_over_async_block() {
     };
     assert!(
         !is_async,
-        "anf must desugar async closures to sync closures"
+        "anf must desugar async closures to non-async closures"
     );
     assert_eq!(params.len(), 1, "the closure keeps its parameter `x`");
     let ExprKind::AsyncBlock {

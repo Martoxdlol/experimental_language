@@ -4,14 +4,16 @@
 //~ 5
 //~ 0
 //~ 10
+import { Future } from "core:prelude";
 import { println } from "std:io";
 function clamp(x: i64, lo: i64, hi: i64): i64 {
   if x < lo { x = lo; }
   if x > hi { x = hi; }
   x
 }
-function main() {
-  println("${clamp(5, 0, 10)}");
-  println("${clamp(-3, 0, 10)}");
-  println("${clamp(99, 0, 10)}");
+function main(): Future<null> async {
+  await println("${clamp(5, 0, 10)}");
+  await println("${clamp(-3, 0, 10)}");
+  await println("${clamp(99, 0, 10)}");
+  null
 }

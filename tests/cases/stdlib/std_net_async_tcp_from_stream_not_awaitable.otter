@@ -1,0 +1,15 @@
+//@ kind: compile-error
+//@ description: std:net AsyncTcpStream.from_stream is an ordinary wrapper conversion, not an async TCP operation
+//@ stderr: `await` requires a `Future`
+
+import { Future } from "core:prelude";
+import { AsyncTcpStream, TcpStream } from "std:net";
+import { ip_v4, socket_addr } from "std:net/types";
+
+function main(): Future<null> async {
+  var connected = await TcpStream.connect(socket_addr(ip_v4(127u8, 0u8, 0u8, 1u8), 9u16));
+  if connected is TcpStream {
+    var _stream = await AsyncTcpStream.from_stream(connected as TcpStream);
+  }
+  null
+}

@@ -3,8 +3,8 @@
 //@ description: Task.spawn runs an async closure on the shared executor, returns JoinHandle<R>, and can await Shared.lock without dedicating one OS thread per task
 //@ stdout:
 //~ worker=50 total=50
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { Shared } from "std:sync";
 import { Task, JoinHandle, Joined, Panicked, Cancelled } from "std:task";
 struct C { value: i64 }
@@ -24,5 +24,6 @@ function main(): Future<null> async {
     });
   var r: Joined<i64> | Panicked | Cancelled = await h.join();
   var total: i64 = await state.lock((c) => c.value);
-  println("worker=${value_of(r) } total=${total }");
+  await println("worker=${value_of(r)} total=${total}");
+  null
 }

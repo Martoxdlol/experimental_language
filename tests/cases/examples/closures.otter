@@ -13,6 +13,7 @@
 //~ label: y
 //~ label: z
 
+import { Future } from "core:prelude";
 // Closures (docs/09): anonymous functions that capture their environment. A
 // closure value is a `(Params) => Ret` — a heap environment holding the
 // captured values plus a pointer to the lifted function. They are first-class:
@@ -31,30 +32,30 @@ function adder(by: i64): (i64) => i64 {
   (n: i64): i64 => n + by
 }
 
-function main() {
+function main(): Future<null> async {
   var inc = (n: i64): i64 => n + 1;
-  println("inc(41)        = ${inc(41)}");
-  println("apply_twice    = ${apply_twice(inc, 40)}");
+  await println("inc(41)        = ${inc(41)}");
+  await println("apply_twice    = ${apply_twice(inc, 40)}");
 
   // Captures are by reference (docs/09 §7): mutations inside the closure are
   // visible to the outer scope. Primitives sit in a heap cell; reference types
   // share the same heap object.
   var scale = 3;
   var times = (n: i64): i64 => n * scale;
-  println("times(14)      = ${times(14)}");
+  await println("times(14)      = ${times(14)}");
 
   var total = 0;
   [1, 2, 3].each { total = total + it; };
-  println("each total     = ${total}");   // 6
+  await println("each total     = ${total}");   // 6
 
   // Capture a heap string.
   var prefix = ">> ";
   var shout = (s: str): str => prefix + s;
-  println(shout("hello"));
+  await println(shout("hello"));
 
   // Higher-order: build specialized closures.
   var add10 = adder(10);
-  println("add10(5)       = ${add10(5)}");
+  await println("add10(5)       = ${add10(5)}");
 
   // A list of closures, applied in a loop.
   var ops: List<(i64) => i64> = [adder(1), adder(10), adder(100)];
@@ -62,16 +63,19 @@ function main() {
   for op in ops {
     total = total + op(0);
   }
-  println("sum of adders  = ${total}");   // 1 + 10 + 100 = 111
+  await println("sum of adders  = ${total}");   // 1 + 10 + 100 = 111
 
   // Higher-order List methods with the trailing-closure + implicit `it` sugar.
   var nums = [1, 2, 3, 4, 5, 6];
   var squares = nums.map { it * it };
   var bigs = squares.filter { it > 10 };
   var sum = bigs.fold(0, (acc: i64, x: i64): i64 => acc + x);
-  println("squares > 10   = ${sum}");      // 16 + 25 + 36 = 77
+  await println("squares > 10   = ${sum}");      // 16 + 25 + 36 = 77
 
   // `each` runs a closure for its side effects.
   var labels: List<str> = ["x", "y", "z"];
-  labels.each { println("label: " + it); };
+  for label in labels {
+    await println("label: " + label);
+  }
+  null
 }

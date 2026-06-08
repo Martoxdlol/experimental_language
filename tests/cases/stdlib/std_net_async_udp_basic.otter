@@ -1,0 +1,150 @@
+//@ kind: run
+//@ serial
+//@ description: std:net AsyncUdpSocket performs UDP send/recv/peek on the same awaitable datagram path as plain UdpSocket
+//@ stdout:
+//~ async-udp=true pong pong ping ping 4 4 0 0
+
+import { Future } from "core:prelude";
+import { Bytes } from "std:bytes";
+import { println, IoError, OtherIo } from "std:io";
+import { AsyncUdpSocket } from "std:net";
+import { SocketAddr, ip_v4, socket_addr } from "std:net/types";
+
+function trim_read_buffer(buf: Bytes, request_len: i64): Bytes {
+  var i = 0;
+  while i < request_len {
+    var _ = buf.remove_at(0);
+    i = i + 1;
+  }
+  buf
+}
+
+function decode_appended(buf: Bytes, request_len: i64): str {
+  var decoded = trim_read_buffer(buf, request_len).decode_utf8();
+  if decoded is str { decoded as str } else { "utf8-error" }
+}
+
+function filled_buffer(len: i64): Bytes {
+  var buf = Bytes.new();
+  var i = 0;
+  while i < len {
+    buf.push(0u8);
+    i = i + 1;
+  }
+  buf
+}
+
+function async_recv_text(socket: AsyncUdpSocket, len: i64): Future<str> async {
+  var buf = filled_buffer(len);
+  var read = await socket.recv_async(buf);
+  if read is IoError || (read as i64) != len {
+    "recv-error"
+  } else {
+    decode_appended(buf, len)
+  }
+}
+
+function async_peek_text(socket: AsyncUdpSocket, len: i64): Future<str> async {
+  var buf = filled_buffer(len);
+  var read = await socket.peek_async(buf);
+  if read is IoError || (read as i64) != len {
+    "peek-error"
+  } else {
+    decode_appended(buf, len)
+  }
+}
+
+function async_recv_from_text(socket: AsyncUdpSocket, len: i64): Future<(str, SocketAddr) | IoError> async {
+  var buf = filled_buffer(len);
+  var received = await socket.recv_from_async(buf);
+  if received is IoError {
+    received as IoError
+  } else {
+    var pair = received as (i64, SocketAddr);
+    if pair.0 != len {
+      IoError { kind: OtherIo {}, message: "short UDP datagram" }
+    } else {
+      var out = (decode_appended(buf, len), pair.1);
+      out
+    }
+  }
+}
+
+function async_peek_from_text(socket: AsyncUdpSocket, len: i64): Future<(str, SocketAddr) | IoError> async {
+  var buf = filled_buffer(len);
+  var received = await socket.peek_from_async(buf);
+  if received is IoError {
+    received as IoError
+  } else {
+    var pair = received as (i64, SocketAddr);
+    if pair.0 != len {
+      IoError { kind: OtherIo {}, message: "short UDP datagram" }
+    } else {
+      var out = (decode_appended(buf, len), pair.1);
+      out
+    }
+  }
+}
+
+function main(): Future<null> async {
+  var bound_receiver = await AsyncUdpSocket.bind(socket_addr(ip_v4(127u8, 0u8, 0u8, 1u8), 0u16));
+  var bound_sender = await AsyncUdpSocket.bind(socket_addr(ip_v4(127u8, 0u8, 0u8, 1u8), 0u16));
+  if bound_receiver is IoError || bound_sender is IoError {
+    await println("async-udp=false bind-error bind-error bind-error bind-error -1 -1 -1 -1");
+    return null;
+  }
+
+  var receiver = bound_receiver as AsyncUdpSocket;
+  var sender = bound_sender as AsyncUdpSocket;
+  var receiver_addr = await receiver.local_addr();
+  var sender_addr = await sender.local_addr();
+  if receiver_addr is IoError || sender_addr is IoError {
+    await println("async-udp=false addr-error addr-error addr-error addr-error -1 -1 -1 -1");
+    return null;
+  }
+
+  var recv_addr = receiver_addr as SocketAddr;
+  var send_addr = sender_addr as SocketAddr;
+  var sent_to = await sender.send_to_async(Bytes.from_str("pong"), recv_addr);
+  var peeked_from = if sent_to is i64 {
+    await async_peek_from_text(receiver, 4)
+  } else {
+    IoError { kind: OtherIo {}, message: "send_to failed" }
+  };
+  var received_from = if sent_to is i64 {
+    await async_recv_from_text(receiver, 4)
+  } else {
+    IoError { kind: OtherIo {}, message: "send_to failed" }
+  };
+
+  var connect_sender = await sender.connect(recv_addr);
+  var connect_receiver = await receiver.connect(send_addr);
+  var sent = if connect_sender is IoError || connect_receiver is IoError {
+    connect_sender
+  } else {
+    await sender.send_async(Bytes.from_str("ping"))
+  };
+  var peeked = if sent is i64 { await async_peek_text(receiver, 4) } else { "send-error" };
+  var received = if sent is i64 { await async_recv_text(receiver, 4) } else { "send-error" };
+  var close_sender = await sender.close();
+  var close_receiver = await receiver.close();
+
+  var from_peer_ok = peeked_from is (str, SocketAddr)
+    && received_from is (str, SocketAddr)
+    && (peeked_from as (str, SocketAddr)).1.port() == send_addr.port()
+    && (received_from as (str, SocketAddr)).1.port() == send_addr.port();
+  var peeked_from_text = if peeked_from is (str, SocketAddr) {
+    (peeked_from as (str, SocketAddr)).0
+  } else {
+    "peek-from-error"
+  };
+  var received_from_text = if received_from is (str, SocketAddr) {
+    (received_from as (str, SocketAddr)).0
+  } else {
+    "recv-from-error"
+  };
+  var sent_to_count = if sent_to is i64 { sent_to as i64 } else { -1 };
+  var sent_count = if sent is i64 { sent as i64 } else { -1 };
+  await println("async-udp=${from_peer_ok} ${peeked_from_text} ${received_from_text} ${peeked} ${received} ${sent_to_count} ${sent_count} ${if close_sender is IoError { 1 } else { 0 }} ${if close_receiver is IoError { 1 } else { 0 }}");
+  null
+}

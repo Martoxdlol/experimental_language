@@ -4,8 +4,8 @@
 //@ description: cancelling a suspended Task.spawn worker wakes every pending JoinHandle.join() waiter as Cancelled
 //@ stdout:
 //~ first=-2 second=-2 total=-4
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { Task, JoinHandle, Joined, Panicked, Cancelled } from "std:task";
 import { sleep } from "std:async";
 
@@ -29,5 +29,6 @@ function main(): Future<null> async {
   h.cancel();
   var a = joined_value(await j1);
   var b = joined_value(await j2);
-  println("first=${a } second=${b } total=${a + b }");
+  await println("first=${a} second=${b} total=${a + b}");
+  null
 }

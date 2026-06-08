@@ -1,3 +1,4 @@
+import { Future } from "core:prelude";
 // Discriminated unions + match. Run: lang run examples/match.lang
 import { println } from "std:io";
 
@@ -29,12 +30,13 @@ function describe(x: i64 | str | null): str {
   }
 }
 
-function main() {
-  println("circle area = " + (area(Circle { radius: 2.0 })as str));
-  println("rect area = " + (area(Rect { w: 3.0, h: 4.0 })as str));
-  println("circle perim = " + (perimeter(Circle { radius: 2.0 })as str));
-  println("rect perim = " + (perimeter(Rect { w: 3.0, h: 4.0 })as str));
-  println(describe(42));
-  println(describe("hello"));
-  println(describe(null));
+function main(): Future<null> async {
+  await println("circle area = " + (area(Circle { radius: 2.0 }) as str));
+  await println("rect area = " + (area(Rect { w: 3.0, h: 4.0 }) as str));
+  await println("circle perim = " + (perimeter(Circle { radius: 2.0 }) as str));
+  await println("rect perim = " + (perimeter(Rect { w: 3.0, h: 4.0 }) as str));
+  await println(describe(42));
+  await println(describe("hello"));
+  await println(describe(null));
+  null
 }

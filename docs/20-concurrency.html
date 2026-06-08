@@ -145,7 +145,7 @@ import { Shared, channel } from "std:sync"</code></pre>
 
 <pre><code>pub function Thread.spawn&lt;R&gt;(work: () =&gt; R): JoinHandle&lt;R&gt;
 // Async overload: when `work` is an async closure `() =&gt; Future&lt;R&gt;`, the worker
-// drives the future to completion and the handle joins on the awaited `R`:
+// polls the future until it resolves and the handle joins on the awaited `R`:
 pub function Thread.spawn&lt;R&gt;(work: () =&gt; Future&lt;R&gt;): JoinHandle&lt;R&gt;
 
 pub struct JoinHandle&lt;R&gt; { ... }
@@ -157,6 +157,10 @@ extend&lt;R&gt; JoinHandle&lt;R&gt; {
 
 pub struct Joined&lt;R&gt; { pub value: R }
 pub struct Panicked  { pub message: str }</code></pre>
+
+<p><code>Thread.spawn</code> always returns a <code>JoinHandle&lt;R&gt;</code>.
+The handle itself is not a <code>Future</code>; call <code>join()</code> and
+<code>await</code> the returned future when you need the result.</p>
 
 <p><code>Panicked</code> is an ordinary result value: it implements
 <code>Eq</code>, <code>Clone</code>, <code>Hash</code>, <code>ToStr</code>, and
@@ -185,10 +189,10 @@ handle types, not plain value records.</p>
 
 <div class="callout">
   <strong>Two ways to get an async worker</strong>
-  <code>Thread.spawn</code> accepts either a <em>synchronous</em> closure
+  <code>Thread.spawn</code> accepts either an <em>ordinary non-async</em> closure
   <code>() =&gt; R</code> or an <em>async</em> closure <code>() =&gt; Future&lt;R&gt;</code>,
   and always returns a <code>JoinHandle&lt;R&gt;</code>. With an async closure the
-  worker drives the future to completion on its own OS thread, so the handle
+  worker polls the future until it resolves on its own OS thread, so the handle
   joins on the awaited <code>R</code> (not a <code>Future&lt;R&gt;</code>); such a
   worker <em>may</em> <code>await</code> and lock a <code>Shared&lt;T&gt;</code>
   (§4). The alternative is the <code>spawn</code> keyword from
@@ -197,21 +201,23 @@ handle types, not plain value records.</p>
   <code>await</code>. The two differ only in the handle they yield:
   <code>Thread.spawn</code> gives a <code>JoinHandle&lt;R&gt;</code> (with
   <code>join</code>/<code>detach</code>), the <code>spawn</code> keyword gives a
-  bare <code>Future&lt;T&gt;</code>. <code>Thread.spawn</code> keeps its dedicated
-  OS-thread guarantee; <code>spawn EXPR</code> runs on the shared work-stealing
-  executor. Only a <em>synchronous</em> <code>Thread.spawn</code> closure
+  bare <code>Future&lt;T&gt;</code>. <code>Thread.spawn</code> keeps its one-OS-thread
+  per-worker guarantee; <code>spawn EXPR</code> runs on the shared work-stealing
+  executor. Only an <em>ordinary non-async</em> <code>Thread.spawn</code> closure
   cannot <code>await</code> or lock (§4).
 </div>
 
 <div class="callout">
   <strong>One OS thread per <code>Thread.spawn</code> worker — by design</strong>
-  <code>Thread.spawn</code> is the <em>real-OS-thread</em> primitive (the analogue
-  of Rust's <code>std::thread::spawn</code>): every worker gets its own dedicated
-  OS thread, sync or async. That is intended, not a limitation — you reach for
-  <code>Thread.spawn</code> precisely when you want a real thread (CPU-bound work,
-  blocking FFI, isolation), and a worker may block freely without starving
-  others. The trade-off is that it does <em>not</em> scale to thousands of mostly
-  idle workers: each holds a thread even while suspended on an <code>await</code>.
+  <code>Thread.spawn</code> is Otter Fusion's one-OS-thread-per-worker primitive:
+  every worker gets its own OS thread, ordinary or async. That is intended,
+  not a limitation — you reach for
+  <code>Thread.spawn</code> precisely when CPU-bound or OS-thread-affine work
+  must run outside the shared executor. It is not a public substitute for
+  wait-capable target APIs: those must expose explicit async futures at the
+  Otter Fusion surface. The trade-off is that <code>Thread.spawn</code> does
+  <em>not</em> scale to thousands of mostly idle workers: each holds a thread
+  even while suspended on an <code>await</code>.
   For massive, lightweight concurrency, use the <code>spawn</code> keyword
   (<a href="21-async.html">21-async</a> §6), whose tasks share the executor.
 </div>
@@ -226,14 +232,72 @@ handle types, not plain value records.</p>
   scheduled on an <strong>M:N work-stealing executor</strong> instead of a
   dedicated OS thread per worker. You write the same thread-like code; the runtime
   multiplexes many lightweight tasks onto a small thread pool, scaling to far more
-  concurrency without one OS thread each. It <em>complements</em>
+  concurrency without one OS thread each. Creating the runtime's executor worker
+  OS threads is a bracketed native-state boundary, separate from the user
+  task's non-blocking scheduling contract; idle executor workers also publish
+  runtime-native/no-root state while parked on the work queue, so they do not
+  hold stop-the-world GC as running mutators. It <em>complements</em>
   <code>Thread.spawn</code> rather than replacing it: keep <code>Thread.spawn</code>
-  for dedicated/blocking work, reach for <code>Task.spawn</code> for high task
-  counts. The executor is a small worker pool with local run queues, stealing,
+  for CPU-heavy or OS-thread-affine work that needs its own OS thread, reach for <code>Task.spawn</code> for high task
+  counts. <code>Task.spawn</code> also returns a <code>JoinHandle&lt;R&gt;</code>,
+  not a <code>Future&lt;R&gt;</code>; await <code>handle.join()</code> to observe
+  <code>Joined | Panicked | Cancelled</code>. Ordinary stdlib operations such as
+  the remaining in-memory <code>std:io</code>
+  <code>Reader</code>/<code>Writer</code>/<code>Seeker</code> methods and
+  buffered adapter reads/writes,
+  child metadata/current-stdio accessors
+  <code>id()</code>/<code>stdin()</code>/<code>stdout()</code>/<code>stderr()</code> are
+  non-<code>Future</code> metadata/current-placeholder values too, with current
+  child stdio returning <code>null</code> and future streamed child stdio reserved for async stream
+  contracts. Any wait-capable target operation
+  discovered at the public surface must be replaced by
+  explicit async APIs under the corrected no-public-blocking contract; do not
+  route it through an ordinary <code>Thread.spawn</code> path. Use the
+  explicit async surfaces that already exist for executor-friendly I/O:
+  <code>std:fs.File.open</code>/<code>create</code>/<code>append</code>/<code>open_with</code>/<code>close</code>,
+  <code>std:fs</code> module text/binary helpers, directory snapshots/mutations,
+  target-backed <code>Path</code> queries, and <code>File</code> text helpers,
+  top-level <code>std:process</code> host helpers
+  <code>args()</code>/<code>env()</code>/<code>env_all()</code>/<code>set_env()</code>,
+  <code>std:process.Command.spawn()</code>/<code>status()</code>/<code>output()</code>
+  and <code>Child.wait()</code>/<code>kill()</code> are now awaitable process futures,
+  concrete stdio handle methods such as <code>stdin().read(...)</code>/
+  <code>stdin().read_async(...)</code> and <code>stdout().write_all(...)</code>/
+  <code>stdout().write_all_async(...)</code>/<code>stderr().flush()</code>/
+  <code>stderr().flush_async()</code>,
+  descriptor byte IO and seek methods such as
+  <code>File.read(...)</code>, <code>File.read_to_end(...)</code>,
+  <code>File.write(...)</code>, <code>File.write_all(...)</code>,
+  <code>File.flush()</code>, <code>File.seek(...)</code>, and the matching aliases
+  <code>File.read_async(...)</code>, <code>File.read_to_end_async(...)</code>,
+  <code>File.write_async(...)</code>, <code>File.write_all_async(...)</code>,
+  <code>File.flush_async()</code>, and <code>File.seek_async(...)</code>, plus
+  the async network surfaces
+  <code>std:net.TcpStream</code> byte-I/O and metadata/control methods,
+  <code>std:net.AsyncTcpStream</code>,
+  <code>std:net.TcpListener.accept()</code>/
+  <code>std:net.AsyncTcpListener.accept_async()</code>, or
+  plain <code>std:net.UdpSocket</code> datagram/setup/control methods/
+  <code>std:net.AsyncUdpSocket</code>. Generic async byte-stream
+  code can use <code>std:io.AsyncReader</code>/<code>AsyncWriter</code>; UDP remains
+  datagram-shaped. Network operation deadlines use
+  <code>std:async.timeout(...)</code> around those explicit async futures today,
+  apart from the dedicated TCP connect-timeout constructors
+  <code>TcpStream.connect_timeout</code> and
+  <code>AsyncTcpStream.connect_timeout</code>;
+  copied timeout method families such as <code>read_timeout_async</code>,
+  <code>write_timeout_async</code>, <code>peek_timeout_async</code>,
+  <code>accept_timeout_async</code>, connected UDP
+  <code>send_timeout_async</code>/<code>recv_timeout_async</code>/<code>peek_timeout_async</code>,
+  or address-aware UDP
+  <code>send_to_timeout_async</code>/<code>recv_from_timeout_async</code>/<code>peek_from_timeout_async</code>
+  are not
+  part of the current API. The executor is a small worker pool with local run queues, stealing,
   and a global injector; <code>sleep</code>/<code>timeout</code> deadlines are
-  driven by a shared timer driver, future I/O sources register one-shot readiness
-  wakeups with the same reactor core, and the <code>spawn</code> keyword also
-  schedules onto it. Runtime deployments can tune the pool width with
+  driven by a shared timer driver, today's helper-backed future I/O sources
+  register one-shot completion wakeups with the same reactor core, and the
+  <code>spawn</code> keyword also schedules onto it. Deeper readiness-native
+  provider integration remains planned work. Runtime deployments can tune the pool width with
   <code>OTTER_FUSION_TASK_WORKERS=N</code> without changing program semantics.
   Task handles additionally support cooperative <code>cancel()</code> /
   <code>abort()</code>: cancellation stops future polls at the next suspension
@@ -241,11 +305,17 @@ handle types, not plain value records.</p>
   makes <code>join()</code> resolve to
   <code>Joined&lt;R&gt; | Panicked | Cancelled</code>. OS-thread
   <code>Thread.spawn</code> handles deliberately do not have <code>cancel()</code>.
-  (Stackful, goroutine-style green threads — transparent blocking with no
-  <code>async</code>/<code>await</code> coloring — are deliberately <em>not</em>
-  planned: they are a second concurrency model in tension with this language's
-  explicit-async design and would require Go-runtime-level syscall handoff and
-  preemption.)
+  <code>detach()</code>, <code>cancel()</code>, and <code>abort()</code> are
+  immediate non-<code>Future</code> handle controls returning <code>null</code>;
+  they are not awaited.
+  The not-awaitable e2e guards cover both ordinary-closure and async-closure
+  <code>Thread.spawn</code>/<code>Task.spawn</code> overloads so neither handle
+  shape can drift into a bare awaitable future.
+  (Stackful, goroutine-style green threads with implicit suspension and no
+  explicit <code>async</code>/<code>await</code> surface are deliberately
+  <em>not</em> planned: they are a second concurrency model in tension with this
+  language's explicit-async design and would require Go-runtime-level syscall
+  handoff and preemption.)
 </div>
 
 <h3>Cross-thread capture — isolation rules</h3>
@@ -308,8 +378,8 @@ handle types, not plain value records.</p>
     <!-- MPMC -->
     <g transform="translate(470, 30)">
       <rect width="430" height="240" rx="8" fill="#f3eefa" stroke="#6b4ba8" stroke-width="2"/>
-      <text x="14" y="22" font-weight="700" fill="#6b4ba8">MPMC — channel_mpmc&lt;T&gt;()</text>
-      <text x="14" y="40" class="small">both ends Clone</text>
+      <text x="14" y="22" font-weight="700" fill="#6b4ba8">MPMC — planned</text>
+      <text x="14" y="40" class="small">future channel_mpmc&lt;T&gt;()</text>
 
       <g transform="translate(20, 60)">
         <rect width="80" height="32" rx="4" fill="#fff" stroke="#6b4ba8"/>
@@ -344,7 +414,7 @@ handle types, not plain value records.</p>
       <text x="14" y="232" font-size="11">Use when fan-out matters.</text>
     </g>
   </svg>
-  <div class="diagram-caption">MPSC is the common case; reach for MPMC only when consumers fan out.</div>
+  <div class="diagram-caption">The implemented channel is unbounded MPSC. MPMC is reserved for the fan-out runtime slice.</div>
 </div>
 
 <h3>Sender / Receiver API</h3>
@@ -358,19 +428,21 @@ extend&lt;T&gt; Receiver&lt;T&gt; {
   function try_recv(self): T | null                // non-blocking poll
 }
 
-extend&lt;T&gt; Receiver&lt;T&gt;: Iterator&lt;T&gt; {            // `for x in rx` drains it
-  function next(self): Item&lt;T&gt; | Done             // blocks; Done on close
-}
-
 pub struct ChannelClosed;</code></pre>
 
 <p><code>ChannelClosed</code> is an ordinary marker value and implements
 <code>Eq</code>, <code>Clone</code>, <code>Hash</code>, <code>ToStr</code>, and
 <code>std:fmt.Debug</code>. Channel endpoints themselves are runtime handles with
-deterministic endpoint-release behavior.</p>
+deterministic endpoint-release behavior. The implemented constructor is
+<code>channel&lt;T&gt;()</code>, which returns <code>(Sender&lt;T&gt;, Receiver&lt;T&gt;)</code>.
+The names <code>channel_bounded</code>, <code>channel_mpmc</code>, and
+<code>channel_mpmc_bounded</code> are reserved in <code>std:sync</code> for the real
+back-pressure and multi-consumer runtime work; calls to them are compile-time
+planned-feature diagnostics, and using them as function values diagnoses too.
+They do not execute placeholder bodies.</p>
 
 <div class="callout good">
-  <strong>Channels are async, non-blocking, and deterministically closeable.</strong>
+  <strong>Channel receive waits are async.</strong>
   <code>send</code> enqueues onto an unbounded queue and returns at once — it
   never blocks (it returns <code>null</code>, or <code>ChannelClosed</code> once
   every receiver is gone). <code>recv()</code> does <em>not</em> park the calling
@@ -381,7 +453,13 @@ deterministic endpoint-release behavior.</p>
   has been dropped, otherwise registers the executor's waker and reports
   <code>Pending</code> so the <em>task</em> suspends and the thread is free to run
   other work. A later <code>send</code> — or the release of the last sender —
-  wakes the waiter, which re-polls.
+  wakes the waiter, which re-polls. <code>for await x in rx</code> is the
+  multi-message drain form: it awaits <code>recv()</code> for each step and
+  terminates once the queue is drained and the channel resolves to
+  <code>ChannelClosed</code>. Plain <code>for x in rx</code> is not a
+  channel API and is rejected by the checker. The negative e2e guards cover the
+  immediate non-blocking <code>send()</code> enqueue, the immediate
+  non-blocking <code>try_recv()</code> poll, and the rejected plain receiver loop.
 </div>
 
 <div class="callout">
@@ -404,12 +482,12 @@ deterministic endpoint-release behavior.</p>
   }
 }</code></pre>
 
-<p><code>try_recv</code> is the synchronous escape hatch: it polls the queue once
+<p><code>try_recv</code> is an immediate non-blocking poll: it checks the queue once
 without a future, returning <code>T | null</code> (<code>null</code> when empty).
-Bounded variants apply back-pressure by making <code>send</code> async too.
-<code>Receiver&lt;T&gt;</code> implements <code>Iterator&lt;T&gt;</code>, so a synchronous
-<code>for x in rx</code> loop drains it — each step blocks for the next message and
-the loop terminates (<code>Done</code>) once the channel is closed and drained.</p>
+Planned bounded variants will apply back-pressure by making <code>send</code> async too.
+The <code>examples/async_channel_iteration.otter</code> example, mirrored by
+<code>tests/cases/examples/async_channel_iteration.otter</code>, demonstrates the
+awaited drain loop.</p>
 
 <!-- =========================================================== -->
 <h2 id="zerocopy">3. Zero-copy on send</h2>
@@ -526,7 +604,7 @@ extend&lt;T&gt; Shared&lt;T&gt; {
   // `lock`/`try_lock` are ALWAYS async — `await` them. `body` may itself be
   // `async` and may `await`; the mutex is held across the body's suspension
   // points (it is task-aware, not OS-thread-bound). When `body` is `async`,
-  // `lock` awaits it to completion under the lock, so `R` denotes the body's
+  // `lock` awaits it until it resolves under the lock, so `R` denotes the body's
   // final (awaited) value — never a nested `Future`.
   function lock&lt;R&gt;(self, body: (T) =&gt; R): Future&lt;R&gt; async
   function try_lock&lt;R&gt;(self, body: (T) =&gt; R): Future&lt;R | LockBusy&gt; async
@@ -555,8 +633,14 @@ var loaded = await state.lock { c async =&gt; { c.value = await fetch(); c.value
   run other tasks (<a href="21-async.html">21-async</a> §6). Waiters are served in
   <strong>FIFO order</strong>, so the lock is fair and starvation-free. The acquire is keyed
   to the <em>task</em>, not the OS thread, so the semantics are identical however the task is
-  driven. There is no read/write variant — <code>Shared&lt;T&gt;</code> is a mutex (a future
-  <code>RwLock&lt;T&gt;</code> would be a separate primitive).
+  driven. There is no read/write variant — <code>Shared&lt;T&gt;</code> is a mutex. A future
+  <code>RwLock&lt;T&gt;</code> would be a separate primitive, and any wait-capable
+  read/write acquisition on that primitive must be an explicit async future;
+  immediate probes must be named <code>try_read</code>/<code>try_write</code> or otherwise
+  documented as non-waiting.
+  Internal registry/cell bookkeeping may contend on host mutexes, but that
+  contention is a runtime-native/no-root implementation boundary; it is not the
+  source-level lock acquisition path.
   <br><span style="color: var(--muted);">Implementation note: the body is invoked over a
   uniform integer/pointer ABI, so a <em>float</em>-typed protected value or body result
   (e.g. <code>Shared&lt;f64&gt;</code> or a body returning <code>f64</code>) is currently
@@ -564,15 +648,15 @@ var loaded = await state.lock { c async =&gt; { c.value = await fetch(); c.value
 </div>
 
 <div class="callout warn">
-  <strong>Only <em>synchronous</em> <code>Thread.spawn</code> workers cannot lock</strong>
+  <strong>Only <em>ordinary non-async</em> <code>Thread.spawn</code> workers cannot lock</strong>
   <code>lock</code>/<code>try_lock</code> are <code>await</code>-only. A
-  <em>synchronous</em> <code>Thread.spawn</code> closure cannot <code>await</code>
+  <em>ordinary non-async</em> <code>Thread.spawn</code> closure cannot <code>await</code>
   (§1), so calling <code>lock</code>/<code>try_lock</code> inside one is a
   <strong>compile error</strong>. An <em>async</em> <code>Thread.spawn</code> closure
-  (<code>() =&gt; Future&lt;R&gt;</code>) <em>may</em> lock — its worker drives the future
+  (<code>() =&gt; Future&lt;R&gt;</code>) <em>may</em> lock — its worker polls the future
   with a real executor and waker, exactly like a <code>spawn</code>-keyword task. So
   any of these run a lock-using worker:
-  <pre><code>// var h = Thread.spawn(() =&gt; state.lock(...))   // ERROR — sync worker can't await a lock
+  <pre><code>// var h = Thread.spawn(() =&gt; state.lock(...))   // ERROR — ordinary worker can't await a lock
 var h = spawn async { await state.lock { c =&gt; c.value = c.value + 1 } }   // OK — spawn keyword
 var h = Thread.spawn { async => await state.lock { c =&gt; c.value = c.value + 1 } }   // OK — async Thread.spawn worker
 await h</code></pre>
@@ -587,10 +671,10 @@ await h</code></pre>
   valid only inside the lock; storing it where it outlives the lock (an outer-scoped variable, a
   struct field, a collection, or an escaping closure) is rejected by escape analysis. To carry data
   out, store a <code>.clone()</code> — a detached deep copy that is no longer aliased into the cell.
-  <br>This analysis is <strong>the same whether <code>body</code> is synchronous or
+  <br>This analysis is <strong>the same whether <code>body</code> is ordinary or
   <code>async</code></strong>: it spans the body's <code>await</code> points, so a reference may not
   escape across a suspension either. (Any additional restriction specific to async bodies will be
-  called out explicitly; the baseline is identical to the sync rule.)
+  called out explicitly; the baseline is identical to the ordinary-body rule.)
 </div>
 
 <div class="callout warn">
@@ -714,20 +798,19 @@ function producer(tx: Sender&lt;i64&gt;) {
   // tx drops here; channel closes when all senders are dropped
 }
 
-function consumer(rx: Receiver&lt;i64&gt;) {
-  for n in rx {
-    println("got " + (n as str))
+function consumer(rx: Receiver&lt;i64&gt;): Future&lt;null&gt; async {
+  for await n in rx {
+    await println("got " + (n as str))
   }
 }
 
 function main(): Future&lt;null&gt; async {
   var (tx, rx) = channel&lt;i64&gt;()
   var h1 = Thread.spawn { producer(tx) }
-  var h2 = Thread.spawn { consumer(rx) }
+  await consumer(rx)
   // `join()` is async — await each handle. The main task suspends rather
-  // than parking the OS thread between worker completions.
+  // than parking the OS thread while the producer completes.
   var _ = await h1.join()
-  var _ = await h2.join()
 }</code></pre>
 
 <pre><code>// Shared counter incremented by many tasks
@@ -735,7 +818,7 @@ import { Shared } from "std:sync"
 
 // Because `lock` is async, the worker must be able to `await` — so it is an
 // `async` function scheduled with the `spawn` keyword (docs/21), or an async
-// `Thread.spawn` closure (§1), NOT a synchronous `Thread.spawn` closure (which
+// `Thread.spawn` closure (§1), NOT an ordinary non-async `Thread.spawn` closure (which
 // cannot `await`).
 function worker(s: Shared&lt;i64&gt;): Future&lt;null&gt; async {
   for _ in (Range { current: 0, end: 1000 }) {
@@ -751,7 +834,7 @@ function main(): Future&lt;null&gt; async {
     tasks.push(spawn worker(s))   // `spawn EXPR` yields a Future&lt;null&gt;
   }
   for t in tasks { await t }
-  println((await state.lock { it }) as str)
+  await println((await state.lock { it }) as str)
 }</code></pre>
 
 <div class="callout">

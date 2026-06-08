@@ -1,0 +1,16 @@
+//@ kind: run
+//@ description: std:time sleep is an async, non-blocking timer Future over Duration
+//@ stdout:
+//~ time-sleep=done
+
+import { Future } from "core:prelude";
+import { println } from "std:io";
+import { Duration, sleep } from "std:time";
+
+function main(): Future<null> async {
+  var _slept = await sleep(Duration.from_millis(1));
+  var _zero = await sleep(Duration.from_nanos(0));
+  var _negative = await sleep(Duration.from_nanos(-1));
+  await println("time-sleep=done");
+  null
+}

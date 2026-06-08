@@ -20,11 +20,12 @@ function main(): Future<null> async {
   var handle: JoinHandle<i64> = Thread.spawn(() => work());
   var result: Joined<i64> | Panicked = await handle.join();
   match result {
-    Joined<i64> ok => println("joined=${ok.value}"),
-    Panicked p => println("panic=${p.message}"),
+    Joined<i64> ok => await println("joined=${ok.value}"),
+    Panicked p => await println("panic=${p.message}"),
   }
 
   var panic_value = Panicked { message: "boom" };
   var panic_copy = panic_value.clone();
-  println("${panic_value == panic_copy} ${panic_value.hash() == panic_copy.hash()} ${panic_value.to_str()} ${render_debug(panic_value)}");
+  await println("${panic_value == panic_copy} ${panic_value.hash() == panic_copy.hash()} ${panic_value.to_str()} ${render_debug(panic_value)}");
+  null
 }

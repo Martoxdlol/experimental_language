@@ -19,7 +19,7 @@ function churn(id: i64, doom: bool): i64 {
   var xs: List<i64> = [];
   var i: i64 = 0;
   while i < 100 {
-    var s: str = "item ${id } ${i }";
+    var s: str = "item ${id} ${i}";
     if s.size() > 0 { xs.push(i); }
     i = i + 1;
   }
@@ -29,11 +29,12 @@ function churn(id: i64, doom: bool): i64 {
   total
 }
 
-function show(label: str, r: Joined<i64> | Panicked) {
+function show(label: str, r: Joined<i64> | Panicked): Future<null> async {
   match r {
-    Joined<i64> j => println(label + " = ok " + (j.value as str)),
-    Panicked p => println(label + " = panicked: " + p.message),
+    Joined<i64> j => await println(label + " = ok " + (j.value as str)),
+    Panicked p => await println(label + " = panicked: " + p.message),
   };
+  null
 }
 
 function main(): Future<null> async {
@@ -41,9 +42,10 @@ function main(): Future<null> async {
   var h1: JoinHandle<i64> = Thread.spawn(() => churn(1, false));
   var h2: JoinHandle<i64> = Thread.spawn(() => churn(2, true));
   var h3: JoinHandle<i64> = Thread.spawn(() => churn(3, false));
-  show("p0", await h0.join());
-  show("p1", await h1.join());
-  show("p2", await h2.join());
-  show("p3", await h3.join());
-  println("survived");
+  await show("p0", await h0.join());
+  await show("p1", await h1.join());
+  await show("p2", await h2.join());
+  await show("p3", await h3.join());
+  await println("survived");
+  null
 }

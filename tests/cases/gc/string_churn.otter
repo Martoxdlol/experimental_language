@@ -3,10 +3,12 @@
 //@ description: string interpolation/concat churn under GC stress (temps must be rooted)
 //@ stdout:
 //~ tail=acc-99
+import { Future } from "core:prelude";
 import { println } from "std:io";
-function main() {
+function main(): Future<null> async {
   var s = "";
   var i = 0;
   while i < 100 { s = "acc-${i}"; i = i + 1; }
-  println("tail=${s}");
+  await println("tail=${s}");
+  null
 }

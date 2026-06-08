@@ -1,12 +1,12 @@
 //@ kind: run
 //@ serial
 //@ env: OTTER_FUSION_GC=stress
-//@ description: async `Thread.spawn` workers build heap garbage and lock a Shared while the GC collects aggressively; precise roots across the worker's await/drive path must keep the shared cell alive (docs/16, docs/20 §1/§4)
+//@ description: async `Thread.spawn` workers build heap garbage and lock a Shared while the GC collects aggressively; precise roots across the worker's await/resolution path must keep the shared cell alive (docs/16, docs/20 §1/§4)
 //@ stdout:
 //~ total = 600
+import { Future } from "core:prelude";
 import { List } from "core:collections";
 import { println } from "std:io";
-import { Future } from "core:prelude";
 import { Shared } from "std:sync";
 import { Thread, JoinHandle, Joined, Panicked } from "std:thread";
 struct C { value: i64 }
@@ -19,7 +19,7 @@ function main(): Future<null> async {
     handles.push(Thread.spawn(() async => {
           var i: i64 = 0;
           while i < 100 {
-            // Allocate garbage each iteration to provoke collections mid-drive.
+            // Allocate garbage each iteration to provoke collections mid-resolution.
             var junk: List<i64> = [i, i + 1, i + 2];
             await s.lock((c) => { c.value = c.value + junk[0] - junk[0] + 1; 0 });
             i = i + 1;
@@ -32,5 +32,6 @@ function main(): Future<null> async {
     var _ = await h.join();
   }
   var total: i64 = await state.lock((c) => c.value);
-  println("total = ${total }");
+  await println("total = ${total}");
+  null
 }

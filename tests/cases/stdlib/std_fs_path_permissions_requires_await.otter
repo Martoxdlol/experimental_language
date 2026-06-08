@@ -1,0 +1,12 @@
+//@ kind: compile-error
+//@ description: std:fs Path.permissions returns Future<Permissions | IoError> and must be awaited before use
+//@ stderr: found `Future<Permissions | IoError>`
+
+import { Future } from "core:prelude";
+import { IoError } from "std:io";
+import { Path, Permissions } from "std:fs";
+
+function main(): Future<null> async {
+  var _permissions: Permissions | IoError = Path.new(".").permissions();
+  null
+}

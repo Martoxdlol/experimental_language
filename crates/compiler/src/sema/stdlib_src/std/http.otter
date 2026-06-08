@@ -50,7 +50,7 @@ function __http_header_key(name: str): str {
   for ch in name.chars() {
     var cp = ch as i64;
     if cp >= 65 && cp <= 90 {
-      out = out + ((cp + 32)as char)as str;
+      out = out + ((cp + 32) as char) as str;
     } else {
       out = out + ch as str;
     }
@@ -392,9 +392,9 @@ extend Status: ToStr {
   function to_str(self): str {
     var reason = self.reason_or_default();
     if reason == "" {
-      "${self.code }"
+      "${self.code}"
     } else {
-      "${self.code } " + reason
+      "${self.code} " + reason
     }
   }
 }
@@ -402,9 +402,9 @@ extend Status: ToStr {
 extend Status: Debug {
   function debug(self): str {
     if self.reason is str {
-      "Status { code: ${self.code }, reason: \"" + (self.reason as str) + "\" }"
+      "Status { code: ${self.code}, reason: \"" + (self.reason as str) + "\" }"
     } else {
-      "Status { code: ${self.code }, reason: null }"
+      "Status { code: ${self.code}, reason: null }"
     }
   }
 }
@@ -430,7 +430,7 @@ extend Headers {
     var out = List<str>();
     var values = self.values.get(__http_header_key(name));
     if values is List<str> {
-      for value in(values as List<str>) {
+      for value in (values as List<str>) {
         out.push(value);
       }
     }

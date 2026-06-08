@@ -1,0 +1,11 @@
+//@ kind: compile-error
+//@ description: std:process Command.is_valid is an immediate pure command validation predicate
+//@ stderr: `await` requires a `Future`
+
+import { Future } from "core:prelude";
+import { Command } from "std:process";
+
+function main(): Future<null> async {
+  var _valid = await Command.new("true").is_valid();
+  null
+}

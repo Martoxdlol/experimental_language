@@ -7,6 +7,7 @@
 //~ Current { offset: -2 }
 //~ true true true other OtherIo
 //~ true true IoError { kind: OtherIo, message: "boom" }
+import { Future } from "core:prelude";
 import { println } from "std:io";
 import { Bytes } from "std:bytes";
 import { Clone, Eq, Hash, ToStr } from "core:prelude";
@@ -37,7 +38,7 @@ function render_debug(value: Debug): str {
   value.debug()
 }
 
-function main() {
+function main(): Future<null> async {
   var m = Mem { pos: 5 };
   var buf = Bytes.new();
   buf.push(10u8);
@@ -49,25 +50,26 @@ function main() {
   if read is i64 {
     if wrote is i64 {
       if seeked is i64 {
-        println("read=${read as i64} write=${wrote as i64} seek=${seeked as i64}");
+        await println("read=${read as i64} write=${wrote as i64} seek=${seeked as i64}");
       }
     }
   }
 
   var e: Error = IoError { kind: NotFound {}, message: "missing" };
-  println("err=${e.message()}");
+  await println("err=${e.message()}");
 
   var start: SeekFrom = Start { offset: 12u64 };
   var start_copy = start.clone();
-  println("${start.equals(start_copy)} ${start.eq(start_copy)} ${start == start_copy} ${start.hash() == start_copy.hash()} ${start.to_str()}");
+  await println("${start.equals(start_copy)} ${start.eq(start_copy)} ${start == start_copy} ${start.hash() == start_copy.hash()} ${start.to_str()}");
   var current: SeekFrom = Current { offset: -2 };
-  println(current.debug());
+  await println(current.debug());
 
   var kind: IoErrorKind = OtherIo {};
   var kind_copy = kind.clone();
-  println("${kind.equals(kind_copy)} ${kind.eq(kind_copy)} ${kind == kind_copy} ${kind.to_str()} ${kind.debug()}");
+  await println("${kind.equals(kind_copy)} ${kind.eq(kind_copy)} ${kind == kind_copy} ${kind.to_str()} ${kind.debug()}");
 
   var io_error = IoError { kind: OtherIo {}, message: "boom" };
   var io_error_copy = io_error.clone();
-  println("${io_error == io_error_copy} ${io_error.hash() == io_error_copy.hash()} ${render_debug(io_error)}");
+  await println("${io_error == io_error_copy} ${io_error.hash() == io_error_copy.hash()} ${render_debug(io_error)}");
+  null
 }

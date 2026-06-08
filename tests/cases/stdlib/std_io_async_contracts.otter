@@ -1,0 +1,139 @@
+//@ kind: run
+//@ serial
+//@ description: std:io AsyncReader and AsyncWriter provide generic async byte I/O over file and TCP adapters
+//@ stdout:
+//~ async-contracts=file-data net-data 9 1
+
+import { Future } from "core:prelude";
+import { Bytes } from "std:bytes";
+import { File, Path, remove } from "std:fs";
+import { AsyncReader, AsyncWriter, IoError, Start, println } from "std:io";
+import { AsyncTcpStream, TcpListener, TcpStream } from "std:net";
+import { SocketAddr, ip_v4, socket_addr } from "std:net/types";
+import { Thread, JoinHandle, Joined, Panicked } from "std:thread";
+
+function trim_read_buffer(buf: Bytes, request_len: i64): Bytes {
+  var i = 0;
+  while i < request_len {
+    var _ = buf.remove_at(0);
+    i = i + 1;
+  }
+  buf
+}
+
+function decode_appended(buf: Bytes, request_len: i64): str {
+  var decoded = trim_read_buffer(buf, request_len).decode_utf8();
+  if decoded is str { decoded as str } else { "utf8-error" }
+}
+
+function write_via_async_contract<T: AsyncWriter>(
+  writer: T,
+  data: Bytes
+): Future<i64 | IoError> async {
+  await writer.write_async(data)
+}
+
+function read_via_async_contract<T: AsyncReader>(
+  reader: T,
+  len: i64
+): Future<str> async {
+  var buf = Bytes.new();
+  var i = 0;
+  while i < len {
+    buf.push(0u8);
+    i = i + 1;
+  }
+  var count = await reader.read_async(buf);
+  if count is IoError || (count as i64) != len {
+    "read-error"
+  } else {
+    decode_appended(buf, len)
+  }
+}
+
+function serve(listener: TcpListener): Future<i64> async {
+  var accepted = await listener.accept();
+  if accepted is IoError {
+    return -1;
+  }
+
+  var pair = accepted as (TcpStream, SocketAddr);
+  var stream = pair.0;
+  var buf = Bytes.new();
+  var i = 0;
+  while i < 8 {
+    buf.push(0u8);
+    i = i + 1;
+  }
+  var read = await stream.read(buf);
+  if read is IoError || (read as i64) != 8 {
+    return -2;
+  }
+  var request = decode_appended(buf, 8);
+  if request != "net-data" {
+    return -3;
+  }
+  var closed = await listener.close();
+  if closed is IoError { -4 } else { 1 }
+}
+
+function joined_value(result: Joined<i64> | Panicked): i64 {
+  match result {
+    Joined<i64> joined => joined.value,
+    Panicked panic => -99,
+  }
+}
+
+function main(): Future<null> async {
+  var path = Path.new("/tmp/otter_fusion_std_io_async_contracts.bin");
+  await remove(path);
+  var opened = await File.create(path);
+  if opened is IoError {
+    await println("async-contracts=file-open-error net-open-error -1 -1");
+    return null;
+  }
+
+  var file = opened as File;
+  var file_written = await write_via_async_contract(file, Bytes.from_str("file-data"));
+  var file_flushed = await file.flush_async();
+  var file_seek = await file.seek_async(Start { offset: 0u64 });
+  var file_text = await read_via_async_contract(file, 9);
+  var file_closed = await file.close();
+  await remove(path);
+
+  var bound = await TcpListener.bind(socket_addr(ip_v4(127u8, 0u8, 0u8, 1u8), 0u16));
+  if bound is IoError {
+    await println("async-contracts=${file_text} net-bind-error ${file_written as i64} -1");
+    return null;
+  }
+
+  var listener = bound as TcpListener;
+  var local = await listener.local_addr();
+  if local is IoError {
+    await println("async-contracts=${file_text} net-local-error ${file_written as i64} -1");
+    return null;
+  }
+
+  var worker: JoinHandle<i64> = Thread.spawn(() async => await serve(listener.clone()));
+  var connected = await AsyncTcpStream.connect(local as SocketAddr);
+  if connected is IoError {
+    await println("async-contracts=${file_text} net-connect-error ${file_written as i64} -1");
+    return null;
+  }
+
+  var stream = connected as AsyncTcpStream;
+  var net_written = await write_via_async_contract(stream, Bytes.from_str("net-data"));
+  var joined = await worker.join();
+  var stream_closed = await stream.close();
+  var file_ok = file_written is i64
+    && (file_written as i64) == 9
+    && file_flushed is null
+    && file_seek is i64
+    && file_closed is null;
+  var net_ok = net_written is i64
+    && (net_written as i64) == 8
+    && stream_closed is null
+    && joined_value(joined) == 1;
+  await println("async-contracts=${file_text} net-data ${if file_ok { file_written as i64 } else { -1 }} ${if net_ok { 1 } else { 0 }}");
+  null
+}

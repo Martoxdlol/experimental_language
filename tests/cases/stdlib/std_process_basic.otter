@@ -6,53 +6,69 @@
 //~ otter_fusion run main.otter
 //~ args=2 first=run env=debug has=true/false count=1 missing=true cwd=examples
 //~ snapshot args=2 env=debug
-//~ status=true true false exit status 0
-//~ signal=false true signal 9
-//~ unknown=false false exit status unknown
+//~ status=true true false false true true exit status 0
+//~ signal=false true false false true signal 9
+//~ stopped=false true false 19 stopped signal 19
+//~ continued=false true true continued
+//~ unknown=false false false false true true true exit status unknown
 //~ output=true true 2 3
 //~ output-snapshot=2 cloned=2
 //~ builders=fusion check opt=1 env=2 count=2 has=true cleared=0/0/false inherited=true/0/false cwd-cleared=true original=otter_fusion run main.otter
 //~ validate=true true true process command program must not be empty true process command environment keys must not be empty or contain '='
 //~ hash-contract args=true env=true output=true
 //~ Command { program: "otter_fusion", args: ["run", "main.otter"], env: {RUST_LOG: "debug"}, cwd: Path { raw: "examples" } }
-//~ ExitStatus { code: 0, signal: null }
-//~ Output { status: ExitStatus { code: 0, signal: null }, stdout: bytes[79,75], stderr: bytes[69,82,82] }
+//~ ExitStatus { code: 0, signal: null, core_dumped: false, stopped_signal: null, continued: null }
+//~ Output { status: ExitStatus { code: 0, signal: null, core_dumped: false, stopped_signal: null, continued: null }, stdout: bytes[79,75], stderr: bytes[69,82,82] }
 
+import { Future } from "core:prelude";
 import { println } from "std:io";
 import { IoError } from "std:io";
 import { List, Map } from "core:collections";
 import { Bytes } from "std:bytes";
 import { Debug } from "std:fmt";
 import { Path } from "std:fs";
-import { Command, ExitStatus, Output, abort, args, command, env, env_all, exit, exit_status, output, set_env } from "std:process";
+import {
+  Command,
+  ExitStatus,
+  Output,
+  abort,
+  args,
+  command,
+  env,
+  env_all,
+  exit,
+  exit_status,
+  output,
+  set_env
+} from "std:process";
 
 function render(value: Debug): str {
   value.debug()
 }
 
-function main() {
-  var argv = args();
-  println("proc-args=${argv.size() >= 3} ${argv[1]} ${argv[2].size() > 0}");
-  set_env("OTTER_FUSION_STDLIB_PROCESS_TEST", "fixture");
-  var value = env("OTTER_FUSION_STDLIB_PROCESS_TEST");
-  var missing = env("OTTER_FUSION_STDLIB_PROCESS_TEST_MISSING");
-  var all = env_all();
-  var all_snapshot = env_all();
+function main(): Future<null> async {
+  var argv = await args();
+  await println("proc-args=${argv.size() >= 3} ${argv[1]} ${argv[2].size() > 0}");
+  await set_env("OTTER_FUSION_STDLIB_PROCESS_TEST", "fixture");
+  var value = await env("OTTER_FUSION_STDLIB_PROCESS_TEST");
+  var missing = await env("OTTER_FUSION_STDLIB_PROCESS_TEST_MISSING");
+  var all = await env_all();
+  var all_snapshot = await env_all();
   all["OTTER_FUSION_STDLIB_PROCESS_TEST"] = "mutated";
-  println("proc-env=${value as str} ${missing is null} ${all_snapshot.get("OTTER_FUSION_STDLIB_PROCESS_TEST") is str} ${(all_snapshot.get("OTTER_FUSION_STDLIB_PROCESS_TEST") as str) == "fixture"}");
+  await println("proc-env=${value as str} ${missing is null} ${all_snapshot.get("OTTER_FUSION_STDLIB_PROCESS_TEST") is str} ${(all_snapshot.get("OTTER_FUSION_STDLIB_PROCESS_TEST") as str) == "fixture"}");
 
   var cmd = Command.new("otter_fusion")
     .arg("run")
     .arg("main.otter")
     .env_var("RUST_LOG", "debug")
     .with_cwd(Path.new("examples"));
-  println(cmd.to_str());
+  await println(cmd.to_str());
 
   var args = cmd.args();
   var env = cmd.env();
   var cwd = cmd.cwd();
-  if env is Map<str, str> && cwd is Path {
-    println("args=${cmd.arg_count()} first=${args[0]} env=${cmd.env_var_value("RUST_LOG") as str} has=${cmd.has_env_var("RUST_LOG")}/${cmd.has_env_var("NOPE")} count=${cmd.env_count()} missing=${cmd.env_var_value("NOPE") is null} cwd=${(cwd as Path).as_str()}");
+  if env is Map < str, str > && cwd is Path {
+    await println("args=${cmd.arg_count()} first=${args[0]} env=${cmd.env_var_value("RUST_LOG") as str} has=${cmd.has_env_var("RUST_LOG")}/${cmd.has_env_var("NOPE")} count=${cmd.env_count()} missing=${cmd.env_var_value("NOPE") is null} cwd=${(cwd as Path).as_str()}");
   }
 
   args.push("--mutated");
@@ -61,26 +77,30 @@ function main() {
   }
   var env_again = cmd.env();
   if env_again is Map<str, str> {
-    println("snapshot args=${cmd.args().size()} env=${(env_again as Map<str, str>)["RUST_LOG"]}");
+    await println("snapshot args=${cmd.args().size()} env=${(env_again as Map<str, str>)["RUST_LOG"]}");
   }
 
   var ok = ExitStatus.exited(0i32);
   var failed = exit_status(1i32, null);
   var signaled = ExitStatus.signaled(9i32);
+  var stopped = ExitStatus.stopped(19i32);
+  var continued = ExitStatus.continued_status();
   var unknown = ExitStatus.unknown();
-  println("status=${ok.success()} ${ok.exited_normally()} ${ok.was_signaled()} ${ok.to_str()}");
-  println("signal=${signaled.success()} ${signaled.was_signaled()} ${signaled.to_str()}");
-  println("unknown=${unknown.exited_normally()} ${unknown.was_signaled()} ${unknown.to_str()}");
+  await println("status=${ok.success()} ${ok.exited_normally()} ${ok.was_signaled()} ${ok.core_dumped() as bool} ${ok.stopped_signal() is null} ${ok.continued() is null} ${ok.to_str()}");
+  await println("signal=${signaled.success()} ${signaled.was_signaled()} ${signaled.was_stopped()} ${signaled.was_continued()} ${signaled.core_dumped() is null} ${signaled.to_str()}");
+  await println("stopped=${stopped.success()} ${stopped.was_stopped()} ${stopped.was_continued()} ${stopped.stopped_signal() as i32} ${stopped.to_str()}");
+  await println("continued=${continued.success()} ${continued.was_continued()} ${continued.continued() as bool} ${continued.to_str()}");
+  await println("unknown=${unknown.exited_normally()} ${unknown.was_signaled()} ${unknown.was_stopped()} ${unknown.was_continued()} ${unknown.core_dumped() is null} ${unknown.stopped_signal() is null} ${unknown.continued() is null} ${unknown.to_str()}");
 
   var stdout = Bytes.from_str("OK");
   var stderr = Bytes.from_str("ERR");
   var captured = Output.new(ok, stdout, stderr);
   var captured2 = output(exit_status(0i32, null), Bytes.from_str("OK"), Bytes.from_str("ERR"));
-  println("output=${captured.status().success()} ${captured == captured2} ${captured.stdout().size()} ${captured.stderr().size()}");
+  await println("output=${captured.status().success()} ${captured == captured2} ${captured.stdout().size()} ${captured.stderr().size()}");
   stdout.push(33u8);
   var captured_stdout = captured.stdout();
   captured_stdout.push(33u8);
-  println("output-snapshot=${captured.stdout().size()} cloned=${captured.clone().stdout().size()}");
+  await println("output-snapshot=${captured.stdout().size()} cloned=${captured.clone().stdout().size()}");
 
   var replacement_args = List<str>();
   replacement_args.push("check");
@@ -98,7 +118,7 @@ function main() {
   var inherited = rebuilt.inherit_env();
   var no_cwd = rebuilt.clear_cwd();
   if rebuilt_env is Map<str, str> {
-    println("builders=${rebuilt.to_str()} opt=${rebuilt.env_var_value("OPT") as str} env=${(rebuilt_env as Map<str, str>).size()} count=${rebuilt.env_count()} has=${rebuilt.has_env_var("MODE")} cleared=${(cleared.env() as Map<str, str>).size()}/${cleared.env_count()}/${cleared.has_env_var("MODE")} inherited=${inherited.env() is null}/${inherited.env_count()}/${inherited.has_env_var("MODE")} cwd-cleared=${no_cwd.cwd() is null} original=${cmd.to_str()}");
+    await println("builders=${rebuilt.to_str()} opt=${rebuilt.env_var_value("OPT") as str} env=${(rebuilt_env as Map<str, str>).size()} count=${rebuilt.env_count()} has=${rebuilt.has_env_var("MODE")} cleared=${(cleared.env() as Map<str, str>).size()}/${cleared.env_count()}/${cleared.has_env_var("MODE")} inherited=${inherited.env() is null}/${inherited.env_count()}/${inherited.has_env_var("MODE")} cwd-cleared=${no_cwd.cwd() is null} original=${cmd.to_str()}");
   }
 
   var empty_program = Command.new("");
@@ -106,7 +126,7 @@ function main() {
   var empty_program_error = empty_program.validation_error();
   var invalid_env_result = invalid_env.validate();
   if empty_program_error is IoError && invalid_env_result is IoError {
-    println("validate=${cmd.is_valid()} ${cmd.validate() is null} ${!empty_program.is_valid()} ${(empty_program_error as IoError).message()} ${invalid_env.validation_error() is IoError} ${(invalid_env_result as IoError).message()}");
+    await println("validate=${cmd.is_valid()} ${cmd.validate() is null} ${!empty_program.is_valid()} ${(empty_program_error as IoError).message()} ${invalid_env.validation_error() is IoError} ${(invalid_env_result as IoError).message()}");
   }
 
   var args_forward = command("tool").arg("alpha").arg("beta");
@@ -114,11 +134,11 @@ function main() {
   var env_left = command("tool").env_var("A", "1").env_var("B", "2");
   var env_right = command("tool").env_var("B", "2").env_var("A", "1");
   var same_output = output(exit_status(0i32, null), Bytes.from_str("OK"), Bytes.from_str("ERR"));
-  println("hash-contract args=${args_forward != args_reversed && args_forward.hash() != args_reversed.hash()} env=${env_left == env_right && env_left.hash() == env_right.hash()} output=${captured == same_output && captured.hash() == same_output.hash()}");
+  await println("hash-contract args=${args_forward != args_reversed && args_forward.hash() != args_reversed.hash()} env=${env_left == env_right && env_left.hash() == env_right.hash()} output=${captured == same_output && captured.hash() == same_output.hash()}");
 
-  println(render(cmd));
-  println(render(ok));
-  println(render(captured));
+  await println(render(cmd));
+  await println(render(ok));
+  await println(render(captured));
 
   var same_cmd = command("otter_fusion")
     .arg("run")
@@ -126,6 +146,7 @@ function main() {
     .env_var("RUST_LOG", "debug")
     .with_cwd(Path.new("examples"));
   if !(cmd == same_cmd && cmd.hash() == same_cmd.hash() && failed != ok) {
-    println("bad process value semantics");
+    await println("bad process value semantics");
   }
+  null
 }

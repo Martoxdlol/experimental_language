@@ -2,12 +2,12 @@
 //
 // An `async` function declares its return type as `Future<Output>`. Calling
 // it does NOT run the body — it returns an inert state-machine future.
-// `await` drives a future inside another async body; the compiler turns the
+// `await` polls a future inside another async body; the compiler turns the
 // surrounding body into a state machine that suspends at each `await`
 // (returning `Pending`) and resumes when the awaited future is ready.
 //
-// `main` itself can be `async`: the runtime detects this and drives the root
-// future automatically — there is no user-visible `block_on`.
+// `main` itself can be `async`: the runtime detects this and polls the root
+// future until it resolves — there is no user-visible `block_on`.
 // `spawn EXPR` schedules a future on a worker; it itself evaluates to a
 // `Future<T>`, so `var f = spawn task(); var v = await f` runs `task` in
 // parallel and joins it.
@@ -111,60 +111,61 @@ function count_to(limit: i64): Future<i64> async {
 }
 
 // The program entry is itself an async function — the runtime starts the
-// executor and drives this future to completion. No `block_on` in user code.
+// executor and polls this root future until it resolves. No `block_on` in user code.
 function main(): Future<null> async {
-  // Drive an async function directly with `await`.
+  // Await an async function directly.
   var a: i64 = await answer();
-  println("answer = ${a }");
+  await println("answer = ${a}");
 
   var g: str = await greet("async world");
-  println(g);
+  await println(g);
 
   // A bare `async { … }` block is a zero-arg inline future literal. It
   // captures enclosing locals by value.
   var base: i64 = 100;
   var computed: i64 = await async { base + 42 };
-  println("computed = ${computed }");
+  await println("computed = ${computed}");
 
   // An async closure `(p) async => E` returns a future when called; it captures
   // the outer environment (here `base`) and may `await` inside.
   var scale = (n: i64): Future<i64> async => base * n;
   var scaled: i64 = await scale(3);
-  println("scaled = ${scaled }");
+  await println("scaled = ${scaled}");
 
   // `await` chaining: answer() = 42, greet_len("world") = len("hello, world") = 12.
   var c: i64 = await compute();
-  println("compute = ${c }");
+  await println("compute = ${c}");
 
   // Genuine suspension: 0 + 1 + 2 + 3 = 6, across four park/resume cycles.
   var t: i64 = await tick(4);
-  println("tick = ${t }");
+  await println("tick = ${t}");
 
   // `for await` over an async stream: 0 + 1 + 2 + 3 + 4 = 10.
   var r = Range { current: 0, end: 5 };
   var s: i64 = await sum_range(r);
-  println("stream = ${s }");
+  await println("stream = ${s}");
 
   // `spawn EXPR` schedules a future on a worker and itself returns a
   // `Future<T>`. We can run two tasks in parallel and `await` each in turn.
   var h: Future<i64> = spawn tick(5);
   var spawned: i64 = await h;
-  println("spawned = ${spawned }");
+  await println("spawned = ${spawned}");
 
   // `timeout(fut, ms)` races a future against a deadline, resolving to the
   // value (`T`) or `TimedOut`. `answer()` is instant, so it beats 100ms.
   var t: i64 | TimedOut = await timeout(answer(), 100);
   match t {
-    i64 v => println("timeout = ${v }"),
-    TimedOut => println("timeout = timed out"),
+    i64 v => await println("timeout = ${v}"),
+    TimedOut => await println("timeout = timed out"),
   }
 
   // `await` in a `while` condition — polled once per iteration → 3.
   var counted: i64 = await count_to(3);
-  println("counted = ${counted }");
+  await println("counted = ${counted}");
 
   // `await` in a short-circuit operand — the left is `false`, so the awaiting
   // right operand is never evaluated and never suspends; `gate` stays false.
   var gate: bool = false && await below(1, 0);
-  println("gate = ${gate }");
+  await println("gate = ${gate}");
+  null
 }

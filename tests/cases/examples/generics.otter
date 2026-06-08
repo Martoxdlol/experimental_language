@@ -6,6 +6,7 @@
 //~ max picks b = 99
 //~ pair = 7 / seven
 
+import { Future } from "core:prelude";
 // Generic functions and structs (monomorphized). Run: lang run examples/generics.lang
 import { println } from "std:io";
 
@@ -14,10 +15,11 @@ function max<T>(a: T, b: T, a_bigger: bool): T { if a_bigger { a } else { b } }
 
 struct Pair<A, B> { first: A, second: B }
 
-function main() {
-  println("id(42)      = ${id(42)}");
-  println("id(\"hi\")    = " + id("hi"));
-  println("max picks b = ${max(1, 99, false)}");
+function main(): Future<null> async {
+  await println("id(42)      = ${id(42)}");
+  await println("id(\"hi\")    = " + id("hi"));
+  await println("max picks b = ${max(1, 99, false)}");
   var p = Pair<i64, str> { first: 7, second: "seven" };
-  println("pair = ${p.first} / " + p.second);
+  await println("pair = ${p.first} / " + p.second);
+  null
 }

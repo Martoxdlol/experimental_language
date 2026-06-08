@@ -1,0 +1,11 @@
+//@ kind: compile-error
+//@ description: std:process Command.validation_error is an immediate pure command validation helper
+//@ stderr: `await` requires a `Future`
+
+import { Future } from "core:prelude";
+import { Command } from "std:process";
+
+function main(): Future<null> async {
+  var _error = await Command.new("").validation_error();
+  null
+}

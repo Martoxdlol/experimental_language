@@ -15,19 +15,25 @@ struct Record {
 
 struct LoggerAlreadySet {}
 
+interface Logger {
+  function log(self, r: Record): Future<null>;
+  function enabled(self, level: Level, module: str): bool;
+}
+
 function level_trace(): Level { LogTrace {} }
 function level_debug(): Level { LogDebug {} }
 function level_info(): Level { Info {} }
 function level_warn(): Level { Warn {} }
 function level_error(): Level { LogError {} }
 
-function record(level: Level, message: str, module: str, fields: Map<str, str>): Record {
+function record(level: Level, message: str, module: str, fields: Map<str, str>): Future<Record> async {
+  var now = await SystemTime.now();
   Record {
     level: level.clone(),
     message: message,
     module: module,
     fields: __log_clone_fields(fields),
-    time: SystemTime.now(),
+    time: now,
   }
 }
 
@@ -69,34 +75,59 @@ function __log_fields_hash(fields: Map<str, str>): u64 {
   h
 }
 
-function log_record(r: Record) {
-  println(r.to_str());
+function log_record(r: Record): Future<null> async {
+  await println(r.to_str());
+  null
 }
 
-function trace(message: str) { log_record(record(level_trace(), message, "", empty_fields())); }
-function debug(message: str) { log_record(record(level_debug(), message, "", empty_fields())); }
-function info(message: str) { log_record(record(level_info(), message, "", empty_fields())); }
-function warn(message: str) { log_record(record(level_warn(), message, "", empty_fields())); }
-function error(message: str) { log_record(record(level_error(), message, "", empty_fields())); }
-
-function info_with(message: str, fields: Map<str, str>) {
-  log_record(record(level_info(), message, "", fields));
+function trace(message: str): Future<null> async {
+  var r = await record(level_trace(), message, "", empty_fields());
+  await log_record(r)
 }
 
-function trace_with(message: str, fields: Map<str, str>) {
-  log_record(record(level_trace(), message, "", fields));
+function debug(message: str): Future<null> async {
+  var r = await record(level_debug(), message, "", empty_fields());
+  await log_record(r)
 }
 
-function debug_with(message: str, fields: Map<str, str>) {
-  log_record(record(level_debug(), message, "", fields));
+function info(message: str): Future<null> async {
+  var r = await record(level_info(), message, "", empty_fields());
+  await log_record(r)
 }
 
-function warn_with(message: str, fields: Map<str, str>) {
-  log_record(record(level_warn(), message, "", fields));
+function warn(message: str): Future<null> async {
+  var r = await record(level_warn(), message, "", empty_fields());
+  await log_record(r)
 }
 
-function error_with(message: str, fields: Map<str, str>) {
-  log_record(record(level_error(), message, "", fields));
+function error(message: str): Future<null> async {
+  var r = await record(level_error(), message, "", empty_fields());
+  await log_record(r)
+}
+
+function info_with(message: str, fields: Map<str, str>): Future<null> async {
+  var r = await record(level_info(), message, "", fields);
+  await log_record(r)
+}
+
+function trace_with(message: str, fields: Map<str, str>): Future<null> async {
+  var r = await record(level_trace(), message, "", fields);
+  await log_record(r)
+}
+
+function debug_with(message: str, fields: Map<str, str>): Future<null> async {
+  var r = await record(level_debug(), message, "", fields);
+  await log_record(r)
+}
+
+function warn_with(message: str, fields: Map<str, str>): Future<null> async {
+  var r = await record(level_warn(), message, "", fields);
+  await log_record(r)
+}
+
+function error_with(message: str, fields: Map<str, str>): Future<null> async {
+  var r = await record(level_error(), message, "", fields);
+  await log_record(r)
 }
 
 extend Level {
@@ -183,7 +214,7 @@ extend Record {
   }
 
   function has_field(self, key: str): bool {
-    self.fields.get(key)is str
+    self.fields.get(key) is str
   }
 
   function field_count(self): i64 { self.fields.size() }
@@ -295,7 +326,8 @@ extend Record: Eq {
 
 extend Record: Hash {
   function hash(self): u64 {
-    var h = (self.level.as_str() + "|" + self.message + "|" + self.module + "|" + self.time.as_unix_nanos()as str).hash();
+    var h = (self.level.as_str() + "|" + self.message + "|" + self.module + "|" + self.time.as_unix_nanos() as str)
+      .hash();
     (h + __log_fields_hash(self.fields)) % 4294967291u64
   }
 }

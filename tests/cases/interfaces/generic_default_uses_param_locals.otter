@@ -3,6 +3,7 @@
 //@ stdout:
 //~ 42
 //~ 5
+import { Future } from "core:prelude";
 import { println } from "std:io";
 
 interface Wrap<T> {
@@ -24,9 +25,10 @@ extend Count: Wrap<i64> {
   function unwrap(self): i64 { self.c }
 }
 
-function main() {
+function main(): Future<null> async {
   var a: Num = Num { n: 42 };
   var b: Count = Count { c: 5 };
-  println("${a.echo()}");
-  println("${b.echo()}");
+  await println("${a.echo()}");
+  await println("${b.echo()}");
+  null
 }

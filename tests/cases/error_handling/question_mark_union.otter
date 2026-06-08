@@ -2,10 +2,12 @@
 //@ description: the ? operator propagates an error variant from a union
 //@ stdout:
 //~ 15 -1
+import { Future } from "core:prelude";
 import { println } from "std:io";
 import { FromResidual } from "core:prelude";
-function main() {
-  println("${code(false)} ${code(true)}");
+function main(): Future<null> async {
+  await println("${code(false)} ${code(true)}");
+  null
 }
 struct Config { ok: i64 }
 struct AppError { code: i64 }

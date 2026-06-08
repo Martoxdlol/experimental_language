@@ -1,0 +1,10 @@
+//@ kind: compile-error
+//@ description: std:process Command.spawn returns a Future and cannot be used as an immediate child value
+//@ stderr: Future<
+
+import { Command, Child } from "std:process";
+import { IoError } from "std:io";
+
+function main() {
+  var child: Child | IoError = Command.new("true").spawn();
+}

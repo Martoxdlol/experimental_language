@@ -3,10 +3,12 @@
 //@ stderr: attempt to add with overflow
 //@ stdout:
 //~ start
+import { Future } from "core:prelude";
 import { println } from "std:io";
-function main() {
-  println("start");
+function main(): Future<null> async {
+  await println("start");
   var x = 9223372036854775807;
   var y = x + 1;
-  println("${y}");
+  await println("${y}");
+  null
 }

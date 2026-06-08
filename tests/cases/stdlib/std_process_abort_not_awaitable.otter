@@ -1,0 +1,11 @@
+//@ kind: compile-error
+//@ description: std:process abort is an immediate process-control marker
+//@ stderr: `await` requires a `Future`
+
+import { Future } from "core:prelude";
+import { abort } from "std:process";
+
+function main(): Future<null> async {
+  var _abort = await abort();
+  null
+}

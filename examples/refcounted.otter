@@ -1,43 +1,60 @@
+import { Future } from "core:prelude";
 // @RefCounted (docs/16 §8.1): opt a struct into deterministic, atomic reference
 // counting. Unlike ordinary managed objects — whose `Drop` is best-effort and
-// GC-timed — a `@RefCounted` value's `drop(self)` runs *synchronously the moment
-// its last strong reference goes away*, with the tracing GC kept only as the
-// cycle-collector backstop (reference counting alone leaks cycles).
+// GC-timed — a `@RefCounted` value's `drop(self)` runs immediately as
+// non-waiting cleanup when its last strong reference goes away, with the
+// tracing GC kept only as the cycle-collector backstop (reference counting
+// alone leaks cycles).
 //
 // Assignment SHARES (retains); `.clone()` makes an independent deep copy. The
 // strong count is atomic, so a refcounted handle can cross threads.
 
 import { println } from "std:io";
 import { Drop } from "core:prelude";
+import { AtomicI64, SeqCst } from "core:sync/atomic";
 
 @RefCounted
-struct File { id: i64 }
+struct Resource { id: i64, events: AtomicI64 }
 
-extend File: Drop {
+extend Resource: Drop {
   // Deterministic finalization: runs at strong-count 0, before the memory is freed.
-  function drop(self) { println("close file ${self.id }"); }
+  function drop(self) { record(self.events, self.id); }
 }
 
 // A @RefCounted owner releases its @RefCounted fields when it is destroyed, so
 // destruction cascades through the owned graph (owner drops first).
 @RefCounted
-struct Session { log: File }
-extend Session: Drop { function drop(self) { println("end session"); } }
+struct Session { log: Resource, events: AtomicI64 }
+extend Session: Drop { function drop(self) { record(self.events, 9); } }
 
-function open(id: i64): File { File { id: id } } // factory: hands back an owned reference
+function record(events: AtomicI64, code: i64): null {
+  var prior = events.load(SeqCst {});
+  events.store((prior * 1000) + code, SeqCst {});
+  null
+}
 
-function main() {
+function acquire(id: i64, events: AtomicI64): Resource { Resource { id: id, events: events } } // factory: hands back an owned reference
+
+function scenario(events: AtomicI64): Future<null> async {
   // Deterministic scope-bound drop, reverse binding order.
-  var a: File = open(1);
-  var b: File = a; // shared: both name the same file; it closes once
-  println("opened ${b.id }");
+  var a: Resource = acquire(1, events);
+  var b: Resource = a; // shared: both name the same resource; it finalizes once
+  await println("acquired ${b.id}");
 
   // Reassignment releases the previous value immediately.
-  var c: File = open(2);
-  c = open(3); // "close file 2" prints here
+  var c: Resource = acquire(2, events);
+  c = acquire(3, events); // records release of resource 2 here
 
-  // Ownership cascade: the session owns its log file.
-  var s: Session = Session { log: open(4) };
-  println("working");
-  // Scope exit (reverse order): session (end + close 4), then c (3), then a/b (1).
+  // Ownership cascade: the session owns its log resource.
+  var s: Session = Session { log: acquire(4, events), events: events };
+  await println("working");
+  // Scope exit (reverse order): session (end + release 4), then c (3), then a/b (1).
+  null
+}
+
+function main(): Future<null> async {
+  var events = AtomicI64.new(0);
+  await scenario(events);
+  await println("release_order=${events.load(SeqCst {})}");
+  null
 }

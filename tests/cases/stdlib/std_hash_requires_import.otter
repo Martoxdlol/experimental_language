@@ -3,12 +3,14 @@
 //@ stderr: cannot find type `Hasher`
 //@ stderr: cannot find type `DefaultHasher`
 //@ stderr: cannot find type `KeyedHasher`
+//@ stderr: cannot find type `HashSeedError`
 //@ stderr: cannot find value `DefaultHasher` in scope
 //@ stderr: cannot find value `KeyedHasher` in scope
 //@ stderr: cannot find value `hash_value` in scope
 //@ stderr: cannot find value `write_hash` in scope
 //@ stderr: cannot find value `combine_hash` in scope
 //@ stderr: cannot find value `keyed_hasher` in scope
+//@ stderr: cannot find value `os_keyed_hasher` in scope
 
 function finish(h: Hasher): u64 {
   h.finish()
@@ -22,9 +24,14 @@ function make_keyed(): KeyedHasher {
   KeyedHasher.new(1u64)
 }
 
+function make_seed_error(): HashSeedError {
+  HashSeedError {}
+}
+
 function main() {
   hash_value(7);
   write_hash(DefaultHasher.new(), 7);
   combine_hash(1u64, 2u64);
   keyed_hasher(1u64);
+  os_keyed_hasher();
 }

@@ -1,0 +1,48 @@
+//@ kind: run
+//@ serial
+//@ description: example program - async channel iteration drains a Receiver with for await; plain receiver iteration is rejected
+//@ stdout:
+//~ async channel iteration: 10
+
+import { Future } from "core:prelude";
+// Async channel iteration drains a Receiver with `for await`; plain
+// receiver iteration is not a public API.
+
+import { println } from "std:io";
+import { Sender, Receiver, channel } from "std:sync";
+import { Thread, JoinHandle, Joined, Panicked } from "std:thread";
+
+function produce(tx: Sender<i64>) {
+  var i = 1;
+  while i <= 4 {
+    tx.send(i);
+    i = i + 1;
+  }
+}
+
+function drain_async(rx: Receiver<i64>): Future<i64> async {
+  var total = 0;
+  for await value in rx {
+    total = total + value;
+  }
+  total
+}
+
+function joined_value(result: Joined<i64> | Panicked): i64 {
+  match result {
+    Joined<i64> joined => joined.value,
+    Panicked panic => -1,
+  }
+}
+
+function main(): Future<null> async {
+  var ends = channel<i64>();
+  var tx = ends.0;
+  var rx = ends.1;
+
+  var producer: JoinHandle<i64> = Thread.spawn(() => { produce(tx); 0 });
+  var total = await drain_async(rx);
+  var _producer_done = joined_value(await producer.join());
+  await println("async channel iteration: ${total}");
+  null
+}

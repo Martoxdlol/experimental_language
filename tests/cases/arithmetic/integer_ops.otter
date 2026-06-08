@@ -6,11 +6,13 @@
 //~ 3
 //~ 2
 //~ -8
+import { Future } from "core:prelude";
 import { println } from "std:io";
-function main() {
-  println("${10 - 3 - 2 }");
-  println("${7 / 2 + 2 }");
-  println("${15 / 5 }");
-  println("${17 % 5 }");
-  println("${0 - 8 }");
+function main(): Future<null> async {
+  await println("${10 - 3 - 2}");
+  await println("${7 / 2 + 2}");
+  await println("${15 / 5}");
+  await println("${17 % 5}");
+  await println("${0 - 8}");
+  null
 }

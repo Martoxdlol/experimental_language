@@ -1,0 +1,11 @@
+//@ kind: compile-error
+//@ description: Shared.new constructs an ordinary Shared handle; lock and try_lock are the awaited surfaces
+//@ stderr: `await` requires a `Future`
+
+import { Future } from "core:prelude";
+import { Shared } from "std:sync";
+
+function main(): Future<null> async {
+  var _state = await Shared.new(1);
+  null
+}

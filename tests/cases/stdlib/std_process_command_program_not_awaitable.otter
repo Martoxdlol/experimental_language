@@ -1,0 +1,11 @@
+//@ kind: compile-error
+//@ description: std:process Command.program is an immediate pure command value accessor
+//@ stderr: `await` requires a `Future`
+
+import { Future } from "core:prelude";
+import { Command } from "std:process";
+
+function main(): Future<null> async {
+  var _program = await Command.new("true").program();
+  null
+}

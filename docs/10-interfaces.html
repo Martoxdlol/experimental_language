@@ -414,9 +414,9 @@ Calls through an interface object dispatch dynamically.</p>
       <g transform="translate(14, 42)" font-size="11.5">
         <text y="0">function print_all&lt;T: Printable&gt;(</text>
         <text y="18">  items: List&lt;T&gt;</text>
-        <text y="36">) {</text>
+        <text y="36">): Future&lt;null&gt; async {</text>
         <text y="54">  for x in items {</text>
-        <text y="72">    print(x.to_string())</text>
+        <text y="72">    await print(x.to_string())</text>
         <text y="90">  }</text>
         <text y="108">}</text>
       </g>
@@ -433,9 +433,9 @@ Calls through an interface object dispatch dynamically.</p>
       <g transform="translate(14, 42)" font-size="11.5">
         <text y="0">function print_all(</text>
         <text y="18">  items: List&lt;Printable&gt;</text>
-        <text y="36">) {</text>
+        <text y="36">): Future&lt;null&gt; async {</text>
         <text y="54">  for x in items {</text>
-        <text y="72">    print(x.to_string())</text>
+        <text y="72">    await print(x.to_string())</text>
         <text y="90">  }</text>
         <text y="108">}</text>
       </g>

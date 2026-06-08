@@ -1,0 +1,17 @@
+//@ kind: compile-error
+//@ description: std:io AsyncReader is an explicit async contract and does not accept ordinary in-memory Reader-only values
+//@ stderr: type `BytesCursor` does not implement `AsyncReader`
+
+import { Future } from "core:prelude";
+import { Bytes } from "std:bytes";
+import { AsyncReader, IoError } from "std:io";
+
+function read_async_only<T: AsyncReader>(reader: T): Future<i64 | IoError> async {
+  await reader.read_async(Bytes.from_str("xxxx"))
+}
+
+function main(): Future<null> async {
+  var cursor = Bytes.from_str("memory-only").cursor();
+  var _ = await read_async_only(cursor);
+  null
+}

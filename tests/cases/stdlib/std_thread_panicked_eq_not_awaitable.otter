@@ -1,0 +1,12 @@
+//@ kind: compile-error
+//@ description: std:thread Panicked equality is an ordinary marker value comparison, not an async join operation
+//@ stderr: `await` requires a `Future`
+
+import { Eq, Future } from "core:prelude";
+import { Panicked } from "std:thread";
+
+function main(): Future<null> async {
+  var panic_value = Panicked { message: "boom" };
+  var _same = await (panic_value == Panicked { message: "boom" });
+  null
+}

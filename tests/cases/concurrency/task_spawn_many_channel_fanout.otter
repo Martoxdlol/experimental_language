@@ -3,8 +3,8 @@
 //@ description: many Task.spawn async workers fan out on the M:N executor, yield, send through cloned channel endpoints, and join deterministically
 //@ stdout:
 //~ received=19900 joined=19900
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { List } from "core:collections";
 import { Task, JoinHandle, Joined, Panicked, Cancelled } from "std:task";
 import { Sender, Receiver, ChannelClosed, channel } from "std:sync";
@@ -52,5 +52,6 @@ function main(): Future<null> async {
     joined = joined + joined_value(await h.join());
   }
 
-  println("received=${received } joined=${joined }");
+  await println("received=${received} joined=${joined}");
+  null
 }

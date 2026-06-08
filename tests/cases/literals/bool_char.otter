@@ -5,10 +5,12 @@
 //~ false
 //~ A
 //~ z
+import { Future } from "core:prelude";
 import { println } from "std:io";
-function main() {
-  println("${true}");
-  println("${false}");
-  println("${'A'}");
-  println("${'z'}");
+function main(): Future<null> async {
+  await println("${true}");
+  await println("${false}");
+  await println("${'A'}");
+  await println("${'z'}");
+  null
 }

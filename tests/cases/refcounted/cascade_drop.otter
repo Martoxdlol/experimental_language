@@ -2,21 +2,36 @@
 //@ description: a @RefCounted owner releases its @RefCounted fields on teardown (owner drops first, cascading)
 //@ stdout:
 //~ built
-//~ drop parent
-//~ drop child 1
+//~ drops=9001
+import { Future } from "core:prelude";
 import { println } from "std:io";
 import { Drop } from "core:prelude";
+import { AtomicI64, SeqCst } from "core:sync/atomic";
 
 @RefCounted
-struct Child { id: i64 }
-extend Child: Drop { function drop(self) { println("drop child ${self.id}"); } }
+struct Child { id: i64, events: AtomicI64 }
+extend Child: Drop { function drop(self) { record(self.events, self.id); } }
 
 @RefCounted
-struct Parent { child: Child }
-extend Parent: Drop { function drop(self) { println("drop parent"); } }
+struct Parent { child: Child, events: AtomicI64 }
+extend Parent: Drop { function drop(self) { record(self.events, 9); } }
 
-function main() {
-  var c: Child = Child { id: 1 };
-  var p: Parent = Parent { child: c };   // field retains; c also owns until scope end
-  println("built");
+function record(events: AtomicI64, code: i64): null {
+  var prior = events.load(SeqCst {});
+  events.store((prior * 1000) + code, SeqCst {});
+  null
+}
+
+function scenario(events: AtomicI64): Future<null> async {
+  var c: Child = Child { id: 1, events: events };
+  var p: Parent = Parent { child: c, events: events };   // field retains; c also owns until scope end
+  await println("built");
+  null
+}
+
+function main(): Future<null> async {
+  var events = AtomicI64.new(0);
+  await scenario(events);
+  await println("drops=${events.load(SeqCst {})}");
+  null
 }

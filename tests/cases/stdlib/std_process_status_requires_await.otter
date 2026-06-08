@@ -1,0 +1,10 @@
+//@ kind: compile-error
+//@ description: std:process Command.status returns a Future and cannot be used as an immediate status value
+//@ stderr: Future<
+
+import { Command, ExitStatus } from "std:process";
+import { IoError } from "std:io";
+
+function main() {
+  var status: ExitStatus | IoError = Command.new("true").status();
+}

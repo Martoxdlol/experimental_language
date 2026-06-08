@@ -3,17 +3,18 @@
 //@ stdout:
 //~ B
 //~ a=false b=true
-import { println, print } from "std:io";
 import { Future } from "core:prelude";
+import { println, print } from "std:io";
 import { yield_now } from "std:async";
 function side(tag: str, b: bool): Future<bool> async {
   await yield_now();
-  print(tag);
+  await print(tag);
   b
 }
 function main(): Future<null> async {
   var a = false && await side("A", true);
   var b = true && await side("B", true);
-  println("");
-  println("a=${a } b=${b }");
+  await println("");
+  await println("a=${a} b=${b}");
+  null
 }

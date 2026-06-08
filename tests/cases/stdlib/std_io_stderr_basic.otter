@@ -1,21 +1,23 @@
 //@ kind: run
-//@ description: std:io exposes stderr marker helpers backed by runtime writes
+//@ description: std:io exposes async stderr print helpers backed by runtime writes
 //@ stdout:
 //~ out-line
 //~ counts=4 true 4 true
 //@ stderr: err-line
 
+import { Future } from "core:prelude";
 import { Bytes } from "std:bytes";
 import { Writer, eprintln, println, stderr, stdout } from "std:io";
 
-function main() {
+function main(): Future<null> async {
   var out = Bytes.from_str("out-");
   var err = Bytes.from_str("err-");
-  var wrote_out = stdout().write(out);
-  var flushed_out = stdout().flush();
-  var wrote_err = stderr().write(err);
-  var flushed_err = stderr().flush();
-  eprintln("line");
-  println("line");
-  println("counts=${wrote_out as i64} ${flushed_out is null} ${wrote_err as i64} ${flushed_err is null}");
+  var wrote_out = await stdout().write(out);
+  var flushed_out = await stdout().flush();
+  var wrote_err = await stderr().write(err);
+  var flushed_err = await stderr().flush();
+  await eprintln("line");
+  await println("line");
+  await println("counts=${wrote_out as i64} ${flushed_out is null} ${wrote_err as i64} ${flushed_err is null}");
+  null
 }

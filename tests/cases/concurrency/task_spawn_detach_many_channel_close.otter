@@ -5,8 +5,8 @@
 //@ stdout:
 //~ count=1024 total=523776 closed=1
 
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { Task } from "std:task";
 import { Receiver, ChannelClosed, channel } from "std:sync";
 import { yield_now } from "std:async";
@@ -48,5 +48,6 @@ function main(): Future<null> async {
       },
     }
   }
-  println("count=${count } total=${total } closed=${closed }");
+  await println("count=${count} total=${total} closed=${closed}");
+  null
 }

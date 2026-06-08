@@ -1,13 +1,15 @@
 //@ kind: run
 //@ serial
-//@ description: std:net UdpSocket supports loopback datagrams with byte buffers and source socket addresses
+//@ description: std:net UdpSocket datagram operations are awaitable over loopback byte buffers and source socket addresses
 //@ stdout:
-//~ udp=true 5 otter true 0 0
+//~ udp=true true true true true true true true true true true true 5 otter otter true ping ping 0 0
 
+import { Future } from "core:prelude";
 import { Bytes } from "std:bytes";
 import { println, IoError } from "std:io";
 import { UdpSocket } from "std:net";
-import { SocketAddr, ip_v4, socket_addr } from "std:net/types";
+import { SocketAddr, ip_v4, ip_v6, socket_addr } from "std:net/types";
+import { Duration } from "std:time";
 
 function trim_read_buffer(buf: Bytes, request_len: i64): Bytes {
   var i = 0;
@@ -18,14 +20,14 @@ function trim_read_buffer(buf: Bytes, request_len: i64): Bytes {
   buf
 }
 
-function read_datagram(socket: UdpSocket, len: i64): (str, i64, SocketAddr | IoError) {
+function read_datagram(socket: UdpSocket, len: i64): Future<(str, i64, SocketAddr | IoError)> async {
   var buf = Bytes.new();
   var i = 0;
   while i < len {
     buf.push(0u8);
     i = i + 1;
   }
-  var received = socket.recv_from(buf);
+  var received = await socket.recv_from(buf);
   if received is IoError {
     var source: SocketAddr | IoError = received as IoError;
     ("recv-error", -1, source)
@@ -38,36 +40,198 @@ function read_datagram(socket: UdpSocket, len: i64): (str, i64, SocketAddr | IoE
   }
 }
 
-function main() {
+function peek_datagram(socket: UdpSocket, len: i64): Future<(str, i64, SocketAddr | IoError)> async {
+  var buf = Bytes.new();
+  var i = 0;
+  while i < len {
+    buf.push(0u8);
+    i = i + 1;
+  }
+  var received = await socket.peek_from(buf);
+  if received is IoError {
+    var source: SocketAddr | IoError = received as IoError;
+    ("peek-error", -1, source)
+  } else {
+    var pair = received as (i64, SocketAddr);
+    var decoded = trim_read_buffer(buf, len).decode_utf8();
+    var text = if decoded is str { decoded as str } else { "utf8-error" };
+    var source: SocketAddr | IoError = pair.1;
+    (text, pair.0, source)
+  }
+}
+
+function read_connected_datagram(socket: UdpSocket, len: i64): Future<(str, i64)> async {
+  var buf = Bytes.new();
+  var i = 0;
+  while i < len {
+    buf.push(0u8);
+    i = i + 1;
+  }
+  var received = await socket.recv(buf);
+  if received is IoError {
+    ("recv-error", -1)
+  } else {
+    var decoded = trim_read_buffer(buf, len).decode_utf8();
+    var text = if decoded is str { decoded as str } else { "utf8-error" };
+    (text, received as i64)
+  }
+}
+
+function peek_connected_datagram(socket: UdpSocket, len: i64): Future<(str, i64)> async {
+  var buf = Bytes.new();
+  var i = 0;
+  while i < len {
+    buf.push(0u8);
+    i = i + 1;
+  }
+  var received = await socket.peek(buf);
+  if received is IoError {
+    ("peek-error", -1)
+  } else {
+    var decoded = trim_read_buffer(buf, len).decode_utf8();
+    var text = if decoded is str { decoded as str } else { "utf8-error" };
+    (text, received as i64)
+  }
+}
+
+function socket_timeout_options_ok(socket: UdpSocket): Future<bool> async {
+  var timeout = Duration.from_millis(1);
+  var read_set = await socket.set_read_timeout(timeout);
+  var read_timeout = await socket.read_timeout();
+  var read_clear = await socket.set_read_timeout(null);
+  var read_cleared = await socket.read_timeout();
+  var write_set = await socket.set_write_timeout(timeout);
+  var write_timeout = await socket.write_timeout();
+  var write_clear = await socket.set_write_timeout(null);
+  var write_cleared = await socket.write_timeout();
+  !(read_set is IoError)
+    && read_timeout is Duration
+    && (read_timeout as Duration).as_millis() == 1
+    && !(read_clear is IoError)
+    && read_cleared is null
+    && !(write_set is IoError)
+    && write_timeout is Duration
+    && (write_timeout as Duration).as_millis() == 1
+    && !(write_clear is IoError)
+    && write_cleared is null
+}
+
+function main(): Future<null> async {
   var loopback = socket_addr(ip_v4(127u8, 0u8, 0u8, 1u8), 0u16);
-  var bound_receiver = UdpSocket.bind(loopback);
+  var bound_receiver = await UdpSocket.bind(loopback);
   if bound_receiver is IoError {
-    println("udp=false -1 bind-receiver false 1 1");
+    await println("udp=false -1 bind-receiver false 1 1");
     return null;
   }
   var receiver = bound_receiver as UdpSocket;
-  var receiver_addr = receiver.local_addr();
+  var receiver_addr = await receiver.local_addr();
   if receiver_addr is IoError {
-    println("udp=false -1 receiver-addr false 1 1");
+    await println("udp=false -1 receiver-addr false 1 1");
     return null;
   }
 
-  var bound_sender = UdpSocket.bind(loopback);
+  var bound_sender = await UdpSocket.bind(loopback);
   if bound_sender is IoError {
-    println("udp=false -1 bind-sender false 1 1");
+    await println("udp=false -1 bind-sender false 1 1");
     return null;
   }
   var sender = bound_sender as UdpSocket;
-  var sender_addr = sender.local_addr();
+  var sender_addr = await sender.local_addr();
   if sender_addr is IoError {
-    println("udp=false -1 sender-addr false 1 1");
+    await println("udp=false -1 sender-addr false 1 1");
     return null;
   }
 
-  var sent = sender.send_to(Bytes.from_str("otter"), receiver_addr as SocketAddr);
-  var packet = read_datagram(receiver, 5);
-  var source_matches = packet.2 is SocketAddr && (packet.2 as SocketAddr).port() == (sender_addr as SocketAddr).port();
-  var close_sender = sender.close();
-  var close_receiver = receiver.close();
-  println("udp=${sent is i64 && packet.1 == sent as i64} ${if sent is i64 { sent as i64 } else { -1 }} ${packet.0} ${source_matches} ${if close_sender is IoError { 1 } else { 0 }} ${if close_receiver is IoError { 1 } else { 0 }}");
+  var pending_error = await sender.take_error();
+  var take_error_ok = pending_error is null;
+  var nonblocking_on = await sender.set_nonblocking(true);
+  var nonblocking_off = await sender.set_nonblocking(false);
+  var nonblocking_ok = !(nonblocking_on is IoError) && !(nonblocking_off is IoError);
+  var timeout_ok = await socket_timeout_options_ok(sender);
+  var ttl_set = await sender.set_ttl(64u32);
+  var ttl = await sender.ttl();
+  var ttl_ok = false;
+  if ttl is u32 {
+    ttl_ok = !(ttl_set is IoError) && (ttl as u32) == 64u32;
+  }
+  var broadcast_on = await sender.set_broadcast(true);
+  var broadcast_state = await sender.broadcast();
+  var broadcast_off = await sender.set_broadcast(false);
+  var broadcast_reset = await sender.broadcast();
+  var broadcast_ok = !(broadcast_on is IoError)
+    && !(broadcast_off is IoError)
+    && broadcast_state is bool
+    && broadcast_reset is bool
+    && (broadcast_state as bool)
+    && !(broadcast_reset as bool);
+  var loop_v4_on = await sender.set_multicast_loop_v4(true);
+  var loop_v4_state = await sender.multicast_loop_v4();
+  var loop_v4_off = await sender.set_multicast_loop_v4(false);
+  var loop_v4_reset = await sender.multicast_loop_v4();
+  var loop_v4_ok = !(loop_v4_on is IoError)
+    && !(loop_v4_off is IoError)
+    && loop_v4_state is bool
+    && loop_v4_reset is bool
+    && (loop_v4_state as bool)
+    && !(loop_v4_reset as bool);
+  var multicast_ttl_set = await sender.set_multicast_ttl_v4(32u32);
+  var multicast_ttl = await sender.multicast_ttl_v4();
+  var multicast_ttl_ok = !(multicast_ttl_set is IoError)
+    && multicast_ttl is u32
+    && (multicast_ttl as u32) == 32u32;
+  var loopback6 = socket_addr(ip_v6(0u16, 0u16, 0u16, 0u16, 0u16, 0u16, 0u16, 1u16), 0u16);
+  var bound_v6 = await UdpSocket.bind(loopback6);
+  var loop_v6_ok = false;
+  var membership_v6_ok = false;
+  if bound_v6 is UdpSocket {
+    var socket_v6 = bound_v6 as UdpSocket;
+    var loop_v6_on = await socket_v6.set_multicast_loop_v6(true);
+    var loop_v6_state = await socket_v6.multicast_loop_v6();
+    var loop_v6_off = await socket_v6.set_multicast_loop_v6(false);
+    var loop_v6_reset = await socket_v6.multicast_loop_v6();
+    loop_v6_ok = !(loop_v6_on is IoError)
+      && !(loop_v6_off is IoError)
+      && loop_v6_state is bool
+      && loop_v6_reset is bool
+      && (loop_v6_state as bool)
+      && !(loop_v6_reset as bool);
+    var invalid_v6 = await socket_v6.join_multicast_v6(ip_v4(224u8, 0u8, 0u8, 251u8), 0u32);
+    var joined_v6 = await socket_v6.join_multicast_v6(
+      ip_v6(65282u16, 0u16, 0u16, 0u16, 0u16, 0u16, 0u16, 1u16),
+      0u32
+    );
+    var left_v6 = await socket_v6.leave_multicast_v6(
+      ip_v6(65282u16, 0u16, 0u16, 0u16, 0u16, 0u16, 0u16, 1u16),
+      0u32
+    );
+    membership_v6_ok = invalid_v6 is IoError
+      && (joined_v6 is null || joined_v6 is IoError)
+      && (left_v6 is null || left_v6 is IoError);
+    var _ = await socket_v6.close();
+  }
+  var joined_v4 = await sender.join_multicast_v4(ip_v4(224u8, 0u8, 0u8, 251u8), ip_v4(0u8, 0u8, 0u8, 0u8));
+  var left_v4 = await sender.leave_multicast_v4(ip_v4(224u8, 0u8, 0u8, 251u8), ip_v4(0u8, 0u8, 0u8, 0u8));
+  var membership_v4_ok = !(joined_v4 is IoError) && !(left_v4 is IoError);
+  var sent = await sender.send_to(Bytes.from_str("otter"), receiver_addr as SocketAddr);
+  var peeked_packet = await peek_datagram(receiver, 5);
+  var packet = await read_datagram(receiver, 5);
+  var source_matches = packet.2 is SocketAddr
+    && (packet.2 as SocketAddr).port() == (sender_addr as SocketAddr).port();
+  var connect_sender = await sender.connect(receiver_addr as SocketAddr);
+  var connect_receiver = await receiver.connect(sender_addr as SocketAddr);
+  var peer = await sender.peer_addr();
+  var connected_sent = await sender.send(Bytes.from_str("ping"));
+  var connected_peek = await peek_connected_datagram(receiver, 4);
+  var connected_packet = await read_connected_datagram(receiver, 4);
+  var connected_ok = !(connect_sender is IoError)
+    && !(connect_receiver is IoError)
+    && peer is SocketAddr
+    && (peer as SocketAddr).port() == (receiver_addr as SocketAddr).port()
+    && connected_sent is i64
+    && connected_peek.1 == connected_sent as i64
+    && connected_packet.1 == connected_sent as i64;
+  var close_sender = await sender.close();
+  var close_receiver = await receiver.close();
+  await println("udp=${sent is i64 && peeked_packet.1 == sent as i64 && packet.1 == sent as i64} ${take_error_ok} ${nonblocking_ok} ${timeout_ok} ${ttl_ok} ${broadcast_ok} ${loop_v4_ok} ${multicast_ttl_ok} ${loop_v6_ok} ${membership_v6_ok} ${membership_v4_ok} ${connected_ok} ${if sent is i64 { sent as i64 } else { -1 }} ${peeked_packet.0} ${packet.0} ${source_matches} ${connected_peek.0} ${connected_packet.0} ${if close_sender is IoError { 1 } else { 0 }} ${if close_receiver is IoError { 1 } else { 0 }}");
+  null
 }

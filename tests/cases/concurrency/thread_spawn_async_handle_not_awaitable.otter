@@ -1,0 +1,13 @@
+//@ kind: compile-error
+//@ description: Thread.spawn with an async closure still returns a JoinHandle; await join(), not the handle
+//@ stderr: `await` requires a `Future`
+
+import { Future } from "core:prelude";
+import { Thread } from "std:thread";
+
+function main(): Future<null> async {
+  var _joined = await Thread.spawn(() async => {
+    7
+  });
+  null
+}

@@ -6,8 +6,8 @@
 //@ stdout:
 //~ cancelled=128 recv=closed
 
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { List } from "core:collections";
 import { Task, JoinHandle, Joined, Panicked, Cancelled } from "std:task";
 import { Receiver, ChannelClosed, channel } from "std:sync";
@@ -60,8 +60,9 @@ function main(): Future<null> async {
   }
 
   if closed == 128 {
-    println("cancelled=${cancelled } recv=closed");
+    await println("cancelled=${cancelled} recv=closed");
   } else {
-    println("cancelled=${cancelled } recv=open ${closed }");
+    await println("cancelled=${cancelled} recv=open ${closed}");
   }
+  null
 }

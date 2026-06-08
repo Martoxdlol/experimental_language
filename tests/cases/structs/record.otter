@@ -4,12 +4,14 @@
 //~ 3
 //~ 4
 //~ 30
+import { Future } from "core:prelude";
 import { println } from "std:io";
-function main() {
+function main(): Future<null> async {
   var p = Point { x: 3, y: 4 };
-  println("${p.x}");
-  println("${p.y}");
+  await println("${p.x}");
+  await println("${p.y}");
   p.x = 30;
-  println("${p.x}");
+  await println("${p.x}");
+  null
 }
 struct Point { x: i64, y: i64 }

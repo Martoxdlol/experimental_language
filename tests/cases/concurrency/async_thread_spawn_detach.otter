@@ -1,10 +1,10 @@
 //@ kind: run
 //@ serial
-//@ description: a detached async `Thread.spawn` worker still runs to completion — it awaits a lock then signals over a channel; main observes the effect without ever holding a JoinHandle (docs/20 §1)
+//@ description: a detached async `Thread.spawn` worker still resolves its future — it awaits a lock then signals over a channel; main observes the effect without ever holding a JoinHandle (docs/20 §1)
 //@ stdout:
 //~ done=1 value=7
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { Shared } from "std:sync";
 import { Thread, JoinHandle, Joined, Panicked } from "std:thread";
 import { Sender, Receiver, ChannelClosed, channel } from "std:sync";
@@ -15,8 +15,8 @@ function main(): Future<null> async {
   var ends = channel<i64>();
   var tx = ends.0;
   var rx = ends.1;
-  // Detach an async worker: it has no JoinHandle, but still drives its future,
-  // locks the Shared, and sends a completion signal over the channel.
+  // Detach an async worker: it has no JoinHandle, but still polls its future,
+  // locks the Shared, and sends a result signal over the channel.
   Thread.spawn(() async => {
       await s.lock((c) => { c.value = 7; 0 });
       tx.send(1);
@@ -25,5 +25,6 @@ function main(): Future<null> async {
   var sig: i64 | ChannelClosed = await rx.recv();
   var done = match sig { i64 x => x, ChannelClosed c => -1 };
   var value: i64 = await state.lock((c) => c.value);
-  println("done=${done } value=${value }");
+  await println("done=${done} value=${value}");
+  null
 }

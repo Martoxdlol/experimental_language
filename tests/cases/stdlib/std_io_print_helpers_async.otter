@@ -1,0 +1,16 @@
+//@ kind: run
+//@ description: std:io print helpers are async public stream writes
+//@ stdout:
+//~ stdout-line
+//@ stderr: stderr-line
+
+import { Future } from "core:prelude";
+import { eprint, eprintln, print, println } from "std:io";
+
+function main(): Future<null> async {
+  await print("stdout");
+  await println("-line");
+  await eprint("stderr");
+  await eprintln("-line");
+  null
+}

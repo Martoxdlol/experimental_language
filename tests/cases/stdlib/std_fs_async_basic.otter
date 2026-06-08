@@ -11,33 +11,34 @@ import { File, Path, remove } from "std:fs";
 
 function main(): Future<null> async {
   var path = Path.new("/tmp/otter_fusion_std_fs_async_basic.bin");
-  remove(path);
+  await remove(path);
 
-  var opened = File.create(path);
+  var opened = await File.create(path);
   if opened is File {
     var file = opened as File;
     var payload = Bytes.from_str("ABCDEFGHIJ");
-    var written = await file.write_async(payload);
-    var flushed = await file.flush_async();
-    var seek_start = await file.seek_async(Start { offset: 0u64 });
+    var written = await file.write(payload);
+    var flushed = await file.flush();
+    var seek_start = await file.seek(Start { offset: 0u64 });
 
     var first = Bytes.new();
     first.push(0u8);
     first.push(0u8);
     first.push(0u8);
     first.push(0u8);
-    var first_count = await file.read_async(first);
+    var first_count = await file.read(first);
     var first_payload = first.slice(4, first.size());
 
-    var seek_mid = await file.seek_async(Current { offset: 0 });
+    var seek_mid = await file.seek(Current { offset: 0 });
     var rest = Bytes.new();
-    var rest_count = await file.read_to_end_async(rest);
-    var closed = file.close();
+    var rest_count = await file.read_to_end(rest);
+    var closed = await file.close();
     var after_close = await file.read_to_end_async(Bytes.new());
 
-    println("async_file=${written as i64} ${first_count as i64} ${first_payload.to_str()} ${rest_count as i64} ${rest.to_str()} ${flushed is null} ${seek_start is i64} ${seek_mid is i64} ${closed is null}");
-    println("async_file_closed=${after_close is IoError}");
+    await println("async_file=${written as i64} ${first_count as i64} ${first_payload.to_str()} ${rest_count as i64} ${rest.to_str()} ${flushed is null} ${seek_start is i64} ${seek_mid is i64} ${closed is null}");
+    await println("async_file_closed=${after_close is IoError}");
   }
 
-  remove(path);
+  await remove(path);
+  null
 }

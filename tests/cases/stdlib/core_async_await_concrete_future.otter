@@ -17,5 +17,6 @@ extend Once: Future<i64> {
 
 function main(): Future<null> async {
   var value = await Once { value: 7 };
-  println("awaited=${value}");
+  await println("awaited=${value}");
+  null
 }

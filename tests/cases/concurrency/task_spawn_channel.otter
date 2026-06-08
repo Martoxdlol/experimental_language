@@ -3,8 +3,8 @@
 //@ description: Task.spawn async worker consumes a cross-task channel with await recv(), proving endpoint capture works on the M:N executor
 //@ stdout:
 //~ sum=30
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { Task, JoinHandle, Joined, Panicked, Cancelled } from "std:task";
 import { Thread } from "std:thread";
 import { Sender, Receiver, ChannelClosed, channel } from "std:sync";
@@ -44,5 +44,6 @@ function main(): Future<null> async {
   var feeder = Thread.spawn(() => produce(tx, 4));
   var _ = await feeder.join();
   var r: Joined<i64> | Panicked | Cancelled = await worker.join();
-  println("sum=${value_of(r) }");
+  await println("sum=${value_of(r)}");
+  null
 }

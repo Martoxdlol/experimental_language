@@ -1,20 +1,21 @@
 //@ kind: run
-//@ description: the left operand of `&&` is unconditional and runs first; the right operand (carrying the `await`) runs only afterwards and only when the left is true — so an effectful sync left prints before the awaited side effect, and not at all when it short-circuits (docs/21 §4)
+//@ description: the left operand of `&&` is unconditional and runs first; the right operand (carrying the `await`) runs only afterwards and only when the left is true — so an effectful non-awaiting left prints before the awaited side effect, and not at all when it short-circuits (docs/21 §4)
 //@ stdout:
 //~ LRM
 //~ r1=true r2=false
-import { println, print } from "std:io";
 import { Future } from "core:prelude";
+import { println, print } from "std:io";
 import { yield_now } from "std:async";
-function mark(tag: str, b: bool): bool { print(tag); b }
+function mark(tag: str, b: bool): Future<bool> async { await print(tag); b }
 function side(tag: str, b: bool): Future<bool> async {
   await yield_now();
-  print(tag);
+  await print(tag);
   b
 }
 function main(): Future<null> async {
-  var r1 = mark("L", true) && await side("R", true);
-  var r2 = mark("M", false) && await side("Q", true);
-  println("");
-  println("r1=${r1 } r2=${r2 }");
+  var r1 = await mark("L", true) && await side("R", true);
+  var r2 = await mark("M", false) && await side("Q", true);
+  await println("");
+  await println("r1=${r1} r2=${r2}");
+  null
 }

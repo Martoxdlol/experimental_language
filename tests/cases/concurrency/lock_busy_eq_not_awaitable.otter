@@ -1,0 +1,12 @@
+//@ kind: compile-error
+//@ description: std:sync LockBusy equality is an ordinary marker value comparison, not an async lock operation
+//@ stderr: `await` requires a `Future`
+
+import { Eq, Future } from "core:prelude";
+import { LockBusy } from "std:sync";
+
+function main(): Future<null> async {
+  var busy = LockBusy {};
+  var _same = await (busy == LockBusy {});
+  null
+}

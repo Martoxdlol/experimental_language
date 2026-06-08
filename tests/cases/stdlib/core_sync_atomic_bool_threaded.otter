@@ -35,5 +35,6 @@ function main(): Future<null> async {
     joined_value(await b.join()) +
     joined_value(await c.join()) +
     joined_value(await d.join());
-  println("atomic-bool-threaded=${flag.load(SeqCst {})} joins=${joins}");
+  await println("atomic-bool-threaded=${flag.load(SeqCst {})} joins=${joins}");
+  null
 }

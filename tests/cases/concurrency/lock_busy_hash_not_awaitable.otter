@@ -1,0 +1,12 @@
+//@ kind: compile-error
+//@ description: std:sync LockBusy.hash is ordinary marker value hashing, not an async lock operation
+//@ stderr: `await` requires a `Future`
+
+import { Future, Hash } from "core:prelude";
+import { LockBusy } from "std:sync";
+
+function main(): Future<null> async {
+  var busy = LockBusy {};
+  var _hash = await busy.hash();
+  null
+}

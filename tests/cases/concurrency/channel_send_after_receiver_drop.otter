@@ -4,8 +4,8 @@
 //@ stdout:
 //~ drained
 //~ closed=true
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { Thread, JoinHandle, Joined, Panicked } from "std:thread";
 import { Sender, Receiver, ChannelClosed } from "std:sync";
 import { channel } from "std:sync";
@@ -21,12 +21,13 @@ function main(): Future<null> async {
   var h: JoinHandle<i64> = Thread.spawn(() => { drain(rx); 0 });
   // Wait for the worker (and thus the receiver release) to complete.
   var _r: Joined<i64> | Panicked = await h.join();
-  println("drained");
+  await println("drained");
   var closed = false;
   var result: null | ChannelClosed = tx.send(99);
   match result {
     ChannelClosed c => { closed = true; },
     null => {},
   }
-  println("closed=${closed }");
+  await println("closed=${closed}");
+  null
 }

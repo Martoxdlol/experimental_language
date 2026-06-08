@@ -3,10 +3,11 @@
 //@ stdout:
 //~ first=1
 //~ first=10
-//~ closing 20
-//~ closing 10
+//~ closing_order=20010
+import { Future } from "core:prelude";
 import { println } from "std:io";
 import { Drop } from "core:prelude";
+import { AtomicI64, SeqCst } from "core:sync/atomic";
 
 // A generic interface with a default method. `peek` has no body and must be
 // provided; `describe` carries a default whose signature and body mention the
@@ -25,6 +26,7 @@ interface Holder<T> {
 struct Resource<T> {
   value: T,
   id: i64,
+  events: AtomicI64,
 }
 
 extend<T> Resource<T>: Holder<T> {
@@ -32,14 +34,28 @@ extend<T> Resource<T>: Holder<T> {
 }
 
 extend<T> Resource<T>: Drop {
-  function drop(self) { println("closing ${self.id}"); }
+  function drop(self) { record(self.events, self.id); }
 }
 
-function main() {
+function record(events: AtomicI64, code: i64): null {
+  var prior = events.load(SeqCst {});
+  events.store((prior * 1000) + code, SeqCst {});
+  null
+}
+
+function scenario(events: AtomicI64): Future<null> async {
   // The inherited generic default works across instantiations.
-  var a: Resource<i64> = Resource<i64> { value: 1, id: 10 };
-  var b: Resource<i64> = Resource<i64> { value: 10, id: 20 };
-  println("first=${a.describe()}");
-  println("first=${b.describe()}");
+  var a: Resource<i64> = Resource<i64> { value: 1, id: 10, events: events };
+  var b: Resource<i64> = Resource<i64> { value: 10, id: 20, events: events };
+  await println("first=${a.describe()}");
+  await println("first=${b.describe()}");
   // `a` and `b` drop here in reverse bind order: 20 then 10.
+  null
+}
+
+function main(): Future<null> async {
+  var events = AtomicI64.new(0);
+  await scenario(events);
+  await println("closing_order=${events.load(SeqCst {})}");
+  null
 }

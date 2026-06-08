@@ -1,0 +1,8 @@
+//@ kind: compile-error
+//@ description: std:log process-global logger registry helpers are planned, not live ordinary public APIs
+//@ stderr: no `set_logger` in the imported module
+//@ stderr: no `logger` in the imported module
+
+import { set_logger, logger } from "std:log";
+
+function main() {}

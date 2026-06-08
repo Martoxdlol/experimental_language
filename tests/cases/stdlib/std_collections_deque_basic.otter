@@ -8,10 +8,13 @@
 //~ set=Deque[-10,20,40] ok=true/true/true bad=false/false
 //~ remove_at=0/2/3/null/null left=Deque[1]
 //~ bulk=Deque[-2,-1,0,2,4,5,6] from=Deque[10,11] contains=true/false
+//~ reverse copy=Deque[6,5,4,2,0,-1,-2] original=Deque[-2,-1,0,2,4,5,6]
+//~ reverse in_place=Deque[6,5,4,2,0,-1,-2] restored=Deque[-2,-1,0,2,4,5,6] empty=Deque[]
 //~ values eq=true hash_eq=true clone=Deque[0,2,4,9] original=Deque[0,2,4]
 //~ debug=Deque[bytes[65], bytes[66]]
 //~ debug-only=Deque[Token(7)]
 //~ cleared size=0 empty=true front_null=true back_null=true
+import { Future } from "core:prelude";
 import { println } from "std:io";
 import { List } from "core:collections";
 import { Deque, deque, deque_from_list } from "std:collections";
@@ -43,28 +46,28 @@ function sum(values: Deque<i64>): i64 {
   total
 }
 
-function main() {
+function main(): Future<null> async {
   var q = deque<i64>();
   q.push_back(2);
   q.push_front(1);
   q.push_back(3);
-  println("ends front=${show_i64(q.front())} back=${show_i64(q.back())} size=${q.size()} empty=${q.is_empty()}");
+  await println("ends front=${show_i64(q.front())} back=${show_i64(q.back())} size=${q.size()} empty=${q.is_empty()}");
 
   var first = q.pop_front();
   var last = q.pop_back();
-  println("pops front=${show_i64(first)} back=${show_i64(last)} remaining=${q.to_str()}");
+  await println("pops front=${show_i64(first)} back=${show_i64(last)} remaining=${q.to_str()}");
 
   q.push_front(0);
   q.push_back(4);
   var list = q.to_list();
-  println("iter sum=${sum(q)} list=${list[0]}/${list[1]}/${list[2]}");
-  println("get=${show_i64(q.get(0))}/${show_i64(q.get(1))}/${show_i64(q.get(2))} null=${q.get(-1) is null}/${q.get(3) is null}");
+  await println("iter sum=${sum(q)} list=${list[0]}/${list[1]}/${list[2]}");
+  await println("get=${show_i64(q.get(0))}/${show_i64(q.get(1))}/${show_i64(q.get(2))} null=${q.get(-1) is null}/${q.get(3) is null}");
   var set_front = q.set(0, -10);
   var set_middle = q.set(1, 20);
   var set_back = q.set(2, 40);
   var set_neg = q.set(-1, 99);
   var set_oob = q.set(3, 99);
-  println("set=${q.to_str()} ok=${set_front}/${set_middle}/${set_back} bad=${set_neg}/${set_oob}");
+  await println("set=${q.to_str()} ok=${set_front}/${set_middle}/${set_back} bad=${set_neg}/${set_oob}");
 
   var removable = deque<i64>();
   removable.push_back(2);
@@ -76,7 +79,7 @@ function main() {
   var removed_tail = removable.remove_at(1);
   var removed_neg = removable.remove_at(-1);
   var removed_oob = removable.remove_at(1);
-  println("remove_at=${show_i64(removed_front)}/${show_i64(removed_back_side)}/${show_i64(removed_tail)}/${show_i64(removed_neg)}/${show_i64(removed_oob)} left=${removable.to_str()}");
+  await println("remove_at=${show_i64(removed_front)}/${show_i64(removed_back_side)}/${show_i64(removed_tail)}/${show_i64(removed_neg)}/${show_i64(removed_oob)} left=${removable.to_str()}");
 
   q.set(0, 0);
   q.set(1, 2);
@@ -94,7 +97,17 @@ function main() {
   seed.push(10);
   seed.push(11);
   var from = deque_from_list<i64>(seed);
-  println("bulk=${q.to_str()} from=${from.to_str()} contains=${q.contains(5)}/${q.contains(9)}");
+  await println("bulk=${q.to_str()} from=${from.to_str()} contains=${q.contains(5)}/${q.contains(9)}");
+
+  var reversed = q.reversed();
+  await println("reverse copy=${reversed.to_str()} original=${q.to_str()}");
+  q.reverse();
+  var reversed_once = q.to_str();
+  q.reverse();
+  var restored = q.to_str();
+  var empty_reverse = deque<i64>();
+  empty_reverse.reverse();
+  await println("reverse in_place=${reversed_once} restored=${restored} empty=${empty_reverse.to_str()}");
 
   q.pop_front();
   q.pop_front();
@@ -107,16 +120,17 @@ function main() {
   same.push_back(4);
   var cloned = q.clone();
   cloned.push_back(9);
-  println("values eq=${q == same} hash_eq=${q.hash() == same.hash()} clone=${cloned.to_str()} original=${q.to_str()}");
+  await println("values eq=${q == same} hash_eq=${q.hash() == same.hash()} clone=${cloned.to_str()} original=${q.to_str()}");
 
   var bytes = deque<Bytes>();
   bytes.push_back(Bytes.from_str("A"));
   bytes.push_back(Bytes.from_str("B"));
-  println("debug=${render(bytes)}");
+  await println("debug=${render(bytes)}");
   var tokens = deque<Token>();
   tokens.push_back(Token { id: 7 });
-  println("debug-only=${render(tokens)}");
+  await println("debug-only=${render(tokens)}");
 
   q.clear();
-  println("cleared size=${q.size()} empty=${q.is_empty()} front_null=${q.front() is null} back_null=${q.back() is null}");
+  await println("cleared size=${q.size()} empty=${q.is_empty()} front_null=${q.front() is null} back_null=${q.back() is null}");
+  null
 }

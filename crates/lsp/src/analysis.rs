@@ -24,7 +24,7 @@ use compiler::sema::symbols::{Def, DefKind, Externals, Program};
 use compiler::sema::{Analysis, Builtin, ResolveContext, ValueRes, analyze_multi_ctx};
 use compiler::span::{FileId, SourceMap, Span};
 use compiler::token::{Token, TokenKind};
-use compiler::ty::Ty;
+use compiler::ty::{Ty, TyKind};
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -1112,14 +1112,87 @@ pub fn is_primitive_type_name(name: &str) -> bool {
 /// A builtin's display signature, for hover.
 pub fn builtin_signature(b: Builtin) -> &'static str {
     match b {
-        Builtin::Print => "print(str): null",
-        Builtin::Println => "println(str): null",
-        Builtin::Eprint => "eprint(str): null",
-        Builtin::Eprintln => "eprintln(str): null",
         Builtin::Panic => "panic(str): never",
         Builtin::PanicWith => "panic_with(value: dynamic): never",
         Builtin::Exit => "exit(i32): never",
         Builtin::Abort => "abort(): never",
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct FunctionSignatureDisplay {
+    pub params: &'static [(&'static str, &'static str)],
+    pub ret: &'static str,
+}
+
+impl FunctionSignatureDisplay {
+    pub fn detail(self) -> String {
+        let params = self
+            .params
+            .iter()
+            .map(|(name, ty)| format!("{name}: {ty}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("({params}): {}", self.ret)
+    }
+
+    pub fn label(self, name: &str) -> String {
+        let params = self
+            .params
+            .iter()
+            .map(|(name, ty)| format!("{name}: {ty}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("{name}({params}): {}", self.ret)
+    }
+}
+
+/// Compiler-recognized stdlib marker stubs that are editor-visible only through
+/// their async public contracts. The source bodies are intentionally payload-free
+/// markers; LSP hovers/completions/signature-help must never surface those as
+/// ordinary null-returning functions.
+pub fn stdlib_marker_signature(
+    prog: &compiler::sema::symbols::Program,
+    def: DefId,
+) -> Option<FunctionSignatureDisplay> {
+    if !prog.is_builtin_def(def) {
+        return None;
+    }
+    let d = prog.def(def);
+    let module_path = &prog.module(d.module).path;
+    let path_is = |want: &[&str]| {
+        module_path.len() == want.len()
+            && module_path
+                .iter()
+                .map(String::as_str)
+                .eq(want.iter().copied())
+    };
+    if path_is(&["std", "async"]) {
+        match d.name.as_str() {
+            "yield_now" => Some(FunctionSignatureDisplay {
+                params: &[],
+                ret: "Future<null>",
+            }),
+            "sleep" => Some(FunctionSignatureDisplay {
+                params: &[("ms", "i64")],
+                ret: "Future<null>",
+            }),
+            "timeout" => Some(FunctionSignatureDisplay {
+                params: &[("future", "Future<T>"), ("ms", "i64")],
+                ret: "Future<T | TimedOut>",
+            }),
+            _ => None,
+        }
+    } else if path_is(&["std", "time"]) {
+        match d.name.as_str() {
+            "sleep" => Some(FunctionSignatureDisplay {
+                params: &[("duration", "Duration")],
+                ret: "Future<null>",
+            }),
+            _ => None,
+        }
+    } else {
+        None
     }
 }
 
@@ -1292,6 +1365,88 @@ impl Compiled {
             .collect()
     }
 
+    /// Render the instantiated type of a direct record field, when the typed HIR
+    /// has a lowered layout template for the receiver's struct definition.
+    pub fn struct_field_type_detail(
+        &self,
+        struct_def: DefId,
+        args: &[Ty],
+        field_name: &str,
+    ) -> Option<String> {
+        let fields = self.analysis.hir.structs.get(&struct_def)?;
+        let compiler::sema::results::StructFields::Record(fields) = fields else {
+            return None;
+        };
+        let (_, ty) = fields.iter().find(|(name, _)| name == field_name)?;
+        let params = self.analysis.program.def(struct_def).generics.as_slice();
+        Some(self.render_ty_with_subst(*ty, params, args))
+    }
+
+    fn render_ty_with_subst(&self, ty: Ty, params: &[DefId], args: &[Ty]) -> String {
+        if let TyKind::Param(param) = self.analysis.tcx.kind(ty)
+            && let Some(idx) = params.iter().position(|p| p == param)
+            && let Some(arg) = args.get(idx)
+        {
+            return self.render_ty_with_subst(*arg, &[], &[]);
+        }
+
+        let name_of = |def: DefId| self.analysis.program.def(def).name.clone();
+        match self.analysis.tcx.kind(ty) {
+            TyKind::Ptr(inner) => format!("*{}", self.render_ty_with_subst(*inner, params, args)),
+            TyKind::Array { elem, len } => {
+                format!(
+                    "[{}; {}]",
+                    self.render_ty_with_subst(*elem, params, args),
+                    len
+                )
+            }
+            TyKind::Named { def, args: ty_args } => {
+                let base = name_of(*def);
+                if ty_args.is_empty() {
+                    base
+                } else {
+                    let inner: Vec<_> = ty_args
+                        .iter()
+                        .map(|arg| self.render_ty_with_subst(*arg, params, args))
+                        .collect();
+                    format!("{}<{}>", base, inner.join(", "))
+                }
+            }
+            TyKind::Tuple(elems) => {
+                let inner: Vec<_> = elems
+                    .iter()
+                    .map(|elem| self.render_ty_with_subst(*elem, params, args))
+                    .collect();
+                format!("({})", inner.join(", "))
+            }
+            TyKind::Func {
+                params: fn_params,
+                ret,
+                is_extern,
+            } => {
+                let inner: Vec<_> = fn_params
+                    .iter()
+                    .map(|param| self.render_ty_with_subst(*param, params, args))
+                    .collect();
+                let prefix = if *is_extern { "extern " } else { "" };
+                format!(
+                    "{}({}) => {}",
+                    prefix,
+                    inner.join(", "),
+                    self.render_ty_with_subst(*ret, params, args)
+                )
+            }
+            TyKind::Union(members) => {
+                let inner: Vec<_> = members
+                    .iter()
+                    .map(|member| self.render_ty_with_subst(*member, params, args))
+                    .collect();
+                inner.join(" | ")
+            }
+            _ => self.analysis.tcx.display(ty, &name_of),
+        }
+    }
+
     /// Every `extend` method whose target's top-level name matches `type_name`.
     /// `want_static` selects instance vs static methods. Methods include both
     /// public and private — visibility is enforced by the checker elsewhere;
@@ -1328,7 +1483,15 @@ impl Compiled {
 
     /// Render a function-like def's signature for completion `detail`/hover.
     /// Falls back to the def kind's name when the item is not a function.
-    pub fn def_signature(&self, def: &Def) -> String {
+    pub fn def_signature(&self, def_id: DefId) -> String {
+        if let Some(sig) = stdlib_marker_signature(&self.analysis.program, def_id) {
+            return sig.detail();
+        }
+        let def = self.analysis.program.def(def_id);
+        self.def_signature_from_def(def)
+    }
+
+    pub fn def_signature_from_def(&self, def: &Def) -> String {
         use compiler::ast::ParamKind;
         let Some(ItemKind::Function(f)) = &def.item else {
             return def.kind.describe().to_string();
@@ -1361,7 +1524,7 @@ impl Compiled {
 
 /// The top-level type-name of a syntactic type, if it is a `Named` reference.
 /// Looks through paren grouping but not unions/tuples/function-types.
-fn top_named_name(t: &compiler::ast::Type) -> Option<&str> {
+pub(crate) fn top_named_name(t: &compiler::ast::Type) -> Option<&str> {
     match &t.kind {
         TypeKind::Named { name, .. } => Some(&name.name),
         TypeKind::Paren(inner) => top_named_name(inner),
@@ -1378,13 +1541,65 @@ fn render_type(map: &SourceMap, t: &compiler::ast::Type) -> String {
         // Prelude/derive-synthesised types have no editor-visible source; we
         // fall back to the structural kind which is still informative.
         match &t.kind {
-            TypeKind::Named { name, .. } => name.name.clone(),
-            TypeKind::Tuple(_) => "tuple".into(),
-            TypeKind::Function { .. } => "function".into(),
-            TypeKind::ExternFunction { .. } => "extern function".into(),
-            TypeKind::Union(_) => "union".into(),
-            TypeKind::Pointer(_) => "pointer".into(),
-            TypeKind::Array { .. } => "array".into(),
+            TypeKind::Named { name, generics } => {
+                let mut rendered = name.name.clone();
+                if !generics.is_empty() {
+                    rendered.push('<');
+                    rendered.push_str(
+                        &generics
+                            .iter()
+                            .map(|ty| render_type(map, ty))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    );
+                    rendered.push('>');
+                }
+                rendered
+            }
+            TypeKind::Tuple(types) => {
+                let elems = types
+                    .iter()
+                    .map(|ty| render_type(map, ty))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("({elems})")
+            }
+            TypeKind::Function { params, ret } => {
+                let params = params
+                    .iter()
+                    .map(|ty| render_type(map, ty))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("({params}) => {}", render_type(map, ret))
+            }
+            TypeKind::ExternFunction { params, ret } => {
+                let params = params
+                    .iter()
+                    .map(|param| {
+                        let ty = render_type(map, &param.ty);
+                        match &param.name {
+                            Some(name) => format!("{}: {ty}", name.name),
+                            None => ty,
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("extern ({params}) => {}", render_type(map, ret))
+            }
+            TypeKind::Union(types) => types
+                .iter()
+                .map(|ty| render_type(map, ty))
+                .collect::<Vec<_>>()
+                .join(" | "),
+            TypeKind::Pointer(inner) => format!("*{}", render_type(map, inner)),
+            TypeKind::Array { elem, len } => {
+                let len = if len.span.file == DOC_FILE {
+                    map.slice(len.span).to_string()
+                } else {
+                    "_".to_string()
+                };
+                format!("[{}; {len}]", render_type(map, elem))
+            }
             TypeKind::SelfType => "Self".into(),
             TypeKind::Paren(inner) => render_type(map, inner),
         }
@@ -1611,8 +1826,141 @@ function main() {
     }
 
     #[test]
+    fn diagnostics_report_planned_sync_channel_constructors() {
+        let src = "import { channel_mpmc } from \"std:sync\";\n\
+                   function main() { var f = channel_mpmc; channel_mpmc<i64>(); }";
+        let c = Compiled::new(src.into());
+        assert!(
+            c.diagnostics
+                .iter()
+                .any(|(_, msg)| msg.contains("`std:sync.channel_mpmc` is planned")),
+            "expected planned channel diagnostic: {:?}",
+            c.diagnostics
+        );
+        assert!(
+            c.diagnostics.len() >= 2,
+            "expected value-use and call diagnostics: {:?}",
+            c.diagnostics
+        );
+    }
+
+    #[test]
+    fn diagnostics_report_ordinary_boundaries_are_not_awaitable() {
+        fn assert_not_awaitable(src: &str, span_needle: &str) {
+            let c = Compiled::new(src.into());
+            assert!(
+                c.diagnostics.iter().any(|(span, msg)| {
+                    msg.contains("`await` requires a `Future`")
+                        && c.map.slice(*span).contains(span_needle)
+                }),
+                "expected not-awaitable diagnostic for {span_needle}: {:?}",
+                c.diagnostics
+            );
+        }
+
+        assert_not_awaitable(
+            "import { Future } from \"core:prelude\";\n\
+             import { TcpStream } from \"std:net\";\n\
+             import { ip_v4, socket_addr } from \"std:net/types\";\n\
+             import { Duration } from \"std:time\";\n\
+             function main(): Future<null> async {\n\
+               var addr = socket_addr(ip_v4(127u8, 0u8, 0u8, 1u8), 0u16);\n\
+               var _ = await TcpStream.connect_timeout(addr, Duration.from_secs(1));\n\
+               null\n\
+             }",
+            "TcpStream.connect_timeout",
+        );
+        assert_not_awaitable(
+            "import { Future } from \"core:prelude\";\n\
+             import { Bytes } from \"std:bytes\";\n\
+             import { stdin } from \"std:io\";\n\
+             function main(): Future<null> async {\n\
+               var _ = await stdin().read(Bytes.new());\n\
+               null\n\
+             }",
+            "stdin",
+        );
+        assert_not_awaitable(
+            "import { Future } from \"core:prelude\";\n\
+             import { channel } from \"std:sync\";\n\
+             function main(): Future<null> async {\n\
+               var pair = channel<i64>();\n\
+               var _ = await pair.1.try_recv();\n\
+               null\n\
+             }",
+            "try_recv",
+        );
+        assert_not_awaitable(
+            "import { Future } from \"core:prelude\";\n\
+             import { Thread } from \"std:thread\";\n\
+             function main(): Future<null> async {\n\
+               var _ = await Thread.spawn(() => 7);\n\
+               null\n\
+             }",
+            "Thread.spawn",
+        );
+        assert_not_awaitable(
+            "import { Future } from \"core:prelude\";\n\
+             import { Thread } from \"std:thread\";\n\
+             function main(): Future<null> async {\n\
+               var _ = await Thread.spawn(() async => { 7 });\n\
+               null\n\
+             }",
+            "Thread.spawn",
+        );
+        assert_not_awaitable(
+            "import { Future } from \"core:prelude\";\n\
+             import { Task } from \"std:task\";\n\
+             function main(): Future<null> async {\n\
+               var _ = await Task.spawn(() => 7);\n\
+               null\n\
+             }",
+            "Task.spawn",
+        );
+        assert_not_awaitable(
+            "import { Future } from \"core:prelude\";\n\
+             import { Task } from \"std:task\";\n\
+             function main(): Future<null> async {\n\
+               var _ = await Task.spawn(() async => { 7 });\n\
+               null\n\
+             }",
+            "Task.spawn",
+        );
+    }
+
+    #[test]
+    fn diagnostics_accept_std_time_sleep_as_awaitable() {
+        let src = "import { Future } from \"core:prelude\";\n\
+                   import { Duration, sleep } from \"std:time\";\n\
+                   function main(): Future<null> async {\n\
+                     var _ = await sleep(Duration.from_millis(1));\n\
+                     null\n\
+                   }";
+        let c = Compiled::new(src.into());
+        assert!(c.diagnostics.is_empty(), "unexpected: {:?}", c.diagnostics);
+    }
+
+    #[test]
     fn clean_program_has_no_diagnostics() {
         let c = Compiled::new(PROG.into());
+        assert!(c.diagnostics.is_empty(), "unexpected: {:?}", c.diagnostics);
+    }
+
+    #[test]
+    fn analysis_accepts_std_rand_os_bytes_helper() {
+        let src = "import { Future } from \"core:prelude\";\n\
+                   import { Bytes } from \"std:bytes\";\n\
+                   import { println } from \"std:io\";\n\
+                   import { RandomError, os_bytes } from \"std:rand\";\n\
+                   function main(): Future<null> async {\n\
+                     var bytes = await os_bytes(4);\n\
+                     match bytes {\n\
+                       Bytes => await println((bytes as Bytes).size() as str),\n\
+                       RandomError => await println((bytes as RandomError).message()),\n\
+                     }\n\
+                     null\n\
+                   }";
+        let c = Compiled::new(src.into());
         assert!(c.diagnostics.is_empty(), "unexpected: {:?}", c.diagnostics);
     }
 
@@ -2026,8 +2374,8 @@ function main(): Future<null> async {
 
     #[test]
     fn task_joinhandle_methods_surface_cancelled_to_lsp() {
-        // `std:task::JoinHandle` is intentionally distinct from
-        // `std:thread::JoinHandle`: the task handle exposes cooperative
+        // `std:task` `JoinHandle` is intentionally distinct from
+        // `std:thread` `JoinHandle`: the task handle exposes cooperative
         // cancellation, and its join future includes the `Cancelled` variant.
         // Keep the LSP type table in lockstep with the checker so hovers and
         // completion-detail UI do not erase that distinction.
@@ -2346,7 +2694,7 @@ interface Service { function start(self): i64; function stop(self): i64; functio
         assert_eq!(
             formatted,
             "import {\n  Clone,\n  ToStr,\n  Eq,\n  Ord,\n  Hash,\n  Iterator,\n  Item,\n  Done,\n  Try,\n  FromResidual,\n  Drop,\n  Future,\n  Ready,\n  Pending,\n  Context\n} from \"core:prelude\";\ntype Many = Result<\n  Alpha,\n  Beta,\n  Gamma,\n  Delta,\n  Epsilon,\n  Zeta,\n  Eta,\n  Theta,\n  Iota,\n  Kappa,\n  Lambda,\n  Mu,\n  Nu\n>;\ntype Value =\n  Alpha |\n  Beta |\n  Gamma |\n  Delta |\n  Epsilon |\n  Zeta |\n  Eta |\n  Theta |\n  Iota |\n  Kappa |\n  Lambda |\n  Mu |\n  Nu |\n  Xi |\n  Omicron;\ninterface Renderable:\n  Alpha +\n  Beta +\n  Gamma +\n  Delta +\n  Epsilon +\n  Zeta +\n  Eta +\n  Theta +\n  Iota +\n  Kappa +\n  Lambda +\n  Mu {\n  function render(self): str;\n}
-interface Service {\n  function start(self): i64;\n  function stop(self): i64;\n  function reset(self): i64;\n  function status(self): i64;\n  function configure(self, alpha: Alpha, beta: Beta): i64;\n}\nfunction dump<T:\n  Alpha +\n  Beta +\n  Gamma +\n  Delta +\n  Epsilon +\n  Zeta +\n  Eta +\n  Theta +\n  Iota +\n  Kappa +\n  Lambda +\n  Mu>(x: T): T { x }\nfunction choose():\n  Alpha |\n  Beta |\n  Gamma |\n  Delta |\n  Epsilon |\n  Zeta |\n  Eta |\n  Theta |\n  Iota |\n  Kappa |\n  Lambda |\n  Mu |\n  Nu |\n  Xi |\n  Omicron { return alpha; }\npub struct Packet {\n  pub alpha: Alpha,\n  beta: Beta,\n  gamma: Gamma,\n  delta: Delta,\n  epsilon: Epsilon,\n  zeta: Zeta,\n  eta: Eta,\n  theta: Theta,\n  iota: Iota\n}\nfunction main<T>() {\n  var xs: List<Map<str, List<T>>> = List<Map<str, List<T>>>();\n  var y = 1; /*keep  exact*/ var z = y + 2;\n  var a = 1; /* open\n  keep interior\n*/ var b = a + 2;\n  var total = combine(\n    alpha,\n    beta,\n    gamma,\n    delta,\n    epsilon,\n    zeta,\n    eta,\n    theta,\n    iota,\n    kappa,\n    lambda,\n    mu,\n    nu\n  );\n  var list = [\n    alpha,\n    beta,\n    gamma,\n    delta,\n    epsilon,\n    zeta,\n    eta,\n    theta,\n    iota,\n    kappa,\n    lambda,\n    mu,\n    nu,\n    xi,\n    omicron,\n    pi,\n    rho\n  ];\n  var map = {\n    \"alpha\": alpha,\n    \"beta\": beta,\n    \"gamma\": gamma,\n    \"delta\": delta,\n    \"epsilon\": epsilon,\n    \"zeta\": zeta,\n    \"eta\": eta,\n    \"theta\": theta\n  };\n  var point = Point {\n    x: alpha,\n    y: beta,\n    z: gamma,\n    w: delta,\n    a: epsilon,\n    b: zeta,\n    c: eta,\n    d: theta,\n    e: iota,\n    f: kappa,\n    g: lambda\n  };\n  var arm = match classify(input) {\n    0 => alpha,\n    1 => beta,\n    2 => gamma,\n    3 => delta,\n    4 => epsilon,\n    5 => zeta,\n    6 => eta,\n    7 => theta,\n    _ => omega\n  };\n  var url = \"http://host/a/*not comment*/\";\n  var c = '+';\n  var msg = \"value ${x + 1 }!\";\n  var x = 1;\n  if x > 0 {\n    x = 2;\n  }\n}\n"
+interface Service {\n  function start(self): i64;\n  function stop(self): i64;\n  function reset(self): i64;\n  function status(self): i64;\n  function configure(self, alpha: Alpha, beta: Beta): i64;\n}\nfunction dump<T:\n  Alpha +\n  Beta +\n  Gamma +\n  Delta +\n  Epsilon +\n  Zeta +\n  Eta +\n  Theta +\n  Iota +\n  Kappa +\n  Lambda +\n  Mu>(x: T): T { x }\nfunction choose():\n  Alpha |\n  Beta |\n  Gamma |\n  Delta |\n  Epsilon |\n  Zeta |\n  Eta |\n  Theta |\n  Iota |\n  Kappa |\n  Lambda |\n  Mu |\n  Nu |\n  Xi |\n  Omicron { return alpha; }\npub struct Packet {\n  pub alpha: Alpha,\n  beta: Beta,\n  gamma: Gamma,\n  delta: Delta,\n  epsilon: Epsilon,\n  zeta: Zeta,\n  eta: Eta,\n  theta: Theta,\n  iota: Iota\n}\nfunction main<T>() {\n  var xs: List<Map<str, List<T>>> = List<Map<str, List<T>>>();\n  var y = 1; /*keep  exact*/ var z = y + 2;\n  var a = 1; /* open\n  keep interior\n*/ var b = a + 2;\n  var total = combine(\n    alpha,\n    beta,\n    gamma,\n    delta,\n    epsilon,\n    zeta,\n    eta,\n    theta,\n    iota,\n    kappa,\n    lambda,\n    mu,\n    nu\n  );\n  var list = [\n    alpha,\n    beta,\n    gamma,\n    delta,\n    epsilon,\n    zeta,\n    eta,\n    theta,\n    iota,\n    kappa,\n    lambda,\n    mu,\n    nu,\n    xi,\n    omicron,\n    pi,\n    rho\n  ];\n  var map = {\n    \"alpha\": alpha,\n    \"beta\": beta,\n    \"gamma\": gamma,\n    \"delta\": delta,\n    \"epsilon\": epsilon,\n    \"zeta\": zeta,\n    \"eta\": eta,\n    \"theta\": theta\n  };\n  var point = Point {\n    x: alpha,\n    y: beta,\n    z: gamma,\n    w: delta,\n    a: epsilon,\n    b: zeta,\n    c: eta,\n    d: theta,\n    e: iota,\n    f: kappa,\n    g: lambda\n  };\n  var arm = match classify(input) {\n    0 => alpha,\n    1 => beta,\n    2 => gamma,\n    3 => delta,\n    4 => epsilon,\n    5 => zeta,\n    6 => eta,\n    7 => theta,\n    _ => omega\n  };\n  var url = \"http://host/a/*not comment*/\";\n  var c = '+';\n  var msg = \"value ${x + 1}!\";\n  var x = 1;\n  if x > 0 {\n    x = 2;\n  }\n}\n"
         );
         // The reformat must be token-preserving (the handler declines otherwise).
         assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
@@ -2376,12 +2724,98 @@ interface Service {\n  function start(self): i64;\n  function stop(self): i64;\n
 
     #[test]
     fn formatting_preserves_async_closure_and_null_generic_spacing() {
-        let src = "function value_of(r:Joined < i64 >|Panicked):i64{\nmatch r {Joined < i64 > j=>j.value,_=>-1}\n}\nfunction main():Future < null > async{\nvar h:JoinHandle < i64 > =Task.spawn(()async=>{null});\n}\n";
+        let src = "function value_of(r:Joined < i64 >|Panicked):i64{\nmatch r {Joined < i64 > j=>j.value,_=>-1}\n}\nstruct Holder { job:(i64)=>Future < i64 > }\nfunction main():Future < null > async{\nvar h:JoinHandle < i64 > =Task.spawn(()async=>{null});\n}\n";
         let c = Compiled::new(src.into());
         let formatted = compiler::fmt::format_source(&c.text);
         assert_eq!(
             formatted,
-            "function value_of(r: Joined<i64> | Panicked): i64 {\n  match r { Joined<i64> j => j.value, _ => -1 }\n}\nfunction main(): Future<null> async {\n  var h: JoinHandle<i64> = Task.spawn(() async => { null });\n}\n"
+            "function value_of(r: Joined<i64> | Panicked): i64 {\n  match r { Joined<i64> j => j.value, _ => -1 }\n}\nstruct Holder { job: (i64) => Future<i64> }\nfunction main(): Future<null> async {\n  var h: JoinHandle<i64> = Task.spawn(() async => { null });\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_preserves_multiline_async_closure_block_indentation() {
+        let src = "function main():Future < null > async{\nTask.spawn(()async=>{\nif(true){\nnull\n}\n});\ndrive(async {\nif(false){\nnull\n}\n});\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function main(): Future<null> async {\n  Task.spawn(() async => {\n    if (true) {\n      null\n    }\n  });\n  drive(async {\n    if (false) {\n      null\n    }\n  });\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_preserves_control_keyword_unary_spacing() {
+        let src = "function main(){\nif!done{return;}\nwhile!done{tick();}\nmatch!done{true=>1,_=>0};\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function main() {\n  if !done { return; }\n  while !done { tick(); }\n  match !done { true => 1, _ => 0 };\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_preserves_statement_keyword_unary_spacing() {
+        let src = "function main(){\nreturn-1;\nbreak-2;\nawait!ready;\nspawn!ready;\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function main() {\n  return -1;\n  break -2;\n  await !ready;\n  spawn !ready;\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_preserves_for_in_paren_and_comment_trivia() {
+        let src = concat!(
+            "function main(){\n",
+            "//~ output",
+            "   ",
+            "\n",
+            "for x in([1,2]){println(x as str);}\n",
+            "}\n"
+        );
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            concat!(
+                "function main() {\n",
+                "  //~ output",
+                "   ",
+                "\n",
+                "  for x in ([1, 2]) { println(x as str); }\n",
+                "}\n"
+            )
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_long_call_arguments_with_trailing_line_comment() {
+        let src = "function main(){\nvar total=combine(alpha,beta,gamma,delta,epsilon,zeta,eta,theta,iota,kappa,lambda,mu,nu); //keep exact\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function main() {\n  var total = combine(\n    alpha,\n    beta,\n    gamma,\n    delta,\n    epsilon,\n    zeta,\n    eta,\n    theta,\n    iota,\n    kappa,\n    lambda,\n    mu,\n    nu\n  ); //keep exact\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_long_call_arguments_with_trailing_block_comment() {
+        let src = "function main(){\nvar total=combine(alpha,beta,gamma,delta,epsilon,zeta,eta,theta,iota,kappa,lambda,mu,nu); /*keep  exact /* nested */ done*/\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function main() {\n  var total = combine(\n    alpha,\n    beta,\n    gamma,\n    delta,\n    epsilon,\n    zeta,\n    eta,\n    theta,\n    iota,\n    kappa,\n    lambda,\n    mu,\n    nu\n  ); /*keep  exact /* nested */ done*/\n}\n"
         );
         assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
     }
@@ -2459,6 +2893,18 @@ interface Service {\n  function start(self): i64;\n  function stop(self): i64;\n
     }
 
     #[test]
+    fn formatting_wraps_single_method_expressions() {
+        let src = "function f() {\nvar result=alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu.compute<Alpha,Beta>(one.two(),three.four());\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  var result = alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu\n    .compute<Alpha, Beta>(one.two(), three.four());\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
     fn formatting_wraps_logical_chains() {
         let src = "function f() {\nvar ok=alpha&&beta(one,two)&&gamma<Delta,Epsilon>(three,four)||delta.epsilon()&&zeta&&eta(theta,iota)&&kappa;\n}\n";
         let c = Compiled::new(src.into());
@@ -2490,6 +2936,30 @@ interface Service {\n  function start(self): i64;\n  function stop(self): i64;\n
         assert_eq!(
             formatted,
             "function f() {\n  var ok = compute<Alpha, Beta>(first_value, second_value, third_value)\n    > other<Gamma, Delta>(fourth_value, fifth_value, sixth_value);\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_single_comparison_expressions() {
+        let src = "function f() {\nvar ok=alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa==lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  var ok = alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa\n    == lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_single_comparison_expressions_with_nested_operands() {
+        let src = "function f() {\nvar ok=alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa==compare<Bool>(beta==gamma,delta<epsilon);\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  var ok = alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa\n    == compare<Bool>(beta == gamma, delta < epsilon);\n}\n"
         );
         assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
     }
@@ -2669,7 +3139,7 @@ interface Service {\n  function start(self): i64;\n  function stop(self): i64;\n
         let formatted = compiler::fmt::format_source(&c.text);
         assert_eq!(
             formatted,
-            "function f() {\n  drive(async {\n      generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; });\n}\n"
+            "function f() {\n  drive(async {\n    generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; });\n}\n"
         );
         assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
     }
@@ -2681,19 +3151,19 @@ interface Service {\n  function start(self): i64;\n  function stop(self): i64;\n
         let formatted = compiler::fmt::format_source(&c.text);
         assert_eq!(
             formatted,
-            "function f() {\n  drive({\n      generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; });\n}\n"
+            "function f() {\n  drive({\n    generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; });\n}\n"
         );
         assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
     }
 
     #[test]
     fn formatting_wraps_macro_block_bodies() {
-        let src = "function f() {\nvar x=@AsBlock { generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; };\nvar y=@Trace(\"op\") { generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; };\n}\n";
+        let src = "function f() {\nvar x=@AsBlock { generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; };\nvar y=@Trace(\"op\") { generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; };\ndrive(@Trace(\"op\") { generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; });\n}\n";
         let c = Compiled::new(src.into());
         let formatted = compiler::fmt::format_source(&c.text);
         assert_eq!(
             formatted,
-            "function f() {\n  var x = @AsBlock {\n    generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; };\n  var y = @Trace(\"op\") {\n    generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; };\n}\n"
+            "function f() {\n  var x = @AsBlock {\n    generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; };\n  var y = @Trace(\"op\") {\n    generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; };\n  drive(@Trace(\"op\") {\n    generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; });\n}\n"
         );
         assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
     }
@@ -3095,6 +3565,18 @@ interface Service {\n  function start(self): i64;\n  function stop(self): i64;\n
     }
 
     #[test]
+    fn formatting_wraps_single_cast_expressions() {
+        let src = "function f() {\nvar value=alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa as LambdaMuNuXiOmicronPiRhoSigmaTau;\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  var value = alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa\n    as LambdaMuNuXiOmicronPiRhoSigmaTau;\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
     fn formatting_wraps_bitwise_and_chains() {
         let src = "function f() {\nvar mask=alpha&beta&gamma&delta&epsilon&zeta&eta&theta&iota&kappa&lambda&mu&nu&xi&omicron&pi;\n}\n";
         let c = Compiled::new(src.into());
@@ -3131,6 +3613,18 @@ interface Service {\n  function start(self): i64;\n  function stop(self): i64;\n
     }
 
     #[test]
+    fn formatting_wraps_single_bitwise_xor_expressions() {
+        let src = "function f() {\nvar mask=alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa^lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  var mask = alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa\n    ^ lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
     fn formatting_wraps_bitwise_or_chains() {
         let src = "function f() {\nvar mask=alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lambda|mu|nu|xi|omicron;\n}\n";
         let c = Compiled::new(src.into());
@@ -3138,6 +3632,18 @@ interface Service {\n  function start(self): i64;\n  function stop(self): i64;\n
         assert_eq!(
             formatted,
             "function f() {\n  var mask = alpha\n    | beta\n    | gamma\n    | delta\n    | epsilon\n    | zeta\n    | eta\n    | theta\n    | iota\n    | kappa\n    | lambda\n    | mu\n    | nu\n    | xi\n    | omicron;\n}\n"
+        );
+        assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
+    }
+
+    #[test]
+    fn formatting_wraps_single_bitwise_or_expressions() {
+        let src = "function f() {\nvar mask=alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa|lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n";
+        let c = Compiled::new(src.into());
+        let formatted = compiler::fmt::format_source(&c.text);
+        assert_eq!(
+            formatted,
+            "function f() {\n  var mask = alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa\n    | lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n"
         );
         assert!(compiler::fmt::token_stream_preserved(&c.text, &formatted));
     }

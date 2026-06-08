@@ -7,12 +7,14 @@
 //~ true
 //~ false
 //~ true
+import { Future } from "core:prelude";
 import { println } from "std:io";
-function main() {
-  println("${1 < 2}");
-  println("${2 < 1}");
-  println("${2 <= 2}");
-  println("${3 > 2}");
-  println("${3 >= 4}");
-  println("${5 == 5}");
+function main(): Future<null> async {
+  await println("${1 < 2}");
+  await println("${2 < 1}");
+  await println("${2 <= 2}");
+  await println("${3 > 2}");
+  await println("${3 >= 4}");
+  await println("${5 == 5}");
+  null
 }

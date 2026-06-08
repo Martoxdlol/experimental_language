@@ -1,0 +1,12 @@
+//@ kind: compile-error
+//@ description: std:task Cancelled.hash is ordinary marker value hashing, not an async task operation
+//@ stderr: `await` requires a `Future`
+
+import { Future, Hash } from "core:prelude";
+import { Cancelled } from "std:task";
+
+function main(): Future<null> async {
+  var cancelled = Cancelled {};
+  var _hash = await cancelled.hash();
+  null
+}

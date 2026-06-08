@@ -37,7 +37,7 @@ bench "string_alloc_churn" {
   var i = 0;
   var acc = 0;
   while i < 50 {
-    var s = "item-${i }";
+    var s = "item-${i}";
     acc = acc + s.size();
     i = i + 1;
   }

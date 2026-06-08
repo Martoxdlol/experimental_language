@@ -1,0 +1,13 @@
+//@ kind: compile-error
+//@ description: std:process Output.status is a captured-output value accessor, not a future-returning process wait surface
+//@ stderr: `await` requires a `Future`
+
+import { Future } from "core:prelude";
+import { Bytes } from "std:bytes";
+import { exit_status, output } from "std:process";
+
+function main(): Future<null> async {
+  var captured = output(exit_status(0i32, null), Bytes.new(), Bytes.new());
+  var _status = await captured.status();
+  null
+}

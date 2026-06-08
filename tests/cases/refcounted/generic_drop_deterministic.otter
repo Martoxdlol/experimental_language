@@ -3,21 +3,36 @@
 //@ stdout:
 //~ start
 //~ end
-//~ drop 2
-//~ drop 1
+//~ drops=2001
+import { Future } from "core:prelude";
 import { println } from "std:io";
 import { Drop } from "core:prelude";
+import { AtomicI64, SeqCst } from "core:sync/atomic";
 
 @RefCounted
-struct Holder<T> { value: T, tag: i64 }
+struct Holder<T> { value: T, tag: i64, events: AtomicI64 }
 
 extend<T> Holder<T>: Drop {
-  function drop(self) { println("drop ${self.tag}"); }
+  function drop(self) { record(self.events, self.tag); }
 }
 
-function main() {
-  println("start");
-  var a: Holder<i64> = Holder<i64> { value: 100, tag: 1 };
-  var b: Holder<str> = Holder<str> { value: "x", tag: 2 };
-  println("end");
+function record(events: AtomicI64, code: i64): null {
+  var prior = events.load(SeqCst {});
+  events.store((prior * 1000) + code, SeqCst {});
+  null
+}
+
+function scenario(events: AtomicI64): Future<null> async {
+  await println("start");
+  var a: Holder<i64> = Holder<i64> { value: 100, tag: 1, events: events };
+  var b: Holder<str> = Holder<str> { value: "x", tag: 2, events: events };
+  await println("end");
+  null
+}
+
+function main(): Future<null> async {
+  var events = AtomicI64.new(0);
+  await scenario(events);
+  await println("drops=${events.load(SeqCst {})}");
+  null
 }

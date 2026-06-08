@@ -6,8 +6,8 @@
 //~ before_clear=open
 //~ after_clear=closed
 
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { List } from "core:collections";
 import { Sender, Receiver, ChannelClosed, channel } from "std:sync";
 import { timeout, TimedOut } from "std:async";
@@ -26,15 +26,16 @@ function main(): Future<null> async {
   indexed = tx.clone();
 
   match await timeout(rx.recv(), 0) {
-    i64 n => println("before_clear=value"),
-    ChannelClosed c => println("before_clear=closed"),
-    TimedOut t => println("before_clear=open"),
+    i64 n => await println("before_clear=value"),
+    ChannelClosed c => await println("before_clear=closed"),
+    TimedOut t => await println("before_clear=open"),
   };
 
   senders.clear();
 
   match await rx.recv() {
-    i64 n => println("after_clear=value"),
-    ChannelClosed c => println("after_clear=closed"),
+    i64 n => await println("after_clear=value"),
+    ChannelClosed c => await println("after_clear=closed"),
   };
+  null
 }

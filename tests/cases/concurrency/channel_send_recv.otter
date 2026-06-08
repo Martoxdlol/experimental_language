@@ -3,8 +3,8 @@
 //@ description: a Thread.spawn producer sends then drops its sender; an async consumer awaits recv() and stops on ChannelClosed
 //@ stdout:
 //~ sum=30
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { Thread, JoinHandle, Joined, Panicked } from "std:thread";
 import { Sender, Receiver, ChannelClosed } from "std:sync";
 import { channel } from "std:sync";
@@ -32,5 +32,6 @@ function main(): Future<null> async {
   // consumer drains 1+4+9+16 and then observes ChannelClosed.
   var worker: JoinHandle<null> = Thread.spawn(() => produce(tx, 4));
   var total: i64 = await consume(rx);
-  println("sum=${total }");
+  await println("sum=${total}");
+  null
 }

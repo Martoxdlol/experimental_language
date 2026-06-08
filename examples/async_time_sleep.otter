@@ -1,0 +1,9 @@
+import { Future } from "core:prelude";
+import { println } from "std:io";
+import { Duration, sleep } from "std:time";
+
+function main(): Future<null> async {
+  var _ = await sleep(Duration.from_millis(1));
+  await println("std-time-sleep");
+  null
+}

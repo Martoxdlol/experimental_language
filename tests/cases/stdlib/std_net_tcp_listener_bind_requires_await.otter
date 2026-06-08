@@ -1,0 +1,11 @@
+//@ kind: compile-error
+//@ description: std:net TcpListener.bind returns a Future and must be awaited
+//@ stderr: found `Future<
+
+import { IoError } from "std:io";
+import { TcpListener } from "std:net";
+import { SocketAddr } from "std:net/types";
+
+function requires_await(addr: SocketAddr) {
+  var _listener: TcpListener | IoError = TcpListener.bind(addr);
+}

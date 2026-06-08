@@ -20,8 +20,8 @@ impl<'a> Checker<'a> {
         self.tcx.mk_named(def, vec![elem])
     }
 
-    /// The element type `T` of a `Receiver<T>` — drives `for n in rx`
-    /// (`Receiver: Iterator`, `docs/20` §2).
+    /// The element type `T` of a `Receiver<T>` — drives `for await n in rx`
+    /// (`docs/20` §2).
     pub(crate) fn receiver_elem(&self, ty: Ty) -> Option<Ty> {
         match self.tcx.kind(ty) {
             TyKind::Named { def, args }
@@ -831,8 +831,8 @@ impl<'a> Checker<'a> {
             }
         }
         // An async worker — the closure returns a `Future<R>` (`docs/20` §1).
-        // The worker drives that future to completion, so the handle joins on
-        // the awaited `R`, not a `Future<R>`. A synchronous worker keeps `R`.
+        // The worker polls that future until it resolves, so the handle joins
+        // on the awaited `R`, not a `Future<R>`. An ordinary non-async worker keeps `R`.
         let output = self.future_def_output(r).unwrap_or(r);
         self.tcx.mk_named(handle_def, vec![output])
     }
@@ -840,8 +840,8 @@ impl<'a> Checker<'a> {
     /// If `ty` is the canonical `Future<Out>` interface object (`docs/21` §1),
     /// its `Out`. Unlike [`future_output`](Self::future_output) this matches
     /// *only* the named `Future<Out>` form — the shape an async closure body
-    /// desugars to (`docs/21` §7) — so a synchronous worker returning a concrete
-    /// `Future`-implementing value is not mistaken for an async worker.
+    /// desugars to (`docs/21` §7) — so an ordinary non-async worker returning a
+    /// concrete `Future`-implementing value is not mistaken for an async worker.
     fn future_def_output(&self, ty: Ty) -> Option<Ty> {
         if let TyKind::Named { def, args } = self.tcx.kind(ty) {
             if *def == self.prog.future_def && args.len() == 1 {
@@ -894,7 +894,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// `std:task::JoinHandle<R>.join(): Future<Joined<R> | Panicked |
+    /// `std:task` `JoinHandle<R>.join(): Future<Joined<R> | Panicked |
     /// Cancelled>`, `.detach(): null`, `.cancel(): null`, and `.abort(): null`.
     pub(crate) fn check_task_join_handle_method(
         &mut self,
@@ -967,7 +967,16 @@ impl<'a> Checker<'a> {
                 );
             }
         }
-        // (b) `Type.static_method()` — a concrete (extendable) type.
+        // (b) `i32.static_method()` / `bool.static_method()` — primitive type
+        // names are extendable types too (`docs/10` §1/§6). Numeric namespace
+        // intrinsics are handled before this path, so this only resolves user
+        // static methods from `extend` blocks.
+        if let Some(recv_ty) = self.primitive_type_name(recv_name) {
+            return Some(self.check_concrete_static_call(
+                recv_ty, recv_name, callee, method, arg_slice, generics, span,
+            ));
+        }
+        // (c) `Type.static_method()` — a concrete (extendable) nominal type.
         if let Some(def) = self.prog.resolve_type_in(self.current_module(), recv_name) {
             if matches!(
                 self.prog.def(def).kind,
@@ -979,6 +988,23 @@ impl<'a> Checker<'a> {
             }
         }
         None
+    }
+
+    fn primitive_type_name(&self, name: &str) -> Option<Ty> {
+        if let Some(it) = IntTy::from_name(name) {
+            return Some(self.tcx.int(it));
+        }
+        if let Some(ft) = FloatTy::from_name(name) {
+            return Some(self.tcx.float(ft));
+        }
+        Some(match name {
+            "bool" => self.tcx.bool,
+            "char" => self.tcx.char,
+            "str" => self.tcx.str,
+            "null" => self.tcx.null,
+            "dynamic" => self.tcx.dynamic,
+            _ => return None,
+        })
     }
 
     /// `T.static_method(args)` where `T` is a generic parameter: the method must
@@ -1211,6 +1237,140 @@ impl<'a> Checker<'a> {
         let mut all_gens = ext_gens.clone();
         all_gens.extend_from_slice(&method_gens);
         self.check_bounds(&all_gens, &targs, span);
+        match &f.return_type {
+            Some(t) => {
+                let t = self.lower_ty(t, &menv);
+                self.subst_ty(t, &subst)
+            }
+            None => self.tcx.null,
+        }
+    }
+
+    /// `i32.static_method(args)` / `str.static_method(args)` for a concrete
+    /// non-generic receiver type. Struct receivers use `check_type_static_call`
+    /// because they may need receiver-generic inference.
+    pub(crate) fn check_concrete_static_call(
+        &mut self,
+        recv_ty: Ty,
+        recv_label: &str,
+        callee: &Expr,
+        method: &Ident,
+        args: &[Expr],
+        explicit_generics: &[Type],
+        span: Span,
+    ) -> Ty {
+        let Some((mdef, ext_subst)) = self.resolve_method(recv_ty, &method.name) else {
+            for a in args {
+                self.check_expr(a, None);
+            }
+            self.emit(
+                method.span,
+                SemaErrorKind::Message(format!(
+                    "type `{recv_label}` has no static method `{}`",
+                    method.name
+                )),
+            );
+            return self.tcx.error;
+        };
+        if !self.prog.def(mdef).is_static {
+            self.emit(
+                method.span,
+                SemaErrorKind::Message(format!(
+                    "`{}` is an instance method on `{recv_label}`; call it on a value",
+                    method.name
+                )),
+            );
+        }
+        self.record_res(callee.span, ValueRes::Method(mdef), self.tcx.error);
+
+        let mut subst = ext_subst.clone();
+        let env = self.local_env();
+        let method_gens = self.prog.def(mdef).generics.clone();
+        for (g, t) in method_gens.iter().zip(explicit_generics) {
+            let gt = self.lower_ty(t, &env);
+            subst.insert(*g, gt);
+        }
+
+        let (menv, _) = self.fn_env(mdef);
+        let Some(ItemKind::Function(f)) = self.prog.def(mdef).item.clone() else {
+            return self.tcx.error;
+        };
+        let raw_param_tys: Vec<Ty> = f
+            .params
+            .iter()
+            .filter_map(|p| match &p.kind {
+                ParamKind::Normal { ty, .. } => {
+                    let t = self.lower_ty(ty, &menv);
+                    Some(self.subst_ty(t, &subst))
+                }
+                ParamKind::SelfParam => None,
+            })
+            .collect();
+
+        for (i, a) in args.iter().enumerate() {
+            let aty = self.check_expr(a, None);
+            if let Some(pt) = raw_param_tys.get(i) {
+                self.unify(*pt, aty, &mut subst);
+            }
+        }
+        for _ in 0..method_gens.len() + 2 {
+            let keys: Vec<DefId> = subst.keys().copied().collect();
+            let mut changed = false;
+            for k in keys {
+                let v = *subst.get(&k).expect("present");
+                let resolved = self.subst_ty(v, &subst);
+                if resolved != v {
+                    subst.insert(k, resolved);
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+
+        let param_tys: Vec<Ty> = raw_param_tys
+            .iter()
+            .map(|t| self.subst_ty(*t, &subst))
+            .collect();
+        if args.len() != param_tys.len() {
+            self.emit(
+                span,
+                SemaErrorKind::ArgCount {
+                    expected: param_tys.len(),
+                    found: args.len(),
+                },
+            );
+        }
+        for (i, a) in args.iter().enumerate() {
+            if let Some(pt) = param_tys.get(i) {
+                let at = self.expr_ty(a.span).unwrap_or(self.tcx.error);
+                self.expect(at, *pt, a.span);
+            }
+        }
+
+        let parent = self.prog.def(mdef).parent;
+        let ext_gens = parent
+            .map(|p| self.prog.def(p).generics.clone())
+            .unwrap_or_default();
+        let mut targs: Vec<Ty> = ext_gens
+            .iter()
+            .map(|g| {
+                let t = subst.get(g).copied().unwrap_or(self.tcx.error);
+                self.subst_ty(t, &subst)
+            })
+            .collect();
+        for g in &method_gens {
+            targs.push(subst.get(g).copied().unwrap_or(self.tcx.error));
+        }
+        if !targs.is_empty() {
+            self.pending_type_args.set(Some(targs.clone()));
+        }
+        let mut all_gens = ext_gens.clone();
+        all_gens.extend_from_slice(&method_gens);
+        self.check_bounds(&all_gens, &targs, span);
+        self.pending_static_recv.set(Some(recv_ty));
+
         match &f.return_type {
             Some(t) => {
                 let t = self.lower_ty(t, &menv);
@@ -1551,15 +1711,15 @@ impl<'a> Checker<'a> {
                 }
                 // `lock`/`try_lock` are ALWAYS async — they return a `Future<R>` the
                 // caller must `await` (`docs/20` §4). That requires an async context;
-                // a synchronous `Thread.spawn` worker cannot lock (`docs/20` §1/§4).
+                // an ordinary non-async `Thread.spawn` worker cannot lock (`docs/20` §1/§4).
                 if !self.in_async {
                     self.emit(
                         name.span,
                         SemaErrorKind::Message(format!(
                             "`{}` is async and must be `await`ed inside an `async` function, \
-                         `async` closure, or `async {{ … }}` block; a synchronous \
+                         `async` closure, or `async {{ … }}` block; an ordinary non-async \
                          `Thread.spawn` worker cannot lock — run lock-using workers with \
-                         the `spawn` keyword instead",
+                         an async worker or the `spawn` keyword instead",
                             name.name,
                         )),
                     );
@@ -1611,8 +1771,8 @@ impl<'a> Checker<'a> {
     // retain it) is an escape and is rejected. `.clone()` detaches (an owned deep
     // copy may leave freely). A reference *returned* from the body is allowed —
     // codegen clones it at the return boundary. The analysis is identical for
-    // synchronous and `async` bodies, and (because the lock is held across the
-    // body's `await`s) it needs no async-specific restriction.
+    // ordinary non-async and `async` bodies, and (because the lock is held
+    // across the body's `await`s) it needs no async-specific restriction.
 
     /// Whether a value of type `ty` is an aliasing heap reference — projecting it
     /// out of the locked cell would let the cell be mutated through the alias.

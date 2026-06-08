@@ -1,0 +1,12 @@
+//@ kind: compile-error
+//@ description: std:fs Path.canonicalize returns Future<Path | IoError> and must be awaited before use
+//@ stderr: found `Future<Path | IoError>`
+
+import { Future } from "core:prelude";
+import { IoError } from "std:io";
+import { Path } from "std:fs";
+
+function main(): Future<null> async {
+  var _canonical: Path | IoError = Path.new(".").canonicalize();
+  null
+}

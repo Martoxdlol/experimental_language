@@ -5,8 +5,8 @@
 //@ stdout:
 //~ sum=8128
 
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { List } from "core:collections";
 import { Sender, Receiver, ChannelClosed, channel } from "std:sync";
 
@@ -36,5 +36,6 @@ function main(): Future<null> async {
     j = j + 1;
   }
 
-  println("sum=${sum }");
+  await println("sum=${sum}");
+  null
 }

@@ -2,23 +2,38 @@
 //@ description: a single `extend<T: ToStr> Cell<T>: Drop` whose `drop` body calls `T`'s `to_str` proves each monomorphization gets its *own* drop glue — the `i64` instance calls the builtin conversion, the `Tag` instance calls the user impl — not one shared finalizer.
 //@ stdout:
 //~ made
-//~ drop=tag7
-//~ drop=99
+//~ drops=704902
+import { Future } from "core:prelude";
 import { println } from "std:io";
 import { Drop, ToStr } from "core:prelude";
+import { AtomicI64, SeqCst } from "core:sync/atomic";
 
 @RefCounted
-struct Cell<T> { value: T }
+struct Cell<T> { value: T, code: i64, events: AtomicI64 }
 
 extend<T: ToStr> Cell<T>: Drop {
-  function drop(self) { println("drop=" + self.value.to_str()); }
+  function drop(self) { record(self.events, self.code + self.value.to_str().size()); }
 }
 
 struct Tag { n: i64 }
 extend Tag: ToStr { function to_str(self): str { "tag${self.n}" } }
 
-function main() {
-  var i: Cell<i64> = Cell<i64> { value: 99 };
-  var t: Cell<Tag> = Cell<Tag> { value: Tag { n: 7 } };
-  println("made");
+function record(events: AtomicI64, code: i64): null {
+  var prior = events.load(SeqCst {});
+  events.store((prior * 1000) + code, SeqCst {});
+  null
+}
+
+function scenario(events: AtomicI64): Future<null> async {
+  var i: Cell<i64> = Cell<i64> { value: 99, code: 900, events: events };
+  var t: Cell<Tag> = Cell<Tag> { value: Tag { n: 7 }, code: 700, events: events };
+  await println("made");
+  null
+}
+
+function main(): Future<null> async {
+  var events = AtomicI64.new(0);
+  await scenario(events);
+  await println("drops=${events.load(SeqCst {})}");
+  null
 }

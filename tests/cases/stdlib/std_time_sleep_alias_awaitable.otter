@@ -1,0 +1,13 @@
+//@ kind: run
+//@ description: std:time sleep aliases await and lower through the duration timer intrinsic
+//@ stdout: time-sleep-alias=ok
+
+import { println } from "std:io";
+import { Future } from "core:async";
+import { Duration, sleep as time_sleep } from "std:time";
+
+function main(): Future<null> async {
+  await time_sleep(Duration.from_millis(1));
+  await println("time-sleep-alias=ok");
+  null
+}

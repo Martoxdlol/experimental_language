@@ -4,9 +4,11 @@
 //~ tab	here
 //~ quote " done
 //~ back \ slash
+import { Future } from "core:prelude";
 import { println } from "std:io";
-function main() {
-  println("tab\there");
-  println("quote \" done");
-  println("back \\ slash");
+function main(): Future<null> async {
+  await println("tab\there");
+  await println("quote \" done");
+  await println("back \\ slash");
+  null
 }

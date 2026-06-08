@@ -1,0 +1,10 @@
+//@ kind: compile-error
+//@ description: std:io newline print helpers return Future<null> and must be awaited before assigning to null
+//@ stderr: expected `null`, found `Future<null>`
+
+import { eprintln, println } from "std:io";
+
+function main() {
+  var _out: null = println("stdout");
+  var _err: null = eprintln("stderr");
+}

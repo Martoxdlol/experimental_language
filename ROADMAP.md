@@ -13,7 +13,7 @@ semantics; this file is only the implementation sequencing.
 - **GC**: Build the runtime behind a `Gc` abstraction. Ship a *correct precise
   tracing collector* first (two-word object header `[type-ptr | mark/fwd]`,
   pointer at the field boundary, Cranelift `user_stack_maps` precise roots,
-  async/best-effort drop via a finalizer queue, two disjoint heaps). Swap in
+  non-waiting best-effort `Drop` finalizers via a finalizer queue, two disjoint heaps). Swap in
   real **MMTk Immix/StickyImmix** as the production plan once the pipeline runs
   end-to-end. The *semantic contract* from `docs/16-memory` is honored from the
   start; only the collector internals are staged.
@@ -102,7 +102,13 @@ The full module/import/package system, end to end.
   resolver (path + registry deps). `pkg:` binding compiles dependency libraries
   and exposes their `pub` API. CLI: `add`/`remove`/`update`/`lock`(+`--check`)/
   `tree`/`why`/`vendor`/`login`/`logout`/`search`/`publish`/`yank`/`audit`, plus
-  `serve` (host a private registry). **Live registry network round-trips are now
+  `serve` (host a private registry). `remove --dry-run` validates and reports the
+  dependency removal without mutating `project.toml`, while normal `remove`
+  applies the same parsed manifest edit. `vendor --dry-run` resolves the graph
+  and reports how many packages would be copied without deleting or copying
+  `vendor/` contents. `update --dry-run --verbose` re-resolves dependencies,
+  reports whether `project.lock` would change, and prints a deterministic
+  normalized lockfile line diff without writing. **Live registry network round-trips are now
   exercised end-to-end**: `crates/pkg/tests/live_registry.rs` boots the server on
   an ephemeral localhost port and round-trips `HttpRegistry` connect → publish
   with metadata sidecar (auth-gated) → index → download → checksum-verify →
@@ -186,12 +192,19 @@ The full module/import/package system, end to end.
       `Hash`, compact diagnostic `ToStr` rendering, and an in-memory
       `std:io.Writer` implementation for appending bytes. Direct
       `Bytes.set(index, byte)` returns `false` for out-of-range writes,
-      `Bytes.pop()` removes and returns the last byte, `Bytes.remove_at(index)`
+      `Bytes.insert(index, byte)` inserts at any valid boundary and returns
+      `false` for negative or out-of-range positions, `Bytes.pop()` removes and
+      returns the last byte, `Bytes.remove_at(index)`
       removes and returns one indexed byte, `Bytes.append(other)`
       snapshots the input before appending, `Bytes.truncate(len)` shrinks the
-      buffer in place, `Bytes.clear()` empties the buffer, and
+      buffer in place, `Bytes.resize(len, fill)` shrinks or grows with a fill
+      byte, `Bytes.fill(byte)` overwrites existing bytes in place,
+      `Bytes.clear()` empties the buffer, and
       `Bytes.starts_with` / `Bytes.ends_with` provide raw bytewise affix
-      checks. `Bytes.from_str`
+      checks while `Bytes.index_of(byte)` / `Bytes.last_index_of(byte)` /
+      `Bytes.contains(byte)` and `Bytes.index_of_bytes(needle)` /
+      `Bytes.last_index_of_bytes(needle)` / `Bytes.contains_bytes(needle)`
+      provide raw byte search helpers. `Bytes.from_str`
       encodes a `str` into
       UTF-8 bytes using the existing string byte iterator, and
       `Bytes.decode_utf8()` validates strict UTF-8 back to `str | Utf8Error`
@@ -205,29 +218,66 @@ The full module/import/package system, end to end.
       equality and hashing over both the snapshot and current cursor position,
       plus clone, diagnostic stringification, and debug rendering.
       `print`/`println` write to stdout and `eprint`/`eprintln` write to stderr
-      through runtime-backed marker functions; `stdin()`, `stdout()`, and
-      `stderr()` now expose byte-oriented `Reader`/`Writer` handles with raw
-      reads, writes, and flushes. `BufReader` and `BufWriter` provide
+      as async helpers over private standard-stream futures; `stdin()`,
+      `stdout()`, and `stderr()` now expose byte-oriented handle methods with
+      raw reads, writes, and flushes. Generic `Reader`/`Writer`/`Seeker`
+      contracts are ordinary value APIs for non-waiting in-memory sources and
+      adapters; concrete stdio methods and their `*_async` aliases return
+      futures, with direct e2e coverage for stdin, stdout, and stderr concrete
+      async paths.
+      `BufReader` and `BufWriter` provide
       interface-object buffered adapters with chunked reads, `read_line`,
       line iteration, buffered writes, and explicit flushing.
-      `std:fs.File` provides target-backed `Reader`/`Writer`/`Seeker` handles;
+      `std:fs.File` provides target-backed future-returning byte IO and seek methods;
       generic-specialized buffered wrappers and pinned `Buffer` views remain
       future provider/library work.
       `SeekFrom` and `IoErrorKind`
       provide direct equality helpers, `Eq.eq`, overloaded `==`, clone/hash/string/debug
       methods; `IoError` implements `Error`, equality, clone, hash, and debug
       rendering.
-- [x] **`std:time::Duration`**: added the portable value type as an
+- [x] **Corrected public `std:fs.File` descriptor setup/close contract**:
+      converted `File.open`, `File.create`, `File.append`, `File.open_with`,
+      and `File.close` from old ordinary-result descriptor boundaries into
+      helper-backed `Future<...>` methods under the corrected
+      no-public-blocking rule. The Otter-authored stdlib now awaits private
+      `__otter_fs_file_open_async` / `__otter_fs_file_close_async` intrinsics;
+      backend/JIT lowering registers only the async runtime constructors; the
+      runtime keeps crate-private encoded open/close helpers behind async
+      futures; and cancellation cleanup closes a descriptor produced by a late
+      cancelled open result. Positive fs/examples now await setup/close, old
+      constructor/close not-awaitable guards were replaced with requires-await
+      guards, LSP type/member completions advertise the new future returns, and
+      docs/18/docs/20/docs/21/docs/24 were refreshed. Later corrected-contract
+      work converted module-level fs helpers, target-backed `Path` queries, and
+      `File` text helpers to the same helper-backed future contract.
+- [x] **Corrected public `std:fs` helper/path/text contract**: converted
+      module-level `read_to_string`/`write_string`/`append_string`,
+      binary `read`/`write`, `read_dir`, `remove`, `rename`, `create_dir`,
+      `create_dir_all`, `canonicalize`, target-backed `Path.exists`/type/
+      metadata/permission/canonicalization queries, and `File` text helpers to
+      helper-backed `Future<...>` methods/functions. The Otter-authored stdlib
+      awaits private `__otter_fs_*_async` intrinsics; backend/JIT lowering
+      registers only async runtime constructors; runtime keeps crate-private
+      encoded helpers behind the async future machinery; positives/examples now
+      await the operations; not-awaitable guards were replaced with
+      requires-await fixtures; LSP namespace/member completions advertise exact
+      future returns; and docs/18/docs/20/docs/21/docs/24 were refreshed.
+- [x] **`std:time.Duration`**: added the portable value type as an
       Otter-authored `std:time` export with constructors, unit conversions,
       absolute subsecond component helpers, predicates, `abs`,
       equality/ordering/hash/clone/stringification, and overloaded `+`/`-`.
       Covered by explicit-import and runtime e2e cases.
 - [x] **`std:time` monotonic/system clocks**: added mixed stdlib value types
-      `Instant` and `SystemTime` over Rust-backed runtime clock hooks. The
-      Otter-authored surface covers `now`, fixed nanosecond constructors,
-      duration arithmetic, Unix-epoch helpers, equality/ordering/hash/clone,
-      stringification, and debug rendering. Calendar/timezone conversions
-      remain future provider/runtime work.
+      `Instant` and `SystemTime`, then aligned their target-backed reads with
+      the corrected async contract. The Otter-authored surface covers awaitable
+      `Instant.now()`, awaitable `Instant.elapsed()`, awaitable
+      `SystemTime.now()`, fixed nanosecond constructors, duration arithmetic,
+      Unix-epoch helpers, equality/ordering/hash/clone, stringification, and
+      debug rendering. `sleep(Duration)` returns `Future<null>` and reuses the
+      runtime timer/reactor path instead of exposing an ordinary-result sleep
+      boundary; compile, e2e, and LSP regressions prove it is awaitable while
+      still distinct from `std:async.sleep(ms)` by accepting a `Duration`.
+      Calendar/timezone conversions remain future provider/runtime work.
 - [x] **`std:time` calendar/timezone value contracts**: added portable
       Otter-authored `TimeZone`, `DateTime`, and `TimeError` values plus
       constructor helpers. `DateTime.new` validates calendar ranges, leap years,
@@ -236,9 +286,9 @@ The full module/import/package system, end to end.
       implements `std:error.Error`. The value layer implements equality, clone,
       hash, stringification/ISO-like rendering, immutable timezone replacement,
       and diagnostic debug rendering.
-      UTC/fixed-offset system-time conversion and provider-backed local offset
-      conversion are implemented; timezone databases, named-zone conversion,
-      and leap-second policy remain planned provider/library work.
+      UTC/fixed-offset system-time conversion and awaitable provider-backed
+      local offset conversion are implemented; timezone databases, named-zone
+      conversion, and leap-second policy remain planned provider/library work.
 - [x] **`std:time` ISO-like DateTime parsing**: added pure Otter Fusion
       `parse_iso8601(s): DateTime | TimeError` plus
       `DateTime.parse_iso8601`. The parser accepts the same portable shapes
@@ -267,23 +317,82 @@ The full module/import/package system, end to end.
       immutable-style replacement builders that snapshot nested path/kind and
       permissions values.
       Covered by explicit-import and runtime e2e cases. `std:fs` is now mixed:
-      Rust-backed runtime hooks provide `Path.exists`, `Path.is_file`, and
+      Rust-backed helper-backed futures provide `Path.exists`, `Path.is_file`,
       `Path.is_dir`, `Path.file_kind`, `Path.byte_len`, `Path.permissions`, and
       `Path.metadata`, `Path.canonicalize`, module-level `canonicalize`,
       `native_separator`, `Path.from_native`, module-level `path_from_native`,
       `Path.to_native_str`, binary `read`/`write` over `std:bytes.Bytes`,
       UTF-8 text `read_to_string`, `write_string`, and `append_string`,
       snapshot-backed `read_dir` returning `DirEntries`, plus
-      path-backed `File.open`, `File.create`,
-      `File.append`, `File.open_with`, `File.path`, descriptor-backed `Reader`/`Writer`/`Seeker`
-      operations, text read/write/append, close,
-      concrete `File` async methods (`read_async`, `read_to_end_async`,
+      path-backed future-returning `File.open`, `File.create`,
+      `File.append`, `File.open_with`, `File.path`, descriptor-backed
+      future-returning close, byte IO, and seek operations, text read/write/append,
+      concrete `File` async aliases (`read_async`, `read_to_end_async`,
       `write_async`, `write_all_async`, `flush_async`, and `seek_async`) backed
-      by reactor-woken runtime futures,
+      by helper-backed, reactor-woken runtime futures,
       explicit `OpenOptions` values for read/write/append/truncate/create/
       create_new modes with provider-independent validation before runtime
       opens, non-recursive `remove`, `rename`, `create_dir`, and
       `create_dir_all`.
+- [x] **`std:io`/`std:fs` ordinary/future contract clarification**:
+      documented that `std:io` generic in-memory `Reader`/`Writer`/`Seeker` and
+      buffered IO adapters are ordinary value-returning surfaces, while
+      `File` open/create/append/open_with constructors, `File.close()`,
+      module-level `std:fs` helpers, path filesystem queries, `File` text
+      helpers,
+      executor-integrated stdio print/stderr helpers and concrete
+      stdin/stdout/stderr handle methods return futures over helper-backed
+      async paths, and file descriptor byte IO/seek methods return futures
+      through both ordinary concrete method names and explicit `*_async` aliases.
+      Added compile-error e2e guards that
+      prove `print(...)`, `println(...)`, `eprint(...)`, and `eprintln(...)`
+      produce `Future<null>` values that must be awaited, and that
+      `stdin().read(...)`, `stdin().read_to_end(...)`,
+      `stdout().write(...)`, `stdout().write_all(...)`,
+      `stdout().flush(...)`, `stderr().write(...)`,
+      `stderr().write_all(...)`, and `stderr().flush(...)`
+      produce futures that must be awaited, and
+      `File.open(...)`, `File.create(...)`, `File.append(...)`,
+      `File.open_with(...)`, `File.close(...)`, `File.read(...)`,
+      `File.read_to_end(...)`, `File.write(...)`,
+      `File.write_all(...)`, `File.flush(...)`, and `File.seek(...)`
+      also produce futures that must be awaited, and
+      `File.read_to_string(...)`, `File.write_string(...)`,
+      `File.append_string(...)`, `read_to_string(...)`, `write_string(...)`,
+      `append_string(...)`, `read(...)`, `write(...)`, `read_dir(...)`,
+      `rename(...)`, `create_dir(...)`, `create_dir_all(...)`,
+      `Path.exists(...)`, `Path.metadata(...)`, `Path.canonicalize(...)`,
+      `canonicalize(...)`, and `remove(...)` also produce futures that must be
+      awaited. The negative guards still prove
+      that
+      `await buf_reader(...).read(...)`,
+      `await buf_reader(...).read_to_end(...)`,
+      `await buf_reader(...).read_line()`, `await buf_reader(...).lines()`,
+      `await buf_writer(...).write(...)`,
+      `await buf_writer(...).write_all(...)`,
+      and `await buf_writer(...).flush(...)` are rejected because those buffered
+      adapter APIs are ordinary in-memory values rather than explicit async
+      surfaces. LSP diagnostics cover the broader
+      async-contract mistakes, and
+      LSP member-completion coverage now also proves concrete stdin/stdout/
+      stderr and `File` byte IO/seek methods advertise exact `Future<...>`
+      returns, while buffered-adapter methods advertise
+      ordinary `i64 | IoError` / `null | IoError` returns, with buffered reader
+      line/iterator helpers locked as ordinary non-`Future` values, and concrete
+      `*_async` aliases advertise matching `Future<...>` returns.
+      LSP namespace completion for `std:io` also proves `stdin`/`stdout`/
+      `stderr` and buffered-adapter constructors advertise ordinary
+      non-`Future` returns, while print helpers advertise `Future<null>`.
+      LSP namespace completion for `std:fs` now
+      also proves module-level file/directory helpers advertise
+      `Future<...>` returns while `open_options` stays an ordinary value, and
+      type-namespace completion
+      proves `File.open`/`create`/`append`/`open_with` advertise
+      `Future<File | IoError>` returns.
+      The async/concurrency worker guidance now also names future-returning
+      concrete `std:io` stream handles explicitly rather than hiding them under
+      generic "file I/O" wording, and the task guidance names remaining
+      ordinary in-memory stdio buffered/generic surfaces directly.
 - [x] **`std:fmt` contracts**: added the Otter-authored `std:fmt` module
       exporting `Display: ToStr`, `Debug`, `FmtSink`, and `FmtError`.
       `FmtError` implements `std:error.Error`, equality, clone, hash, and
@@ -324,7 +433,8 @@ The full module/import/package system, end to end.
       `remove`, `insert_all`, `is_subset`, `is_superset`, `is_disjoint`,
       `clear`, `to_list`,
       `iter`, `union`, `intersect`, and `difference` are
-      covered by stdlib e2e tests. `Set<T>` now also has value semantics:
+      covered by stdlib e2e tests, with LSP member-completion coverage for the
+      helper surface. `Set<T>` now also has value semantics:
       `Eq` when `T: Eq`, `Clone` when `T: Eq + Clone`, and deterministic
       order-insensitive `Hash` when `T: Eq + Hash`, plus compact `ToStr`
       rendering when `T: Eq + ToStr`. Hash-backed storage, set
@@ -338,14 +448,16 @@ The full module/import/package system, end to end.
       depends on its layout. The implementation uses two internal lists for
       front/back operations, exposes push/pop/front/back, direct `get(index)`
       reads, `set(index, value)` writes, `remove_at(index)` removals,
-      size/empty, `to_list`, `iter`, and `clear`, and implements
+      size/empty, `to_list`, `iter`, `clear`, `reversed`, and in-place
+      `reverse`, and implements
       equality, clone, ordered deterministic hashing, stringification, and an
       explicit diagnostic debug implementation with the appropriate bounds.
       Covered by explicit-import and runtime e2e cases.
-- [x] **`std:hash` deterministic and keyed hasher bridge**: added the pure Otter-authored
-      `std:hash` module exporting `Hasher`, `DefaultHasher`, `hash_value`, and
-      `write_hash`, `combine_hash`, plus explicit `KeyedHasher` and
-      `keyed_hasher(seed)`.
+- [x] **`std:hash` deterministic and keyed hasher bridge**: added the mixed
+      Otter/runtime-backed `std:hash` module exporting `Hasher`,
+      `DefaultHasher`, `hash_value`, and `write_hash`, `combine_hash`, plus
+      explicit `KeyedHasher`, `keyed_hasher(seed)`, provider-seeded
+      `os_keyed_hasher()`, and `HashSeedError`.
       This keeps the compiler-recognized `Hash` interface in `core:prelude`
       while giving user code ordinary stdlib hasher values and deterministic
       helper functions. The mixer avoids wrapping arithmetic because Otter
@@ -356,8 +468,11 @@ The full module/import/package system, end to end.
       `Hasher` interface object. `DefaultHasher` and `KeyedHasher` implement
       state equality, clone, hash,
       stringification, and debug rendering so hasher streams can be snapshotted
-      and compared. Keyed map/set construction, OS-seeded HashDoS-safe hashers,
-      and fast/cryptographic variants remain future work.
+      and compared. `os_keyed_hasher()` now returns a future that builds a
+      `KeyedHasher` from the selected provider's OS entropy hook or resolves to
+      `HashSeedError` when entropy is unavailable, keeping OS entropy reads out
+      of immediate pure hasher calls. Keyed map/set construction and
+      fast/cryptographic variants remain future work.
 - [x] **`std:http` value types**: added the pure Otter-authored `std:http`
       module exporting HTTP method/version unions, `Status`,
       multi-value `Headers`, flattened `HeaderEntry`, `HttpRequest`,
@@ -382,7 +497,9 @@ The full module/import/package system, end to end.
       ordinary iteration over repeated values. `Headers.size()` counts
       normalized names, `value_count()` counts flattened values, `is_empty()`
       checks whether any names are present, and `clear()` removes all entries
-      while preserving prior snapshots. Canonical parsing/rendering and
+      while preserving prior snapshots. LSP member-completion coverage now locks
+      the implemented `Headers`, `HttpRequest`, and `HttpResponse` accessor and
+      builder surfaces for editor use. Canonical parsing/rendering and
       HTTP client/server implementations remain future/pkg work.
       `Headers`, `HttpRequest`, and `HttpResponse` now implement value
       equality, clone, structural hash, and diagnostic debug rendering.
@@ -405,7 +522,9 @@ The full module/import/package system, end to end.
       same deep snapshot semantics. Scalar/container shape predicates, array/object `len()`,
       object `contains_key`, and object `keys()`/`values()` snapshots cover
       ordinary inspection without exposing the internal union or aliasing
-      nested values.
+      nested values. LSP member-completion coverage now locks the implemented
+      `Json` helper surface, including shape predicates, snapshot accessors,
+      builders, deep value helpers, compact rendering, and `pretty(indent)`.
       Parsers and stricter canonicalization remain package/follow-up library
       work.
 - [x] **`std:net/types` value identifiers**: added the pure Otter-authored
@@ -427,33 +546,37 @@ The full module/import/package system, end to end.
       target-backed networking;
       those remain future `std:net`/parser work.
 - [x] **`std:net` provider-backed name resolution slice**: added the mixed
-      `std:net` module exporting `resolve(host): List<IpAddr> | IoError`.
+      `std:net` module exporting `resolve(host): Future<List<IpAddr> | IoError>`.
       The Rust runtime hook uses the selected provider's address resolver and
       returns a compact length-framed list of textual IP addresses; the
-      Otter-authored stdlib wrapper decodes provider payloads into existing
+      async Otter-authored stdlib wrapper decodes provider payloads into existing
       `std:net/types.IpAddr` values via `parse_ip_v4` / `parse_ip_v6`, or
-      returns ordinary `IoError` values for provider and malformed-payload
-      errors. Added runtime unit tests, e2e JIT/native coverage for deterministic
+      resolves the future to `IoError` variants for provider and
+      malformed-payload errors. Added runtime unit tests, e2e JIT/native coverage for deterministic
       IPv4-literal resolution plus provider-error handling, near-empty-prelude
       import enforcement for `resolve`, and LSP analysis coverage for files that
       import the new stdlib function. TCP streams/listeners are now covered by
-      the follow-up slices below; async network adapters, IDNA, and richer
-      socket options remain planned target-backed work.
-- [x] **`std:net` synchronous TCP stream/listener slice**: added mixed
+      the follow-up slices below; async network adapters, IDNA, and additional
+      platform-specific socket options remain planned target-backed work.
+- [x] **`std:net` historical TCP stream/listener slice**: added mixed
       `TcpStream` and `TcpListener` handles backed by provider TCP sockets.
       Both are deterministic `@RefCounted` runtime handles with shared clone
-      semantics and explicit `close()`; `TcpStream` implements the synchronous
-      `Reader`/`Writer` contracts plus `connect`, `peer_addr`, `local_addr`, and
-      `set_nodelay`, while `TcpListener` implements `bind`, `accept`, and
-      `local_addr`. The runtime handle registries store per-handle
-      `Arc<Mutex<...>>` entries so blocking accept/read/write operations do not
+      semantics and explicit `close()`; the original direct provider-backed
+      public shape was later superseded by corrected async-contract slices, so
+      current wait-capable TCP operations return futures. The runtime handle
+      registries store per-handle `Arc<Mutex<...>>` entries so private provider waits do not
       hold the whole registry lock. Added runtime loopback coverage, e2e
       JIT/native loopback coverage over port `0`, near-empty-prelude import
       enforcement for the new TCP types, and LSP analysis coverage for TCP
       imports. UDP sockets are now covered by the follow-up slice below; async
-      network adapters, IDNA, and richer socket options remain planned
-      target-backed work.
-- [x] **`std:net` synchronous UDP socket slice**: added a mixed `UdpSocket`
+      network adapters, IDNA, and additional platform-specific socket options
+      remain planned target-backed work. Corrected async-contract follow-ups
+      have since superseded the original ordinary-result TCP connect and accept
+      constructors: `TcpStream.connect`/`connect_timeout` and
+      `TcpListener.accept`, TCP stream byte I/O, TCP stream metadata/control,
+      TCP listener bind/setup/control, and UDP bind/connect/datagrams/
+      metadata/control/options/multicast/close now return futures.
+- [x] **`std:net` historical UDP socket slice**: added a mixed `UdpSocket`
       handle backed by provider UDP sockets. It is a deterministic
       `@RefCounted` runtime handle with shared clone semantics and explicit
       `close`; it supports `bind`, `local_addr`, `send_to(Bytes, SocketAddr)`,
@@ -462,55 +585,713 @@ The full module/import/package system, end to end.
       the received byte count plus source address. Added runtime length-framed
       ABI coverage, e2e JIT/native loopback datagram coverage over port `0`,
       near-empty-prelude import enforcement for `UdpSocket`, and LSP analysis
-      coverage for UDP imports. Async network adapters, IDNA, and richer socket
+      coverage for UDP imports. Corrected async-contract follow-ups have since
+      superseded the public datagram operations: `send`, `recv`, `peek`,
+      `send_to`, `recv_from`, and `peek_from` now return futures; the UDP
+      setup/control follow-up also made bind, connect, metadata, options,
+      multicast controls, and close awaitable. Async network adapters, IDNA, and
+      additional platform-specific socket options remain planned target-backed
+      work.
+- [x] **`std:net` first historical socket-option slice**: added provider-backed option
+      methods for the original socket handles. The early direct-result stream
+      and datagram nodelay/TTL public shapes were superseded by corrected
+      async-contract follow-ups, so every wait-capable option/control surface
+      named here is now future-returning. Private runtime helpers validate TTL
+      payloads and feed provider failures into the async public futures. Added runtime ABI coverage,
+      TCP/UDP loopback e2e option round trips, LSP analysis coverage, and docs.
+      Async network adapters, IDNA, and additional platform-specific socket
       options remain planned target-backed work.
+- [x] **`std:net` historical TCP listener TTL socket-option slice**: extended
+      the provider-backed `TcpListener` handle with old direct-result TTL get/set
+      methods. Corrected async-contract follow-ups superseded those public
+      shapes with `Future<u32 | IoError>` and `Future<null | IoError>` methods.
+      Private runtime helpers validate the `u32` payload, wrap provider listener
+      TTL get/set operations, and feed failures into the async public futures.
+      Added runtime ABI coverage, TCP loopback e2e option coverage, LSP analysis
+      and member completion coverage, and docs while keeping async network
+      adapters, IDNA, and additional platform-specific socket options planned
+      target-backed work.
+- [x] **`std:net` historical UDP broadcast socket-option slice**: extended the
+      provider-backed `UdpSocket` handle with old direct-result broadcast get/set
+      methods. Corrected async-contract follow-ups superseded those public
+      shapes with future-returning methods. Private runtime helpers wrap the
+      provider UDP broadcast option and feed failures into the async public
+      futures. Added runtime ABI coverage, UDP loopback e2e option coverage, LSP
+      analysis coverage, and docs while keeping async network adapters, IDNA,
+      and other platform-specific socket options planned target-backed work.
+- [x] **`std:net` historical IPv4 multicast-loop socket-option slice**:
+      extended `UdpSocket` with old direct-result IPv4 multicast-loop get/set
+      methods. Corrected async-contract follow-ups superseded those public
+      shapes with future-returning methods. Private runtime helpers wrap the
+      provider IPv4 multicast loopback option and feed failures into the async
+      public futures. Added runtime ABI coverage, UDP loopback e2e option
+      coverage, LSP analysis coverage, and docs while keeping async network
+      adapters, IDNA, multicast membership, and other platform-specific socket
+      options planned.
+- [x] **`std:net` historical IPv6 multicast-loop socket-option slice**:
+      extended `UdpSocket` with old direct-result IPv6 multicast-loop get/set
+      methods. Corrected async-contract follow-ups superseded those public
+      shapes with future-returning methods. Private runtime helpers wrap the
+      provider IPv6 multicast loopback option and feed failures into the async
+      public futures. Added runtime ABI coverage over an IPv6 loopback UDP
+      socket, source-level UDP e2e option coverage, LSP analysis coverage, and
+      docs while keeping async network adapters, IDNA, multicast membership, and
+      other platform-specific socket options planned.
+- [x] **`std:net` historical IPv4 multicast membership slice**: extended
+      `UdpSocket` with old direct-result IPv4 join/leave membership methods.
+      Corrected async-contract follow-ups superseded those public shapes with
+      future-returning methods. The Otter stdlib layer passes rendered portable
+      `IpAddr` values into private provider helpers; the runtime validates IPv4
+      group/interface payloads, performs provider membership calls, and feeds
+      failures into the async public futures. Added runtime ABI coverage,
+      source-level UDP e2e membership coverage, LSP analysis coverage, and docs
+      while keeping async network adapters, IDNA, and other platform-specific
+      socket options planned.
+- [x] **`std:net` historical IPv6 multicast membership slice**: extended
+      `UdpSocket` with old direct-result IPv6 join/leave membership methods.
+      Corrected async-contract follow-ups superseded those public shapes with
+      future-returning methods. The Otter stdlib layer passes rendered portable
+      `IpAddr` group values and provider interface indexes into private provider
+      helpers; the runtime validates IPv6 group payloads and `u32` interface
+      indexes, performs provider membership calls, and feeds failures into the
+      async public futures. Added runtime ABI coverage, source-level UDP e2e
+      membership coverage, LSP analysis coverage, and docs while keeping async
+      network adapters, IDNA, and other platform-specific socket options
+      planned.
+- [x] **`std:net` historical IPv4 multicast-TTL socket-option slice**:
+      extended `UdpSocket` with old direct-result IPv4 multicast-TTL get/set
+      methods. Corrected async-contract follow-ups superseded those public
+      shapes with future-returning methods. Private runtime helpers wrap the
+      provider IPv4 multicast TTL option, validate the `u32` payload, and feed
+      failures into the async public futures. Added runtime ABI coverage, UDP
+      loopback e2e option coverage, LSP analysis coverage, and docs while
+      keeping async network adapters, IDNA, multicast membership, and other
+      platform-specific socket options planned.
+- [x] **`std:net` historical UDP socket-error readback slice**: extended
+      `UdpSocket` with old direct-result socket-error readback. Corrected
+      async-contract follow-ups superseded that public shape with
+      `Future<IoError | null>`. Private runtime helpers wrap provider
+      `SO_ERROR` readback, preserve provider-error payloads inside the future
+      result, and return `null` when a healthy socket has no pending error.
+      Added runtime ABI coverage, UDP loopback e2e coverage, LSP analysis
+      coverage, and docs while keeping async network adapters, IDNA, and other
+      platform-specific socket options planned.
+- [x] **`std:net` historical TCP socket-error readback slice**: extended
+      `TcpStream` and `TcpListener` with old direct-result socket-error
+      readback. Corrected async-contract follow-ups superseded those public
+      shapes with `Future<IoError | null>` methods. Private runtime helpers wrap
+      provider `SO_ERROR` readback for both handle registries, preserve provider
+      failures inside the future result, and return `null` when freshly
+      connected/bound loopback handles have no pending error. Added runtime ABI
+      coverage, TCP loopback e2e coverage for listener/client/server stream
+      handles, LSP analysis coverage, and docs while keeping async network
+      adapters, IDNA, and other platform-specific socket options planned.
+- [x] **`std:net` historical nonblocking socket-option slice**: extended the
+      original provider-backed handles with `set_nonblocking(bool):
+      null | IoError` on `TcpStream`, `TcpListener`, and `UdpSocket`. Corrected
+      async-contract follow-ups superseded those public shapes with
+      `Future<null | IoError>` methods while preserving `set_nonblocking` as
+      provider socket-mode configuration, not executor integration. Runtime
+      helpers toggle provider nonblocking mode on the shared socket handles and
+      feed failures into the async public futures. Added runtime ABI coverage, TCP and UDP
+      loopback e2e option coverage, LSP analysis/member-completion coverage,
+      and docs while keeping async network adapters, IDNA, and additional
+      platform-specific socket options planned.
+- [x] **`std:net` historical socket timeout option slice**: extended
+      `TcpStream` and `UdpSocket` with old direct-result provider-backed
+      read/write timeout get/set operations using `std:time.Duration | null`.
+      Corrected async-contract follow-ups superseded those public shapes with
+      future-returning methods. Passing `null` clears the selected provider
+      timeout, finite non-negative durations are encoded as nanoseconds across
+      the private runtime ABI, and invalid/unsupported values resolve through
+      the async public futures. Added runtime ABI coverage including clear and
+      invalid negative-duration cases, TCP/UDP loopback e2e coverage, LSP
+      analysis/member-completion coverage, JIT/native parity, and docs while
+      keeping async network adapters, IDNA, and additional platform-specific
+      socket options planned.
+- [x] **`std:net` connected UDP datagram slice**: extended the provider-backed
+      `UdpSocket` handle with connected-peer setup, connected send/recv, and
+      peer-address helpers alongside the existing address-explicit datagram
+      operations. Corrected async-contract follow-ups superseded the early
+      direct-result public shapes: connected setup, peer address, connected
+      datagrams, address-explicit datagrams, setup/control, options, multicast,
+      and close all now return futures where they touch provider state. The
+      runtime hooks use the provider's
+      connected UDP filtering/default-peer behavior, preserve raw byte payloads
+      through the existing hex ABI, append received bytes into caller-owned
+      `Bytes`, and feed provider failures into the async public futures.
+      Added runtime ABI coverage, loopback e2e coverage, LSP analysis and
+      member-completion coverage, JIT/native parity, and docs while keeping
+      async network adapters, IDNA, and additional platform-specific socket
+      options planned.
+- [x] **`std:net` TCP timed-connect slice**: extended `TcpStream` with
+      `connect_timeout(addr, timeout: Duration)`, backed by
+      the provider's finite TCP connect-with-timeout operation. This historical
+      slice originally returned `TcpStream | IoError`; the corrected async-contract
+      slice superseded the public shape to `Future<TcpStream | IoError>`. The runtime hook
+      validates the public duration as non-negative nanoseconds before crossing
+      into the provider, resolves invalid or failed connects through the async
+      public future, and registers successful streams in the same deterministic
+      handle registry as `connect`. Added runtime ABI coverage including a
+      negative-duration error, loopback e2e coverage, LSP analysis coverage,
+      JIT/native parity, and docs while keeping async network adapters, IDNA,
+      and additional platform-specific socket options planned.
+- [x] **`std:net` TCP stream peek slice**: extended `TcpStream` with stream
+      peek, backed by the provider's non-consuming stream peek operation.
+      Corrected async-contract follow-up superseded the early direct-result
+      public shape: live `TcpStream.peek(buf)` returns `Future<i64 | IoError>`.
+      The stdlib method follows the same caller-owned `Bytes` buffer convention
+      as stream reads: it appends the peeked bytes to the supplied buffer and
+      returns the byte count through the future result, while the runtime hook
+      preserves arbitrary byte payloads through the existing hex ABI and leaves
+      the stream readable afterward. Added runtime coverage for
+      peek-before-read and invalid negative lengths, TCP loopback e2e coverage,
+      LSP analysis/member-completion coverage, JIT/native parity, and docs while
+      keeping async network adapters, IDNA, and additional platform-specific
+      socket options planned.
+- [x] **`std:net` UDP datagram peek slice**: extended `UdpSocket` with
+      `peek(buf: Bytes)` for connected sockets and `peek_from(buf: Bytes)` for
+      address-explicit sockets, both backed by provider non-consuming datagram
+      peek operations. The corrected async-contract UDP datagram slice later
+      superseded the public return shapes to `Future<i64 | IoError>` and
+      `Future<(i64, SocketAddr) | IoError>`.
+      The stdlib methods use the same caller-owned `Bytes` convention as
+      `recv`/`recv_from`, appending peeked payload bytes while leaving the
+      datagram available for a later receive. Runtime hooks preserve arbitrary
+      byte payloads through the existing hex/length-framed ABI and resolve
+      invalid negative lengths through the async public futures. Added runtime
+      peek-before-receive coverage, UDP loopback e2e coverage, LSP
+      analysis/member-completion coverage, and docs while keeping async network
+      adapters, IDNA, and additional platform-specific socket options planned.
+- [x] **`std:net` historical value/future contract clarification**: documented the
+      then-current provider-backed shape for `resolve`, `TcpStream`,
+      `TcpListener`, and `UdpSocket`, then superseded it under the corrected
+      async contract. Current wait-capable DNS, TCP, and UDP public operations
+      return explicit futures over private provider helpers. `set_nonblocking`
+      is now documented as provider socket-mode configuration, not executor
+      integration. Added a compile-error e2e guard proving
+      `TcpStream.connect_timeout(...)` returned `TcpStream | IoError` and could not
+      be `await`ed at the time; the later corrected async-contract slices
+      superseded DNS, TCP connect constructors, listener accept, TCP stream
+      byte I/O/control, TCP listener setup/control, and all wait-capable UDP
+      operations with requires-await guards.
+      The same not-awaitable guard coverage was expanded across
+      TCP listener `bind`, TCP listener
+      `accept`, TCP stream `close`, TCP stream
+      `read`/`read_to_end`/`write`/`write_all`/`flush`/`peek`, and UDP
+      `bind`/`connect`/`send`/`recv`/`peek` plus address-aware
+      `send_to`/`recv_from`/`peek_from`. The concurrency and async chapters now
+      no longer call out TCP stream byte I/O or UDP setup/control as public
+      wait boundaries; those methods are now future-returning helper-backed
+      operations.
+      TCP stream address accessors, error readback, nodelay/nonblocking,
+      read/write timeout, TTL option methods, and close were later superseded
+      with future-returning surfaces and requires-await guards. TCP listener address/error/nonblocking/TTL/close
+      controls and UDP address/error/nonblocking/timeout/TTL/broadcast/
+      multicast/close controls now have the same direct guard coverage.
+      Added an LSP open-document diagnostic regression
+      source for the same not-awaitable boundary classes (`std:net`,
+      `std:process`, `std:fs`, `std:io`, `std:sync`, `std:thread`, and
+      `std:task`); verified with
+      `cargo test -p lsp diagnostics_report_ordinary_boundaries_are_not_awaitable -- --nocapture`
+      under a PTY. Async network adapters and the remaining TCP/UDP
+      wait-capable handle corrections were completed in later slices under the
+      corrected no-public-blocking rule.
+      This is a contract-honesty slice, not the async-network implementation.
+- [x] **`std:net` first async TCP stream adapter slice**: added explicit
+      `AsyncTcpStream` before the corrected async-contract work changed the
+      plain `TcpStream` public operation shapes.
+      The adapter exposes `connect(addr): Future<AsyncTcpStream | IoError>`,
+      `from_stream`, `into_stream`, `read_async`, `write_async`, `peek_async`,
+      address accessors, close, clone, stringification, and debug rendering.
+      Runtime private futures hand TCP connect/read/write/peek to helper
+      threads and wake through the existing reactor registration path, so an
+      executor poll does not park on provider socket waits; cancellation removes
+      the reactor registration and drops late helper results. Added stdlib e2e
+      loopback coverage, import-gating coverage for the new type, LSP analysis
+      and member-completion source coverage, docs/18/docs/20/docs/21/docs/24,
+      and compile-only Rust checks. Async listener/UDP adapters, shared
+      async byte-stream protocols, and deeper readiness-native provider
+      integration remained planned at that point.
+      Follow-up not-awaitable coverage now also proves `from_stream(...)` and
+      `into_stream()` are ordinary conversion helpers, not async TCP
+      operations. Later corrected-contract work superseded the original
+      adapter metadata/control shape too: `AsyncTcpStream.peer_addr()`,
+      `local_addr()`, and `close()` now return futures and must be awaited.
+- [x] **`std:net` async TCP listener accept adapter slice**: added explicit
+      `AsyncTcpListener` before the corrected no-public-blocking rule was
+      applied to the plain listener method. The adapter exposes `bind`,
+      `from_listener`, `into_listener`, `accept_async`, listener
+      metadata/options, close, clone, stringification, and debug rendering.
+      `accept_async()` returns
+      `Future<(AsyncTcpStream, SocketAddr) | IoError>` and uses the same
+      cancellable helper-thread plus reactor-wake path as the TCP stream async
+      adapter, so executor polls do not park on provider `accept` waits. Added
+      the `examples/async_tcp_listener.otter` direct example, loopback
+      JIT/native e2e coverage, e2e example coverage that awaits every
+      `TcpStream` client byte-I/O future while isolating the loopback client
+      body in an async `Thread.spawn` worker,
+      import-gating coverage for the new type, LSP analysis/member-completion
+      source coverage, docs/18/docs/20/docs/21/docs/24, and targeted
+      compile/run verification. At that point, remaining async network
+      work stayed active: shared async byte-stream protocols (completed in the
+      shared protocol slice below),
+      timeout-specific adapter conveniences, deeper readiness-native provider
+      integration, and stress/performance coverage.
+      Follow-up not-awaitable coverage proved the original adapter
+      setup/control shape at the time. Corrected no-public-blocking work later
+      superseded that shape: `AsyncTcpListener.bind(...)`, listener metadata,
+      error readback, TTL, and close now return futures; `from_listener(...)`
+      and `into_listener()` remain ordinary conversion helpers.
+      Follow-up corrected-contract work superseded the original "do not change
+      `TcpListener.accept()`" stance: plain `TcpListener.accept()` now returns
+      `Future<(TcpStream, SocketAddr) | IoError>`, and `accept_async()` remains
+      a convenience wrapper that adapts the accepted stream to
+      `AsyncTcpStream`.
+- [x] **Corrected public TCP listener accept contract**: changed
+      `TcpListener.accept()` from the old ordinary-result wait shape into
+      `Future<(TcpStream, SocketAddr) | IoError>` under the no-public-blocking
+      rule. The stdlib awaits the existing private async accept intrinsic,
+      `AsyncTcpListener.accept_async()` now wraps that public future and adapts
+      the stream to `AsyncTcpStream`, the backend no longer registers the
+      retired direct accept symbol, and the runtime encoded accept helper is
+      crate-private async-runtime machinery. Replaced the old accept
+      not-awaitable guard with a requires-await fixture, updated loopback TCP
+      server helpers to await accept inside async `Thread.spawn` workers, and
+      refreshed LSP/docs/goals. Remaining TCP stream instance I/O/control and
+      UDP socket operations were completed by later corrected-contract slices.
+- [x] **Corrected public TCP stream byte-I/O contract**: changed
+      `TcpStream.read`, `read_to_end`, `write`, `write_all`, `flush`, and
+      `peek` from old ordinary-result wait shapes into `Future`-returning methods
+      under the no-public-blocking rule. The stdlib awaits private async
+      stream intrinsics over helper-backed runtime operations; the backend no
+      longer registers the retired direct byte-I/O symbols; and runtime encoded
+      helpers are crate-private async-runtime machinery. Replaced the old
+      byte-I/O not-awaitable guards with requires-await fixtures, updated
+      loopback TCP examples and stress/timeout regressions to await stream I/O,
+      and refreshed LSP/docs/goals. Remaining TCP metadata/control and UDP
+      socket operations were completed by later corrected-contract slices.
+- [x] **Corrected public UDP datagram contract**: changed plain
+      `UdpSocket.send`, `recv`, `peek`, `send_to`, `recv_from`, and
+      `peek_from` from old ordinary-result wait shapes into `Future`-returning
+      methods under the no-public-blocking rule. The stdlib now awaits the
+      existing private async UDP intrinsics over helper-backed runtime
+      operations; the backend no longer registers the retired direct datagram
+      symbols; and runtime encoded UDP datagram helpers are crate-private
+      async-runtime machinery. Replaced the old UDP datagram not-awaitable
+      guards with requires-await fixtures, updated the loopback UDP e2e case to
+      await plain datagram methods, and refreshed LSP/docs/goals. Remaining UDP
+      bind, connect, metadata/control, timeout/socket-option, multicast, and
+      close methods were completed by the follow-up slice below.
+- [x] **Corrected public TCP listener setup/control contract**: changed
+      `TcpListener.bind`, `local_addr`, `take_error`, `set_nonblocking`, `ttl`,
+      `set_ttl`, and `close` from old ordinary-result wait shapes into
+      `Future`-returning methods under the no-public-blocking rule, and made
+      the matching `AsyncTcpListener.bind`, metadata, TTL, and close helpers
+      awaitable too. The stdlib awaits private async listener intrinsics over
+      helper-backed runtime operations; the backend no longer registers the
+      retired direct listener bind/control symbols; and runtime encoded listener
+      helpers are crate-private async-runtime machinery. Replaced old listener
+      not-awaitable guards with requires-await fixtures, updated TCP listener
+      examples and stress/timeout fixtures to await listener setup/control,
+      added cancellation cleanup coverage for late listener-bind results, and
+      refreshed LSP/docs/goals. TCP stream metadata/control was completed by
+      the follow-up slice below; the later UDP setup/control slice completed
+      the UDP methods too.
+- [x] **Corrected public TCP stream metadata/control contract**: changed
+      `TcpStream.peer_addr`, `local_addr`, `take_error`, `nodelay`,
+      `set_nodelay`, `set_nonblocking`, read/write timeout get/set, `ttl`,
+      `set_ttl`, and `close` from old ordinary-result wait shapes into
+      `Future`-returning methods under the no-public-blocking rule, and made
+      the matching `AsyncTcpStream.peer_addr`, `local_addr`, and `close`
+      wrappers awaitable too. The stdlib awaits private async stream-control
+      intrinsics over helper-backed runtime operations; the backend no longer
+      registers the retired direct-result stream metadata/control symbols; and runtime
+      encoded stream-control helpers are crate-private async-runtime machinery.
+      Replaced old TCP stream and async-stream metadata/control not-awaitable
+      guards with requires-await fixtures, updated TCP examples and
+      stress/timeout fixtures to await stream control, refreshed LSP completion
+      and analysis expectations, and updated docs/goals. Remaining UDP
+      setup/control methods were completed by the follow-up slice below.
+- [x] **Corrected public UDP setup/control contract**: changed
+      `UdpSocket.bind`, `local_addr`, `connect`, `peer_addr`, `take_error`,
+      `set_nonblocking`, read/write timeout get/set, TTL get/set,
+      broadcast/multicast options and membership, and `close` from old
+      ordinary-result wait shapes into `Future`-returning methods under the
+      no-public-blocking rule, and made matching `AsyncUdpSocket` bind,
+      metadata/control/options/multicast/close wrappers awaitable while keeping
+      `from_socket`, `into_socket`, clone/stringification/debug as ordinary
+      value helpers. The stdlib awaits private async UDP setup/control
+      intrinsics over helper-backed runtime operations; the backend no longer
+      registers the retired UDP setup/control direct-result symbols; and runtime encoded
+      UDP helpers are crate-private async-runtime machinery. Added
+      cancellation cleanup coverage for late UDP bind results, replaced old
+      UDP setup/control not-awaitable guards with requires-await fixtures,
+      updated UDP examples/stress/timeout fixtures to await setup/control,
+      refreshed LSP completion/type-namespace/analysis expectations, and
+      updated docs/goals.
+- [x] **Async UDP example wording correction**: refreshed
+      `examples/async_udp.otter`, its mirrored e2e fixture, and goals memory so
+      the datagram-shaped `AsyncUdpSocket` example no longer describes
+      bind/address lookup/close as ordinary setup/control boundaries. The live
+      wording now matches the corrected contract: bind, address lookup,
+      datagram send/receive, and close are awaited futures; `from_socket` and
+      `into_socket` remain ordinary conversion helpers.
+- [x] **`std:net` async UDP datagram adapter slice**: added explicit
+      `AsyncUdpSocket` as a datagram-shaped wrapper over the same UDP handle
+      model. A later corrected-contract slice also made base `UdpSocket`
+      datagram operations future-returning. The adapter exposes `bind`,
+      `from_socket`, `into_socket`,
+      connected `send_async`/`recv_async`/`peek_async`, address-aware
+      `send_to_async`/`recv_from_async`/`peek_from_async`, socket metadata and
+      options, close, clone, stringification, and debug rendering. Runtime
+      private futures reuse the crate-private provider encoders through the same
+      cancellable helper-thread plus reactor-wake path used by the TCP async
+      adapters, so executor polls do not park on provider UDP waits and late
+      results are discarded after cancellation. Added
+      `examples/async_udp.otter` plus a test-gated copy under
+      `tests/cases/examples/`, loopback JIT/native e2e coverage for connected
+      and address-aware datagrams including peek-before-recv,
+      import-gating coverage for the new type, LSP analysis/member-completion
+      source coverage, docs/18/docs/20/docs/21/docs/24, and targeted
+      compile/run verification. At that point, remaining async network work
+      stayed active: shared async byte-stream protocols (completed in the
+      shared protocol slice below), timeout-specific adapter
+      conveniences, deeper readiness-native provider integration, and stress/
+      performance coverage.
+      Follow-up not-awaitable coverage proved the original adapter
+      setup/control shape at the time. Corrected no-public-blocking work later
+      superseded that shape: `AsyncUdpSocket.bind(...)`, adapter metadata,
+      peer setup, socket options, multicast membership controls, and close now
+      return futures; `from_socket(...)` and `into_socket()` remain ordinary
+      conversion helpers.
+- [x] **Async network timeout/cancellation cleanup regression slice**: hardened
+      helper-backed async network cancellation so late cancelled TCP connect,
+      connect_timeout, and accept results release any provider stream handle
+      they registered before the runtime discards the result. Cancellation
+      still removes the reactor registration and result root for every
+      helper-backed I/O future;
+      UDP late receives may consume the target datagram at the provider layer,
+      so cleanup is defined as unregistering the waiter and discarding the late
+      result while preserving subsequent socket usability; docs/24 now mirrors
+      that explicit UDP datagram-consumption caveat. Added runtime units proving
+      late cancelled TCP connect/connect_timeout/accept release registered
+      stream handles, plus JIT/native e2e regressions for timed-out `AsyncUdpSocket.recv_from_async`
+      and timed-out `AsyncTcpListener.accept_async` followed by a successful
+      fresh operation. Updated docs/21/docs/24, ROADMAP, and goals. At that
+      point, remaining async network work stayed active: shared async
+      byte-stream protocols (completed in the shared protocol slice below),
+      timeout-specific convenience APIs, deeper readiness-native provider
+      integration, and broader stress/performance coverage.
+- [x] **Async TCP stream read-timeout cleanup slice**: added
+      `std_net_async_tcp_read_timeout_cleanup.otter`, proving that timing out
+      helper-backed `AsyncTcpStream.read_async` removes the reactor waiter,
+      discards the late read result, and leaves the stream usable for a later
+      read. The regression uses a separate TCP control connection so the
+      cancelled data-stream read can hold its provider lock without blocking the
+      test's coordination path; it documents that the stale provider bytes may
+      be consumed by the cancelled helper. Verified JIT and native parity.
+      Broader async network stress/performance coverage and deeper
+      readiness-native provider integration remain active follow-up work.
+- [x] **Async network GC-stress rooting slice**: added bounded GC-stress
+      coverage for helper-backed async networking with
+      `std_net_async_gc_stress.otter`. The case keeps managed `List<str>` and
+      `Bytes` state live across an `AsyncUdpSocket.recv_from_async` await while
+      `OTTER_FUSION_GC=stress` collects aggressively, then verifies JIT and
+      native parity. This intentionally stays small and serial to avoid
+      oversubscribing network/helper threads under stress mode. Broader async
+      network stress/performance coverage remains active follow-up work.
+- [x] **Async TCP stream GC-stress rooting slice**: added
+      `std_net_async_tcp_gc_stress.otter`, a serial stress case that keeps
+      managed `List<str>` and caller-owned `Bytes` buffers live across
+      helper-backed `AsyncTcpStream.write_async` and `read_async` awaits while
+      an isolated loopback server body awaits the plain `TcpStream` byte-I/O
+      futures.
+      Verified JIT and native parity under `OTTER_FUSION_GC=stress`; this
+      complements the UDP datagram stress case without broad helper-thread
+      oversubscription. Broader async network stress/performance coverage
+      remains active follow-up work.
+- [x] **`std:net` async TCP connect timeout convenience slice**: added
+      `AsyncTcpStream.connect_timeout(addr, timeout: Duration):
+      Future<AsyncTcpStream | IoError>` as an explicit async timed-connect
+      adapter. At the time this deliberately preserved
+      `TcpStream.connect_timeout()`'s ordinary-result public shape; the corrected
+      async-contract slice later superseded that public shape with
+      `Future<TcpStream | IoError>`. Runtime private futures reuse the provider finite TCP
+      connect-with-timeout operation through the same helper-thread plus
+      reactor-wake path as `AsyncTcpStream.connect`; invalid negative durations
+      resolve through the future result, and cancellation uses the same late
+      TCP stream-handle cleanup path as plain async connect, with focused
+      runtime coverage for both connect forms. Added loopback JIT/native e2e
+      coverage including an invalid-duration negative case, LSP analysis/member
+      completion coverage, `examples/async_tcp_timeout.otter` plus a
+      test-gated copy under `tests/cases/examples/`, docs/18/docs/21/docs/24
+      updates, and goals bookkeeping. At that point, remaining async network
+      work included shared async byte-stream protocols (completed in the shared
+      protocol slice below), additional timeout convenience decisions,
+      deeper readiness-native provider integration, and broader stress/
+      performance coverage.
+- [x] **Shared async byte-stream protocol slice**: added
+      `std:io.AsyncReader` and `std:io.AsyncWriter` as Otter Fusion's generic
+      async byte-stream contracts instead of copying Rust's `AsyncRead` /
+      `AsyncWrite` naming. `Stdin`, `Stdout`, `Stderr`, descriptor-backed
+      `std:fs.File`, and `std:net.AsyncTcpStream` implement the matching
+      protocols while keeping their existing concrete async methods. UDP remains
+      deliberately datagram-shaped: `AsyncUdpSocket` keeps `send_async`,
+      `recv_async`, `peek_async`, and address-aware variants rather than being
+      forced into a stream protocol that would hide datagram boundaries. Added
+      `examples/async_io_contracts.otter` plus a test-gated copy under
+      `tests/cases/examples/`, generic async file/TCP e2e coverage, ordinary-reader
+      and ordinary-writer rejection coverage, widened near-empty-prelude import
+      gating, docs/18/docs/20/docs/21/docs/24 updates, and goals bookkeeping.
+      Remaining
+      async-network work: deeper readiness-native provider integration,
+      additional timeout convenience decisions, and broader stress/performance
+      coverage.
+- [x] **Helper-backed async I/O native-state ownership fix**: tightened the
+      runtime future helper path so helper threads no longer perform a
+      thread-wide native-state enter/leave around completion. The private
+      provider helpers own `gc::native_wait(...)` around the actual host wait;
+      helper completion now runs after the wait, encodes the Otter result,
+      roots it, and wakes the reactor without leaving a native state it did not
+      enter. The shared timer driver now registers as a runtime mutator before
+      invoking reactor wakers and parks its idle/deadline condvar waits in
+      runtime-native/no-root state. Added focused runtime regression coverage and
+      verified the serial async-runtime unit slice under a PTY (`cargo test -p runtime
+      async_rt::tests -- --nocapture --test-threads=1`), plus GC-stress
+      JIT/native async I/O and async network smoke runs. Refreshed docs/21 and
+      docs/24. Remaining async-network work stays active: deeper readiness-native
+      provider integration, additional timeout convenience decisions, and
+      broader stress/performance coverage.
+- [x] **LSP async/blocking signature detail slice**: completion details for
+      embedded std/core definitions now render syntactic type structure
+      recursively instead of collapsing non-document types to labels such as
+      `Future`, `tuple`, or `union`. Focused LSP member-completion coverage now
+      proves `std:net.AsyncTcpStream`, `AsyncTcpListener`, and `AsyncUdpSocket`
+      advertise their exact `Future<... | IoError>` return shapes, including
+      all six async UDP datagram methods (`send_async`, `recv_async`,
+      `peek_async`, `send_to_async`, `recv_from_async`, and `peek_from_async`),
+      plus `AsyncTcpStream` adapter/metadata/control completions. Later
+      corrected-contract work superseded the original `AsyncTcpStream` and
+      `AsyncTcpListener` metadata/control completion expectations: live
+      completions now advertise futures for TCP stream/listener setup/control
+      and close, while `AsyncTcpStream.from_stream`/`into_stream` and
+      listener conversion helpers remain ordinary values. `TcpStream`
+      completion coverage now proves metadata/error helpers,
+      nodelay/nonblocking/timeout/TTL controls, close, and byte-I/O methods all
+      advertise `Future<...>` returns. `TcpListener`
+      completion coverage originally proved accept advertised a `Future<...>`
+      return while bind, metadata/error, socket-option, and close were ordinary;
+      later corrected-contract work superseded that shape so live `TcpListener`
+      bind/setup/control/close completions advertise futures too. Later UDP
+      corrected-contract work likewise superseded the original
+      `AsyncUdpSocket` and base `UdpSocket` setup/control completion
+      expectations: live UDP bind/connect/metadata/error/timeout/socket-option/
+      multicast/close completions now advertise `Future<...>` returns, while
+      `AsyncUdpSocket.from_socket` and `into_socket` remain ordinary
+      conversion helpers. Namespace
+      completion coverage now proves top-level `std:net.resolve(host)` advertises
+      its `Future<List<IpAddr> | IoError>` return and must be awaited before DNS
+      results are used.
+      Type-namespace completion coverage now proves async
+      network conversion/setup helpers (`AsyncTcpStream.from_stream`,
+      `AsyncTcpListener.from_listener`, and `AsyncUdpSocket.from_socket`)
+      advertise immediate non-`Future` returns, while corrected-contract work now
+      makes `AsyncTcpListener.bind` and `AsyncUdpSocket.bind` awaitable, while
+      `TcpStream.read`/`read_to_end`/`write`/`write_all`/`flush`/`peek`
+      completions are visibly awaitable. Static type-namespace completion now proves
+      `TcpStream.connect`/`connect_timeout` return `Future<TcpStream | IoError>`
+      while `AsyncTcpStream.connect`/`connect_timeout` return
+      `Future<AsyncTcpStream | IoError>`. LSP TCP import-analysis coverage now
+      also awaits wait-capable TCP futures in its accepted sample program
+      (`TcpListener.accept`, `AsyncTcpListener.accept_async`,
+      `TcpStream.peek`, `AsyncTcpStream` read/write/peek/connect helpers, and
+      generic `AsyncReader`/`AsyncWriter` calls), leaving only pure conversion
+      helpers unawaited. Verified with
+      `cargo test -p lsp
+      type_namespace_completion_marks_tcp_connectors_awaitable -- --nocapture`,
+      `cargo test -p lsp member_completion_lists_std_net -- --nocapture` and
+      `cargo check -p lsp --tests` under a PTY.
+- [x] **LSP stdio print-helper async correction slice**: `std:io`
+      print helpers are no longer compiler builtins. Hover/signature-help now
+      sees them as ordinary stdlib functions returning `Future<null>`, and
+      focused LSP unit coverage proves `print`/`println`/`eprint`/`eprintln`
+      are absent from the builtin signature table.
+- [x] **LSP runtime-handle intrinsic completion slice**: member completion now
+      mirrors checker-recognized intrinsic methods on runtime handles that are
+      not declared as ordinary stdlib `extend` methods. `std:thread.JoinHandle`
+      completions show `join(): Future<Joined<R> | Panicked>` and
+      non-awaitable `detach(): null`; `std:task.JoinHandle` completions show
+      `join(): Future<Joined<R> | Panicked | Cancelled>` plus non-awaitable
+      `detach`/`cancel`/`abort`; channel endpoint completions show
+      `Sender.send(value): null | ChannelClosed`, async
+      `Receiver.recv(): Future<T | ChannelClosed>`, and immediate non-blocking
+      `Receiver.try_recv(): T | null`. Compile-error guards also prove
+      `await Sender.send(...)` is rejected because send is an immediate
+      non-blocking enqueue, not an explicit async receive surface. Verified with
+      `cargo test -p lsp member_completion -- --nocapture` and
+      `cargo check -p lsp --tests` under a PTY.
+- [x] **`std:net` async-adapter documentation drift audit**: refreshed the
+      authoritative module/concurrency/stdlib docs so they no longer describe
+      async network adapters as planned or partially implemented. `docs/17` now
+      lists `AsyncTcpStream`, `AsyncTcpListener`, and `AsyncUdpSocket` in the
+      `std:net` module row, names wait-capable DNS/TCP/UDP operations as
+      future-returning/reactor-backed surfaces, and scopes ordinary socket
+      helpers to adapter conversions or pure address/value accessors; `docs/20`
+      and `docs/24` now point to the explicit async adapter set instead of vague
+      "where implemented" wording. Verified with a stale-text sweep for
+      `planned async adapters`, `async network adapters remain planned`,
+      `future socket operations`, and `where implemented` across the active
+      async/blocking stdlib docs.
 - [x] **`std:rand` deterministic + OS-backed RNG slice**: added the mixed
       `std:rand` module exporting `Rng`, `RandomError`, `SeededRng`,
-      `OsRng`, `ThreadRng`, `random_error`, `os_rng`, `thread_rng`,
+      `OsRng`, `ThreadRng`, `random_error`, `os_rng`, `os_bytes`,
+      `thread_rng`,
       `gen_range_i64`, `gen_range_u64`, `gen_f64`, `gen_range_f64`,
+      `gen_triangular_f64`, `gen_bates_f64`, `gen_irwin_hall_f64`,
+      `gen_min_f64`, `gen_max_f64`, `gen_midrange_f64`, `gen_median_f64`,
       `gen_bool`, `gen_index`, `fill_bytes_n`, `gen_bytes`,
-      `choose_index`, `choose`, and `shuffle`.
+      `choose_index`, `choose`, `weighted_index`, `choose_weighted`,
+      `sample_indices`, `sample`, `shuffle`, and `shuffled`.
       `SeededRng` is deterministic and
       reproducible, with `fill_bytes` appending generated bytes into
       `std:bytes.Bytes`; it is suitable for tests/simulations but not
       cryptographic use. `OsRng` is provider-backed through the runtime entropy
-      hook and exposes fallible `try_next_u32`, `try_next_u64`, and
-      `try_fill_bytes` and `try_fill_bytes_n` methods returning `RandomError`;
-      its `Rng` impl panics on provider entropy failure to preserve the
-      non-fallible generic `Rng` contract. `ThreadRng` is a per-value generator
-      seeded from `OsRng`.
+      hook and exposes fallible `try_next_u32`, `try_next_u64`,
+      `try_fill_bytes`, and `try_fill_bytes_n` methods as explicit futures
+      resolving to values or `RandomError`; `os_bytes(count)` returns a future
+      resolving to an owned provider-entropy `Bytes` buffer or `RandomError`
+      (empty for non-positive counts). `OsRng` intentionally does not implement
+      the ordinary `Rng` interface because target entropy can wait on host
+      state. `ThreadRng` is a per-value generator seeded by awaiting `thread_rng()`.
       Range helpers are half-open
       and return `low` for empty/reversed ranges, including deterministic
       `gen_f64` and `gen_range_f64` helpers built from the next 53 random bits;
+      `gen_triangular_f64` samples a symmetric triangular distribution by
+      averaging two uniform f64 draws and scaling over the same low/high range;
+      `gen_bates_f64` samples a Bates distribution by averaging a caller-chosen
+      count of uniform f64 draws before scaling over the same low/high range,
+      returning `low` for non-positive draw counts or empty/reversed ranges;
+      `gen_irwin_hall_f64` samples the Irwin-Hall family by summing a
+      caller-chosen count of uniform f64 draws over the requested half-open
+      low/high range, returning `0.0` for non-positive draw counts or
+      empty/reversed ranges;
+      `gen_min_f64` and `gen_max_f64` sample the minimum and maximum order
+      statistic from a caller-chosen count of uniform f64 draws over the
+      requested half-open low/high range, returning `low` for non-positive draw
+      counts or empty/reversed ranges;
+      `gen_midrange_f64` samples the midpoint between the observed minimum and
+      maximum from the same caller-chosen draw set and range, and
+      `gen_median_f64` samples the median order statistic from that draw set,
+      averaging the two middle observed values for even draw counts; both
+      return `low` for non-positive draw counts or empty/reversed ranges;
       `gen_bool` samples a numerator/denominator ratio with clamped
-      always-false/always-true edge cases, `fill_bytes_n` / `gen_bytes`
-      generate exact-length byte buffers from any `Rng`, `gen_index` and
+      always-false/always-true edge cases, `gen_binomial` counts successes
+      across repeated ratio trials with the same edge-case clamping,
+      `fill_bytes_n` / `gen_bytes`
+      generate deterministic exact-length byte buffers from any `Rng`,
+      `gen_index` and
       `choose_index` sample uniform zero-based indexes and return `null` for
       non-positive lengths or empty lists, `choose` returns `null` for empty
-      lists, and `shuffle` mutates the provided list in place.
+      lists, `weighted_index` / `choose_weighted` sample unsigned integer
+      weights and return `null` for empty, all-zero, overflowed, or length-
+      mismatched distributions, `sample_indices` returns distinct zero-based
+      indexes without replacement, `sample` returns a new list of draws without
+      replacement while leaving the source list unchanged, and
+      `shuffle` mutates the provided list in place while `shuffled` returns a
+      shuffled copy.
       `SeededRng` implements state equality,
       clone, hash, stringification, and debug rendering so PRNG streams can be
       snapshotted and compared. `RandomError` implements `std:error.Error`,
       equality, clone, hash, stringification, and debug rendering.
-      Cryptographic-strength API guarantees and richer statistical
-      distributions remain planned work.
+      Cryptographic-strength API guarantees and additional statistical
+      continuous distributions remain planned work.
+- [x] **`std:rand` symmetric triangular f64 distribution helper**: added pure
+      Otter Fusion `gen_triangular_f64(rng, low, high): f64`, implemented by
+      averaging two `gen_f64` uniform draws and scaling that average across the
+      half-open low/high range, returning `low` for empty/reversed ranges.
+      Exported it through the stdlib catalog, added deterministic e2e coverage
+      for midpoint, two-draw, and edge cases, expanded near-empty-prelude
+      import-gating coverage, extended LSP rand analysis coverage, and updated
+      docs/18, docs/24, ROADMAP, and goals while keeping cryptographic-strength
+      guarantees and additional continuous distributions planned.
+- [x] **`std:rand` Bates f64 distribution helper**: added pure Otter Fusion
+      `gen_bates_f64(rng, draws, low, high): f64`, implemented by averaging
+      `draws` independent `gen_f64` uniform draws and scaling that average
+      across the half-open low/high range, returning `low` for non-positive
+      draw counts or empty/reversed ranges. Exported it through the stdlib
+      catalog, added deterministic e2e coverage for fixed, sequence, and edge
+      cases, expanded near-empty-prelude import-gating coverage, extended LSP
+      rand analysis coverage, and updated docs/18, docs/24, ROADMAP, and goals
+      while keeping cryptographic-strength guarantees and additional continuous
+      distributions planned.
+- [x] **`std:rand` Irwin-Hall f64 distribution helper**: added pure Otter Fusion
+      `gen_irwin_hall_f64(rng, draws, low, high): f64`, implemented by summing
+      `draws` independent `gen_range_f64` samples over the requested half-open
+      low/high range, returning `0.0` for non-positive draw counts or
+      empty/reversed ranges. Exported it through the stdlib catalog, added
+      deterministic e2e coverage for fixed, sequence, and edge cases, expanded
+      near-empty-prelude import-gating coverage, extended LSP rand analysis
+      coverage, and updated docs/18, docs/24, ROADMAP, and goals while keeping
+      cryptographic-strength guarantees and additional continuous distributions
+      planned.
+- [x] **`std:rand` min/max order-statistic f64 helpers**: added pure Otter
+      Fusion `gen_min_f64(rng, draws, low, high): f64` and
+      `gen_max_f64(rng, draws, low, high): f64`, implemented by taking the
+      minimum or maximum of `draws` independent `gen_range_f64` samples over the
+      requested half-open low/high range. Both helpers return `low` for
+      non-positive draw counts or empty/reversed ranges. Exported them through
+      the stdlib catalog, added deterministic e2e coverage for fixed,
+      sequence, and edge cases, expanded near-empty-prelude import-gating
+      coverage, extended LSP rand analysis coverage, and updated docs/18,
+      docs/24, ROADMAP, and goals while keeping cryptographic-strength
+      guarantees and additional continuous distributions planned.
+- [x] **`std:rand` midrange f64 helper**: added pure Otter Fusion
+      `gen_midrange_f64(rng, draws, low, high): f64`, implemented by taking the
+      midpoint between the observed minimum and maximum of `draws` independent
+      `gen_range_f64` samples over the requested half-open low/high range. It
+      returns `low` for non-positive draw counts or empty/reversed ranges.
+      Exported it through the stdlib catalog, added deterministic e2e coverage
+      for fixed, sequence, and edge cases, expanded near-empty-prelude
+      import-gating coverage, extended LSP rand analysis coverage, and updated
+      docs/18, docs/24, ROADMAP, and goals while keeping cryptographic-strength
+      guarantees and additional continuous distributions planned.
+- [x] **`std:rand` median f64 helper**: added pure Otter Fusion
+      `gen_median_f64(rng, draws, low, high): f64`, implemented by sampling a
+      caller-chosen count of `gen_range_f64` values over the requested half-open
+      low/high range, insertion-sorting the observed values, and returning the
+      middle value (or the average of the two middle values for even draw
+      counts). It returns `low` for non-positive draw counts or empty/reversed
+      ranges. Exported it through the stdlib catalog, added deterministic e2e
+      coverage for fixed, odd/even sequence, and edge cases, expanded
+      near-empty-prelude import-gating coverage, extended LSP rand analysis
+      coverage, and updated docs/18, docs/24, ROADMAP, and goals while keeping
+      cryptographic-strength guarantees and additional continuous distributions
+      planned.
 - [x] **`std:log` portable value/default line slice**: added the pure
       Otter-authored `std:log` module exporting `Level`, prefixed concrete level
       variants (`LogTrace`, `LogDebug`, `Info`, `Warn`, `LogError`), level
-      constructor helpers, `Record`, `LoggerAlreadySet`, `log_record`, and
-      default line helpers (`trace`, `debug`, `info`, `warn`, `error`) plus
-      structured helpers (`trace_with`, `debug_with`, `info_with`,
+      constructor helpers, `Record`, the portable `Logger` interface,
+      `LoggerAlreadySet`, `log_record`, and default line helpers (`trace`,
+      `debug`, `info`, `warn`, `error`) plus structured helpers (`trace_with`,
+      `debug_with`, `info_with`,
       `warn_with`, `error_with`). The implemented slice gives levels, records,
-      and the marker type equality/clone/hash/stringification/debug semantics
-      and prints compact lines through `std:io.println`. `Level.rank()` and
+      logger interface dispatch, and the marker type
+      equality/clone/hash/stringification/debug semantics
+      and returns `Future<null>` from default line helpers that print compact
+      lines through async `std:io.println`. `Level.rank()` and
       `Level.is_at_least(min)` provide portable severity ordering for filtering.
       `Record` also provides
       value-layer accessors and immutable-style `with_*` builders that clone
       field maps to avoid aliasing, including direct field lookup/presence/count,
       field addition, removal, and clearing helpers; `record(...)` and structured `*_with` helpers snapshot
       caller-provided field maps too. Record equality and hashing compare
-      fields by key/value membership rather than rendered field order.
-      Replaceable global logger backends remain planned provider/runtime work.
+      fields by key/value membership rather than rendered field order. LSP
+      member-completion coverage now locks the implemented `Level` filtering
+      helpers and `Record` accessor/builder surface for editor use.
+      Process-global logger installation (`set_logger` / `logger`) remains
+      planned non-waiting registry work; default stderr emission must still go
+      through `Logger.log(...): Future<null>`.
 - [x] **`std:process` portable value layer + host environment/execution/child slice**: added the mixed
       `std:process` module exporting `Command`, `ExitStatus`, captured
       `Output`, live `Child`, constructor helpers, `args`, `env`, `env_all`,
@@ -527,24 +1308,107 @@ The full module/import/package system, end to end.
       `ExitStatus`. `Command` hashing keeps argument order significant while
       matching explicit environment-map equality by key/value membership rather
       than insertion order. `Output` hashing folds status/stdout/stderr in field
-      order. Rust-backed hooks snapshot process argv and environment
-      into ordinary `List<str>` / `Map<str, str>` values, read one variable as
-      `str | null`, mutate one environment variable with validation, and run
-      commands to completion through `Command.status()` / `Command.output()`,
-      and spawn live provider child processes through `Command.spawn()`,
+      order. Rust-backed futures snapshot process argv and environment
+      into `List<str>` / `Map<str, str>` values, read one variable as
+      `str | null`, mutate one environment variable with validation, and resolve
+      command futures through awaited `Command.status()` / `Command.output()`
+      with exact captured stdout/stderr byte decoding covered by e2e tests,
+      and spawn live provider child processes through awaited `Command.spawn()`,
       returning validation/provider failures as `IoError` or successful
       `ExitStatus` / captured `Output` / `Child` values. `Child` is a
       deterministic `@RefCounted` runtime handle: cloned handles share the same
-      child table entry, `id()` exposes the provider process id, `wait()` waits
-      once and caches the observed `ExitStatus`, `kill()` requests provider
-      termination, and final handle drop releases the runtime registry entry
+      child table entry, `id()` exposes the provider process id, awaited
+      `wait()` resolves the provider child once and caches the observed
+      `ExitStatus`, awaited `kill()` requests provider termination, and final
+      handle drop releases the runtime registry entry
       without implicitly killing the OS process. The current `Command` surface
       has no pipe configuration yet, so child stdin/stdout/stderr accessors
       return `null`.
       `exit` and `abort` are imported from `std:process` and lower to the
-      existing runtime process-control intrinsics. Streamed child stdio and
-      richer target-specific status details remain future provider/runtime
-      work.
+      existing runtime process-control intrinsics. `ExitStatus` now carries
+      provider-populated `core_dumped: bool | null` and
+      `stopped_signal: i32 | null` and `continued: bool | null` details in
+      addition to code and signal, with value semantics and exact command/child
+      decoding. Streamed child stdio remains future provider/runtime work.
+- [x] **`std:process` execution/control async contract**: converted
+      `Command.spawn()`, `Command.status()`, `Command.output()`, `Child.wait()`,
+      and `Child.kill()` to awaitable process futures. Runtime execution,
+      output capture, child spawn, child wait, and child kill now go through the
+      helper-backed async future substrate with reactor wakeups; cancellation of
+      a completed-but-discarded async spawn releases the child handle table entry
+      instead of leaking it. Updated docs/18, docs/20, docs/21, docs/24,
+      examples, e2e tests, and LSP member-completion expectations so process
+      execution/control advertise `Future<...>` and cannot be used as immediate
+      old-style values.
+      Top-level host process helpers `args`, `env`, `env_all`, and `set_env`
+      are now awaitable futures too; `exit` and `abort` remain non-returning
+      process-control markers rather than wait-capable helpers. LSP namespace
+      completion for `std:process` advertises the host-state helpers as
+      `Future<...>` and keeps constructors/value helpers ordinary.
+      `Child.id()` and the current child-stdio accessors
+      `stdin()` / `stdout()` / `stderr()` still have direct not-awaitable guards
+      so editor-visible child metadata does not drift into async-looking
+      surface area.
+      Pure command value/validation helpers (`program`, `args`, `env`,
+      `arg_count`, `env_var_value`, `has_env_var`, `env_count`, `cwd`,
+      `validation_error`, `validate`, and `is_valid`) are guarded as ordinary
+      non-awaitable values too. Command value builders (`with_program`,
+      `with_args`, `arg`, `with_env`, `env_var`, `inherit_env`, `clear_env`,
+      `with_cwd`, and `clear_cwd`) are also guarded as fresh `Command` values,
+      so only a deliberately designed async process surface can acquire an async-looking shape.
+      LSP member-completion coverage mirrors this split: execution methods and
+      child wait/control advertise `Future<...>` returns, while child
+      metadata/current-stdio accessors and the pure command value/builder
+      surface advertise immediate non-`Future` return types.
+      `examples/async_process.otter` shows the intended awaited process
+      execution shape, and `tests/cases/examples/async_process.otter` keeps
+      that example contract e2e-gated. LSP member-completion coverage now also
+      proves `Command.spawn`,
+      `Command.status`, `Command.output`, `Child.wait`, `Child.kill`,
+      `Child.id`, and the current child stdio accessors
+      advertise the correct async execution/control signatures and immediate
+      metadata returns.
+      Streamed child stdio remains explicit backlog work.
+- [x] **`std:process` host-helper async contract**: converted top-level
+      `args()`, `env(name)`, `env_all()`, and `set_env(name, value)` to
+      awaitable futures over the same helper-backed async runtime substrate as
+      process execution/control. The runtime now exposes shared encoded helper
+      implementations for argv snapshots, environment lookup/snapshot, and
+      environment mutation, plus async future constructors with reactor wakeups.
+      Updated `std_process_basic` and `std_process_exec_basic` to await host
+      helpers, replaced the old helper not-awaitable guards with
+      `*_requires_await` compile-error regressions, and updated LSP namespace
+      completion plus docs/18/docs/20/docs/21/docs/24 so those helpers no
+      longer appear as ordinary-result wait surfaces.
+- [x] **`std:process` retired direct-result runtime ABI cleanup**: removed JIT
+      registration and runtime exports for the old direct-result process
+      argument/environment, command execution, child wait, and child kill
+      symbols. The async future constructors remain the only generated-code
+      entry points for wait-capable process state, execution, and child-control
+      operations; runtime tests exercise the shared encoded helpers directly,
+      keeping provider-wait coverage private implementation machinery rather
+      than a public or JIT-resolvable ordinary-result wait surface.
+- [x] **`std:process.ExitStatus` stopped-signal detail**: extended the
+      provider-backed process status payload with a nullable
+      `stopped_signal: i32 | null` field, populated from Unix
+      `ExitStatusExt::stopped_signal()` where available and `null` on providers
+      that cannot report it. `ExitStatus` now stores and exposes
+      `stopped_signal(): i32 | null`, includes it in
+      equality/hash/clone/debug semantics, and adds `was_stopped()` plus the
+      value constructor `ExitStatus.stopped(signal)`. Updated runtime ABI tests,
+      process value e2e coverage, LSP member completion, docs/18, docs/24,
+      ROADMAP, and goals while keeping streamed child stdio and the follow-up
+      continued-state status slice planned.
+- [x] **`std:process.ExitStatus` continued-state detail**: extended the
+      provider-backed process status payload with a nullable
+      `continued: bool | null` field, populated from Unix
+      `ExitStatusExt::continued()` where available and `null` on providers that
+      cannot report it. `ExitStatus` now stores and exposes
+      `continued(): bool | null`, includes it in equality/hash/clone/debug
+      semantics, and adds `was_continued()` plus the value constructor
+      `ExitStatus.continued_status()`. Updated runtime ABI tests, process value
+      and awaitable command-completion e2e coverage, LSP member completion, docs/18,
+      docs/24, ROADMAP, and goals while keeping streamed child stdio planned.
 - [x] **`core:sync/atomic.Ordering` value contract**: added the pure
       Otter-authored `core:sync/atomic` module exporting `Ordering`, its five
       memory-ordering variants, and constructor helpers. `Ordering` implements
@@ -564,22 +1428,31 @@ The full module/import/package system, end to end.
       operations are compiler/runtime substrate under the revised core/std
       split.
 - [x] **Stdlib provider invariants**: explicit provider catalogs are validated
-      before public `core:*`/`std:*` views are materialized. Duplicate modules,
-      root-only paths, unaddressable path segments, tier/root mismatches,
-      duplicate exports, and exports missing from bundled toolchain source are
-      diagnosed and skipped instead of becoming importable partial or
-      wrongly-tiered views. Custom providers can also add valid `std:*` module
-      views, and `no-std` still blocks those provider-added `std:*` imports.
-      The built-in module and source manifests also have unit coverage for the
-      same scheme-plus-addressable-segment path shape required of custom
-      providers, plus catalog-to-require-import coverage that catches exported
-      names missing near-empty-prelude negative diagnostics.
+      before public `core:*`/`std:*` views are materialized. Provider names must
+      be stable non-empty ASCII identifiers (`[A-Za-z0-9._-]`), and invalid
+      identities stop view construction before diagnostics or future lockfile
+      metadata can be polluted. Duplicate modules, root-only paths,
+      unaddressable path segments, tier/root mismatches, duplicate exports, and
+      exports missing from bundled toolchain source are diagnosed and skipped
+      instead of becoming importable partial or wrongly-tiered views. Custom
+      providers can also add valid `std:*` module views, and `no-std` still
+      blocks those provider-added `std:*` imports. The built-in module and
+      source manifests also have unit coverage for unique paths and the same
+      scheme-plus-addressable-segment path shape required of custom providers,
+      plus catalog-to-require-import coverage that catches exported
+      names missing near-empty-prelude negative diagnostics. Catalog/provider
+      diagnostics render module paths with the public import spelling (for
+      example `core:sync/atomic`, not colon-separated submodules).
 - [ ] **Next stdlib slices**:
       named-zone timezone database/conversion extensions and leap-second policy
       for `std:time`,
-      async network adapters and richer socket options for `std:net`, streamed child stdio and richer
-      process status details for `std:process`, cryptographic/distribution
-      work for `std:rand`, and remaining collections/bytes work. Each slice needs
+      deeper readiness-native provider integration, richer async network
+      timeout ergonomics after an Otter-specific API decision, and additional
+      platform-specific socket options for `std:net`,
+      streamed child stdio for `std:process`, cryptographic guarantees and
+      remaining continuous distribution work for `std:rand`, pinned `Bytes`/`Buffer` views for
+      `std:bytes`, and collection follow-ups such as set literal syntax,
+      hash-backed `Set`, and keyed collection construction. Each slice needs
       unit + e2e tests, docs, examples, and LSP support.
 
 ### Phase 2 — Type checking & inference  ✅ DONE
@@ -731,9 +1604,14 @@ the full typed `Hir` directly and every consumer reads `analysis.hir`.**
           type-args span tables), `?` (`h_try`), `&`/`*` FFI pointer
           ref/deref, fixed-array `[T;N]` index load/store, `extern var`
           read/write — the last forms exercised by the test corpus + examples.
-  - [ ] Repoint struct layouts + fn signatures (`compute_layout`,
-        `signature_of`) onto `hir.structs` / `hir.fn_sigs` (def-keyed; can ride
-        with Stage 5's `CheckResults` deletion).
+  - [x] Repoint struct layouts + fn signatures (`compute_layout`,
+        `signature_of`) onto `hir.structs` / `hir.fn_sigs`: backend
+        `support::compute_layout` reads def-keyed `analysis.hir.structs` and
+        substitutes generic args from the instantiation, while
+        `support::signature_of` reads def-keyed `analysis.hir.fn_sigs` for
+        parameter locals/types and return types. Backend definition and
+        declaration paths call those helpers, so the old `CheckResults`
+        struct/signature side-table dependency is gone.
 - [x] **Stage 4 — repoint the LSP to HIR.** `Compiled` lowers the HIR and
       builds an `HirIndex` by walking it once: `(span, type)` for every node
       (plus each call's callee-name span → callee type) and `(span, resolution)`
@@ -864,7 +1742,7 @@ the full typed `Hir` directly and every consumer reads `analysis.hir`.**
         retirement mechanism: a check method stashes the datum it just computed
         in a *transient* per-fact slot on the `Checker` (a `Cell<Option<…>>`),
         which `build_hir_node` consumes the instant `check_expr_inner` returns
-        for the same node. Construction is synchronous + depth-first — every
+        for the same node. Construction is eager + depth-first — every
         child node is built (and its slot consumed) before its parent's check
         method writes these — so one slot per fact suffices and the persistent
         span-keyed `HashMap` is gone; the datum lives only on the resulting HIR
@@ -1011,7 +1889,7 @@ the full typed `Hir` directly and every consumer reads `analysis.hir`.**
         `CloneKind`, `ForIter`, `NumIntrinsic`, …) the HIR nodes carry. All
         ~854 tests green (0 warnings), every example JIT + native, all four
         `--emit` modes + DWARF intact.
-- [ ] **Debuggability:** `--emit=tokens|ast|hir|clif` with stable pretty-
+- [x] **Debuggability:** `--emit=tokens|ast|hir|clif` with stable pretty-
       printers; DWARF line tables for built programs.
   - [x] `hir::pretty::print_program` — a stable, deterministic HIR printer
         (definitions in `DefId` order; every expr annotated with its type, every
@@ -1227,7 +2105,7 @@ The tracing GC is functionally complete for single-threaded programs.
       first GC touch, dropped at thread exit), a global `STOP` flag, and
       `Running`/`Parked`/`Native` states with each non-running thread's frame
       pointer recorded. Generated code polls `lang_gc_safepoint` at every loop
-      header; blocking runtime calls will bracket with `enter_native`/
+      header; runtime calls that may wait will bracket with `enter_native`/
       `leave_native`. `maybe_collect` takes a one-collector turn (`GC_TURN`),
       stops the world (sets `STOP`, waits for all other mutators to park/native),
       scans **every** thread's stack (`scan_stack_roots_from(fp)`), mark-sweeps,
@@ -1263,7 +2141,9 @@ The tracing GC is functionally complete for single-threaded programs.
       site declares the instance (pinning its `FuncId` and enqueueing the body) and
       `collect_drops` registers every compiled generic-`drop` instance. Works for both
       GC-managed (best-effort) and `@RefCounted` (deterministic) generic types.
-      TODO: `Shared` lock release on a panicking body.
+      `Shared` lock release on a panicking body is now handled by the
+      worker/task panic boundary and task-held lock cleanup; see the Shared and
+      worker-panic entries below.
       **`@RefCounted` — opt-in deterministic reference counting (`docs/16` §8.1) — DONE:**
       the channel-endpoint carve-out is now generalized into a real, user-facing
       object kind. A `@RefCounted struct` carries a hidden **atomic strong-count**
@@ -1271,8 +2151,9 @@ The tracing GC is functionally complete for single-threaded programs.
       trailer listing owned refcounted-field offsets — the trailer is now written on
       *every* descriptor so the collector reads it uniformly). Runtime intrinsics
       `lang_rc_retain` / `lang_rc_release` (in `runtime::gc`): release at count 0 runs
-      the type's `Drop` synchronously, releases owned refcounted fields (cascade),
-      then frees — no collection needed. The backend inserts ARC across codegen
+      the type's `Drop` immediately as non-waiting cleanup, releases owned
+      refcounted fields (cascade), then frees — no collection needed. The backend
+      inserts ARC across codegen
       (`FnGen::rc_owned` scope-exit release in `emit_return`; retain/move at
       bind/copy/param/return/capture per a conservative owned-vs-borrowed classifier;
       heap-store retain at struct/tuple field stores and at the `elem_to_i64` /
@@ -1475,7 +2356,7 @@ The tracing GC is functionally complete for single-threaded programs.
       operands); `as T` narrows with a panic on mismatch (`lang_panic`, exit
       101) and unboxes, or returns the box when narrowing to a sub-union. Covers
       `T | null` optionals, structs-in-unions, str variants. 8 tests + CLI demo.
-- [ ] **Bug fixed**: `LocalId`s were resetting per function and colliding in the
+- [x] **Bug fixed**: `LocalId`s were resetting per function and colliding in the
       program-wide `local_types` map (could mis-type any multi-function program);
       ids are now globally unique.
 - [x] **`match` expression**: scrutinee dispatch over wildcard/binding/literal/
@@ -1516,7 +2397,12 @@ The tracing GC is functionally complete for single-threaded programs.
       `as` needed (`x + 1`, `x.v`, `"$x"` all work in-branch). Implemented via a
       checker narrowing overlay + an `Adjust::Unbox` coercion the code generator
       applies (unbox the union box to the known variant). 4 tests.
-- [ ] Generic struct construction inference (currently needs explicit `<...>`).
+- [x] **Generic struct construction inference**: record struct construction
+      (`Box { value: v }`) infers generic arguments from field values and
+      expected type, and tuple-struct construction infers them from positional
+      arguments. Covered by generic clone / tuple-construction CLI regressions
+      and examples; unresolved cases still emit the clear "cannot infer generic
+      argument" diagnostic.
 - [x] **String interpolation**: `"$ident"` and `"${expr}"` desugar to a concat
       chain of `to_str` over each part (`docs/01` §8); stringifies the primitive
       set (`as str`) + `str` identity + `null`→"null". **User types are
@@ -1538,7 +2424,8 @@ The tracing GC is functionally complete for single-threaded programs.
       (`gen_try`) tests each residual tag, unboxes the payload, calls
       `from_residual`, re-boxes through `R`, and returns. 1 CLI test
       (`IoError`/`ParseError` → `AppError`); GC-stress clean. (`Try` for
-      non-union wrapper types — §3 — is the remaining piece.)
+      non-union wrapper types is now complete too; see the Phase 5 `Try`
+      entry and `tests/cases/error_handling/try_interface.otter`.)
 - [x] **Generics (monomorphization)**: generic free functions + generic structs.
       Checker does call-site **inference** (unify param types vs args) or takes
       explicit `<...>` args, substitutes into param/return types, and records
@@ -1551,7 +2438,8 @@ The tracing GC is functionally complete for single-threaded programs.
       keys, are follow-ups.)
 - [x] **`List<T>`** (builtin generic): injected prelude type (`Program.list_def`,
       no AST item, special-cased). Runtime is a growable `Vec<i64>` of 8-byte
-      slots; codegen widens each element to `i64` (uextend) and narrows on read.
+      slots; codegen widens each element to an `i64` slot (integer extension or
+      bit-preserving `f32`/`f64` packing) and narrows on read.
       Supports `[a, b, c]` literals (incl. empty with annotation), `xs[i]` /
       `xs[i] = v` (panic OOB), and methods `push`/`size`/`is_empty`/`set`/
       `clear`/`pop`/`insert`/`remove` (`pop`/`remove` → `T|null`, boxed-union
@@ -1686,9 +2574,10 @@ The tracing GC is functionally complete for single-threaded programs.
       `local_env` now carries the function's generics + `Self` (`cur_generics`/
       `cur_self_ty`) so `T`/`Self` resolve in bodies. Calling an instance method
       as static (or vice-versa) is a clear error. JIT + native parity; method-
-      level generics (`Type.wrap<i64>(..)`) supported; `examples/static_methods.otter`;
-      3 CLI tests. TODO: static calls directly on primitive type names
-      (`i32.default()`).
+      level generics (`Type.wrap<i64>(..)`) supported; primitive type names are
+      concrete static-call receivers as well (`i32.default()` and other
+      primitive `extend` static methods); `examples/static_methods.otter`;
+      CLI tests cover concrete, primitive, generic-bound, and native parity.
 - [x] **Static method inference on generic structs** (`docs/11` §3): a static
       call on a generic type like `Box.new(99)` now infers the type arguments
       from the call's argument types — no explicit `<i64>` needed, mirroring
@@ -1774,8 +2663,16 @@ The tracing GC is functionally complete for single-threaded programs.
       recursively (nested submodules supported), feeding `analyze_multi`. Named
       imports, **`import "path" as M` namespace imports** (`M.foo(..)` resolves a
       public function in the aliased module), `pub` visibility, and strict
-      scoping work in both JIT and native builds. 6 CLI tests. (Ambient
-      extension-only imports and `pkg:` cross-package paths deferred.)
+      scoping work in both JIT and native builds. Public named imports now
+      re-export selected type/value names (including aliases) through facade
+      modules without exposing the original module path, and public namespace
+      imports re-export qualified namespace calls such as
+      `Facade.Util.answer()`. Ambient extension-only imports now activate the
+      imported module's `extend` blocks for method/interface resolution without
+      binding names, and `pub import "..."` re-exports that extension activation
+      transitively for umbrella modules/packages, matching docs/17. `pkg:`
+      cross-package paths are covered by the package-manager entries below. 10+
+      CLI tests.
 - [x] **`Map.keys()`/`values()`/`entries()` return real `Iterator` objects**
       (`docs/18` §6). Prelude `struct MapKeys<K>`/`MapValues<V>`/
       `MapEntries<K, V>` each carry a snapshot list (built by the existing
@@ -1849,7 +2746,17 @@ The tracing GC is functionally complete for single-threaded programs.
       and residual. JIT + native + GC-stress parity. 4 new CLI tests
       (basic / FromResidual chained / native / plain-type rejected).
 - [x] User procedural macros (`docs/22` — done, see the dedicated entry).
-- [ ] Ambient/`pkg:` imports; concurrent GC.
+- [x] **Ambient imports, `pkg:` imports, and concurrent GC.** Ambient
+      extension-only imports now record the imported module for extension-method
+      visibility; named and namespace imports activate extensions from the
+      imported module as well, public named imports re-export selected
+      type/value names through facade modules, public namespace imports
+      re-export qualified namespace calls, and public ambient imports re-export
+      extension activation through transitive umbrella chains. `pkg:` imports,
+      `pkg:<name>/<pub mod>` subpaths, contextual package dependency maps,
+      multi-major coexistence, and live registry/git resolution are implemented
+      in the package-manager layer. Concurrent GC reclamation is done through the
+      world-barrier STW design described in the GC section.
 - [x] **Native object output + linking for `otter_fusion build`** (`docs/23`): the
       codegen backend is now generic over `cranelift_module::Module`, so the
       same lowering drives the JIT (`compile`) and a `cranelift-object`
@@ -1869,38 +2776,40 @@ The tracing GC is functionally complete for single-threaded programs.
       byte-identical output to `otter_fusion run`, including under `OTTER_FUSION_GC=stress`.
 
 ### Phase 5 — System features  ✅ DONE (advanced deferrals tracked in "What's next")
-- [~] **Threads (`docs/20` §1): `Thread.spawn`/`join`/`detach` work, sync *and*
+- [~] **Threads (`docs/20` §1): `Thread.spawn`/`join`/`detach` work, ordinary
+      non-async *and*
       async workers.** `Thread.spawn(() => R)` (positional or trailing closure)
       runs the closure on a real OS thread (`runtime::threads::lang_thread_spawn`
       reads the fn pointer from the closure env and runs it) and returns a
       `JoinHandle<R>` (prelude struct holding a registry id).
       **Async worker overload:** when the closure is async (`() => Future<R>`,
-      including the trailing form `Thread.spawn { async => … }`), the worker drives
-      that future to completion on its own OS thread
-      (`lang_thread_spawn_async` = closure-call + `block_on`-drive) and the handle
-      still joins on the *awaited* `R` (not `Future<R>`). Such a worker therefore
-      MAY `await` and lock a `Shared<T>` — only a *synchronous* `Thread.spawn`
+      including the trailing form `Thread.spawn { async => … }`), the worker polls
+      that future until it resolves on its own OS thread
+      (`lang_thread_spawn_async` = closure-call + private root-driver) and the
+      handle still joins on the *awaited* `R` (not `Future<R>`). Such a worker
+      therefore MAY `await` and lock a `Shared<T>` — only an *ordinary non-async* `Thread.spawn`
       closure cannot lock (the narrowed compile error). The checker detects the
       async closure (return type `Future<R'>`) and yields `JoinHandle<R'>`; the
       backend passes the `Pending` tid and no `float_kind` (the awaited value rides
-      as raw bits through `block_on`). A captured channel endpoint is owned by the
-      *future* (released on its completion, not when the building closure returns)
+      as raw bits through the private root-driver entry). A captured channel
+      endpoint is owned by the *future* (released when the future resolves, not when the building closure returns)
       so a worker can `await` then `send`/`recv` across a suspension. **`detach()`**
       relinquishes a worker fire-and-forget (`lang_thread_detach` drops the
-      registry claim + detaches the OS thread); works for sync and async workers.
-      **One OS thread per worker is intended** — `Thread.spawn` is the real-OS-thread
-      primitive (Rust `std::thread::spawn` analogue), so a worker may block freely;
-      massive lightweight concurrency is the `spawn` keyword's job (and a future
-      `Task.spawn` on an M:N executor — see "What's next"). **Worker-panic
+      registry claim + detaches the OS thread); works for ordinary non-async and async workers.
+      **One OS thread per worker is intended** — `Thread.spawn` is Otter Fusion's
+      primitive for CPU-heavy or OS-thread-affine work that must run outside the
+      shared executor, not a public substitute for wait-capable target APIs;
+      massive lightweight concurrency is the `spawn` keyword's job and
+      `Task.spawn` on the M:N executor. **Worker-panic
       isolation is now done** (see its own item below). JIT + native parity;
       `examples/async_thread_spawn.otter` + `concurrency/async_thread_spawn_*`
       cases (lock, parallel, detach, cross-thread channel, GC-stress).
       **`JoinHandle<R>.join()` is async + non-blocking**: it
       yields a `Future<Joined<R> | Panicked>` so the joining task *suspends*
       (`lang_thread_join_future` registers a waker; the worker wakes it on
-      publish) instead of parking the OS thread. From sync code the implicit-async
-      driver runs it to completion; user surface is just `var r = h.join()` (see
-      the Async note below — async is implicit, with the `spawn` keyword).
+      publish) instead of parking the OS thread. User code awaits the returned
+      future from an async context; async `main` is polled by the runtime root
+      executor until it resolves (see `docs/21`).
       The checker recognises `Thread.spawn`, records the result type, and rejects
       mutable-managed captures (deep-clone of mutable managed captures via
       `Clone` is the follow-up); codegen builds the handle/union.
@@ -1919,7 +2828,7 @@ The tracing GC is functionally complete for single-threaded programs.
       **GC reclamation now runs concurrently with live mutators** — the
       single-mutator gate is removed (world-barrier STW + `gc_alloc`; see the GC
       §). (The intermittent threaded *crash* once attributed to contention was a
-      separate async-state-machine bug — a sync `for`+`await` loop losing its
+      separate async-state-machine bug — an ordinary `for`+`await` loop losing its
       iteration state across a suspend — now fixed; see the async section.)
 - [x] **Worker-panic isolation (`docs/14`, `docs/20` §1, `docs/21` §11): a
       panicking worker fails only itself.** A language `panic` raised in generated
@@ -1934,12 +2843,12 @@ The tracing GC is functionally complete for single-threaded programs.
       (`run_under_boundary`) restores the invariants the `longjmp` skipped: it
       drains held `Shared` locks (`lang_shared_release_all` — no poisoning,
       `docs/20` §4) and the thread's transient cross-`poll` GC pins
-      (`gc::release_unwind_pins`, used by `block_on`), then materialises the
+      (`gc::release_unwind_pins`, used by the private root driver), then materialises the
       message as a pinned `str`. `finish_worker` publishes `Panicked { message }`
       so a `JoinHandle.join()` surfaces it recoverably, while a `spawn EXPR`
       awaiter has the panic *re-propagated* at its own `await` (`spawn_poll`) —
       the promise-rejection model (`docs/21` §11). Sibling workers are unaffected.
-      Covers `Thread.spawn` (sync + async closures), the `spawn` keyword, and
+      Covers `Thread.spawn` (ordinary non-async + async closures), the `spawn` keyword, and
       executor-multiplexed `Task.spawn`/`spawn` futures. Dedicated OS-thread
       workers install the boundary at worker entry; executor tasks install it at
       the poll call site so a panicking task unwinds only its own state machine
@@ -1953,10 +2862,10 @@ The tracing GC is functionally complete for single-threaded programs.
       task_spawn_panic_steal_contention_gc_stress,
       spawn_future_panic_sibling_survives_single_worker}`.
 - [x] **Channels (`docs/20` §2): `channel<T>()`, `send`, `recv`, `try_recv`, and
-      deterministic close-on-last-sender-drop + `Receiver: Iterator`.**
+      deterministic close-on-last-sender-drop + async receiver iteration.**
       `channel<T>()` (a recognised builtin, like `Thread.spawn`) allocates a
       runtime channel (`runtime::channels`: a single `Mutex<{queue, waiters,
-      senders, receivers}>` + a `Condvar` for the blocking iterator — one lock so
+      senders, receivers}>` plus private host-side condvar machinery — one lock so
       "empty → register waker", "enqueue → wake", and the endpoint-count
       transitions are all atomic) and returns a `(Sender<T>, Receiver<T>)` tuple
       (prelude structs carrying the channel id). `Sender<T>.send(v)` enqueues +
@@ -1975,29 +2884,1085 @@ The tracing GC is functionally complete for single-threaded programs.
       (wired through `FnGen.endpoint_releases`, drained on every `emit_return`
       path; populated for `by_value` spawn-closure captures via
       `channel_endpoint_kind`). When the last sender is released the channel
-      closes — *immediately, no GC needed* — waking the recv-future waiters and
-      the blocking condvar; a drained `recv()` then resolves to `ChannelClosed`.
-      **`Receiver: Iterator`**: `for x in rx` lowers to `ForDriver::Channel`
-      (checker `receiver_elem`), codegen `h_for_channel` blocking-recvs via
-      `lang_chan_recv_blocking(id, *got)` and terminates (`Done`) on close+drain.
+      closes — *immediately, no GC needed* — waking the recv-future waiters; a
+      drained `recv()` then resolves to `ChannelClosed`. **Async receiver
+      iteration**: `for await x in rx` lowers to `ForDriver::ChannelAsync`, awaits
+      the same channel-recv future each step, and terminates when that future
+      resolves to `ChannelClosed`. Plain `for x in rx` is rejected by
+      the checker; generated code no longer registers or calls any blocking
+      channel-receive ABI, and the old exported runtime symbol is gone.
       Queued values are GC-pinned (`add_extra_root`) while in the queue and
       unpinned on receipt. Element types are restricted to immutable values for
       now (no deep clone-on-send yet). JIT + native parity; `examples/channels.otter`
-      (`for sq in rx`); **7 CLI tests** (iterator-close, recv→ChannelClosed,
+      (`for await sq in rx`) and `examples/async_channel_iteration.otter`;
+      **CLI/e2e tests** (async iterator close, recv→ChannelClosed,
       multi-sender clone, send-after-receiver-drop, managed-element GC-stress,
-      native parity, try_recv) + **4 runtime unit tests** (last-sender-release,
-      drain-then-close, receiver-drop-closes-for-sending, blocking-recv-wakes-on-
-      close cross-thread) + **6 e2e cases** (`channel_send_recv`,
+      native parity, try_recv, rejected plain receiver loop) + **runtime unit
+      tests** (last-sender-release, drain-then-close,
+      receiver-drop-closes-for-sending, private host-side close wake coverage) +
+      **e2e cases** (`channel_send_recv`,
       `channel_iterator_close`, `channel_multi_sender_close`,
       `channel_drain_then_close` — closed-before-consume buffered drain,
       `channel_close_gc_stress` — managed `str` elements across the queue under
       `OTTER_FUSION_GC=stress`, `channel_send_after_receiver_drop` —
       `send`→`ChannelClosed`).
-      The deterministic-release facility is the seed for a future opt-in
-      `@RefCounted` object kind (see goals.txt). TODO: `channel_mpmc`; bounded
-      channels; move/deep-clone-on-send for non-immutable `T`; heap-escaping
-      endpoints (stored in a long-lived struct) still rely on the best-effort GC
-      backstop rather than scope release.
+      The deterministic-release facility was generalized into the opt-in
+      `@RefCounted` object kind. The reserved `std:sync` constructor names
+      `channel_bounded`, `channel_mpmc`, and `channel_mpmc_bounded` now emit
+      explicit planned-feature diagnostics if called or used as function values,
+      instead of silently type-checking through placeholder Otter bodies. TODO:
+      implement real MPMC fan-out, bounded back-pressure with async `send`, and
+      move/deep-clone-on-send for non-immutable `T`.
+- [x] **Channel async-receive boundary clarification**: documented the split between
+      async non-blocking `Receiver.recv()`, immediate non-blocking
+      `Receiver.try_recv()`, and async receiver drains via `for await`.
+      Superseded by the corrected async/blocking contract slice: the old
+      `Receiver: Iterator` / `for x in rx` / `ForDriver::Channel` /
+      ordinary-result channel-receive ABI story has been removed from checker,
+      HIR, codegen, examples, docs/20, docs/21, docs/24, and e2e expectations.
+      `channel_plain_iterator_rejected.otter` proves plain receiver
+      iteration is rejected, while `async_channel_iteration.otter` covers the
+      direct awaited drain example.
+- [x] **Spawn handle async-contract clarification**: documented that
+      `Thread.spawn` is Otter Fusion's one-OS-thread-per-worker primitive for
+      CPU-heavy or OS-thread-affine work and recoverable worker panic
+      reporting, not as a substitute for wait-capable target APIs. `Task.spawn` runs
+      on the shared executor and must not be used to hide wait-capable
+      operations. Both APIs return
+      non-awaitable `JoinHandle<R>` handles; user code awaits the `join()` future
+      to observe completion, while `spawn EXPR` is the direct `Future<T>`
+      fan-out form. Added compile-error e2e guards for `await Thread.spawn(...)`
+      and `await Task.spawn(...)`, now covering both ordinary-closure and
+      async-closure overloads; the LSP diagnostic regression now covers both
+      overload families too, so editor analysis reports the same non-awaitable
+      `JoinHandle<R>` boundary as the CLI. Refreshed docs/examples, and removed
+      unnecessary Rust-copy framing from the contract text.
+- [x] **GC native-state brackets for private provider waits**: added a
+      tight runtime `gc::native_wait(...)` helper and used it around private
+      provider/runtime operations behind explicit async surfaces that may wait on the host: filesystem
+      file/path IO, standard stream reads/writes/flushes, process
+      status/output/spawn/child wait/child kill, duplicate child-wait table
+      waiters, host argument/environment snapshots and environment mutation,
+      private runtime machinery behind async `std:time` clock reads, timer
+      sleep, and local-time offset lookup, DNS resolution, TCP listener
+      bind, TCP connect/read/read_to_end/write/write_all/flush/peek/accept,
+      TCP stream address/error/nodelay/nonblocking/timeout/TTL controls, TCP
+      listener address/error/nonblocking/TTL controls, UDP bind/connect/send/
+      recv/peek variants, UDP
+      address/peer/error/nonblocking/timeout/TTL/broadcast/multicast controls,
+      `Thread.spawn` OS worker creation,
+      async runtime timer/helper thread creation, `Task.spawn`
+      executor worker-pool thread creation, and private OS entropy reads behind
+      awaitable `std:rand.OsRng` / entropy-seeded helper futures. Channel receiver waits are
+      public async futures/`for await` loops; the remaining private receive helper is
+      `cfg(test)` runtime-test machinery, not exported and not registered for generated code. The
+      bracket marks the mutator as native only while the host operation runs,
+      then leaves native state before encoding Otter Fusion result values, so
+      stop-the-world GC can scan roots and proceed without waiting for those
+      provider waits to return. The shared async timer driver registers before
+      waking tasks and publishes runtime-native/no-root state while parked on
+      timer condvars, and idle M:N task executor workers publish the same
+      runtime-native/no-root state while parked on the work-queue condvar.
+      `std:fs.File` descriptor operations now look up
+      an `Arc<Mutex<File>>` under the short-held file-registry lock, release the
+      registry before the provider read/write/flush/seek, serialize only the
+      individual descriptor while inside `gc::native_wait(...)`, and drop explicit
+      async `File.close()` handles inside the same marker after registry removal. Updated
+      docs/16/docs/24 and refreshed the channel example fixture wording.
+- [x] **GC native-state brackets for network handle close/release**: routed TCP
+      stream, TCP listener, and UDP socket explicit `close()` plus deterministic
+      release hooks through the same remove-first, drop-inside-`gc::native_wait(...)`
+      shape used by the private `std:fs.File.close()` helper. This keeps
+      private handle cleanup aligned with the provider-wait audit while
+      preserving the existing public contracts and registry error behavior.
+- [x] **GC native-state bracket for `std:process.Child` table release**: changed
+      `lang_process_child_release` so the child-table mutex is held only for
+      removal, then the removed `ChildEntry` is dropped inside `gc::native_wait(...)`
+      before returning. This preserves the documented contract that releasing a
+      `Child` handle does not kill or wait for the OS child, while keeping host
+      handle cleanup aligned with the process wait/kill/spawn native-state audit.
+- [x] **GC native-state bracket for removed-in-flight `std:process.Child` drops**:
+      routed the local provider `Child` drops in the rare paths where a table
+      entry is removed while `Child.wait()` or `Child.kill()` temporarily owns
+      the OS child through a shared `drop_os_child_native_wait(...)` helper. This
+      keeps all process child handle cleanup on the same native-state boundary
+      as table release, wait, and kill, even when concurrent handle release wins
+      the table race.
+- [x] **GC native-state bracket for idle task-executor workers**: added focused
+      source regression coverage for `wait_for_task`, locking in that M:N
+      executor workers enter runtime-native/no-root state before parking on the
+      work-queue condvar and leave native state after wakeup. This complements
+      the existing worker-pool thread-creation bracket and keeps idle
+      `Task.spawn` workers from holding stop-the-world GC as running mutators.
+- [x] **GC native-state bracket for the internal root-future driver**: added
+      focused source regression coverage for `lang_drive_root_future`, locking
+      in that async `main` and async `Thread.spawn` root-driver parks enter GC
+      native state before parking on the condvar between `Pending` polls and
+      leave native state after wakeup. This remains an internal runtime
+      mechanism; Otter Fusion still has no user-visible `block_on` API.
+- [x] **GC native-state bracket for internal `Shared<T>` runtime mutex waits**:
+      added focused source regression coverage for the shared runtime
+      `runtime_lock(...)` helper, locking in that registry/cell/held-lock mutex
+      contention enters runtime-native/no-root state before the host mutex wait
+      and leaves native state after wakeup. This preserves the public
+      `Shared.lock` contract: contended source-level locks suspend the task
+      through the FIFO waiter queue instead of parking an executor worker.
+- [x] **Concurrency docs runtime-boundary alignment**: updated docs/20 so the
+      user-facing concurrency chapter now mirrors the runtime audit for idle
+      M:N executor workers and internal `Shared<T>` registry/cell mutex waits:
+      both publish runtime-native/no-root state while parked, without changing
+      the public `Task.spawn` or `Shared.lock` contracts.
+- [x] **Async docs runtime-boundary alignment**: updated docs/21 so the
+      worker-thread warning distinguishes ordinary non-waiting stdlib
+      calls from runtime-internal waits. Follow-up wording now says those
+      runtime-private waits do not permit wait-capable stdlib operations to hide
+      inside ordinary value-returning calls in task polls. The async chapter now
+      names executor worker startup, idle work-queue parks, root-future driver
+      waits, timer driver parks, and internal `Shared<T>` registry/cell
+      bookkeeping as GC native/runtime-native boundaries, while preserving the
+      public contracts: no user-visible `block_on`, and `Shared.lock`
+      contention suspends the task instead of parking an executor worker.
+- [x] **GC native-state regression for concrete `std:io` stream hooks**:
+      added focused runtime source coverage locking in that print/eprint,
+      stdout/stderr write and flush, and stdin read/read_to_end host stream
+      operations stay inside `gc::native_wait(...)`. Updated docs/24 to connect
+      private stdio helper waits to the same native-state audit while
+      preserving public concrete stdin/stdout/stderr methods as futures.
+- [x] **Concrete stdio native-state source-regression wording cleanup**:
+      renamed the runtime source regression and assertions so private stdio host
+      waits are described as using the `gc::native_wait(...)` native-state marker,
+      not a source-level API shape.
+- [x] **Time local-offset native-state source-regression wording cleanup**:
+      renamed the runtime source regression so private local UTC offset provider
+      lookup is described as using the native-state marker path, not a public
+      wait-capable API shape.
+- [x] **Runtime native-state source-regression wording sweep**: renamed the
+      remaining runtime source regression tests for OS/runtime thread creation,
+      process environment/child lifecycle, filesystem close cleanup, channel
+      receive waits, and network bind/control/close cleanup so they describe
+      private native-state marker/helper paths rather than public-looking
+      wait boundaries.
+- [x] **Async print documentation snippet cleanup**: refreshed the test-suite
+      README and docs/20/docs/21/docs/26 snippets so `std:io.println` is always
+      awaited from async context, matching the future-returning public print
+      helper contract.
+- [x] **Early handbook async print snippet cleanup**: refreshed docs/01/02/04/
+      06/07/08/09/10/11/12/13/14/18 snippets so `std:io.print` examples are
+      awaited from async contexts instead of implying an immediate public
+      output helper.
+- [x] **Module overview async wait-surface cleanup**: refreshed docs/08, docs/17,
+      and docs/18 so timer polling uses `await sleep(...)`, `std:async.sleep`
+      and channel receive are named as future-returning surfaces, and
+      filesystem/process target-backed operations are summarized as async
+      provider-backed futures rather than plain target-backed helpers.
+- [x] **RefCounted Drop non-waiting cleanup wording**: refreshed docs/16 and the
+      refcounted example so deterministic `Drop` is illustrated with non-waiting
+      resource-token bookkeeping rather than an immediate file-descriptor close
+      story, ordinary explicit cleanup examples await async close/release/commit
+      operations, private GC-native provider waits are described without a
+      public wait-capable cleanup story, and it explicitly states that wait-capable
+      cleanup belongs behind async stdlib futures.
+- [x] **Thread.spawn ordinary-worker wording cleanup**: refreshed docs/20,
+      docs/24, the async thread-spawn example, and the focused async-worker
+      lock fixture so the non-async
+      `Thread.spawn` overload is called an ordinary non-async worker rather than
+      using the old label, while preserving the explicit guidance that
+      `Thread.spawn` is CPU/OS-thread-isolation machinery and not a public
+      substitute for wait-capable target APIs.
+- [x] **Task.spawn ordinary-worker wording cleanup**: refreshed the task-spawn
+      example, mirrored e2e fixture, focused task-spawn capture/ordinary-closure
+      regressions, and stale ROADMAP/goals memory so executor `Task.spawn`
+      non-async closures are called ordinary non-async workers rather than using
+      the old label, while preserving the explicit async-surface and
+      non-awaitable `JoinHandle` contracts.
+- [x] **Task.spawn ordinary-worker wording follow-up**: renamed the remaining
+      sync-named task fixtures, refreshed task cancellation/panic/native-parity
+      expected output, and tightened compiler diagnostics/comments so ordinary
+      non-async `Task.spawn`/`Thread.spawn` workers are not described with
+      old shorthand.
+- [x] **Task.spawn async-lock cancellation parity fixture**: promoted the
+      native-parity `Task.spawn`/`Shared.lock`/cancellation program into a
+      direct e2e fixture with awaited stdio output, then reused that fixture in
+      the CLI native/JIT parity test so async-contract regressions cannot hide
+      in duplicated embedded source.
+- [x] **Process child stdio placeholder wording follow-up**: tightened
+      docs/20, docs/21, docs/24, goals memory, and the focused child
+      stdin/stdout/stderr not-awaitable guards so current child stdio is named
+      as non-Future placeholder accessors returning async-stream-or-null shapes,
+      not as ordinary stdio or process wait surfaces.
+- [x] **Ordinary-control-flow wording follow-up**: refreshed stale test and
+      roadmap wording so non-awaiting short-circuit operands, ordinary closure
+      desugaring, ordinary `for` loops inside async bodies, and ordinary
+      non-async `Thread.spawn` lock rejection are not described with old
+      shorthand.
+- [x] **Engine invocation non-async wording cleanup**: refreshed docs/26's
+      isolate invocation section so host-callable entries are described as
+      non-async or async rather than the old paired wording, preserving the no
+      user-visible `block_on` contract while leaving the engine design
+      unchanged.
+- [x] **Compiler/backend ordinary/internal wording cleanup**: refreshed backend
+      ARC comments, Shared-lock runtime comments, checker comments, and HIR
+      roadmap memory so immediate refcounted cleanup, ordinary non-async
+      `Thread.spawn` workers, and eager depth-first HIR construction are not
+      described with old shorthand.
+- [x] **Channel plain-iterator fixture wording cleanup**: renamed the remaining
+      channel plain-receiver rejection fixture away from the old iterator
+      shorthand and refreshed roadmap/goals memory so receiver drains are
+      described as `recv()` futures or `for await`, while plain receiver
+      iteration remains rejected.
+- [x] **Backend ordinary-for await-state wording cleanup**: refreshed backend
+      async-state-layout comments and HIR driver docs so ordinary `for` loops
+      whose bodies suspend, plus the ordinary `Iterator` protocol, are not
+      described with old shorthand.
+- [x] **Macro/package host wording cleanup**: refreshed macro-host and
+      package-registry server comments so same-thread macro expansion and
+      registry request serving are not described with old public-contract
+      shorthand; no Otter language surface changed.
+- [x] **Async closure/backend non-async wording cleanup**: refreshed backend and
+      compiler comments/tests so async-closure desugaring, ordinary `for`
+      await-state scanning, direct `main` invocation, and print-helper intrinsic
+      exclusions use non-async/ordinary terminology instead of old shorthand.
+- [x] **Residual non-async regression naming cleanup**: renamed the remaining
+      CLI/runtime regression identifiers and private task-cancellation enum
+      variant that used old `sync` shorthand for ordinary non-async closures.
+      The runtime cancellation behavior is unchanged: ordinary non-async task
+      closures are value workers, while future-state cancellation remains the
+      only path that drops generated future state.
+- [x] **FFI Drop/native-state wording cleanup**: refreshed docs/19 and the docs
+      index so pin/handle cleanup is described as explicit release plus
+      non-waiting best-effort finalizer fallback, single-call foreign memory
+      access is not described with old immediate-call wording, and extern
+      safepoint prose uses private native-state terminology rather than a
+      public-looking state name.
+- [x] **Shared/process contract wording cleanup**: tightened docs/20 and
+      docs/24 so internal `Shared<T>` host-mutex contention is described as a
+      runtime-native/no-root implementation boundary, while public
+      `Shared.lock` remains task suspension; process child `wait()` prose now
+      says awaiting the future resolves and caches the provider child status
+      instead of using old direct-operation phrasing.
+- [x] **LSP adapter fixture naming cleanup**: renamed remaining editor fixture
+      locals for plain TCP/UDP adapter conversion results from old shorthand to
+      `plain_*`, and refreshed the older process roadmap entry so awaited
+      `Child.wait()` is described as resolving provider child status.
+- [x] **Live target-operation routing wording cleanup**: tightened docs/20 and docs/24 so
+      wait-capable target operations are described as explicit async futures,
+      not routed through an ordinary `Thread.spawn` path or exposed as
+      non-`Future` provider-backed listener methods. Refreshed older tracker
+      wording away from stale immediate-helper cleanup phrasing.
+- [x] **docs/24 async declaration spelling cleanup**: normalized the stdio and
+      logging API reference blocks from copied prefix-style async declarations
+      to Otter-shaped `pub function ...: Future<...>` declarations, preserving
+      the explicit awaitable public contracts without implying alternate syntax.
+- [x] **docs/24 process reactor wording cleanup**: tightened the
+      `std:process` execution/control callout so provider-backed process start,
+      process-exit status/output capture, child control, and host process-state helpers are
+      described as awaitable reactor-woken futures rather than as a non-async
+      public process operation.
+- [x] **Process status/output wording cleanup**: tightened docs/18,
+      docs/24, ROADMAP, goals, and the process execution fixture metadata so
+      `Command.status()` / `Command.output()` are described as awaitable
+      process-exit status/output-capture futures rather than with copied
+      wording that can imply a blocking process API.
+- [x] **Captured process output accessor boundary cleanup**: tightened docs/18,
+      docs/24, ROADMAP, and goals so `Output.status()` / `stdout()` /
+      `stderr()` are described as non-waiting snapshot accessors over data
+      already produced by awaiting `Command.output()`, distinct from the
+      awaitable `Command.status()` process completion surface. Added a
+      compile-error guard proving captured `Output.status()` cannot be awaited.
+- [x] **docs/21 root-driver park wording cleanup**: refreshed the async chapter
+      so private root-driver and timer-driver runtime boundaries are described
+      as GC native/no-root parks between future polls/deadlines, not as a
+      public wait or `block_on`-like source operation.
+- [x] **Drop non-waiting finalizer wording cleanup**: refreshed docs/15,
+      docs/16, and the drop example/mirrored e2e fixture so `Drop` is described
+      as best-effort non-waiting finalization, not an async cleanup hook. The
+      example now tells users to call explicit cleanup and await it when the
+      release may wait.
+- [x] **docs/24 stdio handle-constructor wording cleanup**: tightened the
+      `std:io` catalog prose so `stdin()`, `stdout()`, and `stderr()` are
+      ordinary handle constructors whose target-backed methods are awaitable,
+      not "async handles" themselves. Added compile-error guards proving the
+      constructors cannot be awaited directly.
+- [x] **docs/29 Rust-backed hook async-contract wording cleanup**: tightened
+      the stdlib contributor guide so hooks that wait on host/runtime state are
+      required to keep that wait private behind async, future-returning public
+      contracts, with private native-wait behavior called out explicitly in the
+      review checklist.
+- [x] **docs/26 engine wait-wording cleanup**: refreshed the engine chapter's
+      isolate isolation and warm-pool performance prose so it describes
+      per-isolate GC as not stopping other isolates and warm pools as reducing
+      setup latency, without implying a public wait or blocking engine API.
+- [x] **docs/26 engine timeout escape-hatch wording cleanup**: tightened the
+      planned engine timeout section so pathological optimized loops must stay
+      bounded by allocation limits or preserve cooperative safepoints, rather
+      than suggesting a public thread-abandon or `block_on`-style timeout path.
+- [x] **TCP example Thread.spawn boundary wording cleanup**: tightened the
+      async TCP listener/timeout examples and mirrored e2e fixtures so
+      `Thread.spawn` is described only as two-sided loopback example
+      isolation, while connect/accept/read/write/timeout network work remains
+      explicit awaited futures at the Otter surface.
+- [x] **Async TCP GC-stress Thread.spawn boundary wording cleanup**: tightened
+      the async TCP GC-stress roadmap/goals summary so the loopback server is
+      described as isolated stress-test machinery, while plain `TcpStream`
+      byte-I/O remains explicit awaited futures rather than a public
+      `Thread.spawn` target-wait route.
+- [x] **docs/16 memory-summary Drop wording cleanup**: tightened the memory
+      chapter lead so `Drop` is described as best-effort non-waiting
+      finalization, with wait-capable release routed through explicit awaited
+      cleanup rather than a wait-capable finalizer story.
+- [x] **docs/17 std:thread index boundary cleanup**: tightened the module-index
+      row so `Thread.spawn` is described as the one-OS-thread-per-worker API for
+      CPU-heavy or OS-thread-affine work, with non-awaitable handles and async
+      `join()`, rather than a vague target-worker primitive that could be read
+      as a substitute for wait-capable target APIs.
+- [x] **Runtime time-hook boundary comment cleanup**: tightened
+      `crates/runtime/src/time.rs` comments so the module is described as
+      private clock/local-offset helper machinery behind async public futures,
+      while public `std:time.sleep(Duration)` is explicitly routed through the
+      reactor timer future in `async_rt` rather than any public sleep ABI.
+- [x] **docs/18 process arg/env summary cleanup**: tightened the stdlib process
+      summary so ordinary `Command` arg/env helpers are described as
+      command-local snapshot inspection, while host argv/environment
+      access/mutation remains explicitly future-returning.
+- [x] **UDP network guidance wording cleanup**: tightened the async chapter's
+      executor-worker warning and stdlib UDP docs so datagram/setup/control
+      operations are described through future-returning `UdpSocket` and
+      datagram-shaped `AsyncUdpSocket` surfaces, not as a vague handle shortcut
+      for wait-capable network work.
+- [x] **`std:log` awaitable helper wording/editor cleanup**: tightened
+      docs/18/docs/24 so `record(...)` is explicitly a timestamping
+      `Future<Record>` and default/structured line logging helpers are
+      `Future<null>` writes through async stdio, then extended LSP namespace
+      completion coverage so those log helpers advertise their future-returning
+      public contract.
+- [x] **`std:log` planned global logger boundary cleanup**: tightened the
+      planned global logger prose so `set_logger` / `logger` are described as
+      non-waiting registry helpers, while default stderr emission remains behind
+      `Logger.log(...): Future<null>`, and added a compile-error guard proving
+      those planned registry helpers are not live public APIs yet.
+- [x] **Planned sync primitive async-contract cleanup**: tightened docs/20,
+      docs/24, ROADMAP, and goals so planned `RwLock`, `Once`, and `Lazy`
+      wait-capable acquisition/initialization paths are future-returning public
+      surfaces, while immediate variants are reserved for explicit non-waiting
+      `try_*` probes or value constructors. Added a compile-error guard proving
+      those planned names are not live ordinary wait-capable APIs today.
+- [x] **Async resolution wording cleanup**: tightened docs/21, the async example
+      and mirrored fixture, focused thread/concurrency fixture metadata, and
+      older roadmap async-worker/root-driver/Shared-lock notes so futures are
+      described as resolving through `await` or private root-driver machinery,
+      without old root-helper wording. Reused the
+      source-level `block_on` rejection guard plus focused async/thread example
+      runs as verification.
+- [x] **Await/process resolution wording follow-up**: tightened the remaining
+      docs/21 await rule and docs/24/ROADMAP process-future prose so they speak
+      about futures resolving through `await`, without old command/root-helper
+      phrasing. Renamed the ordinary-task cancellation regression away from an
+      old filename while preserving its join behavior.
+- [x] **Process reference resolution wording follow-up**: tightened docs/18,
+      docs/21, docs/24, ROADMAP, and goals so process status/output references
+      speak about awaited process-exit status, output capture, and I/O result
+      callbacks rather than command-completion wording that can read like a
+      blocking process boundary. Focused requires-await and process example
+      runs verify the live future-returning contract.
+- [x] **Private root-driver source wording follow-up**: tightened runtime and
+      backend source comments so `lang_drive_root_future` and async `main`
+      lowering are described as private root-driver polling machinery that
+      resolves the future, without old public root-helper wording. Refreshed
+      the async runtime process-future comment to say it resolves command
+      status. Verification recorded in the current slice.
+- [x] **Thread/task source resolution wording follow-up**: tightened runtime,
+      backend, and checker comments plus focused runtime/test metadata so async
+      `Thread.spawn`, `Task.spawn`, `Shared.lock`, detached workers, and process
+      futures are described as resolving, joining, or continuing independently,
+      without old public root-helper wording. Focused
+      runtime builds and detached-task e2e verification cover the renamed tests
+      and fixture wording.
+- [x] **Shared-lock source resolution wording follow-up**: tightened the
+      `Shared.lock` runtime poller comments and async-worker checker comment so
+      async lock bodies and async worker closures are described as being polled
+      until their futures resolve, with task suspension and lock retention
+      explicit, without old public root-helper wording.
+      Focused runtime/compiler test builds plus direct shared-lock e2e coverage
+      verify the touched paths.
+- [x] **HIR async-worker resolution wording follow-up**: tightened HIR builtin
+      docs, async `Thread.spawn` examples, and concurrency fixture metadata so
+      async workers are described as polling futures until they resolve and
+      detached workers signal results over channels, without old root-helper
+      wording. Focused compiler build plus direct async-thread example and
+      lock-worker e2e coverage verify the touched paths.
+- [x] **Runtime async-worker polling wording follow-up**: tightened the
+      `lang_thread_spawn_async` runtime docs, async-spawn runtime test name, and
+      remaining async-thread fixtures so worker futures are described as being
+      polled until they resolve, with result-channel signalling and GC root
+      resolution paths explicit. Focused runtime/compiler builds plus async
+      thread detach/parallel/GC-stress e2e coverage verify the touched paths.
+- [x] **Async example root-future wording follow-up**: tightened the async and
+      threads examples plus their mirrored e2e fixtures so async `main`, direct
+      `await`, and gathered worker results are described as root/task polling
+      until futures resolve, without the old public root-helper vocabulary.
+- [x] **Concurrency docs/root-poll wording follow-up**: tightened docs/20 and
+      backend/runtime source comments so async `Thread.spawn`, async `main`, and
+      `Shared.lock` describe futures as being polled or awaited until they
+      resolve, with the private root-driver window named as implementation
+      machinery rather than source-visible blocking behavior.
+- [x] **Roadmap await-poll wording follow-up**: tightened roadmap async-closure
+      and async-`Shared.lock` entries so `await`/`spawn` are described as polling
+      futures until they resolve, not as a public drive operation.
+- [x] **Async-closure await-poll wording follow-up**: tightened docs/21,
+      async-closure ANF comments, and CLI async iterator/closure regression
+      comments so `await` and `for await` are described as polling futures or
+      async iterators until they resolve rather than as public drive operations.
+- [x] **docs/21 root-future polling wording follow-up**: tightened the async
+      chapter lead, diagram, async-`main` execution paragraph, summary, and CLI
+      native async-`Thread.spawn` parity comment so root futures and async
+      worker futures are described as being polled until they resolve, with
+      timer deadlines managed by the shared timer driver and the private root
+      driver kept internal.
+- [x] **Engine async-entry polling wording follow-up**: tightened docs/26,
+      ROADMAP Stage 7, and the engine goal text so planned async guest entries
+      are described as being polled on the isolate executor from the host await
+      path, preserving the no-user-visible-`block_on` rule.
+- [x] **Async-main and closure metadata polling wording follow-up**: tightened
+      docs/21, async-closure fixtures, shared examples, CLI async regression
+      names/comments, runtime GC pin comments, and older goals memory so async
+      futures are described as being polled or awaited until they resolve rather
+      than as public drive operations.
+- [x] **Runtime GC native-wait helper rename**: renamed the retired private Rust
+      runtime marker and helper suffixes to `gc::native_wait(...)` /
+      `_native_wait`, so GC native-state bracketing is described as private
+      runtime machinery behind async/reactor-backed public contracts rather than
+      as a source-level wait operation.
+- [x] **Private root-driver ABI rename**: renamed the internal runtime/backend
+      root future driver from the old private symbol to
+      `lang_drive_root_future`, and refreshed source regressions so async
+      `main` / async `Thread.spawn` polling now uses an explicit root-driver
+      ABI name while the unresolved source-level `block_on` guard remains
+      intact.
+- [x] **Thread.spawn CPU/affinity guidance cleanup**: tightened docs/20,
+      docs/21, docs/24, and the task/thread examples so `Thread.spawn` is
+      recommended only for CPU-heavy or OS-thread-affine work that needs one OS
+      thread per worker, with wait-capable target APIs remaining explicit
+      public futures.
+- [x] **Stdlib source future-contract regression**: added a compiler-side
+      stdlib manifest regression that directly checks the bundled `std:io`,
+      `std:fs`, `std:net`, `std:process`, `std:time`, and `std:async`
+      source-declared signatures for the no-public-wait contract, then extended
+      the same guard to `std:rand`, `std:hash`, and `std:log` entropy/timestamp/
+      stdio-derived surfaces: suspect target-backed waits must remain
+      `Future<...>` surfaces. The guard now covers the broader concrete
+      fs/file/path and DNS/TCP/UDP/async-adapter method set, plus representative
+      forbidden old direct-result wait signatures, so future source drift has
+      to break a compiler unit test instead of silently reaching users. The
+      intrinsic channel receive contract remains covered by CLI positive/negative
+      guards. docs/29 now requires this style of source-level future-contract
+      coverage for Rust-backed stdlib hooks.
+- [x] **Backend async-hook registry/lowering regression**: added a backend
+      regression over both the JIT runtime-symbol registry and native intrinsic
+      lowering so wait-capable stdlib integration hooks remain wired through
+      their `*_async` symbols, while the retired ordinary-result fs/io/net/
+      process/time/rand hook names cannot reappear as JIT-resolvable or native
+      importable source-visible operations.
+- [x] **Runtime wait-capable export catalog regression**: added a runtime
+      source regression over exported `lang_*` ABI symbols, including macro-made
+      fs path hooks, so stdio/fs/net/process/rand/time wait-capable runtime
+      constructors remain `*_async`, channel receive/thread join/shared lock stay
+      future-constructor ABIs, and retired ordinary-result wait exports cannot
+      reappear alongside the async constructors. Non-waiting release/bookkeeping
+      hooks remain explicit carve-outs.
+- [x] **LSP wait-capable completion catalog regression**: added a compact LSP
+      completion regression that checks the editor-visible signatures for the
+      major public wait-capable stdlib surfaces still advertise `Future<...>`:
+      stdio, fs/file/path, net/DNS/TCP/UDP, process/environment/child control,
+      time/async timers, rand/hash/log provider hooks, channel receive, and
+      thread join.
+- [x] **Historical goals async-contract memory cleanup**: refreshed stale
+      `goals.txt` DONE entries from pre-correction fs/io/process/net slices so
+      they no longer describe live target-backed file, stdio, process, or socket
+      waits as ordinary `Reader`/`Writer`/`Seeker` or ordinary-result provider
+      surfaces. The entries now preserve historical context while naming the
+      current future-returning public contracts and private async runtime
+      machinery.
+- [x] **Async/time marker source-contract cleanup**: refreshed the Otter-authored
+      `std:async` and `std:time` marker stubs so `yield_now`, both `sleep`
+      surfaces, and `timeout` spell their public `Future`-returning async
+      contracts in source. Intrinsic lowering still
+      routes calls to the runtime timer/reactor paths, and LSP alias/namespace
+      signatures continue to advertise the future contracts.
+- [x] **Non-async/ordinary async-wait wording cleanup**: refreshed docs/21,
+      tests/README, iterator await-in-body fixture descriptions, the
+      non-async await-in-condition negative fixture name/description, ROADMAP
+      async-state-machine notes, and stale goals memory so public wording says
+      non-async functions/code or ordinary `for` loops instead of sync
+      functions/code/loops.
+- [x] **LSP stdin async completion detail closure**: tightened the concrete
+      stdio member-completion regression so
+      `Stdin.read_to_end_async` must advertise `Future<i64 | IoError>` just like
+      `Stdin.read_async`; corrected-contract stdio work now also makes
+      `read` / `read_to_end` visibly future-returning public methods.
+- [x] **Stdio historical contract memory cleanup**: audited the live stdio
+      compiler/runtime path and confirmed source-level print helpers plus
+      concrete stdin/stdout/stderr handle waits route through future-returning
+      public methods and private encoded runtime helpers. Updated historical
+      goals that still described concrete stdio handle methods as ordinary
+      not-awaitable values; buffered in-memory adapters remain ordinary.
+- [x] **docs/18 stdio target-backed boundary cleanup**: tightened the stdio
+      architecture prose so `Reader`/`Writer`/`Seeker` are scoped to
+      non-waiting in-memory sources and adapters, while target-backed stdin,
+      stdout, stderr, files, and sockets use async concrete methods and/or
+      `AsyncReader`/`AsyncWriter`. The print helpers are documented as async
+      Otter-authored functions over private standard-stream futures, not public
+      runtime intrinsics.
+- [x] **docs/18 target-backed IO future wording cleanup**: removed the last
+      stale pre-correction result phrase from the stdlib architecture prose.
+      The handbook now says target-backed files, sockets, stdin, stdout, and
+      stderr expose wait-capable operations only as explicit `Future`-returning
+      APIs over helper-backed async paths, while non-waiting in-memory
+      `Reader`/`Writer`/`Seeker` adapters remain ordinary value contracts.
+- [x] **docs/24 stdio cancellation wording cleanup**: refreshed the concrete
+      stdio future cancellation paragraph so late cancelled helpers leave later
+      operations on the same underlying target stream state, without calling
+      that target-backed state a public value surface.
+- [x] **docs/24 private native-state marker wording cleanup**: refreshed the
+      stdio, process environment, and entropy paragraphs so private
+      `gc::native_wait(...)` usage is described as an internal native-state marker
+      around provider waits behind reactor-woken futures, not a user-facing wait
+      shape.
+- [x] **Filesystem docs/24 Path signature cleanup**: removed stale duplicate
+      old ordinary `Path.exists`/metadata-query signatures from the extended
+      stdlib reference block. The surrounding `std:fs` text already said the
+      module has no public ordinary-result filesystem wait surface; the signature table now
+      matches the future-returning path-query contract and requires-await guards.
+- [x] **Process docs/24 execution signature cleanup**: corrected the extended
+      stdlib reference block so `Command.status`, `Command.output`,
+      `Command.spawn`, `Child.wait`, and `Child.kill` advertise
+      `Future<...>` returns, matching the async process callout, source stdlib,
+      LSP completions, and requires-await fixtures.
+- [x] **Async spawn wording precision**: corrected the docs/21 parallel fan-out
+      example so `spawn EXPR` results are described as futures to await, not
+      join handles. This keeps `spawn` distinct from `Thread.spawn`/`Task.spawn`
+      handle APIs under the no-public-blocking contract.
+- [x] **Process docs async-contract wording cleanup**: tightened docs/24 so
+      `std:process` execution/wait/control guidance points at explicit async
+      process futures instead of a `Thread.spawn` routing story.
+      It no longer implies a generic wrapper exists or should be copied in by
+      default.
+- [x] **Async roadmap `block_on` wording cleanup**: removed stale language that
+      described `block_on(fut)` as a recognized source builtin. The roadmap now
+      matches docs/21 and the compile-error guard: `lang_drive_root_future` is
+      an internal runtime entry for async `main` / async `Thread.spawn` root
+      futures, while user code awaits futures and cannot call `block_on`.
+      Tightened the negative fixture so unrelated near-empty-prelude diagnostics
+      cannot mask the actual unresolved-`block_on` check.
+- [x] **Live runtime/LSP `block_on` wording cleanup**: tightened source comments
+      in the LSP CodeLens path and runtime root-driver wake/poll path so they
+      describe async `main` and async `Thread.spawn` execution as a private
+      root-future driver, not a user-visible root-helper. Added CodeLens
+      regression coverage for async `main` and re-ran the unresolved
+      `block_on` compile-error guard.
+- [x] **Backend/thread root-driver wording cleanup**: tightened the remaining
+      async `Thread.spawn` backend/runtime comments so the generated
+      `lang_thread_spawn_async` path names the private root driver and its
+      `Pending` type id instead of describing a source-level root-helper.
+      The public guard remains the unresolved-`block_on` compile-error case,
+      while runtime unit coverage keeps the private root-driver parking path
+      inside the GC native-state boundary.
+- [x] **Async docs wait-boundary wording cleanup**: tightened docs/21's
+      no-user-visible-`block_on` wording so user code awaits futures and cannot
+      hide wait-capable public APIs behind `Thread.spawn`; internal root-driver
+      waits remain private runtime machinery behind async futures.
+- [x] **Stdio ordinary-contract boundary guard under no-public-blocking**:
+      tightened docs/18 and docs/24 so `std:io.Reader`/`Writer`/`Seeker` are
+      described only as non-waiting in-memory contracts, not target-stream
+      protocols. Renamed the async-contract negative fixtures away from stale
+      sync wording and added compile-error guards proving `Stdin`, `Stdout`,
+      and `Stderr` do not implement the ordinary in-memory contracts; target
+      stdio remains available only through `Future`-returning concrete methods
+      and `AsyncReader`/`AsyncWriter`.
+- [x] **Process child stdio async-stream placeholder guard**: changed
+      `std:process.Child` current-stdio placeholder fields/accessors from
+      ordinary `Writer | null` / `Reader | null` shapes to
+      `AsyncWriter | null` / `AsyncReader | null`, preserving the current
+      `null` behavior while preventing planned streamed child stdio from being
+      documented or surfaced as ordinary in-memory contracts. Added
+      compile-error guards that assigning child stdin/stdout/stderr accessors
+      to ordinary `Writer`/`Reader` unions is rejected, and updated docs plus
+      LSP field-completion details/expectations so editor completions show the
+      async-stream-or-null field types.
+- [x] **Network docs async-surface wording cleanup**: tightened docs/20 and
+      docs/24 so network/task guidance points at explicit async socket futures
+      instead of `Thread.spawn` indirection. The docs continue to point
+      executor-friendly network code at `TcpStream`/`TcpListener`/`UdpSocket`
+      futures and their async adapter types.
+- [x] **Async TCP connect completed-result cancellation cleanup**: added a
+      focused runtime regression for the race where an async TCP connect helper
+      has already produced and rooted its encoded success result, but the future
+      is cancelled before the next poll consumes it. The cancellation path now
+      has direct coverage proving it removes the future cell, removes the extra
+      result root, and releases the registered TCP stream handle instead of
+      leaking a cancelled connection.
+- [x] **Async TCP accept completed-result cancellation cleanup**: added the
+      matching runtime regression for a completed-but-unpolled async TCP accept
+      result. Cancelling that future now has direct coverage proving the encoded
+      result root is removed, the future cell is drained, and the accepted TCP
+      stream handle is released instead of leaking a connection.
+- [x] **Async UDP completed-result cancellation root cleanup**: added focused
+      runtime coverage for a completed-but-unpolled async UDP datagram receive
+      result. UDP cancellation has no stream handle to release, but the
+      datagram-shaped encoded result still must be removed from the future cell
+      and extra-root set when the future is cancelled before the next poll.
+- [x] **Async filesystem completed-result cancellation root cleanup**: added
+      focused runtime coverage for a completed-but-unpolled
+      `std:fs.File.read_to_end_async` helper result. Filesystem cancellation has
+      no descriptor handle to release from the encoded read payload, but the
+      byte-buffer-shaped result must still be drained from the future cell and
+      removed from the GC extra-root set while leaving the file descriptor
+      explicitly owned by the caller.
+- [x] **Async filesystem late-result cancellation cleanup**: added focused
+      runtime coverage for a `std:fs.File.read_to_end_async` helper completing
+      after its future has already been cancelled. The regression locks in that
+      no result is rooted, no cancelled waiter is woken, and the descriptor is
+      not implicitly closed by discarding the late byte-buffer payload. Updated
+      docs/21 and docs/24 so the late-result discard contract covers
+      helper-backed stdio/filesystem/network futures instead of only naming
+      network helpers.
+- [x] **Async stdio late-result cancellation cleanup**: added focused runtime
+      coverage for a concrete stdio helper result completing after its future
+      has already been cancelled. The regression locks in that the scalar flush
+      result is not rooted or stored, the cancelled waiter is not woken, and the
+      cancellation owner can still drain the reactor registration.
+- [x] **Concrete stdio async cancellation docs alignment**: tightened docs/24's
+      `std:io` concrete-handle section so it names the same cancellation
+      contract as docs/21: cancelled stdin/stdout/stderr async futures remove
+      their reactor registration, discard late helper results, do not wake
+      cancelled waiters, and may consume provider stdin bytes that satisfied a
+      timed-out read without making the ordinary `Reader`/`Writer` contracts
+      awaitable.
+- [x] **Async cancellation contract wording cleanup**: tightened docs/21's
+      cancellation contract so `.cancel()` immediately unregisters I/O waiters
+      without waiting on target I/O, rather than describing cancellation cleanup
+      as a user-facing cancellation cleanup shape. This keeps the cancellation docs aligned
+      with the corrected no-public-blocking contract and the existing
+      timeout/cancellation cleanup regressions.
+- [x] **Task guidance explicit async-I/O alignment**: tightened docs/20 so
+      the `Task.spawn` executor-worker warning no longer points only at async
+      network adapters. It now names the existing executor-friendly concrete
+      stdio future-returning handle methods, concrete `std:fs.File` byte
+      IO/seek futures plus their `*_async` aliases, and async network adapters
+      as the current async I/O routes, while refusing to present
+      `Thread.spawn` as a substitute for wait-capable target APIs.
+- [x] **Task.spawn example async-I/O wording alignment**: refreshed
+      `examples/task_spawn.otter` and its mirrored e2e fixture so the example
+      no longer describes `Task.spawn` only as a fit for generic async or
+      CPU-small tasks; it now also names explicit async-I/O tasks while keeping
+      CPU-heavy or OS-thread-affine work on `Thread.spawn`.
+- [x] **CPU-heavy Thread.spawn example boundary wording**: refreshed
+      `examples/threads_hardcore.otter` and its mirrored e2e fixture so the
+      CPU-heavy worker example explicitly says it belongs on dedicated
+      `Thread.spawn` OS threads rather than executor `Task.spawn` workers,
+      preserving executor capacity for lightweight async tasks and explicit
+      async I/O.
+- [x] **docs/20 rejected green-thread wording cleanup**: refreshed the
+      concurrency task-spawn summary so the deliberately rejected stackful
+      green-thread model is described as implicit suspension without an
+      explicit async surface, not as an implicit public suspension story.
+- [x] **Channel async-iteration example replacement**: removed the old
+      plain receiver-iterator Thread.spawn example / mirrored fixture and
+      replaced them with `examples/async_channel_iteration.otter` plus
+      `tests/cases/examples/async_channel_iteration.otter`, proving receiver
+      drains are awaited with `for await`.
+- [x] **Channel iterator docs correction**: tightened docs/20 so the public drain
+      form is `for await x in rx`; plain `for x in rx` is rejected instead of
+      documented as an ordinary-result drain boundary.
+- [x] **Engine bridge-channel docs correction**: tightened docs/26 so planned
+      bridge channels reuse the corrected docs/20 channel contract: FIFO
+      delivery, immediate non-blocking `send`/`try_recv`, async `recv()`
+      futures, `for await` receiver drains, and close-on-last-sender, with no
+      receive wait hidden behind the host/isolate boundary.
+- [x] **Async root wait docs Thread.spawn wording**: tightened docs/21's
+      no-user-visible-`block_on` explanation so it names an explicit
+      `Thread.spawn` dedicated-OS-thread boundary instead of generic
+      "dedicated-thread boundaries" wording.
+- [x] **Async worker wait docs I/O async-surface alignment**: tightened
+      docs/21's executor-worker warning so it names concrete stdio
+      future-returning methods and `std:fs.File` byte IO/seek futures beside
+      their async aliases and the async network adapters, matching docs/20 and
+      docs/24.
+- [x] **Async executor-worker docs current-surface cleanup**: removed the
+      stale `sync DB` placeholder from docs/21's executor-worker warning so
+      the list names current documented wait-capable surfaces instead of implying
+      a database API exists today.
+- [x] **Async executor-worker docs timer async-surface alignment**: tightened
+      docs/21's executor-worker warning for the old timer split. Superseded by
+      the corrected async contract: `std:time.sleep(Duration)` is itself an
+      awaitable timer surface.
+- [x] **Stdlib summary Task.spawn async-surface wording**: tightened
+      docs/24's `std:task` summary so wait-capable operations point at
+      an explicit async surface,
+      matching `std:async.sleep`, concrete stdio async methods,
+      `std:fs.File` byte IO/seek futures and aliases, and network adapters.
+- [x] **Async chapter summary async-surface wording**: tightened docs/21's
+      key-takeaways summary so ordinary non-waiting stdlib APIs stay
+      ordinary until an explicit async surface exists.
+- [x] **Buffered stdio negative-test async-surface wording**: refreshed the
+      buffered reader/writer not-awaitable fixture descriptions so they say
+      `BufReader`/`BufWriter` ordinary in-memory methods are not async surfaces, not
+      "not explicit async surfaces", avoiding adapter-taxonomy wording for Otter
+      Fusion's value-vs-explicit-async contract.
+- [x] **Stdio helper/line-iterator fixture async-surface wording**: refreshed
+      the remaining stale stdio not-awaitable fixture descriptions so
+      historical `print`/`eprint` not-awaitable wording is superseded by the
+      corrected `Future<null>` print-helper contract, while
+      `BufReader.lines()` still returns an ordinary iterator, not an explicit
+      async stream surface.
+- [x] **Stdio print-helper async correction**: replaced the old
+      aggregate `println`/`eprintln` not-awaitable fixture with
+      `Future<null>` requires-await guards and a direct async stdout/stderr
+      print-helper run case. Concrete stdio async methods remain
+      helper-backed, reactor-woken futures rather than vaguely reactor-backed
+      futures.
+- [x] **Stdio LSP print-helper async-surface wording**: refreshed the LSP
+      signature-help contract entry so top-level print helpers are stdlib async
+      functions rather than old ordinary compiler builtins, matching the
+      requires-await guards and editor signature checks.
+- [x] **Process contract explicit-async-surface wording**: refreshed the
+      current `std:process` value/future clarification so process execution,
+      child wait/control, and host process helpers are described as explicit
+      awaitable process futures, while command value builders remain ordinary
+      value surfaces rather than copied adapter-shaped APIs.
+- [x] **Process summary async-surface wording**: refreshed docs/18 and
+      docs/24 process summary rows plus the detailed process callout so planned
+      process async work is described as deliberately designed async process
+      surfaces rather than old adapter terminology.
+- [x] **TCP nonblocking fixture async-surface wording**: refreshed the
+      `TcpStream.set_nonblocking` not-awaitable fixture description so it says
+      socket mode configuration is not an executor-integrated async surface,
+      keeping the provider-mode knob distinct from async network adapters.
+- [x] **Listener/UDP nonblocking fixture async-surface wording**: refreshed
+      the `TcpListener.set_nonblocking` and `UdpSocket.set_nonblocking`
+      not-awaitable fixture descriptions so every provider nonblocking toggle
+      is consistently documented as socket-mode configuration, not an
+      executor-integrated async surface.
+- [x] **Socket nonblocking docs async-surface wording**: tightened docs/24's
+      TCP and UDP option paragraphs so provider-backed `set_nonblocking`
+      toggles are described as deliberate provider-readiness/custom-mode knobs
+      outside the Otter Fusion executor, not async surfaces.
+- [x] **UDP pre-correction executor-warning docs**: tightened docs/20 and docs/21
+      so executor/task guidance explicitly named the then-ordinary-result
+      `UdpSocket` `send`/`recv`/`peek`/`send_to`/`recv_from`/`peek_from` beside
+      TCP stream waits, matching the existing UDP not-awaitable guards and
+      `AsyncUdpSocket` adapter split at the time. The corrected UDP datagram
+      contract later superseded that public shape with future-returning plain
+      `UdpSocket` datagram methods and requires-await guards.
+- [x] **Process child accessor async-surface docs**: tightened docs/20 and
+      docs/21 so the executor guidance distinguishes wait-capable process
+      execution/wait/control/helper operations from immediate non-`Future`
+      `Child.id` and current child-stdio accessors, matching the direct
+      not-awaitable guards without pretending those value accessors are
+      executor-integrated async process surfaces.
+- [x] **Process child-stdio fixture wording cleanup**: refreshed the child
+      stdin/stdout/stderr not-awaitable fixture metadata so those current
+      accessors are described as non-Future current-stdio placeholders, while
+      streamed child stdio remains planned async-stream work.
+- [x] **Filesystem executor-warning concrete surface docs**: tightened docs/20
+      and docs/21 at the time to name the pre-correction ordinary-return
+      `std:fs` module helpers, directory snapshots/mutations, target-backed
+      `Path` queries, and `File` text helpers beside future-returning
+      descriptor methods. Corrected-contract work now supersedes that warning:
+      those wait-capable filesystem surfaces are explicit futures too.
+- [x] **Stdio executor-warning concrete surface docs**: tightened docs/20 and
+      docs/21 so executor/task guidance names ordinary non-waiting
+      in-memory `std:io` `Reader`/`Writer`/`Seeker` methods and buffered
+      adapter reads/writes beside the async print helpers and concrete
+      stdin/stdout/stderr async methods, matching
+      docs/24 and the stdio/buffered not-awaitable guard coverage.
+- [x] **Timer summary async-contract correction**: updated docs/24's module
+      summary table so `std:time.sleep(Duration)` is visible as an async
+      non-blocking `Future<null>` timer, while `std:async.sleep(ms)` remains the
+      millisecond helper over the same timer/reactor substrate.
+- [x] **std:async helper wording cleanup**: refreshed docs/17, docs/18, and
+      docs/24 module summaries plus matching bookkeeping so `yield_now`,
+      `sleep`, and `timeout` are described as executor/runtime helpers rather
+      than an adapter family. This keeps the async library surface distinct from
+      actual wrapper/adapter types such as `AsyncTcpStream`.
+- [x] **Thread summary async-contract docs**: tightened docs/24's
+      `std:thread` summary so `Thread.spawn` is visible as the
+      one-OS-thread-per-worker primitive for CPU-heavy or OS-thread-affine work,
+      not an ordinary-result target-operation route, while `Task.spawn`/`spawn` remain the high-scale executor
+      routes; the summary also states that thread `JoinHandle`s are
+      non-awaitable, `detach()` is immediate, and OS-thread handles have no
+      `cancel()`/`abort()` with explicit no-method guards for both names.
+- [x] **Concurrency source-comment module spelling cleanup**: refreshed
+      compiler/backend/runtime/LSP comments that describe Otter Fusion
+      concurrency/core surfaces so they use the language's module/type wording
+      (`std:task` `JoinHandle`, `std:sync` `Sender`, `core:async` `Future`)
+      rather than Rust-style double-colon paths. Real Rust implementation paths
+      such as `std::thread::spawn` remain unchanged.
+- [x] **Async I/O helper-backed reactor wording**: tightened docs/20, docs/21,
+      and docs/24 so current async I/O is described as helper-backed futures
+      that register cancellable one-shot reactor wakeups/completion callbacks,
+      not as already-readiness-native provider integration; the latter remains
+      planned work.
+- [x] **Runtime async helper comment wording cleanup**: tightened
+      `crates/runtime/src/async_rt.rs` comments so private stdlib helper-backed
+      futures are described as wait-capable provider operations handed to helper
+      threads behind cancellable reactor registrations, not as a user-facing
+      stdlib future category. Reactor cancellation wording now says waiters are
+      immediately unregistered without waiting on target I/O.
+- [x] **Memory-model async helper native-state docs**: tightened docs/16's
+      runtime native-state callout so helper-backed async stdio, filesystem, and
+      network futures explicitly split helper-thread creation from provider
+      waits: creation is bracketed by the caller, private provider waits use the
+      helper's `gc::native_wait(...)` marker, and completion encodes and roots the
+      result plus wakes the reactor without a thread-wide native-state
+      enter/leave.
+- [x] **Retired target-backed value wording cleanup**: refreshed the stdlib
+      architecture docs and runtime entropy comment so target-backed stdio,
+      file/socket streams, and OS entropy are described as exposing waits only
+      through explicit `Future`-returning public helpers over private runtime
+      futures.
+- [x] **Runtime entropy Future-surface wording cleanup**: tightened the
+      `std:rand` runtime entropy module comment so OS entropy reaches Otter
+      Fusion user code only through explicit `Future`-returning public helpers
+      over private runtime futures.
+- [x] **Timer marker source-contract guard**: documented the Otter-authored
+      `std:async.sleep(ms)` / `std:time.sleep(Duration)` marker stubs as
+      compiler-recognized future-returning timer helpers, fixed marker
+      recognition to follow the resolved builtin definition through named
+      import aliases, and added checker/e2e regressions proving aliased
+      `yield_now`, `std:async.sleep`, `timeout`, and `std:time.sleep` keep their
+      `Future<...>` contracts rather than falling back to the payload-free
+      source bodies.
+- [x] **LSP timer marker alias signature guard**: centralized editor-facing
+      signatures for the compiler-recognized `std:async` / `std:time` marker
+      stubs, then routed hover, signature help, namespace completion, and
+      function completion details through that contract. Focused LSP coverage
+      now proves named import aliases for `yield_now`, `std:async.sleep`,
+      `timeout`, and `std:time.sleep` advertise `Future<...>` returns and keep
+      alias-aware signature-help labels instead of leaking the payload-free
+      marker bodies.
+- [x] **Async TCP stream constructor correction**: changed public
+      `TcpStream.connect(addr)` and `TcpStream.connect_timeout(addr, timeout)` to
+      return `Future<TcpStream | IoError>` under the corrected no-public-blocking
+      contract. The stdlib wrappers now await the existing private
+      `__otter_net_tcp_connect_async` and
+      `__otter_net_tcp_connect_timeout_async` futures, the backend no longer
+      registers exported direct-result TCP connect symbols, and the runtime keeps
+      the encoded connect helpers private to async future machinery and unit
+      tests. Replaced the old connect not-awaitable guards with
+      `std_net_tcp_connect_requires_await.otter` and
+      `std_net_tcp_connect_timeout_requires_await.otter`, updated loopback TCP
+      run coverage to await the constructors, and refreshed LSP completion so
+      `TcpStream` constructors advertise `Future<TcpStream | IoError>`.
+      Later corrected-contract slices completed TCP stream instance I/O/control,
+      listener setup/accept, and UDP datagram/setup/control cleanup.
+- [x] **Async network timeout convenience contract docs**: clarified that
+      the TCP connect-timeout constructors are the dedicated async timeout
+      operations currently accepted, while ordinary async TCP read/write/peek,
+      listener accept, and UDP datagram operation deadlines use
+      `std:async.timeout(...)` around the explicit future today. Added negative
+      e2e guards for unapproved copied convenience names such as
+      `read_timeout_async`, `accept_timeout_async`, and `recv_timeout_async`;
+      richer timeout ergonomics remain planned target-backed work only after an
+      Otter-specific API decision.
+- [x] **Async network timeout example**: added `examples/async_network_timeout.otter`
+      plus a test-gated mirrored fixture showing the current Otter Fusion
+      pattern for async network operation deadlines: wrap the explicit async
+      datagram future in `std:async.timeout(...)`, discard the timed-out stale
+      result, and keep using the socket for a later datagram instead of adding
+      copied `recv_timeout_async`/`send_timeout_async` methods.
+- [x] **Concurrency timeout guidance alignment**: tightened docs/20's task
+      worker guidance so it names the same async network deadline contract as
+      docs/21/docs/24: use `std:async.timeout(...)` around explicit async
+      futures today, except for the dedicated TCP connect-timeout constructors,
+      and do not infer copied
+      `read_timeout_async`/`accept_timeout_async`/`recv_timeout_async` method
+      families.
+- [x] **Stdlib architecture network timeout summary alignment**: tightened
+      docs/18's `std:net` catalog row so the architecture summary matches
+      docs/20/docs/21/docs/24: async network adapters are helper-backed futures
+      with one-shot reactor wakeups, operation deadlines use
+      `std:async.timeout(...)` except for TCP connect-timeout constructors, and
+      copied timeout method families are not current API.
+- [x] **Stdlib extended summary network timeout alignment**: tightened
+      docs/24's module summary row so the quick-reference `std:net` entry
+      carries the same async deadline contract as the detailed section:
+      `std:async.timeout(...)` wraps explicit async futures today except for
+      TCP connect-timeout constructors, copied timeout method families are not
+      current API, and richer timeout ergonomics remain planned only after an
+      Otter-specific API decision.
+- [x] **LSP async network timeout completion guard**: added focused editor
+      completion coverage proving `AsyncTcpStream`, `AsyncTcpListener`, and
+      `AsyncUdpSocket` do not advertise copied timeout convenience method
+      families such as `read_timeout_async`, `accept_timeout_async`,
+      `recv_timeout_async`, or address-aware UDP timeout variants. This keeps
+      the editor surface aligned with the documented `std:async.timeout(...)`
+      wrapper contract.
+- [x] **Broader async network timeout-name negative coverage**: added e2e
+      compile-error guards for additional copied convenience names
+      `write_timeout_async` and `send_to_timeout_async`, complementing the
+      earlier `read_timeout_async`, `accept_timeout_async`, and
+      `recv_timeout_async` guards so both stream writes and address-aware UDP
+      sends stay on the explicit `std:async.timeout(...)` wrapper contract.
+- [x] **Complete copied async network timeout-name e2e guard set**: added
+      compile-error coverage for the remaining obvious copied timeout method
+      names across implemented async network operations:
+      `peek_timeout_async`, connected UDP `send_timeout_async` /
+      `peek_timeout_async`, and address-aware UDP `recv_from_timeout_async` /
+      `peek_from_timeout_async`. Together with the earlier guards, every current
+      async TCP/listener/UDP operation now has negative coverage against
+      method-family drift.
+- [x] **Async network timeout-name documentation closure**: aligned
+      docs/20, docs/21, docs/24, and the docs/18/docs/24 summary rows with the
+      completed copied-timeout guard set, so the documentation now describes
+      the full rejected timeout-shaped family across TCP read/write/peek,
+      listener accept, and connected/address-aware UDP operations instead of
+      only the earlier sample names.
+- [x] **Process async example metadata wording**: replaced the former
+      Thread.spawn-based process fixture with `async_process`, so the example
+      suite now demonstrates awaited `std:process` execution instead of a
+      `Thread.spawn` target-operation recommendation.
+- [x] **Thread.spawn async-surface wording cleanup**: tightened
+      docs/20, docs/21, docs/24, ROADMAP, and the async TCP timeout example so
+      `Thread.spawn` is described only as a one-OS-thread-per-worker primitive
+      for CPU-heavy or OS-thread-affine work. It is no longer
+      presented as an ordinary route for wait-capable target APIs; those must
+      expose explicit async futures at the Otter Fusion surface. The existing
+      ordinary non-async and async-closure `Thread.spawn` not-awaitable guards continue to
+      prove the API returns `JoinHandle<R>`, not a bare awaitable future.
+- [x] **Async TCP timeout fixture metadata cleanup**: refreshed the mirrored
+      `tests/cases/examples/async_tcp_timeout.otter` description so it names an
+      awaited TCP server whose network operations stay explicit futures instead
+      of calling the server blocking. The source example and mirrored e2e both
+      await listener bind/address lookup, accept, stream read/write/close, and
+      timed connect.
+- [x] **Stdlib implementation-kind async wording cleanup**: refreshed docs/18,
+      docs/24, and docs/29 implementation-kind examples so target-backed
+      `std:fs`, `std:process`, `std:net`, time, hash, and rand hooks are
+      explicitly described as awaitable where they can wait, and removed stale
+      `std:io.print`/`eprintln` Rust-backed examples now that print helpers are
+      ordinary async stdlib functions. Docs/24's `std:io` intro now says
+      `Reader`/`Writer`/`Seeker` are ordinary value-returning contracts for
+      non-waiting in-memory sources/adapters, while target-backed byte streams
+      use async methods and/or `AsyncReader`/`AsyncWriter`.
+- [x] **Stdlib architecture process async summary**: tightened docs/18's
+      `std:process` catalog row so it explicitly classifies
+      `Command.status()`/`output()`, `Command.spawn()`, and child
+      `wait()`/`kill()` as async process futures, while keeping streamed child
+      stdio as planned provider/runtime work.
+- [x] **Stdlib architecture stdio/fs explicit-async summary**: corrected
+      docs/18's `std:io` text so it no longer claims there is no generic async
+      I/O protocol while `AsyncReader`/`AsyncWriter` are implemented. The
+      summary now states the actual contract: `Reader`/`Writer`/`Seeker` and
+      buffered adapters remain ordinary value-returning surfaces, while
+      async-capable stdio/file handles expose future-returning concrete methods
+      plus aliases and `AsyncReader`/`AsyncWriter` implementations.
+- [x] **Stdlib stdio/fs helper-backed async wording closure**: tightened
+      docs/18 and docs/24 so concrete stdio and descriptor-backed file async
+      methods are described as helper-backed futures that wake through the
+      reactor, not as vague reactor-backed methods that could be mistaken for
+      completed readiness-native provider integration.
+- [x] **Module-index stdio helper-backed async wording**: tightened the
+      docs/17 `std:io` module index row so stdin/stdout/stderr async concrete
+      methods are described as helper-backed, reactor-woken methods rather than
+      reactor-backed methods, keeping the import/module overview aligned with
+      the detailed stdlib and async/runtime docs.
+- [x] **Process not-awaitable fixture async-surface wording**: refreshed the
+      `std_process_*_not_awaitable` fixture descriptions so the pre-correction
+      ordinary-return process execution/control/helper surfaces and pure value
+      helpers are described as not explicit async process surfaces, rather than
+      using adapter taxonomy that could imply a default copied async process
+      surface family. Corrected-contract work later replaced wait-capable
+      process guards with requires-await fixtures.
+- [x] **Process pure-value fixture wording closure**: refreshed the remaining
+      `std:process` not-awaitable fixture descriptions so command
+      builders/accessors/predicates/snapshots and `exit`/`abort` markers are
+      described as immediate pure value/control surfaces, while process
+      execution, child wait, child kill, argv/env inspection, and other
+      wait-capable process operations remain future-returning public APIs.
+- [x] **Roadmap process async-surface wording closure**: refreshed the remaining
+      roadmap process backlog and completed-slice wording so planned async
+      process work is described as deliberately designed async process surfaces,
+      not copied adapter terminology.
+- [x] **Filesystem not-awaitable fixture async-surface wording**: refreshed the
+      `std_fs_*_not_awaitable` fixture descriptions so module helpers, path
+      queries, and `File` text helpers were recorded as pre-correction
+      ordinary-return filesystem surfaces. Corrected-contract work has since
+      replaced those guards with requires-await fixtures for all wait-capable
+      filesystem helpers, path queries, and `File` methods.
+- [x] **Channel not-awaitable fixture async-surface wording**: refreshed the
+      channel `send`, `try_recv`, and retired iterator `next` fixture
+      descriptions so immediate enqueue/poll operations and the old
+      ordinary-result receive-drain history is not described as a public async
+      receive surfaces, keeping the guard metadata aligned with `Receiver.recv()`
+      and `for await` drains as the awaited receive operations.
+- [x] **Network not-awaitable fixture async-surface wording**: refreshed the
+      historical `std_net_*_not_awaitable` fixture descriptions so DNS,
+      then-ordinary-result TCP stream/listener operations, socket controls, and UDP
+      datagram/control operations are described as not explicit async
+      resolver/network/stream/listener/UDP surfaces, keeping guard metadata
+      aligned with the explicit `AsyncTcpStream`/`AsyncTcpListener`/
+      `AsyncUdpSocket` adapter split. Corrected-contract follow-ups have since
+      replaced DNS, TCP connect, TCP accept, TCP stream byte-I/O, and UDP
+      datagram guards with requires-await fixtures.
+- [x] **Async network setup wrapper wording**: refreshed the async-network
+      setup/conversion not-awaitable fixture descriptions and matching roadmap
+      notes so `AsyncTcpStream.from_stream`, then-current
+      `AsyncTcpListener.bind`/`from_listener`, and `AsyncUdpSocket.bind`/
+      `from_socket` were described as ordinary wrapper setup/conversion
+      boundaries rather than async operations. Later corrected-contract work
+      superseded `AsyncTcpListener.bind`, which is now awaitable.
+- [x] **Async network wrapper value-helper not-awaitable guards**: added
+      compile-error e2e coverage proving async-network wrapper value helpers
+      remain ordinary values: `AsyncTcpStream.clone()` returns an
+      `AsyncTcpStream`, `AsyncTcpListener.to_str()` returns `str`, and
+      `AsyncUdpSocket.debug()` returns `str`, none of them `Future`s.
+- [x] **Shared handle setup/clone not-awaitable guards**: added compile-error
+      e2e coverage proving `Shared.new(value)` and `Shared.clone()` are ordinary
+      handle construction/clone surfaces, while `Shared.lock` and
+      `Shared.try_lock` remain the awaited lock surfaces.
+- [x] **Shared lock result flattening not-awaitable guards**: added
+      compile-error e2e coverage proving `Shared.lock` and `Shared.try_lock`
+      await the body until it resolves and produce flattened body values (`R` or
+      `R | LockBusy`); attempting to await those resolved values is rejected.
+- [x] **Shared lock result wording cleanup**: refreshed the flattening
+      regression metadata so `Shared.lock` and `Shared.try_lock` are described
+      as awaited lock surfaces resolving to flattened body values, without
+      old result-boundary wording.
+- [x] **Runtime marker value-helper not-awaitable guards**: added compile-error
+      e2e coverage proving `TimedOut`, `Cancelled`, `Panicked`,
+      `ChannelClosed`, and `LockBusy` marker value helpers remain ordinary
+      clone/string/debug/equality/hash surfaces, not `Future`s or async
+      operation surfaces. Follow-up guards cover `hash()` and `==` directly for
+      every marker so the negative coverage matches the documented value
+      surface.
+- [x] **Async stdio fixture/example cleanup**: bulk-refreshed run fixtures and
+      examples so ordinary output uses the corrected async `print`/`println`
+      contract. Straight-line run cases now use `main(): Future<null> async`
+      and await output helpers; worker-panic reporting helpers return futures;
+      duplicate `Future` imports from `core:prelude`/`core:async` were removed;
+      and FFI/atomic-pointer cases compute raw-pointer observations before the
+      first output await so stack/raw pointer state is not live across
+      suspension. Refcounted/example `Drop` coverage now uses non-waiting
+      instrumentation instead of async `println` inside finalizers, preserving
+      deterministic drop-order assertions without exposing wait-capable public
+      output from `Drop`. The follow-up async runtime native-state slice below
+      closes the GC-stress cancellation timeout cluster, and the full e2e suite
+      now reaches 723 pass / 0 fail.
+- [x] **Async runtime timer/cancellation GC native-state fix**: closed the
+      remaining GC-stress cancellation timeout cluster by bracketing private
+      reactor/timer mutex contention and timer-driver startup/OnceLock waiters
+      in runtime-native/no-root state. The timer thread now captures the
+      already-initialized driver rather than re-entering `timer_driver()` during
+      startup, so concurrent `sleep` polls cannot leave workers marked
+      `RUNNING` while they wait for the shared timer driver to initialize.
+      Executor-task cancellation now records a reschedule request when a
+      cancellation races with an in-flight poll and cannot take the poll lock,
+      ensuring the pending task promptly observes cancellation instead of
+      relying on an unrelated timer wake. Added focused runtime regression
+      coverage for private timer/reactor lock bracketing and busy-poll
+      cancellation rescheduling, refreshed docs/16 and docs/21, and verified
+      the three GC-stress cancellation cases plus the full e2e suite at
+      723 pass / 0 fail.
 - [x] **`Shared<T>` (`docs/20` §4): an explicit mutex.** `Shared.new(value)`
       (recognised builtin) creates a runtime mutex cell (`runtime::shared`: a
       logical `locked` flag + value guarded by a short-held `Mutex`/`Condvar`,
@@ -2008,27 +3973,26 @@ The tracing GC is functionally complete for single-threaded programs.
       *handle* (same cell), and a `Shared` is thread-shareable so workers capture
       it. The inner value is GC-pinned for the cell's lifetime. Mutex serializes
       concurrent increments (2×5000 → 10000, deterministic under stress). JIT +
-      native parity; `examples/shared.otter`; 2 CLI tests. TODO: lock release on a
-      panicking body (needs unwinding); reentrancy is undefined (per spec).
-- [x] **Async (`docs/21`) — COMPLETE, with an implicit-async surface.**
-      > **SURFACE NOTE (current design, `docs/21` rewritten):** async is now
-      > **implicit**. There is **no** user-visible `async` modifier, `await`
-      > expression, `block_on` builtin, `async { … }` block, or `for await` —
-      > those were removed from the language surface. A single keyword **`spawn
-      > call_expr`** evaluates to a `JoinHandle<T>` (like Go's `go`). User code
-      > never spells `Future<T>`: `sleep` returns `null`, `Receiver.recv()`
-      > returns `T`, `JoinHandle.join()` returns `Joined<T> | Panicked`,
-      > `Shared.lock(fn)` returns the closure's result. The compiler decides which
-      > functions need state-machine codegen by a fix-point pass
-      > (`propagate_async_calls`): a function is "async" iff its body reaches a
-      > suspending op (`sleep`/`yield_now`/`recv`/`join`) or calls another async
-      > function; non-suspending functions keep straight-line codegen with zero
-      > executor overhead. `main` is driven by `lang_block_on` automatically if it
-      > is async. **The `Future`/`Pending`/`Ready`/state-machine/`block_on`
-      > machinery described below all still exists internally** — it is exactly
-      > what the implicit surface lowers to; the user just never names it. The
-      > `[x]` sub-bullets that mention `await`/`async {}`/`for await` describe the
-      > internal lowering, reachable from the implicit surface.
+      native parity; `examples/shared.otter`; 2 CLI tests. Later async-Shared
+      slices replaced the old ordinary-result lock path with task-aware
+      `lock`/`try_lock` futures, held the mutex across awaits, and completed lock release on
+      cancel/panic through the worker/task panic boundary. Internal Shared
+      registry/cell/held-lock mutex contention is bracketed as
+      runtime-native/no-root, but source-level lock contention remains a task
+      suspension. Reentrancy remains undefined (per spec).
+- [x] **Async (`docs/21`) — COMPLETE, with an explicit `async`/`await` surface.**
+      Surface: user code writes postfix `async` on function, anonymous-function,
+      and closure bodies whose signature returns `Future<T>`; `await` is a
+      user-visible expression valid only inside async bodies; `async { ... }`
+      blocks and `for await` are user-visible; `main` may be async and is polled
+      by the runtime until it resolves. The internal root-future driver parks in GC
+      native state between `Pending` polls; there is no user-visible `block_on`
+      builtin.
+      `spawn EXPR` schedules a future on the shared executor and returns a
+      cancellable `Future<T>`; `Task.spawn` and `Thread.spawn` are handle APIs
+      described in `docs/20`. The `Future`/`Ready`/`Pending`/state-machine
+      machinery below is both a visible type contract and the internal lowering
+      target.
 
       Prelude:
       `interface Future<Output> { poll(self, ctx: *Context): Ready<Output> |
@@ -2043,11 +4007,12 @@ The tracing GC is functionally complete for single-threaded programs.
       the body (returning `Ready<Output>`), and the public symbol becomes a
       *constructor* that allocates the state struct (holding the captured
       arguments / locals) and wraps it in a `Future<Output>` interface-object
-      box whose single vtable slot is `poll`. `block_on(fut): Out` (a recognised
-      builtin) drives the future to completion via the runtime executor
-      (`runtime::async_rt::lang_block_on`: a poll loop that parks on a condvar
-      waker between `Pending` polls, in GC-native state, pinning the future as a
-      GC root across polls). **`await` is fully lowered**: an async function
+      box whose single vtable slot is `poll`. The runtime-internal
+      `lang_drive_root_future` entry polls async `main` and async `Thread.spawn` root
+      futures until they resolve; it is not a source-level builtin and user code must
+      `await` futures instead. That internal poll loop parks on a condvar waker
+      between `Pending` polls, in GC-native state, pinning the future as a GC
+      root across polls. **`await` is fully lowered**: an async function
       whose body contains `await` becomes a real suspendable state machine — the
       state struct holds every body local, `poll` dispatches on a saved state
       word to resume at the right `await`, each `await` saves the live locals +
@@ -2055,9 +4020,10 @@ The tracing GC is functionally complete for single-threaded programs.
       `yield_now()` (a `Future<null>` that suspends once, self-waking) exercises
       genuine park/resume cycles. `await`s in `if`/`while`/`match` bodies work.
       JIT + native parity; GC-stress clean. **`await` inside `async { … }`
-      blocks** works (`block_on(async { await … })`, the doc's main launcher).
-      **`spawn(fut): JoinHandle<T>`** drives a future on a worker thread (reusing
-      the `JoinHandle`/`join` machinery → `Joined<T> | Panicked`). **`for await x
+      blocks** works (`await async { … }`, and async `main` is polled by the
+      runtime root executor until it resolves). **`spawn EXPR`** schedules a future on the shared
+      executor and returns a `Future<T>` whose await observes completion,
+      cancellation, or panic propagation. **`for await x
       in stream`** drives an `AsyncIterator<T>` (`next_async()` is awaited each
       step). `yield_now()` provides genuine suspension; **`sleep(ms)`** is a
       timer-thread-backed future; **`.cancel()`** is a (no-op) abort for the
@@ -2086,7 +4052,7 @@ The tracing GC is functionally complete for single-threaded programs.
       suspend-site scan (`h_scan_value_await`/`h_scan_for_state`) recurses into the
       `&&`/`||` right operand and the `while` condition so every such `await` gets
       a state slot. Short-circuit suppresses the awaited side effect; a `while`
-      condition suspends exactly once per iteration. `await` in a sync function
+      condition suspends exactly once per iteration. `await` in a non-async function
       (even in an operand) is still rejected by the checker. Covered for the bare
       operand/condition forms, nested-`await` operands (scoped in place), chained
       `&&`, `await` in both operands, evaluation order vs. an effectful left, and
@@ -2101,11 +4067,12 @@ The tracing GC is functionally complete for single-threaded programs.
       `h_closure_kind` and the non-empty-`params` branch of `h_async_block` are
       therefore unreachable, kept only as internal-invariant guards). Calling it
       builds the future (capturing `p` + the outer environment by reference,
-      `docs/09` §7) without running `E`; `await` (or `spawn`) drives it. The
+      `docs/09` §7) without running `E`; awaiting or spawning it polls the future
+      until it resolves. The
       closure's value type is `(p) => Future<T>` — a callable, not a bare
       `Future` — so it stores in a struct/list and passes as a higher-order
       argument. Capture-by-reference mutations made inside the body (across an
-      `await`) are visible to the next drive and to the enclosing scope. An
+      `await`) are visible to the next poll and to the enclosing scope. An
       `async` body is a `Future` state machine and so **cannot be `extern`**:
       `record_extern_sig` rejects `extern function … async;` (the same rule that
       forbids extern async closures). Coverage: 12 CLI tests (arrow + `function`
@@ -2125,7 +4092,7 @@ The tracing GC is functionally complete for single-threaded programs.
       per-iteration suspends). 1 CLI test; JIT + native + GC-stress parity.
 - [x] **`for await` over an interface `AsyncIterator` object** (or a bounded
       `T: AsyncIterator<U>` param): the checker's `async_iterator_elem` now
-      resolves `next_async` through the interface (mirroring the sync
+      resolves `next_async` through the interface (mirroring the ordinary
       `iterator_elem`), and `h_for_async` dispatches it via the vtable for an
       interface receiver (else through the concrete impl). 1 CLI test; JIT +
       native + GC-stress parity.
@@ -2141,13 +4108,13 @@ The tracing GC is functionally complete for single-threaded programs.
       (`Intrinsic::AsyncTimeout { output }`). 2 CLI tests (value vs `TimedOut`;
       managed `str` value under GC stress); JIT + native + GC-stress parity;
       `examples/async.otter`.
-- [x] **Sync `for` loop with an `await` in its body** (`docs/21`): a `for` loop
+- [x] **Ordinary `for` loop with an `await` in its body** (`docs/21`): a `for` loop
       that is not itself `for await` but whose body suspends now preserves its
       iteration state across the suspend. The loop's codegen-internal iterable
       pointer(s) + index counter live in Cranelift SSA, which does **not** survive
       a `poll` return — so `async_state_layout` reserves per-loop state-struct
       slots (`(primary, secondary, index)`, keyed by `iter.span` via
-      `h_scan_for_state`; the iterable slots are GC-traced) and all four sync
+      `h_scan_for_state`; the iterable slots are GC-traced) and all four ordinary
       `for` drivers (`ListFast`/`Iterator`/`Map`/`StrChars`) read/write their
       iteration state through those slots when inside an async body. **This was
       the actual root cause of the long-suspected "threaded runtime instability"**
@@ -2267,7 +4234,8 @@ The tracing GC is functionally complete for single-threaded programs.
       `lang_variadic_call` shim, which drives `libffi`'s `ffi_prep_cif_var`/
       `ffi_call` (`crates/runtime/src/variadic.rs`, a minimal hand binding to the
       system `libffi` since neither `pkg-config` nor autotools is assumed; JIT links
-      it via the runtime build script, native links `-lffi`). The checker rejects
+      it via the runtime build script, native builds always link `-lffi` because
+      `libruntime.a` contains the shim even for non-variadic user programs). The checker rejects
       `@Variadic` off an extern import, with no fixed prefix, with decorator args,
       or with a non-scalar/`str` variadic argument; a call below the fixed arity is
       an arity error. Used as a value (not called by name) the import is an ordinary
@@ -2466,7 +4434,7 @@ The tracing GC is functionally complete for single-threaded programs.
     `Thread.spawn` of a float-returning fn (works for `f64`/`f32`), and spawn
     capture-by-value snapshots (`docs/20` §6 — the prior "mutable loop variable"
     XFAIL's spec-correct behavior). The intermittent threaded crash once blamed
-    on contention turned out to be the sync-`for`+`await` state bug (now fixed,
+    on contention turned out to be the ordinary-`for`+`await` state bug (now fixed,
     see the async section); thread-spawning cases still run `serial` to keep
     cross-process CPU contention low. See `tests/README.md`. Runs under
     `cargo test -p cli --test suite`.
@@ -2550,11 +4518,24 @@ The tracing GC is functionally complete for single-threaded programs.
       (`crates/cli/fmt.rs`). Normalizes **indentation** (two spaces per bracket
       level, closer-leading lines dedented), common intra-line token spacing
       (commas, colons, assignment, comparisons including `<`/`>`, generic/type
-      angle spacing, logical operators, and clearly binary arithmetic), strips
-      trailing whitespace, collapses blank-line runs, normalizes code around
+      angle spacing in annotations and async return types, async closure-arrow
+      spacing, control-keyword spacing before parenthesized expressions and
+      unary condition/scrutinee starts such as `if !done` / `match !done`,
+      statement-keyword unary operand spacing such as `return -1` and
+      `await !ready`, `as`/`is` cast and type-test spacing, iterator `in (` spacing,
+      interpolation delimiter edges, logical operators, and clearly binary
+      arithmetic), strips trailing whitespace outside ordinary comment trivia,
+      collapses blank-line runs, normalizes code around
       balanced inline block comments and multi-line block-comment boundary lines
-      while preserving comment text exactly, wraps long parenthesized,
-      bracketed, type-led brace, generic-angle, named-import brace, named-import paths, named-import closing paths, single-argument attributes, attribute argument lists, inline attribute item forms, stacked inline attribute item forms, macro block bodies, ambient/namespace import paths, extern type declarations, extern var declarations, extern function declarations, function bodies, module bodies, module body member lists, map-literal brace, match-arm brace, record-declaration brace comma lists, record field type-annotation union pipe lists, return expressions, break expressions, await/spawn operand expressions, test/bench declaration headers, test/bench bodies, assignment expressions, for iterator headers, for bodies, while condition headers, if/else-if condition headers, match scrutinee headers, match guard headers, unguarded match arm bodies, top-level parenthesized arrow closure bodies, explicit trailing closure bodies, implicit trailing closure bodies, anonymous function expression headers, async block bodies, block expression bodies, loop bodies, else bodies, if bodies, while bodies, type-alias union pipe lists, var initializer expressions, var type-annotation union pipe lists, parameter type-annotation union pipe lists including full multi-parameter layouts, function return union pipe lists, arrow closure return union pipe lists, interface/extend declaration headers, struct declaration headers, type-alias declaration headers, interface/extend bound plus lists, interface/extend body member lists, generic type-parameter bound plus lists including full multi-parameter layouts, cast chains, method chains, logical chains, single logical expressions, comparison expressions, additive chains, single additive expressions, multiplicative chains, single multiplicative expressions, shift chains, single shift expressions, bitwise-AND chains, single bitwise-AND expressions, bitwise-XOR chains, and bitwise-OR chains at token boundaries, and ensures a single trailing newline. A string/comment-
+      while preserving comment text exactly, keeps brace bodies nested under
+      call/index delimiters (including multiline async closures, async blocks
+      passed to calls, plain block expressions, and block-form macro invocations)
+      indented from the opened brace rather than the outer call delimiter, wraps long parenthesized,
+      bracketed, type-led brace, generic-angle, named-import brace, named-import paths, named-import closing paths, single-argument attributes, attribute argument lists, inline attribute item forms, stacked inline attribute item forms, macro block bodies, ambient/namespace import paths, extern type declarations, extern var declarations, extern function declarations, function bodies, module bodies, module body member lists, map-literal brace, match-arm brace, record-declaration brace comma lists, record field type-annotation union pipe lists, return expressions, break expressions, await/spawn operand expressions, test/bench declaration headers, test/bench bodies, assignment expressions, for iterator headers, for bodies, while condition headers, if/else-if condition headers, match scrutinee headers, match guard headers, unguarded match arm bodies, top-level parenthesized arrow closure bodies, explicit trailing closure bodies, implicit trailing closure bodies, anonymous function expression headers, async block bodies, block expression bodies, loop bodies, else bodies, if bodies, while bodies, type-alias union pipe lists, var initializer expressions, var type-annotation union pipe lists, parameter type-annotation union pipe lists including full multi-parameter layouts, function return union pipe lists, arrow closure return union pipe lists, interface/extend declaration headers, struct declaration headers, type-alias declaration headers, interface/extend bound plus lists, interface/extend body member lists, generic type-parameter bound plus lists including full multi-parameter layouts, cast chains, single cast expressions, method chains, single method expressions, logical chains, single logical expressions, comparison expressions, single comparison expressions, additive chains, single additive expressions, multiplicative chains, single multiplicative expressions, shift chains, single shift expressions, bitwise-AND chains, single bitwise-AND expressions, bitwise-XOR chains, single bitwise-XOR expressions, bitwise-OR chains, and single bitwise-OR expressions at token boundaries, and ensures a single trailing newline. A string/comment-
+      Long parenthesized call/argument-list code with a trailing `//` comment
+      or balanced trailing `/* ... */` block comment wraps by formatting the
+      code fragment and reattaching the exact comment text to the final wrapped
+      line. A string/comment-
       aware single scan computes each line's bracket depth (brackets inside
       strings / `//` / nested `/* */` are ignored; block-comment interiors are left
       verbatim). Broader wrapping contexts remain conservative follow-up work. Every reformat is verified by
@@ -2562,13 +4543,22 @@ The tracing GC is functionally complete for single-threaded programs.
       comment trivia** (same kinds + text), so `fmt` can only change whitespace,
       never code or comments (it refuses to write otherwise). `fmt <file|dir>` formats in place (recurses dirs,
       skipping hidden/`target`); `--check` lists unformatted files and exits
-      non-zero (CI gate). Idempotent; verified across all 22 examples (0 token-
-      stream violations; formatted output runs identically). 166 unit + 65 CLI
-      tests + 67 LSP tests cover formatting/token-safety. Follow-up: broaden line
-      wrapping beyond parenthesized/bracketed/type-led brace/generic-angle/named-import brace/named-import paths/named-import closing paths/single-argument attributes/attribute argument lists/inline attribute item forms/stacked inline attribute item forms/macro block bodies/ambient-namespace import paths/extern type declarations/extern var declarations/extern function declarations/function declaration headers/function bodies/module declaration headers/module bodies/module body member lists/interface-or-extend declaration headers/struct declaration headers/type-alias declaration headers/map-literal brace/match-arm brace/record-declaration brace comma lists/record field type-annotation union pipe lists/return expressions/break expressions/await/spawn operand expressions/test/bench declaration headers/test/bench bodies/assignment expressions/for iterator headers/for bodies/while condition headers/if/else-if condition headers/match scrutinee headers/match guard headers/unguarded match arm bodies/top-level parenthesized arrow closure bodies/explicit trailing closure bodies/implicit trailing closure bodies/anonymous function expression headers/async block bodies/block expression bodies/loop bodies/else bodies/if bodies/while bodies/type-alias union pipe lists/var initializer expressions/var type-annotation union pipe lists/parameter type-annotation union pipe lists, including full multi-parameter layouts, function return union pipe lists/arrow closure return union pipe lists/interface/extend declaration headers, struct declaration headers, type-alias declaration headers, interface/extend bound plus lists/interface-or-extend body member lists/generic type-parameter bound plus lists, including full multi-parameter layouts/cast chains/method chains/logical chains/single logical expressions/comparison expressions/additive chains/single additive expressions/multiplicative chains/single multiplicative expressions/shift chains/single shift expressions/bitwise-AND chains/single bitwise-AND expressions/bitwise-XOR chains/bitwise-OR chains. The formatter lives in `compiler::fmt` (shared), and the **LSP exposes it as a
+      non-zero (CI gate); `--emit stdout` requires a single `.otter` file,
+      prints only the formatted source, and leaves the file untouched for editor
+      format-on-save integrations. Idempotent; verified across all 22 examples (0 token-
+      stream violations; formatted output runs identically). Focused compiler,
+      CLI, and LSP tests cover formatting/token-safety, including control
+      keywords before unary conditions/scrutinees and a single
+      comparison-expression guard that wraps only the top-level comparison and
+      leaves nested comparison-like operands intact. CLI coverage also pins
+      user-visible normalization of async generic return types and async
+      closure arrows from malformed input such as `Future < null >` and
+      `Task.spawn(()async => { ... })`, including generic return types inside
+      function-type fields such as `(i64) => Future<i64>`. Follow-up: broaden line
+      wrapping beyond parenthesized/bracketed/type-led brace/generic-angle/named-import brace/named-import paths/named-import closing paths/single-argument attributes/attribute argument lists/inline attribute item forms/stacked inline attribute item forms/macro block bodies/ambient-namespace import paths/extern type declarations/extern var declarations/extern function declarations/function declaration headers/function bodies/module declaration headers/module bodies/module body member lists/interface-or-extend declaration headers/struct declaration headers/type-alias declaration headers/map-literal brace/match-arm brace/record-declaration brace comma lists/record field type-annotation union pipe lists/return expressions/break expressions/await/spawn operand expressions/test/bench declaration headers/test/bench bodies/assignment expressions/for iterator headers/for bodies/while condition headers/if/else-if condition headers/match scrutinee headers/match guard headers/unguarded match arm bodies/top-level parenthesized arrow closure bodies/explicit trailing closure bodies/implicit trailing closure bodies/anonymous function expression headers/async block bodies/block expression bodies/loop bodies/else bodies/if bodies/while bodies/type-alias union pipe lists/var initializer expressions/var type-annotation union pipe lists/parameter type-annotation union pipe lists, including full multi-parameter layouts, function return union pipe lists/arrow closure return union pipe lists/interface/extend declaration headers, struct declaration headers, type-alias declaration headers, interface/extend bound plus lists/interface-or-extend body member lists/generic type-parameter bound plus lists, including full multi-parameter layouts/cast chains/single cast expressions/method chains/single method expressions/logical chains/single logical expressions/comparison expressions/single comparison expressions/additive chains/single additive expressions/multiplicative chains/single multiplicative expressions/shift chains/single shift expressions/bitwise-AND chains/single bitwise-AND expressions/bitwise-XOR chains/single bitwise-XOR expressions/bitwise-OR chains/single bitwise-OR expressions. The formatter lives in `compiler::fmt` (shared), and the **LSP exposes it as a
       `document_formatting` provider** (format-on-save in the editor): the handler
       formats the open buffer, verifies the token-preservation invariant, and
-      returns a whole-document edit (declining if it would change tokens). 67 LSP
+      returns a whole-document edit (declining if it would change tokens). 72 LSP
       tests; the VS Code extension picks the capability up automatically.
 - [x] **LSP folding ranges**: the server advertises `textDocument/foldingRange`
       and returns deterministic ranges for multiline `{...}` code blocks plus
@@ -2718,7 +4708,7 @@ current-isolate pointer). Staged so each step is shippable:
       already emits; `max_stack_depth` guard; `Stats` from the per-isolate accounting.
       Earlier stages run on the shared global heap with best-effort limits and say so.
 - [ ] **Stage 7 — async entries (`docs/26` §7).** Detect an `async` guest entry
-      (Future-returning) and drive it on the isolate's executor, completing the
+      (Future-returning) and poll it on the isolate's executor, completing the
       host's `await` when the guest future resolves (preserves the no-user-visible-
       `block_on` rule). Interacts with the M:N executor work (Phase 5 deferral).
 - [ ] **Stage 8 — cold-start caching (`docs/26` §9).** A content-addressed
@@ -2737,7 +4727,7 @@ current-isolate pointer). Staged so each step is shippable:
   error), `@Bridge` round-trips (host↔guest, all bridge types), host bindings +
   bridge channels, arbitrary-entry invocation, per-isolate heap independence,
   hard memory cap → `OutOfMemory`, timeout → `Timeout` (incl. tight-loop latency),
-  guest panic containment, async entry driven from a host `await`; JIT + native
+  guest panic containment, async entry polled from a host `await`; JIT + native
   parity + GC-stress. Keep `docs/26`, examples, LSP and ROADMAP consistent.
 
 ## Current state (verified 2026-05-30)
@@ -2803,6 +4793,47 @@ feature, JIT≡native byte-identical and GC-stress clean.
    production-ready scope.
 
 **Recently completed:**
+- **Formatter control-keyword unary spacing: DONE.** The shared formatter now
+  inserts a required space between condition/scrutinee-leading keywords and
+  unary expression starters, so forms such as `if!done`, `while!done`, and
+  `match!done` format to `if !done`, `while !done`, and `match !done` while
+  preserving the existing token/comment safety gate. Added shared formatter,
+  CLI `fmt`, and LSP formatting regressions, rebuilt the CLI, and reformatted
+  the bundled stdlib source tree to remove the old spacing residue.
+- **Formatter statement-keyword unary spacing: DONE.** The same shared spacing
+  rule now covers statement/operand-leading keywords, so `return-1`, `break-2`,
+  `await!ready`, and `spawn!ready` normalize to `return -1`, `break -2`,
+  `await !ready`, and `spawn !ready` without changing tokens or comments.
+  Added shared formatter, CLI `fmt`, and LSP formatting regressions.
+- **Formatter async closure/block body indentation: DONE.** Multiline brace bodies
+  nested under call/index delimiters now indent from the opened brace rather
+  than inheriting an extra outer delimiter level, so `Task.spawn(() async => {
+  ... })`, async blocks passed to calls, and plain block expressions such as
+  `drive({ ... })`, plus block-form macro invocations such as
+  `drive(@Trace("op") { ... })`, keep ordinary block indentation. Added shared formatter, CLI
+  `fmt`, and LSP formatting regressions, plus long async/block/macro-expression
+  fallback expectations.
+- **Task.spawn example formatter refresh: DONE.** `examples/task_spawn.otter`
+  has been reformatted with the corrected multiline async closure indentation,
+  and was re-run through `otter_fusion run` to verify the plain-task,
+  async-task, and cancelled-task outputs still match.
+- **Example formatter sweep after brace-body fixes: DONE.** The remaining
+  example-format drift was cleaned in `async_thread_spawn.otter`,
+  `generic_methods.otter`, `interface_devirt_bench.otter`, and
+  `worker_panic.otter`, covering async closure indentation, `for x in (`,
+  and match-body indentation. `otter_fusion fmt examples --check` now reports
+  all examples formatted, and the four touched examples were run directly.
+- **Formatter trailing comment wrapping: DONE.** Long call/argument-list lines
+  with a trailing `//` comment or balanced trailing `/* ... */` block comment
+  now wrap the code fragment while preserving the exact comment text on the
+  final wrapped line. Added shared formatter, CLI `fmt`, and LSP formatting
+  regressions under the token/comment safety gate.
+- **Reserved `std:sync` channel constructors e2e coverage: DONE.** The planned
+  bounded/MPMC constructor names remain exported for diagnostics, but using
+  `channel_bounded`, `channel_mpmc`, or `channel_mpmc_bounded` as a function
+  value, named call, or namespace-qualified call now has an e2e compile-error
+  regression proving the compiler emits planned-feature diagnostics instead of
+  executing placeholder Otter bodies.
 - **Interface direct/branch fast paths: DONE.** HIR codegen now recognizes
   interface values constructed directly from concrete structs, and
   interface-valued `if`/`match` expressions, when they are immediately consumed
@@ -2901,15 +4932,15 @@ feature, JIT≡native byte-identical and GC-stress clean.
   async mutex — a `locked` flag + a **FIFO** waiter queue of `(waker_data, wake_fn)`; a
   contended acquire registers the executor's waker and returns `Pending` (no OS-thread
   parking), so the lock is fair and starvation-free. The lock is built as a runtime
-  `Future` (`lang_shared_lock_future`) the caller's `await` drives: acquire → run the body
-  closure under the lock (driving an `async` body's future to completion, so the lock is
+  `Future` (`lang_shared_lock_future`) the caller awaits: acquire → run the body
+  closure under the lock (awaiting an `async` body's future until it resolves, so the lock is
   HELD across the body's `await`s — fixing the release-before-await footgun) → clone the
   result out *while held* (via a codegen-emitted clone thunk) → release. Cancel/panic
   release via a per-thread held-lock set (`lang_shared_release_all`) — drained by the
   **worker-panic boundary** (now done; see its entry above) so a panicking lock body
-  releases the lock with no poisoning. Only *synchronous* `Thread.spawn`
+  releases the lock with no poisoning. Only ordinary non-async `Thread.spawn`
   workers cannot lock (the narrowed compile error → use an *async* `Thread.spawn` worker or
-  the `spawn` keyword); an async worker drives its future with a real executor and may lock.
+  the `spawn` keyword); an async worker polls its future with a real executor and may lock.
   A new sema escape/detachment taint pass
   rejects references that outlive the body (`.clone()` detaches; a returned reference is
   cloned at the boundary). Tests: e2e `tests/cases/concurrency/*` (mutual exclusion under
@@ -2917,14 +4948,15 @@ feature, JIT≡native byte-identical and GC-stress clean.
   ×4, clone hatch, return clone-out, GC-stress) + runtime/sema/backend unit tests.
   *Limitation:* a float-typed protected value/result is rejected with a clear error
   (uniform integer/pointer body ABI) — wrap in a struct. *Deferred:* `RwLock<T>` (separate
-  primitive).
+  primitive whose wait-capable read/write acquisition must be async/future-returning; immediate
+  probes must be explicit non-waiting `try_*` helpers).
 - **`@RefCounted` — opt-in deterministic reference counting (`docs/16` §8.1): DONE.**
   Generalizes the channel-endpoint carve-out into a user-facing object kind: atomic
-  strong count, synchronous `Drop` + free at count 0, ARC retain/release across
+  strong count, immediate non-waiting `Drop` + free at count 0, ARC retain/release across
   codegen, tracing GC as the cycle backstop. See the Phase-5 GC/Drop entry. Deferred:
   `Weak<T>`; deterministic (vs GC-timed) drop for collection/`union`-held values.
 
-**Remaining features / deferrals (each test-gated when picked up):**
+**Advanced deferral audit (remaining entries are explicitly marked):**
 - **`await` in a short-circuit operand / loop condition** — genuinely conditional
   suspension — **done.** `sema/anf.rs` rewrites the `&&`/`||` right operand and the
   `while` condition as their own *scope* (rather than hoisting the `await` out),
@@ -2935,8 +4967,11 @@ feature, JIT≡native byte-identical and GC-stress clean.
   refinements: cross-*package* (`pkg:`) compiled macro plugins; precise spans
   rendered into macro-generated source; macro-using-macro at the definition site;
   privileged build-script macros (§future).
-- **Channel close on last-`Sender` drop** + `Receiver: Iterator` termination —
-  needs *deterministic* `Drop` (tension with GC-timed best-effort `Drop`).
+- **Channel close on last-`Sender` drop** + async receiver iteration termination —
+  **done.** `Sender`/`Receiver` endpoint handles are deterministically released,
+  last-sender close wakes/drains receivers to `ChannelClosed`, and receiver
+  `for await` loops terminate after buffered messages are drained. See the Phase-5
+  channel entry and the `@RefCounted` carve-out/generalization.
 - **Worker-panic isolation** — **done** (`Thread.spawn`, `spawn` keyword, and
   executor-multiplexed `Task.spawn`): a panicking worker/task fails only itself
   (surfaces as `Panicked` on `join`, or re-propagates at a `spawn` awaiter).
@@ -2950,8 +4985,8 @@ feature, JIT≡native byte-identical and GC-stress clean.
   lazily-started M:N worker pool with per-worker queues, stealing, a global
   injector, task-local held-`Shared` lock tracking, poll-site panic boundaries,
   and duplicate-poll suppression for wake-during-poll futures; `std:task` is
-  importable and `Task.spawn` now accepts both sync `() => R` and async
-  `() => Future<R>` closures, returning a task-specific `std:task::JoinHandle<R>`
+  importable and `Task.spawn` now accepts both ordinary non-async `() => R` and async
+  `() => Future<R>` closures, returning a task-specific `std:task` `JoinHandle<R>`
   with `join`/`detach`/`cancel`/`abort` and scheduling them on the executor.
   The executor sizes from hardware parallelism with a higher bounded cap and an
   `OTTER_FUSION_TASK_WORKERS=N` runtime override for stress/performance tuning.
@@ -2965,13 +5000,13 @@ feature, JIT≡native byte-identical and GC-stress clean.
   cancelling a pending `timeout` future cascades cancellation into its inner
   loser future. `Task.spawn` handle cancellation uses the same path and `join()`
   now resolves to `Joined<R> | Panicked | Cancelled`; the OS-thread
-  `std:thread::JoinHandle<R>` remains distinct and intentionally has no
+  `std:thread` `JoinHandle<R>` remains distinct and intentionally has no
   `cancel()` or `abort()` method. `timeout(fut, ms)` now calls the same
   cancellation hook when the timer wins, so cancellable loser futures such as
   `spawn EXPR` release their suspended task state. `Thread.spawn` remains the
   dedicated OS-thread primitive.
-  Tests added for sync and async `Task.spawn`, by-value capture snapshots for
-  both sync and async `Task.spawn` closures (JIT/native), compiler/e2e rejection
+  Tests added for ordinary non-async and async `Task.spawn`, by-value capture snapshots for
+  both ordinary non-async and async `Task.spawn` closures (JIT/native), compiler/e2e rejection
   of non-shareable mutable captures through `Task.spawn`, async `Task.spawn` with
   `Shared.lock`, spawn-future cancellation releasing a held lock, mass
   `spawn EXPR` future cancellation releasing captured sender endpoints so
@@ -2979,7 +5014,7 @@ feature, JIT≡native byte-identical and GC-stress clean.
   task-handle
   `cancel()`/`abort()` joining as `Cancelled`, `abort()` sharing the same
   suspended-state cleanup path as `cancel()` and releasing task-held `Shared`
-  locks (JIT + native), sync and async `Task.spawn`
+  locks (JIT + native), ordinary non-async and async `Task.spawn`
   panics joining as `Panicked` while a sibling task completes (JIT + native),
   one-worker `Task.spawn` panic-after-await while holding `Shared` releasing the
   lock and allowing a sibling executor task to complete (JIT + native),
@@ -2996,7 +5031,7 @@ feature, JIT≡native byte-identical and GC-stress clean.
   multiple join futures and 128 spawned waiter tasks concurrently awaiting one
   `Task.spawn` join handle all waking as `Cancelled` after handle cancellation
   (JIT + native),
-  sync-closure `Task.spawn`
+  ordinary non-async closure `Task.spawn`
   cancellation remaining cooperative (no forced `Cancelled` without an `await`
   suspension point) with a runtime guard against treating closure envs as future
   cleanup boxes, active-poll cancellation taking effect only once the poll
@@ -3040,12 +5075,12 @@ feature, JIT≡native byte-identical and GC-stress clean.
   across awaits under stress GC while channel close proves captured endpoints
   release (JIT + native), JIT executor/GC-stress coverage for
   task-held `Shared` locks, native/JIT parity for the non-stress task cases,
-  explicit native/JIT parity for `Task.spawn` sync workers, async workers,
+  explicit native/JIT parity for `Task.spawn` ordinary non-async workers, async workers,
   `Shared.lock`, `JoinHandle.join()`, and cancellation joining as `Cancelled`,
   negative compiler/e2e coverage proving OS-thread `JoinHandle` has neither
   `cancel()` nor `abort()`, LSP hover/type-table coverage for `Task.spawn`
   returning `JoinHandle<R>` and task-only `join`/`cancel`/`abort` method types
-  including `Cancelled`, `examples/task_spawn.otter` covering sync workers,
+  including `Cancelled`, `examples/task_spawn.otter` covering ordinary non-async workers,
   async workers, `Shared.lock`, and cancelled joins, native/JIT parity for small executor fanout, 1000-task,
   4096-task, 8192-task, 16384-task, and 32768-task JIT/native executor fanout through the `spawn`
   keyword, 2048- and 4096-task unevenly-yielding `spawn` keyword tasks sending through cloned
@@ -3140,14 +5175,14 @@ feature, JIT≡native byte-identical and GC-stress clean.
   runtime futures that park executor tasks, run the target stdio operation on a
   helper, and wake through the shared cancellable reactor, with cancellation
   draining reactor waiters and managed result roots plus JIT/native stdout/stderr
-  parity and stdin e2e coverage.
+  parity and direct stdin/stdout/stderr async e2e coverage.
   Target shape:
   `Task.spawn` has the same
-  surface as `Thread.spawn` (sync or async closure → `JoinHandle<R>` with
+  surface as `Thread.spawn` (ordinary non-async or async closure → `JoinHandle<R>` with
   `join`/`detach`) and the same safety model (by-value capture snapshots for
   cross-task isolation + `Shared<T>`/channels for shared state), but scheduled on
-  the executor instead of a dedicated OS thread. **Complements, not replaces,**
-  `Thread.spawn` (kept for dedicated/blocking work). **Folds in cancellation
+  the executor instead of one OS thread per worker. **Complements, not replaces,**
+  `Thread.spawn` (kept for CPU-heavy or OS-thread-affine work). **Folds in cancellation
   teeth** (`docs/21` §8): on the executor, `future.cancel()` stops polling the task
   and drops its state machine (running drops, releasing held `Shared` locks /
   endpoints via the per-task release path); `Task.spawn`'s
@@ -3156,23 +5191,26 @@ feature, JIT≡native byte-identical and GC-stress clean.
   path. Cancellation is **cooperative** (effective at the next `await`) — no
   forceful kill; a `Thread.spawn` OS-thread worker has no hard kill (cooperative
   `Shared<bool>`/channel signal only). Explicitly *not* stackful
-  goroutine-style green threads (transparent blocking, no `async`/`await` coloring):
-  that is a second concurrency model in tension with the explicit-async design and
-  needs Go-runtime-level syscall handoff + preemption.
+  goroutine-style green threads with implicit suspension and no explicit async
+  surface: that is a second concurrency model in tension with the
+  explicit-async design and needs Go-runtime-level syscall handoff + preemption.
 - **FFI tail — done:** `@CallConv` decorator; a managed `CString`/`Buffer` handle
   type with `Drop`; `@Variadic` via `libffi` (Cranelift has no portable varargs
   ABI, so variadic calls are marshalled through `ffi_prep_cif_var`/`ffi_call` —
   see the completed-work entry above).
 - **Generic `Drop` types; generic-interface default methods; cross-module
-  interface default methods** — currently scoped out with clear errors, not
-  miscompiles.
+  interface default methods** — **done.** Generic `Drop` finalizers are
+  registered per monomorphization, generic-interface defaults substitute
+  interface type parameters into copied signatures and bodies, and cross-module
+  defaults are expanded from imported `pub` interfaces with ambiguity preserved
+  as diagnostics rather than silently selecting the wrong body.
 - **Package manager advanced:** advanced deferrals are complete as of multi-major
   coexistence; keep hardening registry/package-manager behavior through tests.
 - **GC throughput:** per-thread TLABs **done** (~2× multi-thread alloc); the full
   MMTk Immix move remains (behavior-neutral).
-- **`fmt` follow-up:** broaden line wrapping beyond parenthesized/bracketed/type-led brace/generic-angle/named-import brace/named-import paths/named-import closing paths/single-argument attributes/attribute argument lists/inline attribute item forms/stacked inline attribute item forms/macro block bodies/ambient-namespace import paths/extern type declarations/extern var declarations/extern function declarations/function declaration headers/function bodies/module declaration headers/module bodies/module body member lists/interface-or-extend declaration headers/struct declaration headers/type-alias declaration headers/map-literal brace/match-arm brace/record-declaration brace comma lists/record field type-annotation union pipe lists/return expressions/break expressions/await/spawn operand expressions/test/bench declaration headers/test/bench bodies/assignment expressions/for iterator headers/for bodies/while condition headers/if/else-if condition headers/match scrutinee headers/match guard headers/unguarded match arm bodies/top-level parenthesized arrow closure bodies/explicit trailing closure bodies/implicit trailing closure bodies/anonymous function expression headers/async block bodies/block expression bodies/loop bodies/else bodies/if bodies/while bodies/type-alias union pipe lists/var initializer expressions/var type-annotation union pipe lists/parameter type-annotation union pipe lists, including full multi-parameter layouts, function return union pipe lists/arrow closure return union pipe lists/interface/extend declaration headers, struct declaration headers, type-alias declaration headers, interface/extend bound plus lists/interface-or-extend body member lists/generic type-parameter bound plus lists, including full multi-parameter layouts/cast chains/method chains/logical chains/single logical expressions/comparison expressions/additive chains/single additive expressions/multiplicative chains/single multiplicative expressions/shift chains/single shift expressions/bitwise-AND chains/single bitwise-AND expressions/bitwise-XOR chains/bitwise-OR chains
+- **`fmt` follow-up:** broaden line wrapping beyond parenthesized/bracketed/type-led brace/generic-angle/named-import brace/named-import paths/named-import closing paths/single-argument attributes/attribute argument lists/inline attribute item forms/stacked inline attribute item forms/macro block bodies/ambient-namespace import paths/extern type declarations/extern var declarations/extern function declarations/function declaration headers/function bodies/module declaration headers/module bodies/module body member lists/interface-or-extend declaration headers/struct declaration headers/type-alias declaration headers/map-literal brace/match-arm brace/record-declaration brace comma lists/record field type-annotation union pipe lists/return expressions/break expressions/await/spawn operand expressions/test/bench declaration headers/test/bench bodies/assignment expressions/for iterator headers/for bodies/while condition headers/if/else-if condition headers/match scrutinee headers/match guard headers/unguarded match arm bodies/top-level parenthesized arrow closure bodies/explicit trailing closure bodies/implicit trailing closure bodies/anonymous function expression headers/async block bodies/block expression bodies/loop bodies/else bodies/if bodies/while bodies/type-alias union pipe lists/var initializer expressions/var type-annotation union pipe lists/parameter type-annotation union pipe lists, including full multi-parameter layouts, function return union pipe lists/arrow closure return union pipe lists/interface/extend declaration headers, struct declaration headers, type-alias declaration headers, interface/extend bound plus lists/interface-or-extend body member lists/generic type-parameter bound plus lists, including full multi-parameter layouts/cast chains/single cast expressions/method chains/single method expressions/logical chains/single logical expressions/comparison expressions/single comparison expressions/additive chains/single additive expressions/multiplicative chains/single multiplicative expressions/shift chains/single shift expressions/bitwise-AND chains/single bitwise-AND expressions/bitwise-XOR chains/single bitwise-XOR expressions/bitwise-OR chains/single bitwise-OR expressions
   (ordinary comment-trivia preservation, common spacing, sensitive comment
-  boundary spacing, and the first seventy-seven wrapping slices are in place).
+  boundary spacing, and the first eighty-one wrapping slices are in place).
 - **Embedding engine (`std:engine`, `docs/26`)** — run guest Otter Fusion inside a
   sandboxed isolate (capability whitelist, host bindings, `@Bridge` copy-by-value
   ABI, per-isolate heap/GC + hard limits). Design done (`docs/26`, Phase 7);

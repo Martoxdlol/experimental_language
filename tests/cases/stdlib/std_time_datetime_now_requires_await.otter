@@ -1,0 +1,12 @@
+//@ kind: compile-error
+//@ description: std:time local and wall-clock DateTime helpers return futures and must be awaited
+//@ stderr: expected `DateTime`, found `Future<DateTime>`
+//@ stderr: expected `DateTime`, found `Future<DateTime>`
+//@ stderr: expected `TimeError | DateTime`, found `Future<TimeError | DateTime>`
+import { DateTime, SystemTime, TimeError } from "std:time";
+
+function main() {
+  var utc: DateTime = DateTime.now_utc();
+  var local: DateTime = DateTime.now_local();
+  var converted: DateTime | TimeError = DateTime.from_system_time_local(SystemTime.unix_epoch());
+}

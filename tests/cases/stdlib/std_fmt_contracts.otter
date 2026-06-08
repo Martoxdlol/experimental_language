@@ -7,6 +7,7 @@
 //~ bytes-sink=bytes[72,105,195,169,33] text=Hié!
 //~ fmt-error=bad format
 //~ true true FmtError { message: "bad format" }
+import { Future } from "core:prelude";
 import { println } from "std:io";
 import { Clone, Eq, Hash, ToStr } from "core:prelude";
 import { Bytes } from "std:bytes";
@@ -54,15 +55,15 @@ function write_to_sink(sink: FmtSink, text: str): null | FmtError {
   sink.write_str(text)
 }
 
-function main() {
+function main(): Future<null> async {
   var p = Point { x: 3, y: 4 };
   var sink = Capture { value: "" };
   var written = sink.write_str(render_tostr(p));
 
-  println("display=${render_display(p)}");
-  println("debug=${render_debug(p)}");
+  await println("display=${render_display(p)}");
+  await println("debug=${render_debug(p)}");
   if written is null {
-    println("sink=${sink.value}");
+    await println("sink=${sink.value}");
   }
 
   var bytes = Bytes.new();
@@ -70,14 +71,15 @@ function main() {
   var more_bytes = bytes.write_str("!");
   if bytes_written is null && more_bytes is null {
     match bytes.decode_utf8() {
-      str text => println("bytes-sink=${bytes.to_str()} text=${text}"),
-      _ => println("bytes-sink-decode-error"),
+      str text => await println("bytes-sink=${bytes.to_str()} text=${text}"),
+      _ => await println("bytes-sink-decode-error"),
     }
   }
 
   var fmt_error = FmtError { message: "bad format" };
   var error: Error = fmt_error;
-  println("fmt-error=${error.message()}");
+  await println("fmt-error=${error.message()}");
   var fmt_error_copy = fmt_error.clone();
-  println("${fmt_error == fmt_error_copy} ${fmt_error.hash() == fmt_error_copy.hash()} ${render_debug(fmt_error)}");
+  await println("${fmt_error == fmt_error_copy} ${fmt_error.hash() == fmt_error_copy.hash()} ${render_debug(fmt_error)}");
+  null
 }

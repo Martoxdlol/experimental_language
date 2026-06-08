@@ -1,0 +1,12 @@
+//@ kind: compile-error
+//@ description: Task JoinHandle.detach is an immediate fire-and-forget control, not an async join operation
+//@ stderr: `await` requires a `Future`
+
+import { Future } from "core:prelude";
+import { Task } from "std:task";
+
+function main(): Future<null> async {
+  var handle = Task.spawn(() => 7);
+  var _detached = await handle.detach();
+  null
+}

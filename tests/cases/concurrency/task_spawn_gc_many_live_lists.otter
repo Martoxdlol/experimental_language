@@ -5,8 +5,8 @@
 //@ description: many Task.spawn workers keep managed List locals live across awaits while stress GC runs on a small M:N executor
 //@ stdout:
 //~ total=98688
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { List } from "core:collections";
 import { Task, JoinHandle, Joined, Panicked, Cancelled } from "std:task";
 import { yield_now } from "std:async";
@@ -45,5 +45,6 @@ function main(): Future<null> async {
     j = j + 1;
   }
 
-  println("total=${total }");
+  await println("total=${total}");
+  null
 }

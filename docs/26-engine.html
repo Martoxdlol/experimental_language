@@ -82,7 +82,7 @@
     <li><a href="#bindings">Host bindings — virtual modules</a></li>
     <li><a href="#bridge">The bridge ABI — <code>@Bridge</code> structs</a></li>
     <li><a href="#channels">Bridge channels &amp; shared state</a></li>
-    <li><a href="#invoke">Invoking any entry — sync &amp; async</a></li>
+    <li><a href="#invoke">Invoking any entry — non-async &amp; async</a></li>
     <li><a href="#isolation">Resource control &amp; per-isolate runtime</a></li>
     <li><a href="#perf">Cold starts &amp; caching</a></li>
     <li><a href="#security">Security model</a></li>
@@ -149,12 +149,13 @@ forbidden imports before any code runs), <strong>ABI</strong> (only declared
     <g transform="translate(540, 64)" font-size="11">
       <text y="0">import { now } from "host:env"</text>
       <text y="20">import { println } from "std:io"</text>
-      <text y="48">@Bridge struct Req { path: str }</text>
-      <text y="68">@Bridge struct Resp { code: i32 }</text>
-      <text y="92">function handle(r: Req): Resp {</text>
-      <text y="112">&#160;&#160;println("t=${now()}")</text>
-      <text y="132">&#160;&#160;Resp { code: 200 }</text>
-      <text y="152">}</text>
+      <text y="40">import { Future } from "core:async"</text>
+      <text y="64">@Bridge struct Req { path: str }</text>
+      <text y="84">@Bridge struct Resp { code: i32 }</text>
+      <text y="108">function handle(r: Req): Future&lt;Resp&gt; async {</text>
+      <text y="128">&#160;&#160;await println("t=${now()}")</text>
+      <text y="148">&#160;&#160;Resp { code: 200 }</text>
+      <text y="168">}</text>
     </g>
   </svg>
   <div class="diagram-caption">The host configures, loads, and invokes; the guest sees only whitelisted modules, host bindings, and bridge values.</div>
@@ -204,7 +205,7 @@ var resp = await iso.invoke(unit, "handle", [req])   // Resp | EngineError
 
 // 4. Observe.
 var s = iso.stats()
-println("peak heap=${s.peak_heap_bytes}  elapsed=${s.elapsed_ms}ms")
+await println("peak heap=${s.peak_heap_bytes}  elapsed=${s.elapsed_ms}ms")
 
 // 5. Dispose — frees the isolate's heap and registries (also runs on Drop).
 iso.dispose()
@@ -374,9 +375,11 @@ parameter.</p>
 incremental results, or a long-lived back-channel, the host creates a
 <strong>bridge channel</strong> and hands an endpoint to the guest as a bound value.
 Bridge channels carry bridge-compatible messages and reuse the channel semantics of
-<code>docs/20</code> §2 (FIFO, blocking <code>recv</code>, close-on-last-sender), but
-are managed by the <em>engine</em> layer so they can span the host↔isolate boundary
-even though each isolate otherwise has its own channel registry (§8).</p>
+<code>docs/20</code> §2: FIFO delivery, immediate non-blocking
+<code>send</code>/<code>try_recv</code>, async <code>recv()</code> futures,
+<code>for await</code> receiver drains, and close-on-last-sender. They are managed by
+the <em>engine</em> layer so they can span the host↔isolate boundary even though
+each isolate otherwise has its own channel registry (§8).</p>
 
 <pre><code>// Host: make a bridge channel and pass the receiver end into the guest.
 var (tx, rx) = iso.bridge_channel&lt;LogLine&gt;()    // (Sender&lt;LogLine&gt;, Receiver&lt;LogLine&gt;)
@@ -399,26 +402,26 @@ be exposed as a bound value when host and guest need shared mutable state behind
 async lock; the shared cell, like a bridge channel, is engine-managed.</p>
 
 <!-- =========================================================== -->
-<h2 id="invoke">7. Invoking any entry — sync &amp; async</h2>
+<h2 id="invoke">7. Invoking any entry — non-async &amp; async</h2>
 
 <p>Any <code>pub</code> function in the loaded unit is an entry; there is no special
 <code>main</code>. <code>invoke</code> takes the entry name and a list of bridged
 arguments, marshals them in, runs the function, and marshals the bridged result out.</p>
 
-<pre><code>// Synchronous entry.
+<pre><code>// Non-async entry.
 var resp = iso.invoke(unit, "handle", [req])           // Response | EngineError
 
-// Asynchronous entry — the guest function is `async`; the host awaits it.
+// Async entry — the guest function is `async`; the host awaits it.
 var resp = await iso.invoke(unit, "handle_async", [req])
 
 // Introspection: discover entries and their signatures before calling.
 for e in unit.entries() {
-    println("${e.name}(${e.arity}) -> ${e.returns}")
+    await println("${e.name}(${e.arity}) -> ${e.returns}")
 }
 </code></pre>
 
-<p>Sync and async entries use the same call; the engine detects an <code>async</code>
-entry (its return type is a <code>Future</code>) and drives it on the isolate's
+<p>Non-async and async entries use the same call; the engine detects an <code>async</code>
+entry (its return type is a <code>Future</code>) and polls it on the isolate's
 executor, completing the host's <code>await</code> when the guest future resolves.
 This keeps the language's "no user-visible <code>block_on</code>" rule
 (<code>docs/21</code> §6): the host stays in its own async world while the guest runs
@@ -454,7 +457,7 @@ per-isolate <strong>runtime context</strong>. The context is selected by a
 thread-local <em>current isolate</em> pointer, set when a thread enters an isolate's
 guest code and cleared on exit — so generated code needs no extra parameter and the
 hot path stays a thread-local read. Stop-the-world GC operates per isolate (it stops
-only that isolate's mutators), so one isolate collecting or paused never blocks
+only that isolate's mutators), so one isolate collecting or paused never stops
 another.</p>
 
 <h3>Limits</h3>
@@ -471,13 +474,14 @@ another.</p>
 
 <div class="callout good">
   <strong>Cooperative interruption fits the existing design.</strong> The backend
-  already inserts GC safepoints at every loop back-edge and around blocking calls
-  (<code>docs/16</code>). A deadline / cancel flag checked at those same points gives
+  already inserts GC safepoints at every loop back-edge and around private
+  provider/runtime wait boundaries (<code>docs/16</code>). A deadline / cancel flag checked at those same points gives
   timeouts and cancellation almost for free: interruption latency is one loop
   iteration. A straight-line, loop-free, allocation-free snippet is inherently bounded
   and needs no interruption. The one residual case — a deliberately tight inner loop
-  the optimizer collapsed past a back-edge — is bounded by <code>max_alloc_bytes</code>
-  or, if truly necessary, by running the isolate on a thread the host can abandon.
+  the optimizer collapsed past a back-edge — must either remain bounded by
+  <code>max_alloc_bytes</code> or preserve a cooperative safepoint. The engine does not
+  expose a thread-abandon or <code>block_on</code>-style timeout escape hatch.
 </div>
 
 <h3>Measurement</h3>
@@ -496,7 +500,7 @@ direct call into already-compiled machine code. The <strong>cold</strong> path �
 first <code>load</code> of a given source, or the first after a process restart — is
 where the work lives. The design attacks it on two fronts: a persistent
 <em>compiled-artifact cache</em> so a cold start rarely recompiles, and a
-<em>warm isolate pool</em> so a fresh execution context rarely waits.</p>
+<em>warm isolate pool</em> so a fresh execution context rarely pays setup latency.</p>
 
 <h3>Compiled-artifact cache</h3>
 
@@ -670,8 +674,8 @@ best-effort limits and are explicit about it.</p>
     <li><strong>Bridge channels</strong> and <strong>bridged return values</strong>
         carry results and streams; <code>Shared&lt;T&gt;</code> exposes shared mutable
         state.</li>
-    <li><strong>Any <code>pub</code> entry</strong> is callable by name, sync or async,
-        with the host driving an async guest future to completion.</li>
+    <li><strong>Any <code>pub</code> entry</strong> is callable by name, non-async or async,
+        with the host await path polling an async guest future until it resolves.</li>
     <li><strong>Per-isolate runtime state</strong> makes <code>max_heap_bytes</code>,
         <code>max_alloc_bytes</code>, <code>timeout_ms</code>, and <code>max_stack_depth</code>
         real per-isolate walls, with cooperative interruption at existing safepoints

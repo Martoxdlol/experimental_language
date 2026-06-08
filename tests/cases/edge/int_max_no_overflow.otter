@@ -3,10 +3,12 @@
 //@ stdout:
 //~ 9223372036854775806
 //~ -9223372036854775807
+import { Future } from "core:prelude";
 import { println } from "std:io";
-function main() {
+function main(): Future<null> async {
   var max = 9223372036854775807;
-  println("${max - 1}");
+  await println("${max - 1}");
   var min = 0 - max - 1;
-  println("${min + 1}");
+  await println("${min + 1}");
+  null
 }

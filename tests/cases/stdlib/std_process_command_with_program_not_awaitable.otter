@@ -1,0 +1,11 @@
+//@ kind: compile-error
+//@ description: std:process Command.with_program is an immediate pure command value builder
+//@ stderr: `await` requires a `Future`
+
+import { Future } from "core:prelude";
+import { Command } from "std:process";
+
+function main(): Future<null> async {
+  var _command = await Command.new("true").with_program("printf");
+  null
+}

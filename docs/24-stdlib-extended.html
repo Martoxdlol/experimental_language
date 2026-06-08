@@ -195,7 +195,7 @@ library APIs move to <code>std:</code>.</p>
         <rect x="110" width="80" height="20" rx="3" fill="#fff" stroke="#1a4a8a"/><text x="150" y="14" text-anchor="middle">std:rand</text>
         <rect x="200" width="80" height="20" rx="3" fill="#fff" stroke="#1a4a8a"/><text x="240" y="14" text-anchor="middle">std:log</text>
       </g>
-      <text x="60" y="118" font-size="11" class="small">Target-backed std modules implement portable std contracts — e.g. std:fs.File implements std:io.Reader/Writer/Seeker.</text>
+      <text x="60" y="118" font-size="11" class="small">Target-backed std modules expose explicit async surfaces; pure values keep portable contracts.</text>
     </g>
   </svg>
   <div class="diagram-caption"><code>core:</code> is the small privileged substrate. <code>std:</code> carries both portable contracts and target-backed implementations.</div>
@@ -249,8 +249,8 @@ symbols, and implementation kind:</p>
   <thead><tr><th>Kind</th><th>Use for</th><th>Examples</th></tr></thead>
   <tbody>
     <tr><td><code>Otter</code></td><td>Interfaces, value types, adapters, and pure library helpers authored in Otter Fusion.</td><td><code>std:error</code>, <code>std:bytes</code>, <code>std:fmt</code>, <code>std:time.Duration</code>, <code>std:fs.Path</code>, <code>std:net/types</code></td></tr>
-    <tr><td><code>RustBacked</code></td><td>Runtime/compiler intrinsics with a small importable marker surface.</td><td><code>std:io.print</code>, <code>std:io.eprintln</code>, <code>core:prelude.panic</code>, <code>std:process.exit</code>/<code>abort</code></td></tr>
-    <tr><td><code>Mixed</code></td><td>Otter Fusion API definitions layered over Rust runtime primitives.</td><td><code>core:ffi</code>, <code>std:time.Instant</code>, <code>std:time.SystemTime</code>, <code>std:sync</code>, <code>std:thread</code>, <code>std:task</code>, <code>std:async</code>, <code>std:fs.File</code> handles and file helpers, <code>std:process</code> host environment/execution/child helpers, <code>std:rand.OsRng</code>/<code>ThreadRng</code></td></tr>
+    <tr><td><code>RustBacked</code></td><td>Runtime/compiler intrinsics with a small importable marker surface.</td><td><code>core:prelude.panic</code>, <code>std:process.exit</code>/<code>abort</code></td></tr>
+    <tr><td><code>Mixed</code></td><td>Otter Fusion API definitions layered over Rust runtime primitives.</td><td><code>core:ffi</code>, awaitable <code>std:hash.os_keyed_hasher</code>, awaitable <code>std:time.Instant</code>/<code>SystemTime</code> clock reads, <code>std:sync</code>, <code>std:thread</code>, <code>std:task</code>, <code>std:async</code>, awaitable <code>std:fs.File</code> handles and file helpers, awaitable <code>std:process</code> host environment/execution/child helpers, awaitable <code>std:rand.OsRng</code>/<code>ThreadRng</code></td></tr>
   </tbody>
 </table>
 
@@ -364,6 +364,7 @@ var from = deque_from_list&lt;i64&gt;(seeded)</code></pre>
     <tr><td><code>size()</code> · <code>is_empty()</code></td><td><code>i64</code> · <code>bool</code></td></tr>
     <tr><td><code>contains(value)</code> when <code>T: Eq</code></td><td><code>bool</code></td></tr>
     <tr><td><code>to_list()</code> · <code>iter()</code></td><td><code>List&lt;T&gt;</code> · <code>Iterator&lt;T&gt;</code></td></tr>
+    <tr><td><code>reversed()</code> · <code>reverse()</code></td><td><code>Deque&lt;T&gt;</code> · <code>null</code></td></tr>
     <tr><td><code>clear()</code></td><td><code>null</code></td></tr>
   </tbody>
 </table>
@@ -376,7 +377,8 @@ the whole list before the existing front rather than reversing it.
 mutates the same logical order and returns <code>false</code> without mutating for
 negative or out-of-range indexes. <code>remove_at(index)</code> removes and returns
 the value at the same logical index, or <code>null</code> for negative or out-of-range
-indexes.</p>
+indexes. <code>reversed()</code> returns a new deque in reverse logical order without
+mutating the receiver, and <code>reverse()</code> reverses the receiver in place.</p>
 
 <p><code>Deque</code> implements equality when <code>T: Eq</code>, clone when
 <code>T: Clone</code>, deterministic ordered hashing when <code>T: Hash</code>,
@@ -397,10 +399,13 @@ b.push(0x41u8)
 b.append_iter([0x42u8, 0x43u8].iter())
 b.append(Bytes.from_str("DE"))
 b.set(1, 0x78u8)
+b.insert(1, 0x79u8)
 b.pop()
 b.remove_at(0)
 b.truncate(2)
-b.size()                              // 2
+b.resize(4, 0x00u8)
+b.fill(0xffu8)
+b.size()                              // 4
 
 var part = b.slice(1, 3)              // copy
 var it = b.iter()                     // Iterator&lt;u8&gt;
@@ -414,8 +419,10 @@ var r = b.cursor()                    // BytesCursor snapshot</code></pre>
     <tr><td><code>size()</code> · <code>is_empty()</code></td><td><code>i64</code> · <code>bool</code></td><td></td></tr>
     <tr><td><code>get(i)</code></td><td><code>u8 | null</code></td><td></td></tr>
     <tr><td><code>set(i, b)</code></td><td><code>bool</code></td><td>Returns <code>false</code> for negative or out-of-range indexes</td></tr>
-    <tr><td><code>push(b)</code> · <code>pop()</code> · <code>remove_at(i)</code> · <code>append(other)</code> · <code>append_iter(it)</code> · <code>truncate(len)</code> · <code>clear()</code></td><td><code>null</code> / <code>u8 | null</code></td><td><code>other: Bytes</code>, <code>it: Iterator&lt;u8&gt;</code>; <code>truncate</code> only shrinks</td></tr>
+    <tr><td><code>push(b)</code> · <code>insert(i, b)</code> · <code>pop()</code> · <code>remove_at(i)</code> · <code>append(other)</code> · <code>append_iter(it)</code> · <code>truncate(len)</code> · <code>resize(len, fill)</code> · <code>fill(byte)</code> · <code>clear()</code></td><td><code>null</code> / <code>bool</code> / <code>u8 | null</code></td><td><code>other: Bytes</code>, <code>it: Iterator&lt;u8&gt;</code>; <code>insert</code> accepts indexes from 0 through size; <code>resize</code> grows with fill bytes; <code>fill</code> overwrites existing bytes</td></tr>
     <tr><td><code>slice(start, end)</code></td><td><code>Bytes</code></td><td>Copy</td></tr>
+    <tr><td><code>index_of(byte)</code> · <code>last_index_of(byte)</code> · <code>contains(byte)</code></td><td><code>i64 | null</code> · <code>bool</code></td><td>Raw byte search</td></tr>
+    <tr><td><code>index_of_bytes(needle)</code> · <code>last_index_of_bytes(needle)</code> · <code>contains_bytes(needle)</code></td><td><code>i64 | null</code> · <code>bool</code></td><td>Raw subsequence search; empty needle matches at 0 / size</td></tr>
     <tr><td><code>starts_with(prefix)</code> · <code>ends_with(suffix)</code></td><td><code>bool</code></td><td>Bytewise prefix/suffix checks; empty affixes match</td></tr>
     <tr><td><code>cursor()</code></td><td><code>BytesCursor</code></td><td>Snapshot reader/seeker</td></tr>
     <tr><td><code>decode_utf8()</code></td><td><code>str | Utf8Error</code></td><td>Strict UTF-8 decoding; <code>to_str()</code> remains diagnostic</td></tr>
@@ -434,12 +441,18 @@ var r = b.cursor()                    // BytesCursor snapshot</code></pre>
 <p><code>Bytes</code> implements <code>std:io.Writer</code> and
 <code>std:fmt.FmtSink</code> today as an in-memory sink.
 <code>set(i, b)</code> mutates one byte and returns <code>false</code> when the index is
-outside the buffer. <code>pop()</code> removes and returns the last byte, or
+outside the buffer. <code>insert(i, b)</code> inserts before the byte at index
+<code>i</code>, accepts <code>i == size()</code> as append, and returns <code>false</code>
+for negative or out-of-range positions. <code>pop()</code> removes and returns the last byte, or
 <code>null</code> for an empty buffer. <code>remove_at(i)</code> removes and returns
 one indexed byte, or <code>null</code> for negative or out-of-range indexes.
 <code>truncate(len)</code> removes trailing bytes
 when <code>len</code> is shorter than the current size, clears the buffer for
 non-positive lengths, and leaves the buffer unchanged when <code>len</code> is larger.
+<code>resize(len, fill)</code> has the same shrink/clear behavior and appends
+<code>fill</code> bytes when <code>len</code> is larger than the current size.
+<code>fill(byte)</code> overwrites every existing byte in place and leaves empty
+buffers empty.
 <code>append(other)</code> snapshots the other byte buffer before appending, so
 <code>b.append(b)</code> doubles the current contents once and then stops.
 <code>write</code> snapshots its input before appending, so writing a buffer to itself
@@ -449,7 +462,14 @@ doubles the current contents rather than looping over newly appended bytes.
 <code>Bytes.cursor()</code> and <code>BytesCursor.new(bytes)</code> snapshot their source so
 later mutations to the original <code>Bytes</code> do not change what the cursor reads.
 <code>Bytes.starts_with</code> and <code>Bytes.ends_with</code> compare raw bytes directly and
-do not decode UTF-8.
+do not decode UTF-8. <code>Bytes.index_of(byte)</code> and
+<code>Bytes.last_index_of(byte)</code> return the first or last matching zero-based
+byte index, or <code>null</code>; <code>Bytes.contains(byte)</code> is the boolean form.
+<code>Bytes.index_of_bytes(needle)</code> and
+<code>Bytes.last_index_of_bytes(needle)</code> return the first or last matching raw
+byte subsequence start index, or <code>null</code>. An empty <code>needle</code> matches at
+index <code>0</code> for forward search and at <code>size()</code> for reverse search.
+<code>Bytes.contains_bytes(needle)</code> is the boolean form of subsequence search.
 <code>BytesCursor</code> implements equality and hashing over both the snapshot and
 current cursor position, plus clone, diagnostic stringification, and
 <code>std:fmt.Debug</code>.
@@ -566,12 +586,17 @@ storage will land with keyed <code>std:hash</code> map/set construction and gene
 map-key support.</p>
 
 <!-- =========================================================== -->
-<h2 id="io">7. <code>std:io</code> — Reader · Writer · Seeker</h2>
+<h2 id="io">7. <code>std:io</code> — Reader · Writer · AsyncReader · AsyncWriter · Seeker</h2>
 
-<p>The single most load-bearing addition. Every I/O source/sink in <code>std:</code>
-implements these three interfaces, so parsers, encoders, compressors, and protocol code
-written against the interfaces work on files, sockets, in-memory buffers, and stdin/stdout
-uniformly.</p>
+<p>The single most load-bearing addition. <code>Reader</code>, <code>Writer</code>, and
+<code>Seeker</code> are ordinary value-returning contracts for non-waiting in-memory
+sources and adapters. They are not target-stream protocols, and wait-capable
+providers such as files, sockets, stdin/stdout/stderr, and child-process pipes
+must not implement them for operations that may wait. Target-backed byte streams
+instead expose async methods and/or implement <code>AsyncReader</code> and
+<code>AsyncWriter</code>, the Otter Fusion async counterparts to those contracts.
+Target-backed I/O sources are documented only through explicit future-returning
+operations.</p>
 
 <pre><code>pub interface Reader {
   // Reads up to buf.size() bytes. Returns bytes-read, or 0 on EOF, or IoError.
@@ -585,6 +610,14 @@ pub interface Writer {
   function write(self, buf: Bytes): i64 | IoError
   function write_all(self, buf: Bytes): null | IoError
   function flush(self): null | IoError
+}
+
+pub interface AsyncReader {
+  function read_async(self, buf: Bytes): Future&lt;i64 | IoError&gt;
+}
+
+pub interface AsyncWriter {
+  function write_async(self, buf: Bytes): Future&lt;i64 | IoError&gt;
 }
 
 pub interface Seeker {
@@ -604,15 +637,48 @@ pub union IoErrorKind = NotFound | PermissionDenied | ConnectionRefused
                       | IoTimedOut | UnexpectedEof | Interrupted | OtherIo</code></pre>
 
 <p>The implemented catalog exports the contracts above, <code>IoError</code>,
-<code>IoErrorKind</code>, the seek-position variants, <code>print</code>, and
-<code>println</code>, plus stderr counterparts <code>eprint</code> and
-<code>eprintln</code>. It also exports <code>stdin()</code> as a <code>Reader</code>
-handle and stdout/stderr <code>Writer</code> handles via <code>stdout()</code> and
-<code>stderr()</code>. <code>IoTimedOut</code> and
+<code>IoErrorKind</code>, the seek-position variants, async
+<code>print</code>, and <code>println</code>, plus async stderr counterparts
+<code>eprint</code> and <code>eprintln</code>. It also exports concrete
+<code>stdin()</code>, <code>stdout()</code>, and <code>stderr()</code> handle
+constructors whose target-backed methods are the awaitable surfaces.
+<code>IoTimedOut</code> and
 <code>OtherIo</code> are deliberately named with an IO prefix for clarity at call
 sites; bundled toolchain source now uses hidden module-local owners under the
 private <code>__builtins__</code> root, so future modules can still use ordinary local
 names without colliding across <code>std:*</code> packages.</p>
+
+<div class="callout warn">
+  <strong><code>std:io</code> ordinary and async contracts are explicit.</strong>
+  Top-level helpers <code>print</code>, <code>println</code>, <code>eprint</code>,
+  and <code>eprintln</code> return <code>Future&lt;null&gt;</code> and must be
+  awaited. Concrete <code>stdin()</code>, <code>stdout()</code>, and
+  <code>stderr()</code> handle methods such as <code>read</code>,
+  <code>read_to_end</code>, <code>write</code>, <code>write_all</code>, and
+  <code>flush</code> also return <code>Future</code>s; their
+  <code>*_async</code> aliases remain available for explicit async-byte-stream
+  code. Generic in-memory <code>Reader.read</code>,
+  <code>Reader.read_to_end</code>, <code>Writer.write</code>,
+  <code>Writer.write_all</code>, <code>Writer.flush</code>, and
+  <code>Seeker.seek</code> return ordinary values, not <code>Future</code>s, because they
+  are not target-backed I/O. <code>Stdin</code>, <code>Stdout</code>, and
+  <code>Stderr</code> deliberately do not implement these ordinary in-memory
+  contracts.
+  In-memory
+  <code>BytesCursor</code> readers and <code>Bytes</code> writers are ordinary in-memory
+  contract implementors unless they explicitly implement
+  <code>AsyncReader</code>/<code>AsyncWriter</code>; those protocols are not inferred
+  from the ordinary contracts. Buffered adapters over in-memory streams forward those same ordinary contracts;
+  <code>BufReader.read</code>,
+  <code>BufReader.read_to_end</code>, <code>BufReader.read_line</code>,
+  <code>BufReader.lines</code>, <code>BufWriter.write</code>,
+  <code>BufWriter.write_all</code>, and <code>BufWriter.flush</code> are also
+  ordinary value-returning boundaries.
+  Concrete stdio handles expose helper-backed async methods that wake through
+  the reactor, and generic async byte-stream code can use
+  <code>AsyncReader</code>/<code>AsyncWriter</code>. There is no generic async
+  seeker protocol today.
+</div>
 
 <p><code>SeekFrom</code> and <code>IoErrorKind</code> are union aliases. They provide direct
 <code>equals(...)</code> helpers plus <code>Eq.eq</code>, overloaded <code>==</code>, <code>Clone</code>, <code>Hash</code>,
@@ -766,8 +832,8 @@ does not promise those value semantics.</p>
 
 <p><code>Duration</code> is portable Otter-authored value API. <code>Instant</code> and
 <code>SystemTime</code> are mixed stdlib values: their methods and value semantics are
-ordinary Otter Fusion definitions, while <code>now()</code> reads target-backed Rust
-runtime clock hooks. They still live in <code>std:time</code>, not <code>core:</code>, because
+ordinary Otter Fusion definitions, while target-backed clock reads are explicit
+awaitable futures. They still live in <code>std:time</code>, not <code>core:</code>, because
 the compiler does not treat time values specially.</p>
 
 <pre><code>pub struct Duration {
@@ -816,11 +882,11 @@ implementations for standard types remain follow-up library work.</p>
 <pre><code>pub struct Instant { ... }
 
 extend Instant {
-  function now(): Instant
+  function now(): Future&lt;Instant&gt;
   function from_nanos(nanos: i64): Instant
   function as_nanos(self): i64
   function duration_since(self, earlier: Instant): Duration
-  function elapsed(self): Duration
+  function elapsed(self): Future&lt;Duration&gt;
   function add_duration(self, duration: Duration): Instant
   function sub_duration(self, duration: Duration): Instant
 }
@@ -828,7 +894,7 @@ extend Instant {
 pub struct SystemTime { ... }
 
 extend SystemTime {
-  function now(): SystemTime
+  function now(): Future&lt;SystemTime&gt;
   function unix_epoch(): SystemTime
   function from_unix_nanos(nanos: i64): SystemTime
   function as_unix_nanos(self): i64
@@ -840,9 +906,10 @@ extend SystemTime {
 }</code></pre>
 
 <p><code>Instant</code> and <code>SystemTime</code> implement <code>Eq</code>, <code>Ord</code>,
-<code>Hash</code>, <code>Clone</code>, <code>ToStr</code>, and <code>std:fmt.Debug</code>. The current
-clock ABI returns signed nanoseconds: <code>Instant</code> uses a process-local
-monotonic epoch, and <code>SystemTime</code> uses Unix-epoch nanoseconds.</p>
+<code>Hash</code>, <code>Clone</code>, <code>ToStr</code>, and <code>std:fmt.Debug</code>.
+<code>Instant.now()</code>, <code>Instant.elapsed()</code>, and
+<code>SystemTime.now()</code> are awaitable and complete through private reactor-woken
+runtime futures; target-backed clock reads are explicit async operations.</p>
 
 <pre><code>pub union TimeZone = Utc | FixedOffset | NamedTimeZone
 
@@ -858,9 +925,9 @@ pub struct DateTime {
 }
 
 extend DateTime {
-  function now_utc(): DateTime
-  function now_local(): DateTime
-  function from_system_time_local(t: SystemTime): DateTime | TimeError
+  function now_utc(): Future&lt;DateTime&gt;
+  function now_local(): Future&lt;DateTime&gt;
+  function from_system_time_local(t: SystemTime): Future&lt;DateTime | TimeError&gt;
   function new(year: i32, month: u8, day: u8,
                hour: u8, minute: u8, second: u8, nanos: u32,
                tz: TimeZone): DateTime | TimeError
@@ -891,15 +958,20 @@ perform portable UTC and fixed-offset conversions over Unix-epoch nanoseconds.
 Named timezone conversion returns <code>TimeError</code> until provider-backed
 timezone databases exist.
 <code>DateTime.now_utc()</code>, <code>DateTime.now_local()</code>, and
-<code>DateTime.from_system_time_local(t)</code> are implemented over the
-target-backed clock and local-offset hooks. Local conversion captures the
-provider's UTC offset for that timestamp and returns a fixed-offset
-<code>DateTime</code>; it does not resolve a named timezone.
+<code>DateTime.from_system_time_local(t)</code> are awaitable and implemented over
+private target-backed clock and local-offset futures. Local conversion captures
+the provider's UTC offset for that timestamp and returns a fixed-offset
+<code>DateTime</code>; the local-offset provider lookup is private runtime machinery
+behind the future and does not resolve a named timezone.
 <code>DateTime.with_timezone(tz)</code> rebuilds the value with the same local
 date/time fields and a cloned replacement timezone.</p>
 <p><code>TimeError</code> implements <code>std:error.Error</code>, equality, clone, hash, and
-debug rendering. <code>sleep(Duration)</code> is implemented as a mixed stdlib function
-over a Rust-backed runtime sleep hook; non-positive durations are no-ops.
+debug rendering. <code>sleep(Duration)</code> returns <code>Future&lt;null&gt;</code> and
+suspends through the runtime timer/reactor path without parking the caller's
+executor worker. Non-positive durations produce an immediately settling timer
+future; positive sub-millisecond durations round up to one millisecond. Editor
+namespace completion keeps the duration-based <code>Time.sleep</code> surface distinct
+from millisecond-based <code>Async.sleep</code>, and both are awaitable timer futures.
 Timezone databases, named-zone conversion, and leap-second policy remain planned
 follow-up work.</p>
 
@@ -922,11 +994,13 @@ future work.</p>
 
 pub struct DefaultHasher
 pub struct KeyedHasher
+pub struct HashSeedError
 
 pub function hash_value&lt;T: Hash&gt;(value: T): u64
 pub function write_hash&lt;T: Hash&gt;(hasher: Hasher, value: T): null
 pub function combine_hash(left: u64, right: u64): u64
 pub function keyed_hasher(seed: u64): KeyedHasher
+pub function os_keyed_hasher(): Future&lt;KeyedHasher | HashSeedError&gt;
 
 extend DefaultHasher {
   function new(): DefaultHasher
@@ -968,8 +1042,13 @@ extend KeyedHasher: Hasher {
 toolchain behavior. <code>KeyedHasher</code> uses the same deterministic stream
 algorithm but mixes a caller-provided seed into the initial state, giving
 libraries an explicit comparable keyed hasher value without changing map/set
-construction yet. Neither hasher is a cryptographic hash or an OS-seeded
-HashDoS-resistant hasher. The implementation deliberately avoids wrapping
+construction yet. <code>os_keyed_hasher()</code> returns a future that resolves to a
+<code>KeyedHasher</code> seeded from the selected provider's OS entropy source, or
+<code>HashSeedError</code> if entropy is unavailable; callers must
+<code>await</code> it because target entropy reads may wait on host state.
+This is the convenience constructor to prefer when callers want per-run hash
+seeding without managing their own seed material.
+Neither hasher algorithm is cryptographic. The implementation deliberately avoids wrapping
 arithmetic because Otter Fusion integer overflow is checked. Both hashers
 support byte-stream writes through <code>write_u8</code> and
 <code>write_bytes(Bytes)</code>, plus convenience writes for signed integers, booleans,
@@ -979,8 +1058,10 @@ so generic code does not need to know which concrete hasher it received.
 <code>DefaultHasher</code> and
 <code>KeyedHasher</code> implement equality, clone, hash, diagnostic
 stringification, and <code>std:fmt.Debug</code> over their current deterministic state,
-so callers can snapshot and compare hasher streams. Future work: keyed map/set
-construction, OS-seeded HashDoS-safe convenience hashers, and fast or cryptographic variants in pkg:
+so callers can snapshot and compare hasher streams. <code>HashSeedError</code>
+implements <code>std:error.Error</code>, equality, clone, hash, stringification, and
+<code>std:fmt.Debug</code>. Future work: keyed map/set
+construction and fast or cryptographic variants in pkg:
 libraries.</p>
 
 <!-- =========================================================== -->
@@ -1292,15 +1373,17 @@ response values.</p>
 <h2 id="io-impl">16. <code>std:io</code> — concrete handles <span class="pill spec">spec</span></h2>
 
 <p>Chapter 18 already places <code>print</code>, <code>println</code>,
-<code>eprint</code>, and <code>eprintln</code> here as runtime-backed stream
-helpers. The implemented mixed slice also exposes stdin/stdout/stderr handles
-as byte-oriented <code>Reader</code>/<code>Writer</code> implementations. Buffered adapters
-and richer stream options remain planned provider work.</p>
+<code>eprint</code>, and <code>eprintln</code> here as async stream helpers backed by
+the concrete stdout/stderr async writer paths. The implemented mixed slice also
+exposes stdin/stdout/stderr handles as byte-oriented async concrete handles,
+plus pure std buffered adapters over non-blocking in-memory <code>Reader</code> or
+<code>Writer</code> values. Richer target-backed stream options remain planned
+provider work.</p>
 
-<pre><code>pub function print(s: str): null
-pub function println(s: str): null
-pub function eprint(s: str): null
-pub function eprintln(s: str): null
+<pre><code>pub function print(s: str): Future&lt;null&gt;
+pub function println(s: str): Future&lt;null&gt;
+pub function eprint(s: str): Future&lt;null&gt;
+pub function eprintln(s: str): Future&lt;null&gt;
 
 pub function stdin():  Stdin
 pub function stdout(): Stdout
@@ -1310,27 +1393,38 @@ pub struct Stdin  { ... }
 pub struct Stdout { ... }
 pub struct Stderr { ... }
 
-extend Stdin:  Reader { ... }
-extend Stdout: Writer { ... }
-extend Stderr: Writer { ... }
-
 extend Stdin {
+  function read(self, buf: Bytes): Future&lt;i64 | IoError&gt;
+  function read_to_end(self, buf: Bytes): Future&lt;i64 | IoError&gt;
   function read_async(self, buf: Bytes): Future&lt;i64 | IoError&gt;
   function read_to_end_async(self, buf: Bytes): Future&lt;i64 | IoError&gt;
 }
 
 extend Stdout {
+  function write(self, buf: Bytes): Future&lt;i64 | IoError&gt;
+  function write_all(self, buf: Bytes): Future&lt;null | IoError&gt;
+  function flush(self): Future&lt;null | IoError&gt;
   function write_async(self, buf: Bytes): Future&lt;i64 | IoError&gt;
   function write_all_async(self, buf: Bytes): Future&lt;null | IoError&gt;
   function flush_async(self): Future&lt;null | IoError&gt;
 }
 
-extend Stderr { ... same async writer methods ... }</code></pre>
+extend Stderr { ... same async writer methods and *_async aliases ... }</code></pre>
 
-<p>The async concrete-handle methods are backed by runtime futures that park the
-executor task, perform the target's blocking stdio operation on a helper, and
-wake the task through the shared one-shot reactor. They are for stdio handles;
-the portable <code>Reader</code>/<code>Writer</code> traits remain synchronous contracts.</p>
+<p>The async concrete-handle methods for stdin, stdout, and stderr are backed by
+runtime futures that park the executor task, run the private target stdio wait
+on a helper, and wake the task through the shared one-shot reactor. Generic
+async byte-stream code should depend on
+<code>AsyncReader</code>/<code>AsyncWriter</code>; the portable <code>Reader</code>/
+<code>Writer</code> traits remain ordinary in-memory contracts and are not implemented
+by these wait-capable target handles. Cancelling one of these
+concrete stdio futures removes its reactor registration and discards any late
+helper result; a timed-out stdin read may still consume provider bytes that
+satisfied the cancelled helper, but no cancelled waiter is woken and later
+stdio operations still use the same underlying target stream state. Private
+runtime helpers mark host stream read/write/flush waits with the internal
+<code>gc::native_wait</code> native-state marker before completing the public
+futures.</p>
 
 <!-- =========================================================== -->
 <h2 id="fs">17. <code>std:fs</code> — files · Path <span class="pill spec">spec</span> + <span class="pill planned">planned</span></h2>
@@ -1359,11 +1453,32 @@ non-recursive remove/rename/directory creation operations, snapshot-backed
 directory reads, and descriptor-backed <code>File</code> values over Rust runtime
 hooks. <code>OpenOptions</code> provides explicit read/write/append/truncate/create/
 create_new open configuration plus portable validation for descriptor-backed
-files. <code>File</code> implements <code>std:io.Reader</code>,
-<code>std:io.Writer</code>, and <code>std:io.Seeker</code>, plus concrete
-reactor-backed async methods for descriptor reads, writes, flushes, and seeks;
+files. Every public filesystem operation that may wait on target storage is a
+helper-backed, reactor-woken future: module-level text/binary helpers,
+directory snapshots, mutations, canonicalization, target-backed
+<code>Path</code> queries, descriptor open/create/append/open-with, close, File
+text helpers, reads, writes, flushes, and seeks. <code>File</code> also exposes
+matching <code>*_async</code> byte-I/O aliases;
 errors surface as ordinary
-<code>std:io.IoError</code> values.</p>
+<code>std:io.IoError</code> values. Cancelling a descriptor async method removes
+its reactor registration and discards any late helper result; a timed-out read
+may still consume provider bytes, but the file descriptor remains explicitly
+owned by user code until <code>close()</code> or final release.</p>
+
+<div class="callout ok">
+  <strong><code>std:fs</code> exposes filesystem waits only as public async futures.</strong>
+  Use <code>await read_to_string(...)</code>, <code>await write_string(...)</code>,
+  <code>await append_string(...)</code>, <code>await read(...)</code>,
+  <code>await write(...)</code>, <code>await read_dir(...)</code>,
+  <code>await remove(...)</code>, <code>await rename(...)</code>,
+  <code>await create_dir(...)</code>, <code>await create_dir_all(...)</code>,
+  <code>await canonicalize(...)</code>, <code>await Path.exists()</code>,
+  <code>await Path.metadata()</code>, <code>await Path.canonicalize()</code>,
+  <code>await File.read_to_string()</code>, <code>await File.write_string(...)</code>,
+  and <code>await File.append_string(...)</code>. Pure path/value helpers such as
+  <code>Path.join</code>, <code>Path.normalize</code>, <code>OpenOptions.with_read</code>,
+  and metadata snapshot accessors remain ordinary value operations.
+</div>
 
 <pre><code>pub struct Path {
   pub raw: str,    // slash-separated in the portable value layer
@@ -1396,29 +1511,35 @@ extend Path {
   function eq(self, other: Path): bool
   function hash(self): u64
 
-  function exists(self): bool | IoError
-  function is_file(self): bool | IoError
-  function is_dir(self): bool | IoError
-  function file_kind(self): FileKind | IoError
-  function byte_len(self): u64 | IoError
-  function permissions(self): Permissions | IoError
-  function metadata(self): Metadata | IoError
-  function canonicalize(self): Path | IoError
+  function exists(self): Future&lt;bool | IoError&gt;
+  function is_file(self): Future&lt;bool | IoError&gt;
+  function is_dir(self): Future&lt;bool | IoError&gt;
+  function file_kind(self): Future&lt;FileKind | IoError&gt;
+  function byte_len(self): Future&lt;u64 | IoError&gt;
+  function permissions(self): Future&lt;Permissions | IoError&gt;
+  function metadata(self): Future&lt;Metadata | IoError&gt;
+  function canonicalize(self): Future&lt;Path | IoError&gt;
 }
 
 extend File {
-  function open(path: Path):   File | IoError
-  function create(path: Path): File | IoError
-  function append(path: Path): File | IoError
-  function open_with(path: Path, options: OpenOptions): File | IoError
+  function open(path: Path):   Future&lt;File | IoError&gt;
+  function create(path: Path): Future&lt;File | IoError&gt;
+  function append(path: Path): Future&lt;File | IoError&gt;
+  function open_with(path: Path, options: OpenOptions): Future&lt;File | IoError&gt;
   function path(self): Path
   function is_append_mode(self): bool
   function handle_id(self): i64
-  function read_to_string(self): str | IoError
-  function write_string(self, contents: str): null | IoError
-  function append_string(self, contents: str): null | IoError
-  function close(self): null | IoError
+  function read_to_string(self): Future&lt;str | IoError&gt;
+  function write_string(self, contents: str): Future&lt;null | IoError&gt;
+  function append_string(self, contents: str): Future&lt;null | IoError&gt;
+  function close(self): Future&lt;null | IoError&gt;
 
+  function read(self, buf: Bytes): Future&lt;i64 | IoError&gt;
+  function read_to_end(self, buf: Bytes): Future&lt;i64 | IoError&gt;
+  function write(self, buf: Bytes): Future&lt;i64 | IoError&gt;
+  function write_all(self, buf: Bytes): Future&lt;null | IoError&gt;
+  function flush(self): Future&lt;null | IoError&gt;
+  function seek(self, pos: SeekFrom): Future&lt;i64 | IoError&gt;
   function read_async(self, buf: Bytes): Future&lt;i64 | IoError&gt;
   function read_to_end_async(self, buf: Bytes): Future&lt;i64 | IoError&gt;
   function write_async(self, buf: Bytes): Future&lt;i64 | IoError&gt;
@@ -1426,8 +1547,6 @@ extend File {
   function flush_async(self): Future&lt;null | IoError&gt;
   function seek_async(self, pos: SeekFrom): Future&lt;i64 | IoError&gt;
 }
-
-extend File: Reader + Writer + Seeker { ... }
 
 pub struct OpenOptions {
   pub read: bool,
@@ -1459,20 +1578,20 @@ extend OpenOptions {
   function is_valid(self): bool
 }
 
-pub function read_to_string(path: Path): str | IoError
-pub function write_string(path: Path, contents: str): null | IoError
-pub function append_string(path: Path, contents: str): null | IoError
-pub function read(path: Path): Bytes | IoError
-pub function write(path: Path, data: Bytes): null | IoError
-pub function remove(path: Path): null | IoError
-pub function rename(from: Path, to: Path): null | IoError
-pub function create_dir(path: Path):     null | IoError
-pub function create_dir_all(path: Path): null | IoError
-pub function canonicalize(path: Path): Path | IoError
+pub function read_to_string(path: Path): Future&lt;str | IoError&gt;
+pub function write_string(path: Path, contents: str): Future&lt;null | IoError&gt;
+pub function append_string(path: Path, contents: str): Future&lt;null | IoError&gt;
+pub function read(path: Path): Future&lt;Bytes | IoError&gt;
+pub function write(path: Path, data: Bytes): Future&lt;null | IoError&gt;
+pub function remove(path: Path): Future&lt;null | IoError&gt;
+pub function rename(from: Path, to: Path): Future&lt;null | IoError&gt;
+pub function create_dir(path: Path):     Future&lt;null | IoError&gt;
+pub function create_dir_all(path: Path): Future&lt;null | IoError&gt;
+pub function canonicalize(path: Path): Future&lt;Path | IoError&gt;
 pub function native_separator(): str
 pub function path_from_native(s: str): Path
 
-pub function read_dir(path: Path): DirEntries | IoError
+pub function read_dir(path: Path): Future&lt;DirEntries | IoError&gt;
 
 pub struct DirEntry {
   pub path: Path,
@@ -1545,7 +1664,8 @@ clone, hash, stringification, and diagnostic debug rendering.
 <code>Metadata</code> implement equality, clone, hash, stringification, and
 diagnostic debug rendering; <code>Metadata</code> constructors, accessors, and
 replacement builders clone nested values so callers receive snapshots. The
-path query and text helpers touch the target filesystem now. <code>Path.metadata()</code>
+path query and text helpers touch the target filesystem and therefore return
+futures. <code>Path.metadata()</code>
 builds a snapshot <code>Metadata</code> value from the selected target: file kind uses
 symlink-aware metadata, length and permissions use regular metadata, missing
 paths return <code>IoError</code>, and executable permissions are provider-specific
@@ -1561,22 +1681,28 @@ depend on the Otter-authored <code>Bytes</code> struct layout.
 <code>Path.to_native_str()</code> translate between the portable slash-separated
 <code>Path</code> representation and the selected provider's native separator;
 <code>native_separator()</code> exposes that separator for tooling and diagnostics.
-<code>File.open_with(path, options)</code> opens descriptor-backed files with explicit
+<code>File.open_with(path, options)</code> asynchronously opens descriptor-backed files with explicit
 read/write/append/truncate/create/create_new flags. <code>OpenOptions</code> is an
 ordinary immutable-style value with validation, equality, clone, hash,
 stringification, and diagnostic debug rendering. <code>validation_error</code>,
 <code>validate</code>, and <code>is_valid</code> enforce provider-independent open rules:
 an open must request at least one of read/write/append, and truncate/create/
-create_new require write or append access. <code>File.open_with</code> returns those
+create_new require write or append access. <code>File.open_with</code> resolves those
 validation failures as <code>IoError</code> before calling the selected provider hook.
 Existing <code>File.open</code>, <code>File.create</code>, and <code>File.append</code>
-remain convenience constructors over the same provider hook.
-Concrete <code>File</code> async methods run descriptor-backed reads, writes,
-flushes, and seeks through runtime futures that park the executor task, perform
-the target operation on a helper thread, and wake through the shared one-shot
-reactor. They are concrete handle methods rather than generic
-<code>AsyncRead</code>/<code>AsyncWrite</code> protocols; those broader protocols remain planned
-for future network and stream adapters.
+remain future-returning convenience constructors over the same provider hook.
+Concrete <code>File</code> byte IO and seek methods, together with the matching
+<code>*_async</code> aliases, run descriptor-backed reads, writes, flushes, and
+seeks through runtime futures that park the executor task, perform the target
+operation on a helper thread, and wake through the shared one-shot reactor.
+Module-level text/binary helpers, directory snapshots, mutations,
+canonicalization, target-backed <code>Path</code> queries, and <code>File</code>
+text helpers use the same helper-backed future shape rather than ordinary
+value-returning filesystem waits.
+Helper-thread creation is bracketed as a runtime native-state boundary.
+They are concrete handle methods, and <code>File</code> also satisfies the generic
+<code>std:io.AsyncReader</code> and <code>std:io.AsyncWriter</code>
+byte-stream contracts where those methods match the protocol.
 <code>remove(path)</code> removes regular files, symlinks, and empty directories but
 is intentionally non-recursive. <code>read_dir(path)</code> snapshots the selected
 directory into provider-backed <code>DirEntry</code> values and returns a
@@ -1587,68 +1713,346 @@ deterministic for that snapshot but follows provider directory ordering.</p>
 <!-- =========================================================== -->
 <h2 id="net">18. <code>std:net</code> — DNS · TCP · UDP <span class="pill spec">spec</span> + <span class="pill planned">planned</span></h2>
 
-<pre><code>pub function resolve(host: str): List&lt;IpAddr&gt; | IoError
+<pre><code>pub function resolve(host: str): Future&lt;List&lt;IpAddr&gt; | IoError&gt;
 
 pub struct TcpStream { ... }
-extend TcpStream: Reader + Writer { ... }
 extend TcpStream {
-  function connect(addr: SocketAddr): TcpStream | IoError
-  function peer_addr(self):  SocketAddr | IoError
-  function local_addr(self): SocketAddr | IoError
-  function set_nodelay(self, on: bool): null | IoError
-  function close(self): null | IoError
+  function connect(addr: SocketAddr): Future&lt;TcpStream | IoError&gt;
+  function connect_timeout(addr: SocketAddr, timeout: Duration): Future&lt;TcpStream | IoError&gt;
+  function read(self, buf: Bytes): Future&lt;i64 | IoError&gt;
+  function read_to_end(self, buf: Bytes): Future&lt;i64 | IoError&gt;
+  function write(self, buf: Bytes): Future&lt;i64 | IoError&gt;
+  function write_all(self, buf: Bytes): Future&lt;null | IoError&gt;
+  function flush(self): Future&lt;null | IoError&gt;
+  function peek(self, buf: Bytes): Future&lt;i64 | IoError&gt;
+  function peer_addr(self): Future&lt;SocketAddr | IoError&gt;
+  function local_addr(self): Future&lt;SocketAddr | IoError&gt;
+  function take_error(self): Future&lt;IoError | null&gt;
+  function nodelay(self): Future&lt;bool | IoError&gt;
+  function set_nodelay(self, on: bool): Future&lt;null | IoError&gt;
+  function set_nonblocking(self, on: bool): Future&lt;null | IoError&gt;
+  function read_timeout(self): Future&lt;Duration | null | IoError&gt;
+  function set_read_timeout(self, timeout: Duration | null): Future&lt;null | IoError&gt;
+  function write_timeout(self): Future&lt;Duration | null | IoError&gt;
+  function set_write_timeout(self, timeout: Duration | null): Future&lt;null | IoError&gt;
+  function ttl(self): Future&lt;u32 | IoError&gt;
+  function set_ttl(self, ttl: u32): Future&lt;null | IoError&gt;
+  function close(self): Future&lt;null | IoError&gt;
+}
+
+pub struct AsyncTcpStream { ... }
+extend AsyncTcpStream: AsyncReader + AsyncWriter {
+  function connect(addr: SocketAddr): Future&lt;AsyncTcpStream | IoError&gt;
+  function connect_timeout(addr: SocketAddr, timeout: Duration): Future&lt;AsyncTcpStream | IoError&gt;
+  function from_stream(stream: TcpStream): AsyncTcpStream
+  function into_stream(self): TcpStream
+  function peer_addr(self): Future&lt;SocketAddr | IoError&gt;
+  function local_addr(self): Future&lt;SocketAddr | IoError&gt;
+  function read_async(self, buf: Bytes): Future&lt;i64 | IoError&gt;
+  function write_async(self, buf: Bytes): Future&lt;i64 | IoError&gt;
+  function peek_async(self, buf: Bytes): Future&lt;i64 | IoError&gt;
+  function close(self): Future&lt;null | IoError&gt;
 }
 
 pub struct TcpListener { ... }
 extend TcpListener {
-  function bind(addr: SocketAddr): TcpListener | IoError
-  function accept(self): (TcpStream, SocketAddr) | IoError
-  function local_addr(self): SocketAddr | IoError
+  function bind(addr: SocketAddr): Future&lt;TcpListener | IoError&gt;
+  function accept(self): Future&lt;(TcpStream, SocketAddr) | IoError&gt;
+  function local_addr(self): Future&lt;SocketAddr | IoError&gt;
+  function take_error(self): Future&lt;IoError | null&gt;
+  function set_nonblocking(self, on: bool): Future&lt;null | IoError&gt;
+  function ttl(self): Future&lt;u32 | IoError&gt;
+  function set_ttl(self, ttl: u32): Future&lt;null | IoError&gt;
+  function close(self): Future&lt;null | IoError&gt;
+}
+
+pub struct AsyncTcpListener { ... }
+extend AsyncTcpListener {
+  function bind(addr: SocketAddr): Future&lt;AsyncTcpListener | IoError&gt;
+  function from_listener(listener: TcpListener): AsyncTcpListener
+  function into_listener(self): TcpListener
+  function accept_async(self): Future&lt;(AsyncTcpStream, SocketAddr) | IoError&gt;
+  function local_addr(self): Future&lt;SocketAddr | IoError&gt;
+  function take_error(self): Future&lt;IoError | null&gt;
+  function ttl(self): Future&lt;u32 | IoError&gt;
+  function set_ttl(self, ttl: u32): Future&lt;null | IoError&gt;
+  function close(self): Future&lt;null | IoError&gt;
 }
 
 pub struct UdpSocket { ... }
 extend UdpSocket {
-  function bind(addr: SocketAddr): UdpSocket | IoError
-  function send_to(self, buf: Bytes, addr: SocketAddr): i64 | IoError
-  function recv_from(self, buf: Bytes): (i64, SocketAddr) | IoError
+  function bind(addr: SocketAddr): Future&lt;UdpSocket | IoError&gt;
+  function local_addr(self): Future&lt;SocketAddr | IoError&gt;
+  function connect(self, addr: SocketAddr): Future&lt;null | IoError&gt;
+  function peer_addr(self): Future&lt;SocketAddr | IoError&gt;
+  function take_error(self): Future&lt;IoError | null&gt;
+  function set_nonblocking(self, on: bool): Future&lt;null | IoError&gt;
+  function read_timeout(self): Future&lt;Duration | null | IoError&gt;
+  function set_read_timeout(self, timeout: Duration | null): Future&lt;null | IoError&gt;
+  function write_timeout(self): Future&lt;Duration | null | IoError&gt;
+  function set_write_timeout(self, timeout: Duration | null): Future&lt;null | IoError&gt;
+  function ttl(self): Future&lt;u32 | IoError&gt;
+  function set_ttl(self, ttl: u32): Future&lt;null | IoError&gt;
+  function broadcast(self): Future&lt;bool | IoError&gt;
+  function set_broadcast(self, on: bool): Future&lt;null | IoError&gt;
+  function multicast_loop_v4(self): Future&lt;bool | IoError&gt;
+  function set_multicast_loop_v4(self, on: bool): Future&lt;null | IoError&gt;
+  function multicast_loop_v6(self): Future&lt;bool | IoError&gt;
+  function set_multicast_loop_v6(self, on: bool): Future&lt;null | IoError&gt;
+  function multicast_ttl_v4(self): Future&lt;u32 | IoError&gt;
+  function set_multicast_ttl_v4(self, ttl: u32): Future&lt;null | IoError&gt;
+  function join_multicast_v4(self, group: IpAddr, iface: IpAddr): Future&lt;null | IoError&gt;
+  function leave_multicast_v4(self, group: IpAddr, iface: IpAddr): Future&lt;null | IoError&gt;
+  function join_multicast_v6(self, group: IpAddr, iface: u32): Future&lt;null | IoError&gt;
+  function leave_multicast_v6(self, group: IpAddr, iface: u32): Future&lt;null | IoError&gt;
+  function send(self, buf: Bytes): Future&lt;i64 | IoError&gt;
+  function recv(self, buf: Bytes): Future&lt;i64 | IoError&gt;
+  function peek(self, buf: Bytes): Future&lt;i64 | IoError&gt;
+  function send_to(self, buf: Bytes, addr: SocketAddr): Future&lt;i64 | IoError&gt;
+  function recv_from(self, buf: Bytes): Future&lt;(i64, SocketAddr) | IoError&gt;
+  function peek_from(self, buf: Bytes): Future&lt;(i64, SocketAddr) | IoError&gt;
+  function close(self): Future&lt;null | IoError&gt;
+}
+
+pub struct AsyncUdpSocket { ... }
+extend AsyncUdpSocket {
+  function bind(addr: SocketAddr): Future&lt;AsyncUdpSocket | IoError&gt;
+  function from_socket(socket: UdpSocket): AsyncUdpSocket
+  function into_socket(self): UdpSocket
+  function local_addr(self): Future&lt;SocketAddr | IoError&gt;
+  function connect(self, addr: SocketAddr): Future&lt;null | IoError&gt;
+  function peer_addr(self): Future&lt;SocketAddr | IoError&gt;
+  function ttl(self): Future&lt;u32 | IoError&gt;
+  function take_error(self): Future&lt;IoError | null&gt;
+  function set_ttl(self, ttl: u32): Future&lt;null | IoError&gt;
+  function broadcast(self): Future&lt;bool | IoError&gt;
+  function set_broadcast(self, on: bool): Future&lt;null | IoError&gt;
+  function multicast_loop_v4(self): Future&lt;bool | IoError&gt;
+  function set_multicast_loop_v4(self, on: bool): Future&lt;null | IoError&gt;
+  function multicast_loop_v6(self): Future&lt;bool | IoError&gt;
+  function set_multicast_loop_v6(self, on: bool): Future&lt;null | IoError&gt;
+  function multicast_ttl_v4(self): Future&lt;u32 | IoError&gt;
+  function set_multicast_ttl_v4(self, ttl: u32): Future&lt;null | IoError&gt;
+  function join_multicast_v4(self, group: IpAddr, iface: IpAddr): Future&lt;null | IoError&gt;
+  function leave_multicast_v4(self, group: IpAddr, iface: IpAddr): Future&lt;null | IoError&gt;
+  function join_multicast_v6(self, group: IpAddr, iface: u32): Future&lt;null | IoError&gt;
+  function leave_multicast_v6(self, group: IpAddr, iface: u32): Future&lt;null | IoError&gt;
+  function send_async(self, buf: Bytes): Future&lt;i64 | IoError&gt;
+  function recv_async(self, buf: Bytes): Future&lt;i64 | IoError&gt;
+  function peek_async(self, buf: Bytes): Future&lt;i64 | IoError&gt;
+  function send_to_async(self, buf: Bytes, addr: SocketAddr): Future&lt;i64 | IoError&gt;
+  function recv_from_async(self, buf: Bytes): Future&lt;(i64, SocketAddr) | IoError&gt;
+  function peek_from_async(self, buf: Bytes): Future&lt;(i64, SocketAddr) | IoError&gt;
+  function close(self): Future&lt;null | IoError&gt;
 }</code></pre>
 
-<p><code>resolve(host)</code> is implemented as a mixed stdlib function over the
-selected provider's address resolver. It returns a list of portable
-<code>IpAddr</code> values from <code>std:net/types</code> or an ordinary
-<code>IoError</code> on provider failure. The resolver is target-backed, so address
-ordering and host database behavior follow the selected provider; IP literals
-round-trip deterministically.</p>
+<p><code>resolve(host)</code> is implemented as a mixed stdlib async function over the
+selected provider's address resolver. It returns a future that resolves to a
+list of portable <code>IpAddr</code> values from <code>std:net/types</code> or an
+ordinary <code>IoError</code> on provider failure. The provider lookup runs through
+runtime future machinery and reactor wakeups as an explicit async DNS operation;
+address ordering and host database behavior still follow
+the selected provider, while IP literals round-trip deterministically.</p>
+
+<div class="callout warn">
+  <strong>UDP setup/control is async at the public surface.</strong>
+  <code>UdpSocket</code> bind/connect/address/error/timeout/TTL/broadcast/
+  multicast/nonblocking/close operations now return <code>Future</code>s, just like
+  the UDP datagram methods. Provider work runs behind private helper-backed
+  futures with reactor wakeups; no public UDP operation that may touch the OS
+  is an ordinary value-returning call.
+  Async adapter conversion helpers such as
+  <code>from_*</code>, and <code>into_*</code> return ordinary values too; the
+  awaitable network surfaces include <code>AsyncTcpListener.bind</code>,
+  <code>AsyncUdpSocket.bind</code>, and the documented <code>Future</code>-returning
+  operations.
+</div>
+
+<p><code>TcpStream.connect(addr)</code> and
+<code>TcpStream.connect_timeout(addr, timeout)</code> are implemented as mixed
+stdlib async constructors over provider TCP connect operations. They return
+<code>Future&lt;TcpStream | IoError&gt;</code>, run provider waits off the executor
+worker through the helper-backed reactor path, and report invalid negative
+timeouts or failed connects as ordinary <code>IoError</code> values.</p>
+
+<p><code>TcpStream.read(buf)</code>, <code>read_to_end(buf)</code>,
+<code>write(buf)</code>, <code>write_all(buf)</code>, <code>flush()</code>, and
+<code>peek(buf)</code> are implemented as mixed stdlib async methods over provider
+TCP stream operations. They return <code>Future</code>s, run provider waits off the
+executor worker through the helper-backed reactor path, and append read or
+peeked bytes into the caller-owned <code>Bytes</code> buffer only after the future
+resolves. <code>peek(buf)</code> does not consume bytes from the provider stream;
+<code>read_to_end(buf)</code> resolves at provider EOF.</p>
+
+<p><code>TcpStream.peer_addr()</code>, <code>local_addr()</code>,
+<code>take_error()</code>, <code>nodelay()</code>,
+<code>set_nodelay(on)</code>, <code>set_nonblocking(on)</code>, read/write
+timeout get/set methods, <code>ttl()</code>, <code>set_ttl(ttl)</code>, and
+<code>close()</code> are also mixed stdlib async methods. They return
+<code>Future</code>s and route provider-backed stream metadata, socket option,
+mode, timeout, and explicit close work through the helper-backed reactor path
+instead of exposing wait-capable ordinary methods.</p>
+
+<p><code>TcpListener.accept()</code> is implemented as a mixed stdlib async
+method over provider TCP accept. It returns
+<code>Future&lt;(TcpStream, SocketAddr) | IoError&gt;</code>, runs the provider wait
+off the executor worker through the helper-backed reactor path, and releases
+late accepted stream handles if a cancelled or timed-out accept result arrives
+after the waiter was removed.</p>
+
+<p><code>TcpListener.bind(addr)</code>, <code>local_addr()</code>,
+<code>take_error()</code>, <code>set_nonblocking(on)</code>, <code>ttl()</code>,
+<code>set_ttl(ttl)</code>, and <code>close()</code> are also mixed stdlib async
+methods. They return <code>Future</code>s and route provider-backed listener setup,
+metadata, socket option, mode, and explicit close work through the same
+helper-backed reactor path instead of exposing non-<code>Future</code> listener
+methods for provider-backed work. If a cancelled listener-bind future completes after its waiter was
+removed, the runtime releases the late-created listener handle before
+discarding the stale result.</p>
 
 <p><code>TcpStream</code> and <code>TcpListener</code> are implemented as mixed
 stdlib handles over provider TCP sockets. They are deterministic
 <code>@RefCounted</code> values backed by opaque runtime handles; cloning preserves
 the shared handle, <code>close()</code> releases it explicitly, and dropping the
 last Otter value releases the runtime registry entry. <code>TcpStream</code>
-implements the synchronous <code>Reader</code>/<code>Writer</code> contracts, while
-<code>TcpListener.accept()</code> returns both the accepted stream and peer
-<code>SocketAddr</code>.</p>
+byte I/O methods return futures rather than implementing the ordinary
+non-waiting <code>Reader</code>/<code>Writer</code> contracts, while
+<code>TcpListener.accept()</code> returns a future that resolves to both the
+accepted stream and peer <code>SocketAddr</code>. Stream metadata/control and
+listener bind, metadata, error-readback, nonblocking, TTL, and close members also return futures under
+the corrected no-public-blocking contract. The implemented TCP option surface includes
+<code>TCP_NODELAY</code> readback/set, IP TTL get/set operations, and pending
+socket-error readback through <code>take_error()</code> for streams.
+TCP streams and listeners also expose provider-backed <code>set_nonblocking</code>
+toggles for code that deliberately manages provider readiness outside the
+Otter Fusion executor; switching the flag does not replace the documented
+future-returning TCP stream and listener surfaces.
+<code>TcpStream</code> additionally exposes read/write timeout get/set operations
+using <code>std:time.Duration</code>; passing <code>null</code> clears the provider
+timeout, while negative or unsupported timeout values surface as
+<code>IoError</code>.</p>
+
+<p><code>AsyncTcpStream</code> is an explicit async network adapter and implements
+<code>std:io.AsyncReader</code>/<code>std:io.AsyncWriter</code>. It is a
+normal stdlib value that wraps a provider TCP stream handle without changing
+the underlying handle identity. <code>connect(addr)</code>,
+<code>connect_timeout(addr, timeout)</code>, <code>read_async(buf)</code>, <code>write_async(buf)</code>, and
+<code>peek_async(buf)</code> return <code>Future</code>s and wake through the
+runtime reactor path; their provider waits run off the executor worker so a
+poll does not park the task scheduler. Helper-thread creation is bracketed as a
+runtime native-state boundary; the helper path brackets only the provider wait
+with GC native-state transitions; encoded Otter result values are created after
+that wait has ended. Cancellation removes the future's reactor registration,
+drops the eventual result if the helper completes later, and releases any TCP
+stream handle created by a late cancelled connect, connect_timeout, or accept.
+Timed-out helper-backed reads may consume the provider bytes that satisfied the
+late read; the runtime discards that stale result and keeps the stream usable
+for subsequent operations.
+The timed variants use the provider's finite TCP connect operation and report
+invalid negative durations as ordinary <code>IoError</code> values.
+Other async TCP operation deadlines are expressed today with
+<code>std:async.timeout(stream.read_async(buf), ms)</code>,
+<code>timeout(stream.write_async(buf), ms)</code>, or
+<code>timeout(stream.peek_async(buf), ms)</code>; dedicated per-operation
+timeout method families such as <code>read_timeout_async</code>,
+<code>write_timeout_async</code>, or <code>peek_timeout_async</code> are not
+part of the current API.
+<code>from_stream(stream)</code> adapts an existing stream explicitly, and
+<code>into_stream()</code> returns the plain stream handle; both conversion helpers
+return ordinary values, not <code>Future</code>s. Stream metadata and handle control methods
+such as <code>peer_addr</code>, <code>local_addr</code>, and <code>close</code>
+also return <code>Future</code>s through the same public stream-control contract. Async TCP has GC-stress coverage for
+managed state kept live across helper-backed write/read awaits.</p>
+
+<p><code>AsyncTcpListener</code> is the matching explicit TCP accept adapter.
+It wraps a provider listener and keeps the accepted stream adapted to
+<code>AsyncTcpStream</code>. <code>bind(addr)</code> returns
+<code>Future&lt;AsyncTcpListener | IoError&gt;</code>, and <code>accept_async()</code> awaits
+the same future-backed accept path as <code>TcpListener.accept()</code> and returns
+<code>Future&lt;(AsyncTcpStream, SocketAddr) | IoError&gt;</code>, while
+<code>into_listener()</code> returns the plain listener handle when code
+intentionally needs that value. <code>from_listener</code> and
+<code>into_listener</code> are ordinary conversion helpers, not awaitable
+accept operations. Listener metadata, error-readback, TTL, and close methods
+also return <code>Future</code>s. If a timed-out bind or accept later completes at
+the provider layer, the runtime discards the late result and releases the
+created listener or accepted stream handle.</p>
 
 <p><code>UdpSocket</code> is implemented as a mixed stdlib handle over provider
-UDP sockets. It is also a deterministic <code>@RefCounted</code> runtime handle;
-<code>send_to</code> sends one datagram from a <code>Bytes</code> buffer, and
-<code>recv_from</code> appends one received datagram into the caller-provided
-buffer and returns the byte count plus source <code>SocketAddr</code>.</p>
+UDP sockets. It is also a deterministic <code>@RefCounted</code> runtime handle.
+Its bind/connect/datagram/metadata/control/option/multicast/close operations
+return <code>Future</code>s: <code>send_to</code> sends one
+datagram from a <code>Bytes</code> buffer, and <code>recv_from</code> appends one
+received datagram into the caller-provided buffer and returns the byte count plus
+source <code>SocketAddr</code>. <code>peek_from</code> uses the same caller-owned
+buffer convention and returns the same source address without consuming the
+datagram. Connected <code>recv</code> and <code>peek</code> provide the
+corresponding default-peer operations, with <code>peek</code> leaving the datagram
+available for a later receive.
+<code>connect</code> records a default peer for provider filtering and enables
+connected <code>send</code>/<code>recv</code>; <code>peer_addr</code> reports the
+connected peer. Those operations are also awaitable. The
+implemented UDP option surface includes IP TTL get/set operations and provider
+UDP broadcast, IPv4/IPv6 multicast-loop, and IPv4 multicast-TTL readback/set
+operations plus pending socket-error readback through <code>take_error()</code>.
+UDP sockets also expose a provider-backed <code>set_nonblocking</code> toggle,
+plus read/write timeout get/set operations using
+<code>Duration | null</code>, with <code>null</code> clearing the timeout. These
+controls are awaited like other provider-backed UDP operations.
+IPv4 multicast group membership is provider-backed through
+<code>join_multicast_v4</code> and <code>leave_multicast_v4</code>, taking
+portable <code>IpAddr</code> values for the multicast group and interface.
+IPv6 multicast membership is provider-backed through
+<code>join_multicast_v6</code> and <code>leave_multicast_v6</code>, taking a
+portable <code>IpAddr</code> group and a provider interface index
+<code>u32</code>.</p>
 
-<p>Async network equivalents are planned as <code>std:async</code> adapters
-(<code>AsyncTcpStream</code>, <code>AsyncTcpListener</code>). Their shared
-<code>AsyncRead</code> / <code>AsyncWrite</code> protocols are planned companion contracts;
-they are not part of today's <code>core:async</code> catalog export. IDNA,
-richer socket options, and async network adapters remain planned
-target-backed work.</p>
+<p><code>AsyncUdpSocket</code> is the explicit UDP datagram adapter. It wraps a
+provider UDP socket while sharing the same helper-backed datagram future path as
+<code>UdpSocket</code>. <code>bind(addr)</code> returns
+<code>Future&lt;AsyncUdpSocket | IoError&gt;</code>. Connected <code>send_async</code>, <code>recv_async</code>, and
+<code>peek_async</code>, plus address-aware <code>send_to_async</code>,
+<code>recv_from_async</code>, and <code>peek_from_async</code>, return
+<code>Future</code>s and wake through the runtime reactor path; provider waits
+run off the executor worker and own their GC native-state bracket.
+Helper-thread creation is bracketed as a runtime native-state boundary.
+Cancellation removes the reactor registration, and late helper results are
+discarded. A timed-out UDP receive may still consume the provider datagram that
+satisfied the cancelled helper; the cleanup contract is that the stale result is
+dropped, the waiter is gone, and the socket remains usable for later datagrams.
+UDP operation deadlines use <code>std:async.timeout(...)</code> around the
+datagram future today; dedicated connected names such as
+<code>send_timeout_async</code>/<code>recv_timeout_async</code>/<code>peek_timeout_async</code>
+or address-aware names such as
+<code>send_to_timeout_async</code>/<code>recv_from_timeout_async</code>/<code>peek_from_timeout_async</code>
+are not part of the current API.
+<code>from_socket(socket)</code> adapts
+an existing socket explicitly, and <code>into_socket()</code> crosses back to
+the underlying <code>UdpSocket</code> handle when code intentionally needs that value; both
+conversion helpers return ordinary values, not <code>Future</code>s. Adapter
+metadata, peer setup, socket options, multicast membership controls, and
+<code>close</code> are awaitable wrappers over the same UDP future-backed
+operations, alongside the documented adapter <code>*_async</code> methods. The
+adapter has GC-stress coverage for managed state kept live across a
+helper-backed datagram await. It intentionally does not implement
+<code>AsyncReader</code>/<code>AsyncWriter</code>: datagram boundaries and
+address-aware receive/send results are part of the UDP contract, so forcing UDP
+into a byte-stream protocol would hide semantics instead of making async code
+more honest.</p>
+
+<p><code>std:io.AsyncReader</code> and <code>std:io.AsyncWriter</code> are the
+shared async byte-stream protocols. IDNA, additional platform-specific socket
+options, richer timeout ergonomics beyond the explicit
+<code>std:async.timeout(...)</code> wrapper, and deeper readiness-native
+provider integration remain planned target-backed work.</p>
 
 <!-- =========================================================== -->
 <h2 id="time-std">19. <code>std:time</code> — local offsets · named zones <span class="pill spec">spec</span> + <span class="pill planned">planned</span></h2>
 
 <pre><code>extend DateTime {
-  function now_utc(): DateTime
-  function now_local(): DateTime
-  function from_system_time_local(t: SystemTime): DateTime | TimeError
+  function now_utc(): Future&lt;DateTime&gt;
+  function now_local(): Future&lt;DateTime&gt;
+  function from_system_time_local(t: SystemTime): Future&lt;DateTime | TimeError&gt;
 }</code></pre>
 
 <p><code>Duration</code>, <code>Instant</code>, <code>SystemTime</code>,
@@ -1657,7 +2061,8 @@ target-backed work.</p>
 including UTC/fixed-offset <code>SystemTime.to_datetime(tz)</code>,
 <code>DateTime.to_system_time()</code>, and provider-backed local offset conversion
 through <code>DateTime.now_local()</code> and
-<code>DateTime.from_system_time_local(t)</code>. Local conversions intentionally return
+<code>DateTime.from_system_time_local(t)</code>. Clock reads, local-time conversion,
+and sleep are awaitable futures; local conversions intentionally return
 fixed-offset <code>DateTime</code> values for the selected timestamp. Timezone
 databases, named-zone conversion, and leap-second policy remain planned.</p>
 
@@ -1665,25 +2070,30 @@ databases, named-zone conversion, and leap-second policy remain planned.</p>
 <h2 id="sync-extra">20. <code>std:sync</code> — additions <span class="pill planned">planned</span></h2>
 
 <p>Chapter 20 covers <code>Shared&lt;T&gt;</code>, channels, and <code>LockBusy</code>.
-Additions:</p>
+Additions remain planned, and their wait-capable lock/initialization paths must
+be future-returning at the public surface. Immediate variants are reserved only
+for explicit non-waiting <code>try_*</code> probes or value constructors.</p>
 
 <pre><code>pub struct RwLock&lt;T&gt; { ... }
 extend&lt;T&gt; RwLock&lt;T&gt; {
   function new(value: T): RwLock&lt;T&gt;
-  function read(self):  ReadGuard&lt;T&gt;  | LockBusy
-  function write(self): WriteGuard&lt;T&gt; | LockBusy
+  function read(self):  Future&lt;ReadGuard&lt;T&gt;&gt;
+  function write(self): Future&lt;WriteGuard&lt;T&gt;&gt;
+  function try_read(self):  ReadGuard&lt;T&gt;  | LockBusy
+  function try_write(self): WriteGuard&lt;T&gt; | LockBusy
 }
 
 pub struct Once { ... }
 extend Once {
   function new(): Once
-  function call_once(self, init: () =&gt; null): null   // runs init at most once across threads
+  function call_once(self, init: () =&gt; Future&lt;null&gt;): Future&lt;null&gt;   // awaits init at most once
 }
 
 pub struct Lazy&lt;T&gt; { ... }
 extend&lt;T&gt; Lazy&lt;T&gt; {
   function new(init: () =&gt; T): Lazy&lt;T&gt;
-  function get(self): T   // initializes on first call; subsequent calls return cached
+  function get(self): Future&lt;T&gt;      // initializes on first await; subsequent awaits resolve cached
+  function try_get(self): T | LockBusy   // non-waiting probe of an initialized value
 }</code></pre>
 
 <!-- =========================================================== -->
@@ -1800,10 +2210,10 @@ behavior.</p>
 <!-- =========================================================== -->
 <h2 id="process">22. <code>std:process</code> <span class="pill spec">spec</span> + <span class="pill planned">planned</span></h2>
 
-<pre><code>pub function args(): List&lt;str&gt;
-pub function env(name: str): str | null
-pub function env_all(): Map&lt;str, str&gt;
-pub function set_env(name: str, value: str): null
+<pre><code>pub function args(): Future&lt;List&lt;str&gt;&gt;
+pub function env(name: str): Future&lt;str | null&gt;
+pub function env_all(): Future&lt;Map&lt;str, str&gt;&gt;
+pub function set_env(name: str, value: str): Future&lt;null&gt;
 pub function exit(code: i32): never
 pub function abort(): never
 
@@ -1837,40 +2247,101 @@ extend Command {
   function validate(self): null | IoError
   function is_valid(self): bool
 
-  function status(self): ExitStatus | IoError   // run to completion, no capture
-  function output(self): Output | IoError       // run to completion, capture
+  function status(self): Future&lt;ExitStatus | IoError&gt;   // await process-exit status
+  function output(self): Future&lt;Output | IoError&gt;       // await process-exit status and captured output
 
-  function spawn(self):  Child  | IoError
+  function spawn(self):  Future&lt;Child | IoError&gt;
 }
 
 pub struct Child {
-  pub stdin:  Writer | null,
-  pub stdout: Reader | null,
-  pub stderr: Reader | null,
+  pub stdin:  AsyncWriter | null,
+  pub stdout: AsyncReader | null,
+  pub stderr: AsyncReader | null,
 }
 
 extend Child {
-  function wait(self):    ExitStatus | IoError
-  function kill(self):    null       | IoError
+  function wait(self):    Future&lt;ExitStatus | IoError&gt;
+  function kill(self):    Future&lt;null | IoError&gt;
   function id(self):      u32
-  function stdin(self):   Writer | null
-  function stdout(self):  Reader | null
-  function stderr(self):  Reader | null
+  function stdin(self):   AsyncWriter | null
+  function stdout(self):  AsyncReader | null
+  function stderr(self):  AsyncReader | null
 }
 
-pub struct ExitStatus { pub code: i32 | null, pub signal: i32 | null }
+pub struct ExitStatus {
+  pub code: i32 | null,
+  pub signal: i32 | null,
+  pub core_dumped: bool | null,
+  pub stopped_signal: i32 | null,
+  pub continued: bool | null,
+}
 pub struct Output     { pub status: ExitStatus, pub stdout: Bytes, pub stderr: Bytes }
+
+extend ExitStatus {
+  function exited(code: i32): ExitStatus
+  function signaled(signal: i32): ExitStatus
+  function stopped(signal: i32): ExitStatus
+  function continued_status(): ExitStatus
+  function unknown(): ExitStatus
+  function code(self): i32 | null
+  function signal(self): i32 | null
+  function core_dumped(self): bool | null
+  function stopped_signal(self): i32 | null
+  function continued(self): bool | null
+  function success(self): bool
+  function exited_normally(self): bool
+  function was_signaled(self): bool
+  function was_stopped(self): bool
+  function was_continued(self): bool
+}
 
 pub function command(program: str): Command
 pub function exit_status(code: i32 | null, signal: i32 | null): ExitStatus
 pub function output(status: ExitStatus, stdout: Bytes, stderr: Bytes): Output</code></pre>
 
+<div class="callout good">
+  <strong><code>std:process</code> execution and child control are async.</strong>
+  <code>args()</code>, <code>env(name)</code>, <code>env_all()</code>,
+  <code>set_env(name, value)</code>, <code>Command.spawn()</code>,
+  <code>Command.status()</code>, <code>Command.output()</code>,
+  <code>Child.wait()</code>, and <code>Child.kill()</code> return awaitable
+  <code>Future</code>s. Provider-backed process start, process-exit status/output capture,
+  wait, kill, and host process-state operations run behind helper-backed
+  futures that wake through the reactor rather than exposing any non-async
+  public process operation.
+  Child metadata and stdio accessors such as <code>id()</code>,
+  <code>stdin()</code>, <code>stdout()</code>, and <code>stderr()</code> are
+  non-<code>Future</code> metadata/current-placeholder value accessors; the stdio
+  accessors return async stream handles or <code>null</code>, never ordinary in-memory
+  <code>Reader</code>/<code>Writer</code> contracts. Captured
+  <code>Output.status()</code>, <code>Output.stdout()</code>, and
+  <code>Output.stderr()</code> are non-waiting snapshot accessors over data already
+  produced by awaiting <code>Command.output()</code>; they are not process status or
+  pipe-drain operations. <code>Command</code> inspection and
+  validation helpers such as <code>program()</code>, <code>args()</code>,
+  <code>env()</code>, <code>arg_count()</code>, <code>env_var_value()</code>,
+  <code>has_env_var()</code>, <code>env_count()</code>, <code>cwd()</code>,
+  <code>validation_error()</code>, <code>validate()</code>, and
+  <code>is_valid()</code>. Pure value builders such as
+  <code>with_program()</code>, <code>with_args()</code>, <code>arg()</code>,
+  <code>with_env()</code>, <code>env_var()</code>,
+  <code>inherit_env()</code>, <code>clear_env()</code>,
+  <code>with_cwd()</code>, and <code>clear_cwd()</code> return fresh
+  <code>Command</code> values, not process futures. The e2e suite now has
+  positive await coverage for host process helpers and process
+  execution/control, plus compile-error guards proving those methods cannot be
+  used as immediate old-style values.
+</div>
+
 <p>The implemented slice includes the portable value layer, host
-environment access, process termination hooks, and run-to-completion process
-execution. <code>Command</code>, <code>ExitStatus</code>, and captured
-<code>Output</code> are ordinary values. Builders and accessors
+environment access, process termination hooks, and awaitable process
+execution/capture. <code>Command</code>, <code>ExitStatus</code>, and captured
+<code>Output</code> are portable values. Builders and accessors
 snapshot owned lists, maps, paths, and byte buffers so mutating a returned value
 or a builder input does not mutate the original command or output record.
+Once <code>Command.output()</code> resolves, <code>Output.status()</code> returns a
+cloned captured <code>ExitStatus</code> value and never starts, waits on, or observes
+another provider process.
 <code>arg_count</code>, <code>env_var_value</code>, <code>has_env_var</code>, and
 <code>env_count</code> provide direct read-only inspection without cloning the
 whole argument list or environment map; inherited environments report no
@@ -1884,7 +2355,7 @@ environment. <code>validation_error</code>, <code>validate</code>, and
 <code>is_valid</code> check the portable command invariants before a command crosses
 into the provider runtime: the program name must be non-empty, and explicit
 environment keys must be non-empty and must not contain <code>=</code>.
-<code>status()</code> and <code>output()</code> return those validation failures as
+<code>status()</code> and <code>output()</code> are async and resolve those validation failures as
 <code>IoError</code> before calling the target-backed execution hooks. These values
 implement equality, clone, hash, stringification where appropriate, and
 <code>std:fmt.Debug</code>. <code>Command.hash()</code> is structural:
@@ -1892,28 +2363,41 @@ argument order is significant, explicit environment maps hash by key/value
 membership to match command equality rather than insertion order, and inherited
 environment / missing cwd states are tagged distinctly from explicit empty
 values. <code>Output.hash()</code> folds status, stdout, and stderr in field order.
-Rust-backed hooks implement <code>args()</code>,
+Rust-backed futures implement <code>args()</code>,
 <code>env(name)</code>, <code>env_all()</code>, and <code>set_env(name, value)</code>
 as snapshotting process-state helpers; <code>env</code> returns <code>null</code> for a
 missing variable, and <code>set_env</code> validates names/values before mutating the
-host environment. <code>exit(code)</code> and <code>abort()</code> are importable
+host environment. Those host environment operations use the runtime's
+internal <code>gc::native_wait</code> native-state marker privately while touching
+the process environment, then resolve through reactor-woken futures.
+<code>exit(code)</code> and <code>abort()</code> are importable
 <code>std:process</code> marker functions that lower to runtime process-control
-intrinsics. <code>Command.status()</code> runs a command to completion while inheriting
-the current stdout/stderr streams, and <code>Command.output()</code> runs a command to
-completion while capturing stdout/stderr as <code>Bytes</code>. Both methods decode
+intrinsics. Awaiting <code>Command.status()</code> resolves the command future while inheriting
+the current stdout/stderr streams, and awaiting <code>Command.output()</code> resolves the command
+future while capturing stdout/stderr as exact <code>Bytes</code> values across the
+runtime's private hexadecimal byte payload boundary. Both methods decode
 provider launch failures into <code>IoError</code> and preserve the command's
-snapshotting args/env/cwd semantics. <code>Command.spawn()</code> starts a live
+snapshotting args/env/cwd semantics. <code>ExitStatus</code> exposes portable
+<code>code()</code>, <code>signal()</code>, <code>success()</code>,
+<code>exited_normally()</code>, and <code>was_signaled()</code> helpers plus
+<code>core_dumped(): bool | null</code>,
+<code>stopped_signal(): i32 | null</code>, and
+<code>continued(): bool | null</code>; providers that cannot report these
+target-specific details return <code>null</code>. Awaiting <code>Command.spawn()</code> starts a live
 provider child process and returns a deterministic <code>@RefCounted</code>
 <code>Child</code> handle. Cloned child handles share the same runtime child
-entry; <code>id()</code> exposes the provider process id, <code>wait()</code>
-waits once and caches the observed <code>ExitStatus</code> for repeat callers,
-and <code>kill()</code> requests provider termination before a later
-<code>wait()</code>. Dropping the last <code>Child</code> releases the runtime
-registry entry but does not implicitly kill the OS process. The current
+entry; <code>id()</code> exposes the provider process id, awaiting <code>wait()</code>
+resolves the provider child once and caches the observed <code>ExitStatus</code> for repeat callers,
+and awaiting <code>kill()</code> requests provider termination before a later
+awaited <code>wait()</code>. Dropping the last <code>Child</code> releases the runtime
+registry entry but does not implicitly kill the OS process; provider-child
+handle cleanup runs inside the same <code>gc::native_wait</code> native-state bracket
+used by wait/kill, including concurrent removal paths. The current
 <code>Command</code> surface has no pipe configuration yet, so child
 <code>stdin()</code>, <code>stdout()</code>, and <code>stderr()</code> return
-<code>null</code>; streamed child stdio and richer target-specific status details
-remain target/provider-backed work.</p>
+<code>null</code>; streamed child stdio remains target/provider-backed async stream
+work and must use <code>AsyncWriter</code>/<code>AsyncReader</code> rather than ordinary
+in-memory <code>Writer</code>/<code>Reader</code> contracts.</p>
 
 <!-- =========================================================== -->
 <h2 id="rand">23. <code>std:rand</code> <span class="pill spec">spec</span> + <span class="pill planned">planned</span></h2>
@@ -1926,20 +2410,20 @@ remain target/provider-backed work.</p>
 
 pub struct RandomError { ... }
 
-// Per-handle default generator. Seeded from OsRng on construction.
-pub function thread_rng(): ThreadRng | RandomError
+// Per-handle default generator. Seeded from OsRng through an async constructor.
+pub function thread_rng(): Future&lt;ThreadRng | RandomError&gt;
 pub struct ThreadRng { ... }
 extend ThreadRng: Rng { ... }
 
 // OS-provided target entropy.
 pub function os_rng(): OsRng
+pub function os_bytes(count: i64): Future&lt;Bytes | RandomError&gt;
 pub struct OsRng;
-extend OsRng: Rng { ... }
 extend OsRng {
-  function try_next_u32(self): u32 | RandomError
-  function try_next_u64(self): u64 | RandomError
-  function try_fill_bytes(self, buf: Bytes): null | RandomError
-  function try_fill_bytes_n(self, buf: Bytes, count: i64): null | RandomError
+  function try_next_u32(self): Future&lt;u32 | RandomError&gt;
+  function try_next_u64(self): Future&lt;u64 | RandomError&gt;
+  function try_fill_bytes(self, buf: Bytes): Future&lt;null | RandomError&gt;
+  function try_fill_bytes_n(self, buf: Bytes, count: i64): Future&lt;null | RandomError&gt;
 }
 
 // Deterministic PRNG for reproducibility (tests, simulations).
@@ -1954,24 +2438,48 @@ pub function gen_range_i64(rng: Rng, low: i64, high: i64): i64    // half-open
 pub function gen_range_u64(rng: Rng, low: u64, high: u64): u64    // half-open
 pub function gen_f64(rng: Rng): f64                               // [0, 1)
 pub function gen_range_f64(rng: Rng, low: f64, high: f64): f64    // half-open
+pub function gen_triangular_f64(rng: Rng, low: f64, high: f64): f64
+pub function gen_bates_f64(rng: Rng, draws: i64, low: f64, high: f64): f64
+pub function gen_irwin_hall_f64(rng: Rng, draws: i64, low: f64, high: f64): f64
+pub function gen_min_f64(rng: Rng, draws: i64, low: f64, high: f64): f64
+pub function gen_max_f64(rng: Rng, draws: i64, low: f64, high: f64): f64
+pub function gen_midrange_f64(rng: Rng, draws: i64, low: f64, high: f64): f64
+pub function gen_median_f64(rng: Rng, draws: i64, low: f64, high: f64): f64
 pub function gen_bool(rng: Rng, numerator: i64, denominator: i64): bool
+pub function gen_binomial(rng: Rng, trials: i64, numerator: i64, denominator: i64): i64
 pub function gen_index(rng: Rng, len: i64): i64 | null
 pub function fill_bytes_n(rng: Rng, buf: Bytes, count: i64): null
 pub function gen_bytes(rng: Rng, count: i64): Bytes
 pub function choose_index&lt;T&gt;(rng: Rng, list: List&lt;T&gt;): i64 | null
+pub function weighted_index(rng: Rng, weights: List&lt;u64&gt;): i64 | null
+pub function choose_weighted&lt;T&gt;(rng: Rng, list: List&lt;T&gt;, weights: List&lt;u64&gt;): T | null
+pub function sample_indices(rng: Rng, len: i64, count: i64): List&lt;i64&gt;
+pub function sample&lt;T&gt;(rng: Rng, list: List&lt;T&gt;, count: i64): List&lt;T&gt;
 pub function shuffle&lt;T&gt;(rng: Rng, list: List&lt;T&gt;): null
+pub function shuffled&lt;T&gt;(rng: Rng, list: List&lt;T&gt;): List&lt;T&gt;
 pub function choose&lt;T&gt;(rng: Rng, list: List&lt;T&gt;): T | null</code></pre>
 
 <p>The implemented slice has both reproducible and target-backed pieces:
 <code>SeededRng</code> is a pure Otter-authored PRNG, while
-<code>OsRng</code> draws <code>u32</code> values from the selected provider's
-OS entropy hook and <code>ThreadRng</code> is a per-value generator seeded from
-<code>OsRng</code>. <code>OsRng</code> exposes fallible <code>try_next_u32</code>,
+<code>OsRng</code> exposes explicit futures for values drawn from the selected
+provider's OS entropy hook and <code>ThreadRng</code> is a per-value generator
+seeded from <code>OsRng</code> by awaiting <code>thread_rng()</code>. The runtime
+runs provider entropy reads behind reactor-woken futures and brackets the
+private host read with the internal <code>gc::native_wait</code> native-state marker,
+so stop-the-world collection is not delayed if the entropy source stalls.
+<code>os_bytes(count)</code> returns a
+future resolving to an owned
+<code>Bytes</code> buffer filled from provider entropy or a
+<code>RandomError</code>; non-positive counts return an empty buffer without
+touching the provider. <code>OsRng</code> exposes fallible
+<code>try_next_u32</code>,
 <code>try_next_u64</code>, <code>try_fill_bytes</code>, and
-<code>try_fill_bytes_n</code> methods returning
-<code>RandomError</code> when the target entropy source is unavailable; its
-<code>Rng</code> implementation panics on that exceptional failure so generic
-helpers can keep the non-fallible <code>Rng</code> contract.</p>
+<code>try_fill_bytes_n</code> methods returning futures that resolve to
+<code>RandomError</code> when the target entropy source is unavailable.
+<code>OsRng</code> intentionally does not implement the ordinary
+<code>Rng</code> interface because that interface cannot honestly represent
+target-backed waits; use <code>ThreadRng</code> or <code>SeededRng</code> for
+generic <code>Rng</code> helpers.</p>
 
 <p><code>fill_bytes</code> appends eight generated bytes to a
 <code>Bytes</code> buffer, <code>gen_range_i64</code> and
@@ -1979,13 +2487,46 @@ helpers can keep the non-fallible <code>Rng</code> contract.</p>
 <code>gen_f64</code> samples a <code>[0, 1)</code> value from the
 next 53 random bits, <code>gen_range_f64</code> scales that value across a
 half-open range and returns <code>low</code> when <code>high &lt;= low</code>,
-<code>fill_bytes_n</code> and <code>gen_bytes</code> generate exact-length byte
+<code>gen_triangular_f64</code> samples a symmetric triangular distribution by
+averaging two uniform <code>[0, 1)</code> draws and scaling that average over the
+same low/high range, returning <code>low</code> when <code>high &lt;= low</code>,
+<code>gen_bates_f64</code> samples the Bates distribution by averaging
+<code>draws</code> uniform <code>[0, 1)</code> draws before scaling over the same
+range, returning <code>low</code> when <code>draws &lt;= 0</code> or
+<code>high &lt;= low</code>,
+<code>gen_irwin_hall_f64</code> samples the Irwin-Hall family by summing
+<code>draws</code> independent uniform samples over the requested half-open
+low/high range, returning <code>0.0</code> when <code>draws &lt;= 0</code> or
+<code>high &lt;= low</code>,
+<code>gen_min_f64</code> and <code>gen_max_f64</code> sample the minimum and
+maximum order statistic respectively from <code>draws</code> independent
+uniform values over the requested half-open low/high range, returning
+<code>low</code> when <code>draws &lt;= 0</code> or <code>high &lt;= low</code>,
+<code>gen_midrange_f64</code> samples the midpoint between the observed minimum and
+maximum over the same draw set and range, returning <code>low</code> for the same
+non-positive draw-count and empty-range edges,
+<code>gen_median_f64</code> samples the median order statistic over the same draw
+set and range, averaging the two middle observed values for even draw counts
+and returning <code>low</code> for non-positive draw counts or empty/reversed ranges,
+<code>fill_bytes_n</code> and <code>gen_bytes</code> generate deterministic exact-length byte
 buffers from any <code>Rng</code>, and <code>gen_bool</code> samples a numerator/denominator ratio
-with clamped always-false and always-true edge cases. <code>gen_index</code> and
+with clamped always-false and always-true edge cases. <code>gen_binomial</code>
+counts successes across repeated <code>gen_bool</code> trials, returning
+<code>0</code> for non-positive trial counts or impossible ratios and the trial
+count for guaranteed-success ratios. <code>gen_index</code> and
 <code>choose_index</code> sample uniform zero-based indexes and return
 <code>null</code> for non-positive lengths or empty lists. <code>choose</code> returns
-<code>null</code> for an empty list, and <code>shuffle</code> mutates the provided list
-in place using the supplied RNG stream. <code>SeededRng</code> remains the
+<code>null</code> for an empty list. <code>weighted_index</code> samples from unsigned
+integer weights and returns <code>null</code> for empty, all-zero, or overflowed
+weight totals; <code>choose_weighted</code> additionally returns <code>null</code>
+when the value and weight list lengths differ. <code>sample_indices</code> returns
+up to <code>count</code> distinct zero-based indexes from <code>0..len</code> without
+replacement, returning an empty list for non-positive lengths or counts.
+<code>sample</code> returns a new list of values at sampled indexes, leaves the
+source list unchanged, and returns an empty list for non-positive counts or
+empty inputs. <code>shuffle</code> mutates the provided list
+in place using the supplied RNG stream; <code>shuffled</code> returns a shuffled
+copy and leaves the source list unchanged. <code>SeededRng</code> remains the
 recommended API for tests, simulations, and repeatable tooling behavior.
 <code>SeededRng</code> implements equality, clone, hash,
 diagnostic stringification, and <code>std:fmt.Debug</code> over its current state;
@@ -1993,15 +2534,17 @@ cloning snapshots the stream. <code>RandomError</code> implements
 <code>std:error.Error</code>, equality, clone, hash, stringification, and
 <code>std:fmt.Debug</code>.</p>
 
-<p>Cryptographic-strength API guarantees and richer statistical distributions
-remain planned provider/runtime work.</p>
+<p>Cryptographic-strength API guarantees and additional continuous distributions
+remain planned provider/library work.</p>
 
 <!-- =========================================================== -->
 <h2 id="log">24. <code>std:log</code> <span class="pill spec">spec</span> + <span class="pill planned">planned</span></h2>
 
-<p>The implemented slice provides portable log levels, records, marker value
-semantics, and default line logging helpers. Replaceable global logger backends
-remain planned provider/runtime work.</p>
+<p>The implemented slice provides portable log levels, records, the
+<code>Logger</code> interface contract, marker value semantics, awaitable record
+timestamp construction, and awaitable default line logging helpers that write
+through async stdio. Replaceable global logger installation remains planned
+non-waiting registry work.</p>
 
 <pre><code>pub union Level = LogTrace | LogDebug | Info | Warn | LogError
 
@@ -2015,6 +2558,11 @@ pub struct Record {
 
 pub struct LoggerAlreadySet
 
+pub interface Logger {
+  function log(self, r: Record): Future&lt;null&gt;
+  function enabled(self, level: Level, module: str): bool
+}
+
 pub function level_trace(): Level
 pub function level_debug(): Level
 pub function level_info():  Level
@@ -2027,27 +2575,32 @@ extend Level {
 }
 
 pub function record(level: Level, message: str,
-                    module: str, fields: Map&lt;str, str&gt;): Record
+                    module: str, fields: Map&lt;str, str&gt;): Future&lt;Record&gt;
 pub function empty_fields(): Map&lt;str, str&gt;
-pub function log_record(r: Record): null
+pub function log_record(r: Record): Future&lt;null&gt;
 
-// Default line logging helpers.
-pub function trace(message: str): null
-pub function debug(message: str): null
-pub function info(message: str):  null
-pub function warn(message: str):  null
-pub function error(message: str): null
-pub function trace_with(message: str, fields: Map&lt;str, str&gt;): null
-pub function debug_with(message: str, fields: Map&lt;str, str&gt;): null
-pub function info_with(message: str, fields: Map&lt;str, str&gt;): null
-pub function warn_with(message: str, fields: Map&lt;str, str&gt;): null
-pub function error_with(message: str, fields: Map&lt;str, str&gt;): null</code></pre>
+// Default awaitable line logging helpers.
+pub function trace(message: str): Future&lt;null&gt;
+pub function debug(message: str): Future&lt;null&gt;
+pub function info(message: str):  Future&lt;null&gt;
+pub function warn(message: str):  Future&lt;null&gt;
+pub function error(message: str): Future&lt;null&gt;
+pub function trace_with(message: str, fields: Map&lt;str, str&gt;): Future&lt;null&gt;
+pub function debug_with(message: str, fields: Map&lt;str, str&gt;): Future&lt;null&gt;
+pub function info_with(message: str, fields: Map&lt;str, str&gt;): Future&lt;null&gt;
+pub function warn_with(message: str, fields: Map&lt;str, str&gt;): Future&lt;null&gt;
+pub function error_with(message: str, fields: Map&lt;str, str&gt;): Future&lt;null&gt;</code></pre>
 
-<p><code>Level</code>, <code>Record</code>, and <code>LoggerAlreadySet</code> implement
+<p><code>record(...)</code> awaits <code>SystemTime.now()</code> to stamp the
+record, and <code>log_record</code> plus the default line helpers return
+<code>Future&lt;null&gt;</code> because they write through async
+<code>std:io.println</code>. <code>Level</code>, <code>Record</code>, and
+<code>LoggerAlreadySet</code> implement
 equality, clone, hash, stringification, and <code>std:fmt.Debug</code>. The concrete
 variant names use the <code>Log*</code> prefix where needed for clarity while the public
 constructor helpers provide the conventional level names. <code>log_record</code> and the
-convenience functions write a compact line through <code>std:io.println</code>.
+convenience functions return futures that write a compact line through
+<code>std:io.println</code> and must be awaited.
 <code>Level.rank()</code> orders levels from trace (<code>0</code>) through error
 (<code>4</code>), and <code>Level.is_at_least(min)</code> provides the portable
 filtering predicate used by logger implementations.
@@ -2062,16 +2615,16 @@ compose records without aliasing the original structured fields. Direct
 <code>field</code>, <code>has_field</code>, and <code>field_count</code> inspection
 does not require cloning the whole field map. Record equality and hashing
 compare structured fields by key/value membership rather than rendered field
-order. Level/time accessors and builders snapshot nested values as well.</p>
+order. Level/time accessors and builders snapshot nested values as well.
+<code>Logger</code> is the portable interface user-defined loggers implement; callers
+can dispatch through it today, while process-global installation remains a
+planned non-waiting registry concern. Any default stderr emission still happens
+by awaiting <code>Logger.log(...)</code>, never through an ordinary stderr write.</p>
 
-<p>The planned follow-up is the replaceable global logger contract:</p>
+<p>The planned follow-up is the replaceable global logger state:</p>
 
-<pre><code>pub interface Logger {
-  function log(self, r: Record): null
-  function enabled(self, level: Level, module: str): bool
-}
-
-// Global logger. Set once at program start; default is a stderr line logger.
+<pre><code>// Planned non-waiting registry helpers. Set once at program start; the default
+// logger's stderr emission still occurs through Logger.log(...): Future&lt;null&gt;.
 pub function set_logger(l: Logger): null | LoggerAlreadySet
 pub function logger(): Logger</code></pre>
 
@@ -2093,21 +2646,21 @@ pub function logger(): Logger</code></pre>
     <tr><td><code>core:collections</code></td><td>core</td><td><span class="pill spec">spec</span></td>
         <td><code>List</code>, <code>Map</code>, <code>Set</code>, <code>Entry</code> — explicit import; <code>Set</code> value semantics, compact stringification, snapshots, bulk insertion, and subset/superset/disjoint predicates; deterministic default hasher; keyed collection construction planned</td></tr>
     <tr><td><code>std:collections</code></td><td>std</td><td><span class="pill spec">spec</span></td>
-        <td><code>Deque</code>, <code>deque&lt;T&gt;()</code>, and <code>deque_from_list&lt;T&gt;(List&lt;T&gt;)</code>; ordinary Otter-authored collection with bulk front/back extension, indexed reads/writes/removals, membership testing, equality, clone, hash, stringification, debug rendering, list snapshots, and iterator support</td></tr>
+        <td><code>Deque</code>, <code>deque&lt;T&gt;()</code>, and <code>deque_from_list&lt;T&gt;(List&lt;T&gt;)</code>; ordinary Otter-authored collection with bulk front/back extension, indexed reads/writes/removals, membership testing, reverse/reversed helpers, equality, clone, hash, stringification, debug rendering, list snapshots, and iterator support</td></tr>
     <tr><td><code>core:ffi</code></td><td>core</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>
         <td><code>Foreign</code>, <code>CString</code>, <code>CStr</code>, <code>Buffer</code>, C-width aliases, <code>c_void</code>, <code>c_va_list</code>; planned pinning/callback/thread-attach helpers</td></tr>
     <tr><td><code>std:bytes</code></td><td>std</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>
-        <td><code>Bytes</code>, <code>BytesCursor</code>, <code>from_str</code> UTF-8 encoding, <code>decode_utf8</code> strict UTF-8 decoding, direct set/pop/remove/append/truncate/clear helpers, <code>Utf8Error</code> error/value semantics, byte/cursor clone/equality/hash/diagnostic stringification/debug, in-memory <code>Writer</code>, cursor-backed <code>Reader</code>/<code>Seeker</code>; planned pinned <code>Buffer</code> view</td></tr>
+        <td><code>Bytes</code>, <code>BytesCursor</code>, <code>from_str</code> UTF-8 encoding, <code>decode_utf8</code> strict UTF-8 decoding, direct set/insert/pop/remove/append/truncate/resize/clear helpers, byte and subsequence search helpers, <code>Utf8Error</code> error/value semantics, byte/cursor clone/equality/hash/diagnostic stringification/debug, in-memory <code>Writer</code>, cursor-backed <code>Reader</code>/<code>Seeker</code>; planned pinned <code>Buffer</code> view</td></tr>
     <tr><td><code>std:io</code></td><td>std</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>
-        <td><code>print</code>, <code>println</code>, <code>eprint</code>, <code>eprintln</code>, <code>Reader</code>, <code>Writer</code>, <code>Seeker</code>, <code>SeekFrom</code>, <code>IoError</code>, IO value semantics, stdin <code>Reader</code>, stdout/stderr <code>Writer</code> handles, <code>BufReader</code>/<code>BufWriter</code> interface-object adapters</td></tr>
+        <td>async <code>print</code>, <code>println</code>, <code>eprint</code>, <code>eprintln</code>, ordinary in-memory <code>Reader</code>, <code>Writer</code>, and <code>Seeker</code> contracts, async byte-stream <code>AsyncReader</code>/<code>AsyncWriter</code> contracts, <code>SeekFrom</code>, <code>IoError</code>, IO value semantics, stdin <code>AsyncReader</code>, stdout/stderr <code>AsyncWriter</code> handles with async concrete methods and <code>*_async</code> aliases, <code>BufReader</code>/<code>BufWriter</code> in-memory interface-object adapters</td></tr>
     <tr><td><code>std:fmt</code></td><td>std</td><td><span class="pill spec">spec</span></td>
         <td><code>Display</code>, <code>Debug</code>, <code>FmtSink</code>, <code>FmtError</code>; <code>FmtError</code> error/value semantics; primitive/string <code>Debug</code> intrinsics; <code>Debug</code> impls for pure stdlib values and renderable collections</td></tr>
     <tr><td><code>std:error</code></td><td>std</td><td><span class="pill spec">spec</span></td>
         <td><code>Error</code> interface, <code>Annotated</code> wrapper, <code>with_context</code>; <code>Annotated</code> debug rendering</td></tr>
     <tr><td><code>std:time</code></td><td>std</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>
-        <td><code>Duration</code>, monotonic <code>Instant</code>, wall-clock <code>SystemTime</code>, <code>TimeZone</code>, <code>DateTime</code>, <code>TimeError</code>, value semantics, ISO-like formatting/parsing, timezone replacement, UTC/fixed-offset/local system-time conversion, <code>DateTime.now_utc()</code>, <code>DateTime.now_local()</code>, and <code>sleep(Duration)</code>; planned timezone databases, named-zone conversion, and leap-second policy</td></tr>
+        <td><code>Duration</code>, monotonic <code>Instant</code>, wall-clock <code>SystemTime</code>, <code>TimeZone</code>, <code>DateTime</code>, <code>TimeError</code>, value semantics, ISO-like formatting/parsing, timezone replacement, UTC/fixed-offset conversion, awaitable clock/local system-time conversion via <code>Instant.now()</code>, <code>SystemTime.now()</code>, <code>DateTime.now_utc()</code>, <code>DateTime.now_local()</code>, <code>DateTime.from_system_time_local(t)</code>, and async non-blocking <code>sleep(Duration): Future&lt;null&gt;</code>; planned timezone databases, named-zone conversion, and leap-second policy</td></tr>
     <tr><td><code>std:hash</code></td><td>std</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>
-        <td><code>Hasher</code>, deterministic <code>DefaultHasher</code>, explicit <code>KeyedHasher</code>, byte-stream writes, interface-level <code>Hash</code> writes, state value semantics, <code>hash_value</code>, <code>write_hash</code>, <code>combine_hash</code>, <code>keyed_hasher</code>; planned keyed collection integration</td></tr>
+        <td><code>Hasher</code>, deterministic <code>DefaultHasher</code>, explicit <code>KeyedHasher</code>, awaitable OS-seeded <code>os_keyed_hasher()</code> with <code>HashSeedError</code>, byte-stream writes, interface-level <code>Hash</code> writes, state value semantics, <code>hash_value</code>, <code>write_hash</code>, <code>combine_hash</code>, <code>keyed_hasher</code>; planned keyed collection integration</td></tr>
     <tr><td><code>core:async</code></td><td>core</td><td><span class="pill spec">spec</span></td>
         <td><code>Future</code>, <code>Ready</code>, <code>Pending</code>, <code>Context</code>, <code>AsyncIterator</code></td></tr>
     <tr><td><code>std:json</code></td><td>std</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>
@@ -2117,25 +2670,25 @@ pub function logger(): Logger</code></pre>
     <tr><td><code>std:http</code></td><td>std</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>
         <td>Comparable <code>Method</code>/<code>HttpVersion</code>, standard <code>Status</code> helpers/reason phrases and reason builders, case-insensitive normalized <code>Headers</code> with order-insensitive header-name hashing, <code>HeaderEntry</code>, <code>HttpRequest</code>, <code>HttpResponse</code>, value equality/clone/hash, flattened header entries, request/response snapshot accessors and header builders, diagnostic debug rendering; planned parsing/client/server work</td></tr>
     <tr><td><code>std:fs</code></td><td>std</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>
-        <td><code>Path</code> value operations including lexical normalization, native separator conversion, and target-backed existence/type/metadata/canonicalization queries; <code>DirEntry</code>/<code>DirEntries</code>/<code>FileKind</code>, <code>Metadata</code>/<code>Permissions</code>, and <code>OpenOptions</code> value semantics with snapshot constructors/accessors/builders and open-option validation; target-backed binary <code>read</code>/<code>write</code>, text <code>File</code>/<code>read_to_string</code>/<code>write_string</code>/<code>append_string</code>, descriptor-backed <code>File</code> handles implementing <code>Reader</code>/<code>Writer</code>/<code>Seeker</code> plus concrete async methods, explicit open options, snapshot-backed <code>read_dir</code>, plus non-recursive <code>remove</code>, <code>rename</code>, <code>create_dir</code>, and <code>create_dir_all</code></td></tr>
+        <td><code>Path</code> value operations including lexical normalization and native separator conversion; <code>DirEntry</code>/<code>DirEntries</code>/<code>FileKind</code>, <code>Metadata</code>/<code>Permissions</code>, and <code>OpenOptions</code> value semantics with snapshot constructors/accessors/builders and open-option validation; helper-backed, reactor-woken future-returning target-backed existence/type/metadata/canonicalization queries, binary <code>read</code>/<code>write</code>, text helpers, descriptor-backed <code>File</code> open/create/append/open-with, close, text helpers, byte IO, and seek methods plus <code>AsyncReader</code>/<code>AsyncWriter</code> aliases, explicit open options, snapshot-backed <code>read_dir</code>, plus non-recursive <code>remove</code>, <code>rename</code>, <code>create_dir</code>, and <code>create_dir_all</code></td></tr>
     <tr><td><code>std:net</code></td><td>std</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>
-        <td>Provider-backed <code>resolve(host): List&lt;IpAddr&gt; | IoError</code>; synchronous <code>TcpStream</code>/<code>TcpListener</code> handles implementing <code>Reader</code>/<code>Writer</code> and accept/local/peer address operations; synchronous <code>UdpSocket</code> datagrams with bind/send_to/recv_from/local address/close; planned async network adapters, IDNA, and richer socket options</td></tr>
+        <td>Provider-backed async <code>resolve(host): Future&lt;List&lt;IpAddr&gt; | IoError&gt;</code>, <code>TcpStream.connect</code>/<code>connect_timeout</code>, <code>TcpStream</code> byte I/O plus metadata/control/close, <code>TcpListener.bind</code>/accept/setup/control/close, and future-returning <code>UdpSocket</code> bind/connect/datagrams/metadata/control/options/multicast/close over helper-backed futures and one-shot reactor wakeups; explicit <code>AsyncTcpStream</code> implementing <code>AsyncReader</code>/<code>AsyncWriter</code> plus <code>AsyncTcpListener</code> with async TCP connect/connect_timeout/read/write/peek/stream metadata/control/listener bind/accept/listener setup/control over helper-backed futures and one-shot reactor wakeups; network operation deadlines use <code>std:async.timeout(...)</code> around explicit async futures today except for the dedicated TCP connect-timeout constructors, so copied timeout method families such as TCP read/write/peek timeout names, listener accept timeout names, and connected or address-aware UDP timeout names are not current API; explicit datagram-shaped <code>AsyncUdpSocket</code> adapter with async UDP bind/connect/send/recv/peek/send_to/recv_from/peek_from/metadata/control/options/multicast/close over the same helper-backed future/reactor-wake path; planned IDNA, deeper readiness-native provider integration, richer timeout ergonomics after an Otter-specific API decision, and additional platform-specific socket options</td></tr>
     <tr><td><code>std:thread</code></td><td>std</td><td><span class="pill spec">spec</span></td>
-        <td><code>Thread.spawn</code>, <code>JoinHandle</code>, <code>Joined</code>, <code>Panicked</code>; <code>Panicked</code> value semantics</td></tr>
+        <td><code>Thread.spawn</code> as the one-OS-thread-per-worker primitive for ordinary non-async or async workers whose CPU-heavy or OS-thread-affine work must run outside the shared executor, with host OS-thread creation bracketed as a runtime native-state boundary; it is not a public substitute for wait-capable target APIs under the corrected async contract; use <code>Task.spawn</code>/<code>spawn</code> for high-scale executor work instead; non-awaitable <code>JoinHandle</code> handles with async non-blocking <code>join()</code>, ordinary <code>detach()</code>, no <code>cancel()</code>/<code>abort()</code>, <code>Joined</code>, and <code>Panicked</code>; <code>Panicked</code> value semantics</td></tr>
     <tr><td><code>std:sync</code></td><td>std</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>
-        <td><code>Shared</code> and channels are exported today; <code>ChannelClosed</code>/<code>LockBusy</code> value semantics; <code>RwLock</code>, <code>Once</code>, and <code>Lazy</code> are planned</td></tr>
+        <td><code>Shared</code>, unbounded MPSC <code>channel</code>, <code>Sender</code>/<code>Receiver</code>, async non-blocking <code>Receiver.recv()</code>, async receiver drains via <code>for await value in rx</code>, immediate non-blocking <code>try_recv()</code>, compile-error guard coverage rejecting plain receiver iteration, and <code>ChannelClosed</code>/<code>LockBusy</code> value semantics are implemented today; <code>Shared.lock</code> contention suspends tasks through a FIFO waiter queue while internal runtime mutex waits publish runtime-native/no-root state; bounded/MPMC constructor names are reserved and diagnose if called; <code>RwLock</code>, <code>Once</code>, and <code>Lazy</code> are planned only under the same async public contract, with wait-capable acquisition/initialization methods future-returning and immediate probes explicitly non-waiting</td></tr>
     <tr><td><code>std:task</code></td><td>std</td><td><span class="pill spec">spec</span></td>
-        <td><code>Task.spawn</code> on the M:N executor, executor <code>JoinHandle&lt;R&gt;</code> with <code>join</code>/<code>detach</code>/<code>cancel</code>/<code>abort</code>, <code>Joined&lt;R&gt;</code>, <code>Panicked</code>, and <code>Cancelled</code> value semantics</td></tr>
+        <td><code>Task.spawn</code> on the M:N executor for lightweight work, with executor worker-pool OS-thread creation bracketed as a runtime native-state boundary and idle worker condvar parks published as runtime-native/no-root state; non-awaitable executor <code>JoinHandle&lt;R&gt;</code> with async <code>join</code>, <code>detach</code>, cooperative <code>cancel</code>/<code>abort</code>, <code>Joined&lt;R&gt;</code>, <code>Panicked</code>, and <code>Cancelled</code> value semantics; wait-capable operations must use explicit async surfaces</td></tr>
     <tr><td><code>core:sync/atomic</code></td><td>core</td><td><span class="pill spec">spec</span></td>
         <td><code>Ordering</code> value semantics and constructor helpers; runtime-backed <code>AtomicI32</code>, <code>AtomicI64</code>, <code>AtomicU32</code>, <code>AtomicU64</code>, <code>AtomicBool</code>, and <code>AtomicPtr&lt;T&gt;</code> load/store/swap/compare-exchange operations with integer/bool fetch operations</td></tr>
     <tr><td><code>std:async</code></td><td>std</td><td><span class="pill spec">spec</span></td>
-        <td><code>yield_now</code>, <code>sleep</code>, <code>timeout</code>, <code>TimedOut</code> value semantics, executor/runtime adapters</td></tr>
+        <td><code>yield_now</code>, executor-suspending <code>sleep(ms)</code>, <code>timeout</code>, <code>TimedOut</code> value semantics, and runtime helpers shared by explicit async timer surfaces such as <code>std:time.sleep(Duration)</code></td></tr>
     <tr><td><code>std:process</code></td><td>std</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>
-        <td><code>Command</code>, live <code>Child</code>, <code>ExitStatus</code>, captured <code>Output</code>, snapshotting value builders/accessors including args/env/cwd replacement and clearing, direct command validation, structural equality/hash value semantics, host <code>args</code>/<code>env</code>/<code>env_all</code>/<code>set_env</code>, process <code>exit</code>/<code>abort</code>, run-to-completion <code>Command.status()</code>/<code>output()</code>, and <code>Command.spawn()</code> with child <code>id()</code>/<code>wait()</code>/<code>kill()</code>; planned streamed child stdio and richer target-specific status details</td></tr>
+        <td><code>Command</code>, live <code>Child</code>, <code>ExitStatus</code>, captured <code>Output</code>, snapshotting value builders/accessors including args/env/cwd replacement and clearing, direct command validation, structural equality/hash value semantics, captured-output <code>Output.status()</code> / <code>stdout()</code> / <code>stderr()</code> as non-waiting snapshot accessors, async host <code>args(): Future&lt;List&lt;str&gt;&gt;</code>, <code>env</code>, <code>env_all</code>, and <code>set_env</code>, process <code>exit</code>/<code>abort</code>, awaitable process-exit status <code>Command.status(): Future&lt;ExitStatus | IoError&gt;</code> / awaitable output capture <code>Command.output(): Future&lt;Output | IoError&gt;</code> with exact stdout/stderr byte capture and code/signal/core-dump/stopped-signal/continued status details, and async <code>Command.spawn(): Future&lt;Child | IoError&gt;</code> with child <code>id()</code> plus async <code>wait()</code>/<code>kill()</code>; planned streamed child stdio uses async stream contracts and currently returns <code>null</code></td></tr>
     <tr><td><code>std:rand</code></td><td>std</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>
-        <td><code>Rng</code>, deterministic <code>SeededRng</code> with state value semantics, OS-backed <code>OsRng</code>, per-value <code>ThreadRng</code>, <code>RandomError</code>, integer/f64 range helpers, exact byte-buffer helpers, <code>gen_bool</code>, uniform index helpers, <code>choose</code>, <code>shuffle</code>; planned cryptographic-strength guarantees and richer distributions</td></tr>
+        <td><code>Rng</code>, deterministic <code>SeededRng</code> with state value semantics, awaitable OS-backed <code>OsRng</code> entropy methods, owned <code>os_bytes</code> entropy buffers, per-value <code>ThreadRng</code>, <code>RandomError</code>, integer/f64 range helpers, symmetric triangular, Bates, Irwin-Hall, min/max order-statistic, midrange, and median f64 sampling, exact byte-buffer helpers, <code>gen_bool</code>, <code>gen_binomial</code>, uniform index helpers, <code>choose</code>, <code>weighted_index</code>, <code>choose_weighted</code>, <code>sample_indices</code>, <code>sample</code>, <code>shuffle</code>, <code>shuffled</code>; planned cryptographic-strength guarantees and additional continuous distributions</td></tr>
     <tr><td><code>std:log</code></td><td>std</td><td><span class="pill spec">spec</span> + <span class="pill planned">planned</span></td>
-        <td><code>Level</code>, <code>Record</code>, <code>LoggerAlreadySet</code>, level ranking/filter helpers, record accessors/builders including field add/remove/clear, field-map snapshots, and field-order-independent equality/hash, default line logging helpers; planned replaceable global logger</td></tr>
+        <td><code>Level</code>, <code>Record</code>, <code>Logger</code>, <code>LoggerAlreadySet</code>, level ranking/filter helpers, awaitable <code>record(...): Future&lt;Record&gt;</code> timestamp construction, record accessors/builders including field add/remove/clear, field-map snapshots, and field-order-independent equality/hash, awaitable default line logging helpers over async stdio; planned global logger installation</td></tr>
   </tbody>
 </table>
 

@@ -1,0 +1,9 @@
+//@ kind: compile-error
+//@ description: std:time sleep keeps its Future<null> contract when imported through an alias
+//@ stderr: expected `null`, found `Future<null>`
+
+import { Duration, sleep as time_sleep } from "std:time";
+
+function main() {
+  var done: null = time_sleep(Duration.from_millis(1));
+}

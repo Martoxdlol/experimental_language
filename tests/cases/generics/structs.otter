@@ -3,10 +3,12 @@
 //@ stdout:
 //~ 7
 //~ seven
+import { Future } from "core:prelude";
 import { println } from "std:io";
 struct Pair<A, B> { first: A, second: B }
-function main() {
+function main(): Future<null> async {
   var p = Pair<i64, str> { first: 7, second: "seven" };
-  println("${p.first}");
-  println(p.second);
+  await println("${p.first}");
+  await println(p.second);
+  null
 }

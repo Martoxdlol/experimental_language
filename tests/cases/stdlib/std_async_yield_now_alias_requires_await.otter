@@ -1,0 +1,9 @@
+//@ kind: compile-error
+//@ description: std:async yield_now keeps its Future<null> contract when imported through an alias
+//@ stderr: expected `null`, found `Future<null>`
+
+import { yield_now as pause } from "std:async";
+
+function main() {
+  var done: null = pause();
+}

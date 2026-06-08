@@ -1,8 +1,10 @@
 //@ kind: panic
 //@ description: integer subtraction overflow at INT_MIN panics
 //@ stderr: attempt to subtract with overflow
+import { Future } from "core:prelude";
 import { println } from "std:io";
-function main() {
+function main(): Future<null> async {
   var min = 0 - 9223372036854775807 - 1;
-  println("${min - 1}");
+  await println("${min - 1}");
+  null
 }

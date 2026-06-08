@@ -3,12 +3,12 @@
 //@ stdout:
 //~ tttt
 //~ i=3
-import { println, print } from "std:io";
 import { Future } from "core:prelude";
+import { println, print } from "std:io";
 import { yield_now } from "std:async";
 function tick(i: i64): Future<bool> async {
   await yield_now();
-  print("t");
+  await print("t");
   i < 3
 }
 function main(): Future<null> async {
@@ -16,6 +16,7 @@ function main(): Future<null> async {
   while await tick(i) {
     i = i + 1;
   }
-  println("");
-  println("i=${i }");
+  await println("");
+  await println("i=${i}");
+  null
 }

@@ -4,8 +4,8 @@
 //@ description: Task.spawn sustains 8192 yielding async workers and joins every handle without quadratic GC root churn
 //@ stdout:
 //~ total=33550336
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { List } from "core:collections";
 import { Task, JoinHandle, Joined, Panicked, Cancelled } from "std:task";
 import { yield_now } from "std:async";
@@ -38,5 +38,6 @@ function main(): Future<null> async {
     j = j + 1;
   }
 
-  println("total=${total }");
+  await println("total=${total}");
+  null
 }

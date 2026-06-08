@@ -7,12 +7,14 @@
 //~ 1000000
 //~ 0
 //~ -42
+import { Future } from "core:prelude";
 import { println } from "std:io";
-function main() {
-  println("${0xFF}");
-  println("${0o377}");
-  println("${0b1111_1111}");
-  println("${1_000_000}");
-  println("${0}");
-  println("${-42}");
+function main(): Future<null> async {
+  await println("${0xFF}");
+  await println("${0o377}");
+  await println("${0b1111_1111}");
+  await println("${1_000_000}");
+  await println("${0}");
+  await println("${-42}");
+  null
 }

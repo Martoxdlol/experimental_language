@@ -1,11 +1,11 @@
 //@ kind: run
-//@ description: std:io async concrete handles park on reactor-backed futures instead of blocking executor polls
+//@ description: std:io async concrete handles use helper-backed, reactor-woken futures instead of blocking executor polls
 //@ stdin: abcdef
 //@ stdout:
 //~ async-write
 //~ async-stdin=2 bytes[97,98] 4 bytes[99,100,101,102] true
-import { Bytes } from "std:bytes";
 import { Future } from "core:prelude";
+import { Bytes } from "std:bytes";
 import { println, stdin, stdout } from "std:io";
 
 function main(): Future<null> async {
@@ -23,5 +23,6 @@ function main(): Future<null> async {
   var wrote = await out.write_all_async(Bytes.from_str("async-write\n"));
   var flushed = await out.flush_async();
 
-  println("async-stdin=${first_count as i64} ${first_payload.to_str()} ${rest_count as i64} ${rest.to_str()} ${wrote is null && flushed is null}");
+  await println("async-stdin=${first_count as i64} ${first_payload.to_str()} ${rest_count as i64} ${rest.to_str()} ${wrote is null && flushed is null}");
+  null
 }

@@ -19,7 +19,7 @@ function render_debug(value: Debug): str {
 function main(): Future<null> async {
   var shared: Shared<i64> = Shared.new(10);
   var locked: i64 = await shared.lock((value: i64): i64 => value + 5);
-  println("locked=${locked}");
+  await println("locked=${locked}");
 
   var ends = channel<i64>();
   var tx: Sender<i64> = ends.0;
@@ -27,15 +27,16 @@ function main(): Future<null> async {
   tx.send(3);
   var received: i64 | ChannelClosed = await rx.recv();
   match received {
-    i64 value => println("received=${value}"),
-    ChannelClosed => println("received=closed"),
+    i64 value => await println("received=${value}"),
+    ChannelClosed => await println("received=closed"),
   }
 
   var closed = ChannelClosed {};
   var closed_copy = closed.clone();
-  println("${closed == closed_copy} ${closed.hash() == closed_copy.hash()} ${closed.to_str()} ${render_debug(closed)}");
+  await println("${closed == closed_copy} ${closed.hash() == closed_copy.hash()} ${closed.to_str()} ${render_debug(closed)}");
 
   var busy = LockBusy {};
   var busy_copy = busy.clone();
-  println("${busy == busy_copy} ${busy.hash() == busy_copy.hash()} ${busy.to_str()} ${render_debug(busy)}");
+  await println("${busy == busy_copy} ${busy.hash() == busy_copy.hash()} ${busy.to_str()} ${render_debug(busy)}");
+  null
 }

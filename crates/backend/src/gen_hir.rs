@@ -2284,7 +2284,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 // drives it. An `async` body was desugared (ANF) into a closure
                 // returning an `async { … }` block, so its return type is a
                 // `Future<R>` — detect that, flatten to `R`, and have the runtime
-                // drive the body future to completion under the lock.
+                // await the body future until it resolves under the lock.
                 let body = &args[1];
                 let fret = self.func_ret(body.ty);
                 let (r_ty, body_is_async) = match self.cx.analysis.tcx.kind(resolve_shallow(
@@ -2740,20 +2740,6 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
 
     fn h_builtin_call(&mut self, b: Builtin, args: &[hir::Expr]) -> CgResult<Option<Value>> {
         match b {
-            Builtin::Print | Builtin::Println | Builtin::Eprint | Builtin::Eprintln => {
-                let arg = self.h_expr(&args[0])?.ok_or_else(|| {
-                    CodegenError::new(args[0].span, "builtin argument has no value")
-                })?;
-                let name = match b {
-                    Builtin::Print => "lang_print",
-                    Builtin::Println => "lang_println",
-                    Builtin::Eprint => "lang_eprint",
-                    Builtin::Eprintln => "lang_eprintln",
-                    _ => unreachable!("print builtin branch only handles print builtins"),
-                };
-                self.call_intrinsic(name, &[PTR], None, &[arg]);
-                Ok(None)
-            }
             Builtin::Panic => {
                 let msg = self
                     .h_expr(&args[0])?
@@ -3527,69 +3513,76 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             }
             hir::ForDriver::ListFast { elem } => self.h_for_list(pattern, iter, body, *elem),
             hir::ForDriver::AsyncIter(info) => self.h_for_async(pattern, iter, body, info),
+            hir::ForDriver::ChannelAsync {
+                elem,
+                union_ty,
+                closed_ty,
+            } => self.h_for_channel_async(pattern, iter, body, *elem, *union_ty, *closed_ty),
             hir::ForDriver::StrChars => self.h_for_str_chars(pattern, iter, body),
-            hir::ForDriver::Channel { elem } => self.h_for_channel(pattern, iter, body, *elem),
         }
     }
 
-    /// `for n in rx` over a `Receiver<T>` (`docs/20` §2): blocking-recv each
-    /// message, binding it and running the body, until the channel is closed
-    /// and drained — at which point `lang_chan_recv_blocking` reports "no value"
-    /// (`got == 0`, the iterator's `Done`) and the loop exits. This is the
-    /// synchronous `Receiver: Iterator` drainer; the recv parks the OS thread
-    /// (cooperating with the GC) while waiting, so a closed sender promptly
-    /// terminates it.
-    fn h_for_channel(
+    /// `for await n in rx` over a `Receiver<T>`: await `recv()` each iteration
+    /// and exit when the resolved union is `ChannelClosed`. This is deliberately
+    /// built on the existing channel-recv future; no OS thread is parked.
+    fn h_for_channel_async(
         &mut self,
         pattern: &hir::Pattern,
         iter: &hir::Expr,
         body: &hir::Block,
         elem: Ty,
+        union_ty: Ty,
+        closed_ty: Ty,
     ) -> CgResult<Option<Value>> {
+        if !matches!(&iter.kind, hir::ExprKind::Name(hir::Res::Local(_))) {
+            return Err(CodegenError::new(
+                iter.span,
+                "`for await` over a channel currently requires the receiver to be \
+                 a variable — bind it with `var rx = …;` first",
+            ));
+        }
         let rty = iter.ty;
-        let rxv = self
-            .h_expr(iter)?
-            .ok_or_else(|| CodegenError::new(iter.span, "receiver has no value"))?;
-        self.mark_root(rxv);
-        let chan = self.emit_channel_id(rxv, rty, iter.span)?;
-        let got_slot =
-            self.b
-                .create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, 8, 3));
         let header = self.b.create_block();
         let body_bb = self.b.create_block();
         let exit = self.b.create_block();
         self.b.ins().jump(header, &[]);
         self.term = true;
+
         self.switch(header);
-        self.emit_safepoint();
-        let got_ptr = self.b.ins().stack_addr(PTR, got_slot, 0);
-        let raw = self
-            .call_intrinsic(
-                "lang_chan_recv_blocking",
-                &[types::I64, PTR],
-                Some(types::I64),
-                &[chan, got_ptr],
-            )
-            .expect("blocking recv");
-        let got = self
-            .b
-            .ins()
-            .load(types::I64, MemFlags::trusted(), got_ptr, 0);
-        let zero = self.b.ins().iconst(types::I64, 0);
-        let have = self.b.ins().icmp(IntCC::NotEqual, got, zero);
-        self.b.ins().brif(have, body_bb, &[], exit, &[]);
+        let rxv = self
+            .h_expr(iter)?
+            .ok_or_else(|| CodegenError::new(iter.span, "receiver has no value"))?;
+        self.mark_root(rxv);
+        let chan = self.emit_channel_id(rxv, rty, iter.span)?;
+        let fut = self
+            .emit_channel_recv(chan, elem, "recv", iter.span)?
+            .ok_or_else(|| CodegenError::new(iter.span, "channel recv returned no future"))?;
+        let u = self
+            .emit_await_suspend(fut, iter.span, union_ty)?
+            .ok_or_else(|| CodegenError::new(iter.span, "awaited channel recv has no value"))?;
+        self.mark_root(u);
+        let tag = self.b.ins().load(types::I64, MemFlags::trusted(), u, 0);
+        let closed_id = self.type_id_of(closed_ty);
+        let closed_c = self.b.ins().iconst(types::I64, closed_id);
+        let is_closed = self.b.ins().icmp(IntCC::Equal, tag, closed_c);
+        self.b.ins().brif(is_closed, exit, &[], body_bb, &[]);
         self.term = true;
+
         self.switch(body_bb);
-        let elem_val = self.i64_to_elem(raw, elem, iter.span)?;
-        if is_managed_ptr(
-            self.cx.analysis,
-            resolve_shallow(self.cx.analysis, elem, &self.subst),
-        ) {
-            if let Some(v) = elem_val {
-                self.mark_root(v);
+        let value = match self.cx_clty(elem) {
+            Some(ct) => {
+                let v = self.b.ins().load(ct, MemFlags::trusted(), u, 8);
+                if is_managed_ptr(
+                    self.cx.analysis,
+                    resolve_shallow(self.cx.analysis, elem, &self.subst),
+                ) {
+                    self.mark_root(v);
+                }
+                Some(v)
             }
-        }
-        self.h_bind_pattern(pattern, elem_val, elem, false, false)?;
+            None => None,
+        };
+        self.h_bind_pattern(pattern, value, elem, false, false)?;
         self.loops.push(LoopCg {
             continue_block: header,
             break_block: exit,
@@ -3604,7 +3597,6 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         self.switch(exit);
         Ok(None)
     }
-
     /// `for ch in s` over a `str` (`docs/18` §4): snapshot the Unicode scalars
     /// into a `List<char>` (`lang_str_to_chars`) and index-loop them — exactly
     /// the desugaring `for ch in s.chars()` with no intermediate iterator
@@ -3717,7 +3709,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
             .ok_or_else(|| CodegenError::new(iter.span, "stream has no value"))?;
         // Resolve `next_async`: an interface-object stream dispatches through the
         // vtable; a concrete `extend … : AsyncIterator` resolves to the impl
-        // (mirrors the synchronous `h_for_iterator`).
+        // (mirrors the ordinary `h_for_iterator` path).
         let fut = if self.cx.analysis.program.def(info.next_async).kind == DefKind::InterfaceMethod
         {
             let recv = resolve_shallow(self.cx.analysis, info.iter_ty, &self.subst);
@@ -3791,8 +3783,8 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     }
 
     /// The async state-struct slots `(self_ptr, iterable_off, index_off)` reserved
-    /// for a sync `for` loop (keyed by `iter.span`) whose body awaits, or `None`
-    /// for an ordinary (non-suspending) loop. When `Some`, the loop's iterable
+    /// for an ordinary `for` loop (keyed by `iter.span`) whose body awaits, or
+    /// `None` for an ordinary (non-suspending) loop. When `Some`, the loop's iterable
     /// pointer and index counter must be held in the persistent state struct (not
     /// in Cranelift SSA, which does not survive a `poll` return) — see
     /// `async_state_layout` / `h_scan_for_state`.
@@ -4168,7 +4160,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     ) -> CgResult<Option<Value>> {
         if is_async {
             // Unreachable in practice: `sema::anf` desugars every async closure
-            // `(p) async => E` into a *sync* closure returning a bare async block
+            // `(p) async => E` into a non-async closure returning a bare async block
             // — `(p) => async { E }` (`docs/21` §7) — before codegen runs, so a
             // `Closure` node always arrives here with `is_async == false`. The
             // async surface is the async block (`h_async_block` + the state
@@ -4497,7 +4489,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         if !params.is_empty() {
             // Unreachable in practice: an `async { … }` block is always a
             // *zero-arg* inline future literal (`docs/21` §6–§7). An async
-            // closure's parameters live on the enclosing (desugared, sync)
+            // closure's parameters live on the enclosing desugared non-async
             // closure — `(p) => async { E }` — never on the block, so the block's
             // param list is always empty here. A non-empty list means the
             // async-closure desugar (`sema::anf`) produced a malformed shape.
@@ -4774,6 +4766,36 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                     &[ms, rt, pt],
                 ))
             }
+            hir::Intrinsic::TimeSleep => {
+                let duration = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "sleep duration has no value")
+                })?;
+                let layout = self.layout_for_ty(args[0].ty).ok_or_else(|| {
+                    CodegenError::new(args[0].span, "sleep duration is not an aggregate")
+                })?;
+                let nanos = self.h_load_field(duration, &layout, 0).ok_or_else(|| {
+                    CodegenError::new(args[0].span, "sleep duration has no nanos field")
+                })?;
+                let zero = self.b.ins().iconst(types::I64, 0);
+                let million = self.b.ins().iconst(types::I64, 1_000_000);
+                let positive = self.b.ins().icmp(IntCC::SignedGreaterThan, nanos, zero);
+                let base_ms = self.b.ins().sdiv(nanos, million);
+                let rem = self.b.ins().srem(nanos, million);
+                let has_rem = self.b.ins().icmp(IntCC::NotEqual, rem, zero);
+                let rounded = self.b.ins().iadd_imm(base_ms, 1);
+                let ms_if_positive = self.b.ins().select(has_rem, rounded, base_ms);
+                let ms = self.b.ins().select(positive, ms_if_positive, zero);
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                Ok(self.call_intrinsic(
+                    "lang_async_sleep",
+                    &[types::I64, types::I64, types::I64],
+                    Some(PTR),
+                    &[ms, rt, pt],
+                ))
+            }
             hir::Intrinsic::AsyncTimeout { output } => {
                 let fut = self.h_expr(&args[0])?.ok_or_else(|| {
                     CodegenError::new(args[0].span, "timeout future has no value")
@@ -4873,6 +4895,130 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                 };
                 Ok(self.call_intrinsic(symbol, &[types::I64, types::I64], Some(PTR), &[rt, pt]))
             }
+            hir::Intrinsic::RandOsBytesAsync => {
+                let count = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "random bytes async count has no value")
+                })?;
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                Ok(self.call_intrinsic(
+                    "lang_rand_os_bytes_async",
+                    &[types::I64, types::I64, types::I64],
+                    Some(PTR),
+                    &[count, rt, pt],
+                ))
+            }
+            hir::Intrinsic::FsReadTextAsync
+            | hir::Intrinsic::FsReadBytesAsync
+            | hir::Intrinsic::FsExistsAsync
+            | hir::Intrinsic::FsIsFileAsync
+            | hir::Intrinsic::FsIsDirAsync
+            | hir::Intrinsic::FsKindAsync
+            | hir::Intrinsic::FsLenAsync
+            | hir::Intrinsic::FsReadOnlyAsync
+            | hir::Intrinsic::FsExecutableAsync
+            | hir::Intrinsic::FsRemoveAsync
+            | hir::Intrinsic::FsCreateDirAsync
+            | hir::Intrinsic::FsCreateDirAllAsync
+            | hir::Intrinsic::FsCanonicalizeAsync
+            | hir::Intrinsic::FsReadDirAsync => {
+                let path = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "filesystem async path has no value")
+                })?;
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                let symbol = match intrinsic {
+                    hir::Intrinsic::FsReadTextAsync => "lang_fs_read_text_async",
+                    hir::Intrinsic::FsReadBytesAsync => "lang_fs_read_bytes_async",
+                    hir::Intrinsic::FsExistsAsync => "lang_fs_exists_async",
+                    hir::Intrinsic::FsIsFileAsync => "lang_fs_is_file_async",
+                    hir::Intrinsic::FsIsDirAsync => "lang_fs_is_dir_async",
+                    hir::Intrinsic::FsKindAsync => "lang_fs_kind_async",
+                    hir::Intrinsic::FsLenAsync => "lang_fs_len_async",
+                    hir::Intrinsic::FsReadOnlyAsync => "lang_fs_read_only_async",
+                    hir::Intrinsic::FsExecutableAsync => "lang_fs_executable_async",
+                    hir::Intrinsic::FsRemoveAsync => "lang_fs_remove_async",
+                    hir::Intrinsic::FsCreateDirAsync => "lang_fs_create_dir_async",
+                    hir::Intrinsic::FsCreateDirAllAsync => "lang_fs_create_dir_all_async",
+                    hir::Intrinsic::FsCanonicalizeAsync => "lang_fs_canonicalize_async",
+                    hir::Intrinsic::FsReadDirAsync => "lang_fs_read_dir_async",
+                    _ => unreachable!(),
+                };
+                Ok(self.call_intrinsic(
+                    symbol,
+                    &[PTR, types::I64, types::I64],
+                    Some(PTR),
+                    &[path, rt, pt],
+                ))
+            }
+            hir::Intrinsic::FsWriteTextAsync
+            | hir::Intrinsic::FsAppendTextAsync
+            | hir::Intrinsic::FsWriteBytesAsync
+            | hir::Intrinsic::FsRenameAsync => {
+                let first = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "filesystem async first argument has no value")
+                })?;
+                let second = self.h_expr(&args[1])?.ok_or_else(|| {
+                    CodegenError::new(
+                        args[1].span,
+                        "filesystem async second argument has no value",
+                    )
+                })?;
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                let symbol = match intrinsic {
+                    hir::Intrinsic::FsWriteTextAsync => "lang_fs_write_text_async",
+                    hir::Intrinsic::FsAppendTextAsync => "lang_fs_append_text_async",
+                    hir::Intrinsic::FsWriteBytesAsync => "lang_fs_write_bytes_async",
+                    hir::Intrinsic::FsRenameAsync => "lang_fs_rename_async",
+                    _ => unreachable!(),
+                };
+                Ok(self.call_intrinsic(
+                    symbol,
+                    &[PTR, PTR, types::I64, types::I64],
+                    Some(PTR),
+                    &[first, second, rt, pt],
+                ))
+            }
+            hir::Intrinsic::FsFileOpenAsync => {
+                let path = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "file open_async path has no value")
+                })?;
+                let mode = self.h_expr(&args[1])?.ok_or_else(|| {
+                    CodegenError::new(args[1].span, "file open_async mode has no value")
+                })?;
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                Ok(self.call_intrinsic(
+                    "lang_fs_file_open_async",
+                    &[PTR, PTR, types::I64, types::I64],
+                    Some(PTR),
+                    &[path, mode, rt, pt],
+                ))
+            }
+            hir::Intrinsic::FsFileCloseAsync => {
+                let handle = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "file close_async handle has no value")
+                })?;
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                Ok(self.call_intrinsic(
+                    "lang_fs_file_close_async",
+                    &[types::I64, types::I64, types::I64],
+                    Some(PTR),
+                    &[handle, rt, pt],
+                ))
+            }
             hir::Intrinsic::FsFileReadAsync => {
                 let handle = self.h_expr(&args[0])?.ok_or_else(|| {
                     CodegenError::new(args[0].span, "file read_async handle has no value")
@@ -4950,11 +5096,725 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
                     &[handle, mode, offset, rt, pt],
                 ))
             }
-            hir::Intrinsic::TimeMonotonicNanos => {
-                Ok(self.call_intrinsic("lang_time_monotonic_nanos", &[], Some(types::I64), &[]))
+            hir::Intrinsic::ProcessArgsAsync | hir::Intrinsic::ProcessEnvAllAsync => {
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                let symbol = match intrinsic {
+                    hir::Intrinsic::ProcessArgsAsync => "lang_process_args_async",
+                    hir::Intrinsic::ProcessEnvAllAsync => "lang_process_env_all_async",
+                    _ => unreachable!(),
+                };
+                Ok(self.call_intrinsic(symbol, &[types::I64, types::I64], Some(PTR), &[rt, pt]))
             }
-            hir::Intrinsic::TimeSystemNanos => {
-                Ok(self.call_intrinsic("lang_time_system_nanos", &[], Some(types::I64), &[]))
+            hir::Intrinsic::ProcessEnvAsync => {
+                let name = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "process env_async name has no value")
+                })?;
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                Ok(self.call_intrinsic(
+                    "lang_process_env_async",
+                    &[PTR, types::I64, types::I64],
+                    Some(PTR),
+                    &[name, rt, pt],
+                ))
+            }
+            hir::Intrinsic::ProcessSetEnvAsync => {
+                let name = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "process set_env_async name has no value")
+                })?;
+                let value = self.h_expr(&args[1])?.ok_or_else(|| {
+                    CodegenError::new(args[1].span, "process set_env_async value has no value")
+                })?;
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                Ok(self.call_intrinsic(
+                    "lang_process_set_env_async",
+                    &[PTR, PTR, types::I64, types::I64],
+                    Some(PTR),
+                    &[name, value, rt, pt],
+                ))
+            }
+            hir::Intrinsic::ProcessStatusAsync
+            | hir::Intrinsic::ProcessOutputAsync
+            | hir::Intrinsic::ProcessSpawnAsync => {
+                let payload = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "process async payload has no value")
+                })?;
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                let symbol = match intrinsic {
+                    hir::Intrinsic::ProcessStatusAsync => "lang_process_status_async",
+                    hir::Intrinsic::ProcessOutputAsync => "lang_process_output_async",
+                    hir::Intrinsic::ProcessSpawnAsync => "lang_process_spawn_async",
+                    _ => unreachable!(),
+                };
+                Ok(self.call_intrinsic(
+                    symbol,
+                    &[PTR, types::I64, types::I64],
+                    Some(PTR),
+                    &[payload, rt, pt],
+                ))
+            }
+            hir::Intrinsic::ProcessChildWaitAsync | hir::Intrinsic::ProcessChildKillAsync => {
+                let handle = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "process child async handle has no value")
+                })?;
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                let symbol = match intrinsic {
+                    hir::Intrinsic::ProcessChildWaitAsync => "lang_process_child_wait_async",
+                    hir::Intrinsic::ProcessChildKillAsync => "lang_process_child_kill_async",
+                    _ => unreachable!(),
+                };
+                Ok(self.call_intrinsic(
+                    symbol,
+                    &[types::I64, types::I64, types::I64],
+                    Some(PTR),
+                    &[handle, rt, pt],
+                ))
+            }
+            hir::Intrinsic::NetResolveAsync => {
+                let host = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "net resolve_async host has no value")
+                })?;
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                Ok(self.call_intrinsic(
+                    "lang_net_resolve_async",
+                    &[PTR, types::I64, types::I64],
+                    Some(PTR),
+                    &[host, rt, pt],
+                ))
+            }
+            hir::Intrinsic::NetTcpConnectAsync => {
+                let addr = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "TCP connect_async address has no value")
+                })?;
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                Ok(self.call_intrinsic(
+                    "lang_net_tcp_connect_async",
+                    &[PTR, types::I64, types::I64],
+                    Some(PTR),
+                    &[addr, rt, pt],
+                ))
+            }
+            hir::Intrinsic::NetTcpConnectTimeoutAsync => {
+                let addr = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(
+                        args[0].span,
+                        "TCP connect_timeout async address has no value",
+                    )
+                })?;
+                let nanos = self.h_expr(&args[1])?.ok_or_else(|| {
+                    CodegenError::new(
+                        args[1].span,
+                        "TCP connect_timeout async duration has no value",
+                    )
+                })?;
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                Ok(self.call_intrinsic(
+                    "lang_net_tcp_connect_timeout_async",
+                    &[PTR, types::I64, types::I64, types::I64],
+                    Some(PTR),
+                    &[addr, nanos, rt, pt],
+                ))
+            }
+            hir::Intrinsic::NetTcpStreamReadAsync | hir::Intrinsic::NetTcpStreamPeekAsync => {
+                let handle = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "TCP async handle has no value")
+                })?;
+                let count = self.h_expr(&args[1])?.ok_or_else(|| {
+                    CodegenError::new(args[1].span, "TCP async byte count has no value")
+                })?;
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                let symbol = match intrinsic {
+                    hir::Intrinsic::NetTcpStreamReadAsync => "lang_net_tcp_stream_read_async",
+                    hir::Intrinsic::NetTcpStreamPeekAsync => "lang_net_tcp_stream_peek_async",
+                    _ => unreachable!(),
+                };
+                Ok(self.call_intrinsic(
+                    symbol,
+                    &[types::I64, types::I64, types::I64, types::I64],
+                    Some(PTR),
+                    &[handle, count, rt, pt],
+                ))
+            }
+            hir::Intrinsic::NetTcpStreamReadToEndAsync | hir::Intrinsic::NetTcpStreamFlushAsync => {
+                let handle = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "TCP async handle has no value")
+                })?;
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                let symbol = match intrinsic {
+                    hir::Intrinsic::NetTcpStreamReadToEndAsync => {
+                        "lang_net_tcp_stream_read_to_end_async"
+                    }
+                    hir::Intrinsic::NetTcpStreamFlushAsync => "lang_net_tcp_stream_flush_async",
+                    _ => unreachable!(),
+                };
+                Ok(self.call_intrinsic(
+                    symbol,
+                    &[types::I64, types::I64, types::I64],
+                    Some(PTR),
+                    &[handle, rt, pt],
+                ))
+            }
+            hir::Intrinsic::NetTcpStreamWriteAsync => {
+                let handle = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "TCP write_async handle has no value")
+                })?;
+                let contents = self.h_expr(&args[1])?.ok_or_else(|| {
+                    CodegenError::new(args[1].span, "TCP write_async payload has no value")
+                })?;
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                Ok(self.call_intrinsic(
+                    "lang_net_tcp_stream_write_async",
+                    &[types::I64, PTR, types::I64, types::I64],
+                    Some(PTR),
+                    &[handle, contents, rt, pt],
+                ))
+            }
+            hir::Intrinsic::NetTcpStreamWriteAllAsync => {
+                let handle = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "TCP write_all async handle has no value")
+                })?;
+                let contents = self.h_expr(&args[1])?.ok_or_else(|| {
+                    CodegenError::new(args[1].span, "TCP write_all async payload has no value")
+                })?;
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                Ok(self.call_intrinsic(
+                    "lang_net_tcp_stream_write_all_async",
+                    &[types::I64, PTR, types::I64, types::I64],
+                    Some(PTR),
+                    &[handle, contents, rt, pt],
+                ))
+            }
+            hir::Intrinsic::NetTcpStreamCloseAsync
+            | hir::Intrinsic::NetTcpStreamPeerAddrAsync
+            | hir::Intrinsic::NetTcpStreamLocalAddrAsync
+            | hir::Intrinsic::NetTcpStreamTakeErrorAsync
+            | hir::Intrinsic::NetTcpStreamNodelayAsync
+            | hir::Intrinsic::NetTcpStreamReadTimeoutAsync
+            | hir::Intrinsic::NetTcpStreamWriteTimeoutAsync
+            | hir::Intrinsic::NetTcpStreamTtlAsync => {
+                let handle = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "TCP stream async handle has no value")
+                })?;
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                let symbol = match intrinsic {
+                    hir::Intrinsic::NetTcpStreamCloseAsync => "lang_net_tcp_stream_close_async",
+                    hir::Intrinsic::NetTcpStreamPeerAddrAsync => {
+                        "lang_net_tcp_stream_peer_addr_async"
+                    }
+                    hir::Intrinsic::NetTcpStreamLocalAddrAsync => {
+                        "lang_net_tcp_stream_local_addr_async"
+                    }
+                    hir::Intrinsic::NetTcpStreamTakeErrorAsync => {
+                        "lang_net_tcp_stream_take_error_async"
+                    }
+                    hir::Intrinsic::NetTcpStreamNodelayAsync => "lang_net_tcp_stream_nodelay_async",
+                    hir::Intrinsic::NetTcpStreamReadTimeoutAsync => {
+                        "lang_net_tcp_stream_read_timeout_async"
+                    }
+                    hir::Intrinsic::NetTcpStreamWriteTimeoutAsync => {
+                        "lang_net_tcp_stream_write_timeout_async"
+                    }
+                    hir::Intrinsic::NetTcpStreamTtlAsync => "lang_net_tcp_stream_ttl_async",
+                    _ => unreachable!(),
+                };
+                Ok(self.call_intrinsic(
+                    symbol,
+                    &[types::I64, types::I64, types::I64],
+                    Some(PTR),
+                    &[handle, rt, pt],
+                ))
+            }
+            hir::Intrinsic::NetTcpStreamSetNodelayAsync
+            | hir::Intrinsic::NetTcpStreamSetNonblockingAsync
+            | hir::Intrinsic::NetTcpStreamSetTtlAsync => {
+                let handle = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "TCP stream async handle has no value")
+                })?;
+                let value = self.h_expr(&args[1])?.ok_or_else(|| {
+                    CodegenError::new(args[1].span, "TCP stream async value has no value")
+                })?;
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                let symbol = match intrinsic {
+                    hir::Intrinsic::NetTcpStreamSetNodelayAsync => {
+                        "lang_net_tcp_stream_set_nodelay_async"
+                    }
+                    hir::Intrinsic::NetTcpStreamSetNonblockingAsync => {
+                        "lang_net_tcp_stream_set_nonblocking_async"
+                    }
+                    hir::Intrinsic::NetTcpStreamSetTtlAsync => "lang_net_tcp_stream_set_ttl_async",
+                    _ => unreachable!(),
+                };
+                Ok(self.call_intrinsic(
+                    symbol,
+                    &[types::I64, types::I64, types::I64, types::I64],
+                    Some(PTR),
+                    &[handle, value, rt, pt],
+                ))
+            }
+            hir::Intrinsic::NetTcpStreamSetReadTimeoutAsync
+            | hir::Intrinsic::NetTcpStreamSetWriteTimeoutAsync => {
+                let handle = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "TCP stream timeout async handle has no value")
+                })?;
+                let nanos = self.h_expr(&args[1])?.ok_or_else(|| {
+                    CodegenError::new(args[1].span, "TCP stream timeout nanos has no value")
+                })?;
+                let present = self.h_expr(&args[2])?.ok_or_else(|| {
+                    CodegenError::new(args[2].span, "TCP stream timeout presence has no value")
+                })?;
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                let symbol = match intrinsic {
+                    hir::Intrinsic::NetTcpStreamSetReadTimeoutAsync => {
+                        "lang_net_tcp_stream_set_read_timeout_async"
+                    }
+                    hir::Intrinsic::NetTcpStreamSetWriteTimeoutAsync => {
+                        "lang_net_tcp_stream_set_write_timeout_async"
+                    }
+                    _ => unreachable!(),
+                };
+                Ok(self.call_intrinsic(
+                    symbol,
+                    &[types::I64, types::I64, types::I64, types::I64, types::I64],
+                    Some(PTR),
+                    &[handle, nanos, present, rt, pt],
+                ))
+            }
+            hir::Intrinsic::NetTcpListenerBindAsync => {
+                let addr = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "TCP listener bind_async addr has no value")
+                })?;
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                Ok(self.call_intrinsic(
+                    "lang_net_tcp_listener_bind_async",
+                    &[PTR, types::I64, types::I64],
+                    Some(PTR),
+                    &[addr, rt, pt],
+                ))
+            }
+            hir::Intrinsic::NetTcpListenerCloseAsync
+            | hir::Intrinsic::NetTcpListenerAcceptAsync
+            | hir::Intrinsic::NetTcpListenerLocalAddrAsync
+            | hir::Intrinsic::NetTcpListenerTakeErrorAsync
+            | hir::Intrinsic::NetTcpListenerTtlAsync => {
+                let handle = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "TCP listener async handle has no value")
+                })?;
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                let symbol = match intrinsic {
+                    hir::Intrinsic::NetTcpListenerCloseAsync => "lang_net_tcp_listener_close_async",
+                    hir::Intrinsic::NetTcpListenerAcceptAsync => {
+                        "lang_net_tcp_listener_accept_async"
+                    }
+                    hir::Intrinsic::NetTcpListenerLocalAddrAsync => {
+                        "lang_net_tcp_listener_local_addr_async"
+                    }
+                    hir::Intrinsic::NetTcpListenerTakeErrorAsync => {
+                        "lang_net_tcp_listener_take_error_async"
+                    }
+                    hir::Intrinsic::NetTcpListenerTtlAsync => "lang_net_tcp_listener_ttl_async",
+                    _ => unreachable!(),
+                };
+                Ok(self.call_intrinsic(
+                    symbol,
+                    &[types::I64, types::I64, types::I64],
+                    Some(PTR),
+                    &[handle, rt, pt],
+                ))
+            }
+            hir::Intrinsic::NetTcpListenerSetNonblockingAsync
+            | hir::Intrinsic::NetTcpListenerSetTtlAsync => {
+                let handle = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "TCP listener async handle has no value")
+                })?;
+                let value = self.h_expr(&args[1])?.ok_or_else(|| {
+                    CodegenError::new(args[1].span, "TCP listener async value has no value")
+                })?;
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                let symbol = match intrinsic {
+                    hir::Intrinsic::NetTcpListenerSetNonblockingAsync => {
+                        "lang_net_tcp_listener_set_nonblocking_async"
+                    }
+                    hir::Intrinsic::NetTcpListenerSetTtlAsync => {
+                        "lang_net_tcp_listener_set_ttl_async"
+                    }
+                    _ => unreachable!(),
+                };
+                Ok(self.call_intrinsic(
+                    symbol,
+                    &[types::I64, types::I64, types::I64, types::I64],
+                    Some(PTR),
+                    &[handle, value, rt, pt],
+                ))
+            }
+            hir::Intrinsic::NetUdpRecvAsync
+            | hir::Intrinsic::NetUdpPeekAsync
+            | hir::Intrinsic::NetUdpRecvFromAsync
+            | hir::Intrinsic::NetUdpPeekFromAsync => {
+                let handle = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "UDP async handle has no value")
+                })?;
+                let count = self.h_expr(&args[1])?.ok_or_else(|| {
+                    CodegenError::new(args[1].span, "UDP async byte count has no value")
+                })?;
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                let symbol = match intrinsic {
+                    hir::Intrinsic::NetUdpRecvAsync => "lang_net_udp_recv_async",
+                    hir::Intrinsic::NetUdpPeekAsync => "lang_net_udp_peek_async",
+                    hir::Intrinsic::NetUdpRecvFromAsync => "lang_net_udp_recv_from_async",
+                    hir::Intrinsic::NetUdpPeekFromAsync => "lang_net_udp_peek_from_async",
+                    _ => unreachable!(),
+                };
+                Ok(self.call_intrinsic(
+                    symbol,
+                    &[types::I64, types::I64, types::I64, types::I64],
+                    Some(PTR),
+                    &[handle, count, rt, pt],
+                ))
+            }
+            hir::Intrinsic::NetUdpBindAsync => {
+                let addr = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "UDP bind_async address has no value")
+                })?;
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                Ok(self.call_intrinsic(
+                    "lang_net_udp_bind_async",
+                    &[PTR, types::I64, types::I64],
+                    Some(PTR),
+                    &[addr, rt, pt],
+                ))
+            }
+            hir::Intrinsic::NetUdpCloseAsync
+            | hir::Intrinsic::NetUdpLocalAddrAsync
+            | hir::Intrinsic::NetUdpPeerAddrAsync
+            | hir::Intrinsic::NetUdpTakeErrorAsync
+            | hir::Intrinsic::NetUdpReadTimeoutAsync
+            | hir::Intrinsic::NetUdpWriteTimeoutAsync
+            | hir::Intrinsic::NetUdpTtlAsync
+            | hir::Intrinsic::NetUdpBroadcastAsync
+            | hir::Intrinsic::NetUdpMulticastLoopV4Async
+            | hir::Intrinsic::NetUdpMulticastLoopV6Async
+            | hir::Intrinsic::NetUdpMulticastTtlV4Async => {
+                let handle = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "UDP async handle has no value")
+                })?;
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                let symbol = match intrinsic {
+                    hir::Intrinsic::NetUdpCloseAsync => "lang_net_udp_close_async",
+                    hir::Intrinsic::NetUdpLocalAddrAsync => "lang_net_udp_local_addr_async",
+                    hir::Intrinsic::NetUdpPeerAddrAsync => "lang_net_udp_peer_addr_async",
+                    hir::Intrinsic::NetUdpTakeErrorAsync => "lang_net_udp_take_error_async",
+                    hir::Intrinsic::NetUdpReadTimeoutAsync => "lang_net_udp_read_timeout_async",
+                    hir::Intrinsic::NetUdpWriteTimeoutAsync => "lang_net_udp_write_timeout_async",
+                    hir::Intrinsic::NetUdpTtlAsync => "lang_net_udp_ttl_async",
+                    hir::Intrinsic::NetUdpBroadcastAsync => "lang_net_udp_broadcast_async",
+                    hir::Intrinsic::NetUdpMulticastLoopV4Async => {
+                        "lang_net_udp_multicast_loop_v4_async"
+                    }
+                    hir::Intrinsic::NetUdpMulticastLoopV6Async => {
+                        "lang_net_udp_multicast_loop_v6_async"
+                    }
+                    hir::Intrinsic::NetUdpMulticastTtlV4Async => {
+                        "lang_net_udp_multicast_ttl_v4_async"
+                    }
+                    _ => unreachable!(),
+                };
+                Ok(self.call_intrinsic(
+                    symbol,
+                    &[types::I64, types::I64, types::I64],
+                    Some(PTR),
+                    &[handle, rt, pt],
+                ))
+            }
+            hir::Intrinsic::NetUdpConnectAsync => {
+                let handle = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "UDP connect_async handle has no value")
+                })?;
+                let addr = self.h_expr(&args[1])?.ok_or_else(|| {
+                    CodegenError::new(args[1].span, "UDP connect_async address has no value")
+                })?;
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                Ok(self.call_intrinsic(
+                    "lang_net_udp_connect_async",
+                    &[types::I64, PTR, types::I64, types::I64],
+                    Some(PTR),
+                    &[handle, addr, rt, pt],
+                ))
+            }
+            hir::Intrinsic::NetUdpSetNonblockingAsync
+            | hir::Intrinsic::NetUdpSetTtlAsync
+            | hir::Intrinsic::NetUdpSetBroadcastAsync
+            | hir::Intrinsic::NetUdpSetMulticastLoopV4Async
+            | hir::Intrinsic::NetUdpSetMulticastLoopV6Async
+            | hir::Intrinsic::NetUdpSetMulticastTtlV4Async => {
+                let handle = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "UDP async handle has no value")
+                })?;
+                let value = self.h_expr(&args[1])?.ok_or_else(|| {
+                    CodegenError::new(args[1].span, "UDP async value has no value")
+                })?;
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                let symbol = match intrinsic {
+                    hir::Intrinsic::NetUdpSetNonblockingAsync => {
+                        "lang_net_udp_set_nonblocking_async"
+                    }
+                    hir::Intrinsic::NetUdpSetTtlAsync => "lang_net_udp_set_ttl_async",
+                    hir::Intrinsic::NetUdpSetBroadcastAsync => "lang_net_udp_set_broadcast_async",
+                    hir::Intrinsic::NetUdpSetMulticastLoopV4Async => {
+                        "lang_net_udp_set_multicast_loop_v4_async"
+                    }
+                    hir::Intrinsic::NetUdpSetMulticastLoopV6Async => {
+                        "lang_net_udp_set_multicast_loop_v6_async"
+                    }
+                    hir::Intrinsic::NetUdpSetMulticastTtlV4Async => {
+                        "lang_net_udp_set_multicast_ttl_v4_async"
+                    }
+                    _ => unreachable!(),
+                };
+                Ok(self.call_intrinsic(
+                    symbol,
+                    &[types::I64, types::I64, types::I64, types::I64],
+                    Some(PTR),
+                    &[handle, value, rt, pt],
+                ))
+            }
+            hir::Intrinsic::NetUdpSetReadTimeoutAsync
+            | hir::Intrinsic::NetUdpSetWriteTimeoutAsync => {
+                let handle = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "UDP async handle has no value")
+                })?;
+                let nanos = self.h_expr(&args[1])?.ok_or_else(|| {
+                    CodegenError::new(args[1].span, "UDP async timeout nanos has no value")
+                })?;
+                let present = self.h_expr(&args[2])?.ok_or_else(|| {
+                    CodegenError::new(args[2].span, "UDP async timeout flag has no value")
+                })?;
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                let symbol = match intrinsic {
+                    hir::Intrinsic::NetUdpSetReadTimeoutAsync => {
+                        "lang_net_udp_set_read_timeout_async"
+                    }
+                    hir::Intrinsic::NetUdpSetWriteTimeoutAsync => {
+                        "lang_net_udp_set_write_timeout_async"
+                    }
+                    _ => unreachable!(),
+                };
+                Ok(self.call_intrinsic(
+                    symbol,
+                    &[types::I64, types::I64, types::I64, types::I64, types::I64],
+                    Some(PTR),
+                    &[handle, nanos, present, rt, pt],
+                ))
+            }
+            hir::Intrinsic::NetUdpJoinMulticastV4Async
+            | hir::Intrinsic::NetUdpLeaveMulticastV4Async => {
+                let handle = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "UDP multicast_v4 handle has no value")
+                })?;
+                let group = self.h_expr(&args[1])?.ok_or_else(|| {
+                    CodegenError::new(args[1].span, "UDP multicast_v4 group has no value")
+                })?;
+                let interface = self.h_expr(&args[2])?.ok_or_else(|| {
+                    CodegenError::new(args[2].span, "UDP multicast_v4 interface has no value")
+                })?;
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                let symbol = match intrinsic {
+                    hir::Intrinsic::NetUdpJoinMulticastV4Async => {
+                        "lang_net_udp_join_multicast_v4_async"
+                    }
+                    hir::Intrinsic::NetUdpLeaveMulticastV4Async => {
+                        "lang_net_udp_leave_multicast_v4_async"
+                    }
+                    _ => unreachable!(),
+                };
+                Ok(self.call_intrinsic(
+                    symbol,
+                    &[types::I64, PTR, PTR, types::I64, types::I64],
+                    Some(PTR),
+                    &[handle, group, interface, rt, pt],
+                ))
+            }
+            hir::Intrinsic::NetUdpJoinMulticastV6Async
+            | hir::Intrinsic::NetUdpLeaveMulticastV6Async => {
+                let handle = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "UDP multicast_v6 handle has no value")
+                })?;
+                let group = self.h_expr(&args[1])?.ok_or_else(|| {
+                    CodegenError::new(args[1].span, "UDP multicast_v6 group has no value")
+                })?;
+                let interface = self.h_expr(&args[2])?.ok_or_else(|| {
+                    CodegenError::new(args[2].span, "UDP multicast_v6 interface has no value")
+                })?;
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                let symbol = match intrinsic {
+                    hir::Intrinsic::NetUdpJoinMulticastV6Async => {
+                        "lang_net_udp_join_multicast_v6_async"
+                    }
+                    hir::Intrinsic::NetUdpLeaveMulticastV6Async => {
+                        "lang_net_udp_leave_multicast_v6_async"
+                    }
+                    _ => unreachable!(),
+                };
+                Ok(self.call_intrinsic(
+                    symbol,
+                    &[types::I64, PTR, types::I64, types::I64, types::I64],
+                    Some(PTR),
+                    &[handle, group, interface, rt, pt],
+                ))
+            }
+            hir::Intrinsic::NetUdpSendAsync => {
+                let handle = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "UDP send_async handle has no value")
+                })?;
+                let contents = self.h_expr(&args[1])?.ok_or_else(|| {
+                    CodegenError::new(args[1].span, "UDP send_async payload has no value")
+                })?;
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                Ok(self.call_intrinsic(
+                    "lang_net_udp_send_async",
+                    &[types::I64, PTR, types::I64, types::I64],
+                    Some(PTR),
+                    &[handle, contents, rt, pt],
+                ))
+            }
+            hir::Intrinsic::NetUdpSendToAsync => {
+                let handle = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "UDP send_to_async handle has no value")
+                })?;
+                let contents = self.h_expr(&args[1])?.ok_or_else(|| {
+                    CodegenError::new(args[1].span, "UDP send_to_async payload has no value")
+                })?;
+                let addr = self.h_expr(&args[2])?.ok_or_else(|| {
+                    CodegenError::new(args[2].span, "UDP send_to_async address has no value")
+                })?;
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                Ok(self.call_intrinsic(
+                    "lang_net_udp_send_to_async",
+                    &[types::I64, PTR, PTR, types::I64, types::I64],
+                    Some(PTR),
+                    &[handle, contents, addr, rt, pt],
+                ))
+            }
+            hir::Intrinsic::TimeMonotonicNanosAsync => {
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                Ok(self.call_intrinsic(
+                    "lang_time_monotonic_nanos_async",
+                    &[types::I64, types::I64],
+                    Some(PTR),
+                    &[rt, pt],
+                ))
+            }
+            hir::Intrinsic::TimeSystemNanosAsync => {
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                Ok(self.call_intrinsic(
+                    "lang_time_system_nanos_async",
+                    &[types::I64, types::I64],
+                    Some(PTR),
+                    &[rt, pt],
+                ))
+            }
+            hir::Intrinsic::TimeLocalOffsetSecondsAsync => {
+                let unix_nanos = self.h_expr(&args[0])?.ok_or_else(|| {
+                    CodegenError::new(args[0].span, "local offset timestamp has no value")
+                })?;
+                let ready_tid = 1000 + self.cx.analysis.program.ready_def.index() as i64;
+                let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
+                let rt = self.b.ins().iconst(types::I64, ready_tid);
+                let pt = self.b.ins().iconst(types::I64, pending_tid);
+                Ok(self.call_intrinsic(
+                    "lang_time_local_offset_seconds_async",
+                    &[types::I64, types::I64, types::I64],
+                    Some(PTR),
+                    &[unix_nanos, rt, pt],
+                ))
             }
             hir::Intrinsic::FutureCancel => {
                 let fut = self.h_expr(&args[0])?.ok_or_else(|| {
@@ -5552,7 +6412,7 @@ fn h_scan_value_await(e: &hir::Expr, out: &mut Vec<Span>) {
     }
 }
 
-/// Enumerate the `iter.span` of every **sync** `for` loop in `block` whose body
+/// Enumerate the `iter.span` of every ordinary `for` loop in `block` whose body
 /// contains an `await` (so the async state struct can reserve slots for the
 /// loop's iterable pointer + index). Such a loop suspends mid-iteration, and its
 /// codegen-internal iteration state (the iterable value + the index counter) is
@@ -5588,9 +6448,9 @@ fn h_scan_for_state_expr(e: &hir::Expr, out: &mut Vec<Span>) {
             h_scan_for_state(body, out);
         }
         K::Block(b) | K::Loop(b) => h_scan_for_state(b, out),
-        // The condition is its own scope after ANF and may host a sync `for` loop
-        // whose body awaits (its iteration state must survive the suspend), so
-        // scan it as well as the body.
+        // The condition is its own scope after ANF and may host an ordinary `for`
+        // loop whose body awaits (its iteration state must survive the suspend),
+        // so scan it as well as the body.
         K::While { cond, body } => {
             h_scan_for_state_expr(cond, out);
             h_scan_for_state(body, out);

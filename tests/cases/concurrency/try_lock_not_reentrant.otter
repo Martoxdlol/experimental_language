@@ -3,8 +3,8 @@
 //@ stdout:
 //~ inner = busy
 //~ free = 7
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { Shared, LockBusy } from "std:sync";
 struct X { value: i64 }
 struct Counter { x: X }
@@ -19,11 +19,12 @@ function main(): Future<null> async {
         LockBusy busy => "busy",
       }
     });
-  println("inner = " + inner);
+  await println("inner = " + inner);
   // Once released, a non-blocking try_lock succeeds and yields the body result.
   var free: str = match await state.try_lock((c) => c.x.value) {
     i64 n => (n as str),
     LockBusy busy => "busy",
   };
-  println("free = " + free);
+  await println("free = " + free);
+  null
 }

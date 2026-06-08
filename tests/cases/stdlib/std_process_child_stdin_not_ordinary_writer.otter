@@ -1,0 +1,15 @@
+//@ kind: compile-error
+//@ description: std:process Child.stdin is an async-stream-or-null accessor, not an ordinary in-memory Writer contract
+//@ stderr: expected `null | Writer`, found `null | AsyncWriter`
+
+import { Future } from "core:prelude";
+import { Child, Command } from "std:process";
+import { Writer } from "std:io";
+
+function main(): Future<null> async {
+  var spawned = await Command.new("true").spawn();
+  if spawned is Child {
+    var _stdin: Writer | null = (spawned as Child).stdin();
+  }
+  null
+}

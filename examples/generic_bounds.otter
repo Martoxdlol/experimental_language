@@ -1,3 +1,4 @@
+import { Future } from "core:prelude";
 // Generic bounds (docs/11 §1): a type parameter constrained by an interface can
 // call that interface's methods. Calls are monomorphized — each instantiation
 // dispatches directly to the concrete `extend` impl, with zero indirection.
@@ -14,7 +15,7 @@ struct Robot { id: i64 }
 
 extend Dog: Show { function show(self): str { "woof" } }
 extend Cat: Show { function show(self): str { "meow" } }
-extend Robot: Show { function show(self): str { "unit-${self.id }" } }
+extend Robot: Show { function show(self): str { "unit-${self.id}" } }
 
 // `T: Show` lets us call `.show()` on any value of type T.
 function announce<T: Show>(label: str, x: T): str {
@@ -35,9 +36,10 @@ function total<T: Scale>(x: T, factor: i64): i64 {
   x.scale(factor)
 }
 
-function main() {
-  println(announce("the dog", Dog {}));
-  println(announce("the cat", Cat {}));
-  println(announce("the bot", Robot { id: 7 }));
-  println("scaled = ${total(Money { cents: 250 }, 4) }");
+function main(): Future<null> async {
+  await println(announce("the dog", Dog {}));
+  await println(announce("the cat", Cat {}));
+  await println(announce("the bot", Robot { id: 7 }));
+  await println("scaled = ${total(Money { cents: 250 }, 4)}");
+  null
 }

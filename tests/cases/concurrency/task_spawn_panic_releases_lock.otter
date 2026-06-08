@@ -46,9 +46,10 @@ function main(): Future<null> async {
     });
 
   match await bad.join() {
-    Joined<i64> j => println("bad = joined"),
-    Panicked p => println("bad = panicked: " + p.message),
-    Cancelled c => println("bad = cancelled"),
+    Joined<i64> j => await println("bad = joined"),
+    Panicked p => await println("bad = panicked: " + p.message),
+    Cancelled c => await println("bad = cancelled"),
   };
-  println("sibling = ${joined_i64(await sibling.join()) }");
+  await println("sibling = ${joined_i64(await sibling.join())}");
+  null
 }

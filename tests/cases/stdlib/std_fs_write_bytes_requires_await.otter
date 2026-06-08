@@ -1,0 +1,13 @@
+//@ kind: compile-error
+//@ description: std:fs write returns Future<null | IoError> and must be awaited before use
+//@ stderr: expected `null | IoError`, found `Future<null | IoError>`
+
+import { Future } from "core:prelude";
+import { Bytes } from "std:bytes";
+import { IoError } from "std:io";
+import { Path, write } from "std:fs";
+
+function main(): Future<null> async {
+  var _written: null | IoError = write(Path.new("/tmp/otter_fusion_requires_await.bin"), Bytes.from_str("x"));
+  null
+}

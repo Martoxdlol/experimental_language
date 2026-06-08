@@ -5,17 +5,19 @@
 //~ sum of squares 1..5 = 55
 //~ channel drained and closed
 
-// Channels (docs/20 §2) are async, non-blocking, and *deterministically
-// closeable*. `channel<T>()` returns a `(Sender<T>, Receiver<T>)` pair; `send`
-// enqueues without blocking and returns `null | ChannelClosed`.
+import { Future } from "core:prelude";
+// Channels (docs/20 §2) are deterministically closeable. `channel<T>()`
+// returns a `(Sender<T>, Receiver<T>)` pair; `send` enqueues without blocking,
+// `recv()` is the single-message async receive path, and `for await` over a
+// receiver awaits each message without parking an executor worker.
 //
 // The channel CLOSES when its last `Sender` is dropped. For these runtime
 // endpoint handles that drop is *deterministic and scope-bound* (docs/16 §8):
 // a `Sender` captured into a worker is released the instant the worker returns,
 // without waiting for a garbage collection. Once closed and drained, `recv()`
-// resolves to `ChannelClosed` and the synchronous `Receiver: Iterator`
-// (`for x in rx`) terminates. Endpoints are thread-safe, so a `Sender` can be
-// captured into a spawned worker; cloning one makes another producer.
+// resolves to `ChannelClosed` and `for await x in rx` terminates. Endpoints are
+// thread-safe, so a `Sender` can be captured into a spawned worker; cloning one
+// makes another producer.
 
 import { println } from "std:io";
 import { JoinHandle } from "std:thread";
@@ -34,17 +36,17 @@ function produce(tx: Sender<i64>, n: i64) {
   }
 }
 
-// A consumer drains with `for sq in rx`: the loop blocks for each message and
-// terminates (Done) once the channel is closed and drained — no GC needed.
-function consume(rx: Receiver<i64>): i64 {
+// A consumer drains with `for await sq in rx`: the loop awaits each message and
+// terminates once the channel is closed and drained — no GC needed.
+function consume(rx: Receiver<i64>): Future<i64> async {
   var total: i64 = 0;
-  for sq in rx {
+  for await sq in rx {
     total = total + sq;
   }
   total
 }
 
-function main() {
+function main(): Future<null> async {
   var pair: (Sender<i64>, Receiver<i64>) = channel<i64>();
   var tx: Sender<i64> = pair.0;
   var rx: Receiver<i64> = pair.1;
@@ -53,12 +55,13 @@ function main() {
   // role into the worker, which releases it on return (closing the channel).
   var worker: JoinHandle<i64> = Thread.spawn(() => { produce(tx, 5); 0 });
 
-  var total: i64 = consume(rx);                          // blocks until closed
-  println("sum of squares 1..5 = " + (total as str));    // 1+4+9+16+25 = 55
+  var total: i64 = await consume(rx);
+  await println("sum of squares 1..5 = " + (total as str));    // 1+4+9+16+25 = 55
 
   // The channel is now drained and closed; a non-blocking poll sees nothing.
   match rx.try_recv() {
-    i64 n => println("unexpected: " + (n as str)),
-    null => println("channel drained and closed"),
+    i64 n => await println("unexpected: " + (n as str)),
+    null => await println("channel drained and closed"),
   }
+  null
 }

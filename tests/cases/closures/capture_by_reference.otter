@@ -2,10 +2,12 @@
 //@ description: closures capture enclosing locals by reference (docs/09 §7) — a mutation of the captured variable after the closure is created is observed when the closure runs (contrast Thread.spawn, which snapshots by value per docs/20 §6)
 //@ stdout:
 //~ 42
+import { Future } from "core:prelude";
 import { println } from "std:io";
-function main() {
+function main(): Future<null> async {
   var x = 1;
   var read_x = () => x;
   x = 42;
-  println("${read_x() }");
+  await println("${read_x()}");
+  null
 }

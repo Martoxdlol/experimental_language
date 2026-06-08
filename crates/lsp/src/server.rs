@@ -11,19 +11,21 @@ use compiler::ast::{
     PatternKind as AstPatternKind, StmtKind as AstStmtKind, StructKind,
 };
 use compiler::ids::{DefId, ModId};
-use compiler::sema::ValueRes;
 use compiler::sema::resolve_ctx::normalize;
+use compiler::sema::{Lowerer, TypeEnv, ValueRes};
 use compiler::span::Span;
+use compiler::ty::{Ty, TyCtxt};
 use dashmap::DashMap;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
 
+use crate::analysis::stdlib_marker_signature;
 use crate::analysis::{
     Compiled, DOC_FILE, LineIndex, TokenClass, builtin_signature, dot_completion_context,
     float_instance_methods, float_static_methods, int_instance_methods, keyword_texts,
     list_intrinsic_methods, map_intrinsic_methods, offset_at, position_at,
-    primitive_static_methods, span_to_range, str_intrinsic_methods,
+    primitive_static_methods, span_to_range, str_intrinsic_methods, top_named_name,
 };
 use compiler::sema::symbols::DefKind;
 use compiler::ty::TyKind;
@@ -635,9 +637,18 @@ impl LanguageServer for Backend {
                 | ValueRes::Global(d)
                 | ValueRes::StructCtor(d) => {
                     let def = c.analysis.program.def(d);
-                    lines.push(format!("```otter-fusion\n{}\n```", c.def_label(def)));
-                    if let Some(ret) = c.analysis.hir.fn_sigs.get(&d).map(|s| s.ret) {
-                        lines.push(format!("returns `{}`", c.display_ty(ret)));
+                    if let Some(sig) = stdlib_marker_signature(&c.analysis.program, d) {
+                        let display_name = c.map.slice(span);
+                        lines.push(format!(
+                            "```otter-fusion\nfunction {}\n```",
+                            sig.label(display_name)
+                        ));
+                        lines.push(format!("returns `{}`", sig.ret));
+                    } else {
+                        lines.push(format!("```otter-fusion\n{}\n```", c.def_label(def)));
+                        if let Some(ret) = c.analysis.hir.fn_sigs.get(&d).map(|s| s.ret) {
+                            lines.push(format!("returns `{}`", c.display_ty(ret)));
+                        }
                     }
                 }
                 ValueRes::Builtin(b) => {
@@ -1013,15 +1024,14 @@ impl LanguageServer for Backend {
         let Some((callee_off, active)) = find_active_call(&c.text, off) else {
             return Ok(None);
         };
-        let Some((_, res)) = c.resolution_at(callee_off) else {
+        let Some((span, res)) = c.resolution_at(callee_off) else {
             return Ok(None);
         };
+        let display_name = c.map.slice(span);
         let sig = match res {
             compiler::sema::ValueRes::Function(d)
             | compiler::sema::ValueRes::Method(d)
-            | compiler::sema::ValueRes::StructCtor(d) => {
-                build_signature_info(&c, c.analysis.program.def(d))
-            }
+            | compiler::sema::ValueRes::StructCtor(d) => build_signature_info(&c, d, display_name),
             compiler::sema::ValueRes::Builtin(b) => Some(builtin_signature_info(b)),
             _ => None,
         };
@@ -1369,7 +1379,7 @@ fn default_completions(c: &Compiled) -> Vec<CompletionItem> {
             .analysis
             .program
             .resolve_value_in(compiler::ids::ModId::ROOT, name)
-            .map(|d| c.def_signature(c.analysis.program.def(d)));
+            .map(|d| c.def_signature(d));
         push(
             &mut items,
             &mut seen,
@@ -1383,10 +1393,9 @@ fn default_completions(c: &Compiled) -> Vec<CompletionItem> {
         );
     }
 
-    // 3. Builtins.
+    // 3. Compiler builtins. `std:io` print helpers are ordinary async stdlib
+    // functions, so they only appear through imports or `std:io` namespaces.
     let builtins: &[(&str, &str)] = &[
-        ("print", "(str)"),
-        ("println", "(str)"),
         ("panic", "(str): never"),
         ("panic_with", "(value: dynamic): never"),
         ("exit", "(code: i32): never"),
@@ -1449,6 +1458,7 @@ fn member_completions(c: &Compiled, ctx: &crate::analysis::DotContext) -> Vec<Co
     if let Some((s, e)) = ctx.receiver_ident {
         let name = &c.text[s..e];
         push_type_namespace_members(c, name, &mut items, &mut seen, &mut push);
+        push_imported_namespace_members(c, name, &mut items, &mut seen, &mut push);
     }
 
     items
@@ -1505,17 +1515,21 @@ fn push_instance_members(
     }
 
     // Named types: struct fields + interface methods + `extend` methods.
-    if let TyKind::Named { def, .. } = kind {
+    if let TyKind::Named { def, args } = kind {
         let d = prog.def(def);
         match d.kind {
             DefKind::Struct | DefKind::ExternStruct => {
                 for f in c.struct_fields(def) {
+                    let detail = c
+                        .struct_field_type_detail(def, &args, &f.name)
+                        .map(|ty| format!(": {ty}"));
                     push(
                         items,
                         seen,
                         CompletionItem {
                             label: f.name.clone(),
                             kind: Some(CompletionItemKind::FIELD),
+                            detail,
                             sort_text: Some("1".into()),
                             ..Default::default()
                         },
@@ -1554,6 +1568,7 @@ fn push_instance_members(
                 );
             }
         }
+        push_runtime_handle_intrinsic_methods(c, def, &args, items, seen, push);
 
         // Any user `extend` block whose target's head name matches this type's
         // name contributes instance methods.
@@ -1565,6 +1580,216 @@ fn push_instance_members(
                 def_to_completion(c, m, CompletionItemKind::METHOD),
             );
         }
+    }
+
+    // Aliases lower away before they reach HIR (`type Level = A | B | ...` is
+    // just the union), but users attach methods to the source-level alias with
+    // `extend Level`. Recover those alias-target methods by comparing the
+    // expanded alias type structurally against the receiver type.
+    push_alias_extend_methods_for_receiver(c, ty, items, seen, push);
+}
+
+fn push_runtime_handle_intrinsic_methods(
+    c: &Compiled,
+    def: DefId,
+    args: &[Ty],
+    items: &mut Vec<CompletionItem>,
+    seen: &mut HashSet<String>,
+    push: &mut impl FnMut(&mut Vec<CompletionItem>, &mut HashSet<String>, CompletionItem),
+) {
+    let prog = &c.analysis.program;
+    let first_arg = |fallback: &str| {
+        args.first()
+            .copied()
+            .map(|ty| c.display_ty(ty))
+            .unwrap_or_else(|| fallback.to_string())
+    };
+
+    if def == prog.join_handle_def {
+        let output = first_arg("R");
+        for (name, sig) in [
+            ("join", format!("(): Future<Joined<{output}> | Panicked>")),
+            ("detach", "(): null".to_string()),
+        ] {
+            push(
+                items,
+                seen,
+                intrinsic_completion(name, &sig, CompletionItemKind::METHOD),
+            );
+        }
+    } else if def == prog.task_join_handle_def {
+        let output = first_arg("R");
+        for (name, sig) in [
+            (
+                "join",
+                format!("(): Future<Joined<{output}> | Panicked | Cancelled>"),
+            ),
+            ("detach", "(): null".to_string()),
+            ("cancel", "(): null".to_string()),
+            ("abort", "(): null".to_string()),
+        ] {
+            push(
+                items,
+                seen,
+                intrinsic_completion(name, &sig, CompletionItemKind::METHOD),
+            );
+        }
+    } else if def == prog.sender_def {
+        let elem = first_arg("T");
+        push(
+            items,
+            seen,
+            intrinsic_completion(
+                "send",
+                &format!("(value: {elem}): null | ChannelClosed"),
+                CompletionItemKind::METHOD,
+            ),
+        );
+    } else if def == prog.receiver_def {
+        let elem = first_arg("T");
+        for (name, sig) in [
+            ("recv", format!("(): Future<{elem} | ChannelClosed>")),
+            ("try_recv", format!("(): {elem} | null")),
+        ] {
+            push(
+                items,
+                seen,
+                intrinsic_completion(name, &sig, CompletionItemKind::METHOD),
+            );
+        }
+    }
+}
+
+fn push_alias_extend_methods_for_receiver(
+    c: &Compiled,
+    receiver_ty: Ty,
+    items: &mut Vec<CompletionItem>,
+    seen: &mut HashSet<String>,
+    push: &mut impl FnMut(&mut Vec<CompletionItem>, &mut HashSet<String>, CompletionItem),
+) {
+    let prog = &c.analysis.program;
+    for (idx, extend_def) in prog.defs.iter().enumerate() {
+        if extend_def.kind != DefKind::Extend {
+            continue;
+        }
+        let Some(ItemKind::Extend(e)) = &extend_def.item else {
+            continue;
+        };
+        let Some(alias_name) = top_named_name(&e.target) else {
+            continue;
+        };
+        let Some(alias_def) = prog.resolve_type_in(extend_def.module, alias_name) else {
+            continue;
+        };
+        if prog.def(alias_def).kind != DefKind::TypeAlias
+            || !alias_expands_to_receiver(c, alias_def, receiver_ty)
+        {
+            continue;
+        }
+
+        let extend_id = DefId(idx as u32);
+        for method in prog.defs.iter().filter(|d| {
+            d.kind == DefKind::ExtendMethod && !d.is_static && d.parent == Some(extend_id)
+        }) {
+            push(
+                items,
+                seen,
+                def_to_completion(c, method, CompletionItemKind::METHOD),
+            );
+        }
+    }
+}
+
+fn alias_expands_to_receiver(c: &Compiled, alias_def: DefId, receiver_ty: Ty) -> bool {
+    let prog = &c.analysis.program;
+    let def = prog.def(alias_def);
+    if !def.generics.is_empty() {
+        return false;
+    }
+    let Some(ItemKind::TypeAlias(alias)) = &def.item else {
+        return false;
+    };
+
+    let mut alias_tcx = TyCtxt::new();
+    let mut errors = Vec::new();
+    let alias_ty = {
+        let mut lowerer = Lowerer::new(prog, &mut alias_tcx, &mut errors);
+        lowerer.lower(&alias.aliased, &TypeEnv::new(def.module))
+    };
+    errors.is_empty()
+        && !alias_tcx.is_error(alias_ty)
+        && ty_structurally_eq(&alias_tcx, alias_ty, &c.analysis.tcx, receiver_ty)
+}
+
+fn ty_structurally_eq(left_tcx: &TyCtxt, left: Ty, right_tcx: &TyCtxt, right: Ty) -> bool {
+    match (left_tcx.kind(left), right_tcx.kind(right)) {
+        (TyKind::Bool, TyKind::Bool)
+        | (TyKind::Char, TyKind::Char)
+        | (TyKind::Str, TyKind::Str)
+        | (TyKind::Null, TyKind::Null)
+        | (TyKind::Dynamic, TyKind::Dynamic)
+        | (TyKind::Never, TyKind::Never)
+        | (TyKind::SelfTy, TyKind::SelfTy)
+        | (TyKind::Error, TyKind::Error) => true,
+        (TyKind::Int(a), TyKind::Int(b)) => a == b,
+        (TyKind::Float(a), TyKind::Float(b)) => a == b,
+        (TyKind::Named { def: a, args: aa }, TyKind::Named { def: b, args: ba }) => {
+            a == b
+                && aa.len() == ba.len()
+                && aa
+                    .iter()
+                    .zip(ba)
+                    .all(|(a, b)| ty_structurally_eq(left_tcx, *a, right_tcx, *b))
+        }
+        (TyKind::Tuple(a), TyKind::Tuple(b)) => {
+            a.len() == b.len()
+                && a.iter()
+                    .zip(b)
+                    .all(|(a, b)| ty_structurally_eq(left_tcx, *a, right_tcx, *b))
+        }
+        (
+            TyKind::Func {
+                params: ap,
+                ret: ar,
+                is_extern: ae,
+            },
+            TyKind::Func {
+                params: bp,
+                ret: br,
+                is_extern: be,
+            },
+        ) => {
+            ae == be
+                && ap.len() == bp.len()
+                && ap
+                    .iter()
+                    .zip(bp)
+                    .all(|(a, b)| ty_structurally_eq(left_tcx, *a, right_tcx, *b))
+                && ty_structurally_eq(left_tcx, *ar, right_tcx, *br)
+        }
+        (TyKind::Ptr(a), TyKind::Ptr(b)) => ty_structurally_eq(left_tcx, *a, right_tcx, *b),
+        (TyKind::Array { elem: ae, len: al }, TyKind::Array { elem: be, len: bl }) => {
+            al == bl && ty_structurally_eq(left_tcx, *ae, right_tcx, *be)
+        }
+        (TyKind::Union(a), TyKind::Union(b)) => {
+            if a.len() != b.len() {
+                return false;
+            }
+            let mut used = vec![false; b.len()];
+            'outer: for a_member in a {
+                for (idx, b_member) in b.iter().enumerate() {
+                    if !used[idx] && ty_structurally_eq(left_tcx, *a_member, right_tcx, *b_member) {
+                        used[idx] = true;
+                        continue 'outer;
+                    }
+                }
+                return false;
+            }
+            true
+        }
+        (TyKind::Param(a), TyKind::Param(b)) => a == b,
+        (TyKind::Infer(a), TyKind::Infer(b)) => a == b,
+        _ => false,
     }
 }
 
@@ -1614,6 +1839,57 @@ fn push_type_namespace_members(
     }
 }
 
+fn push_imported_namespace_members(
+    c: &Compiled,
+    alias: &str,
+    items: &mut Vec<CompletionItem>,
+    seen: &mut HashSet<String>,
+    push: &mut impl FnMut(&mut Vec<CompletionItem>, &mut HashSet<String>, CompletionItem),
+) {
+    let prog = &c.analysis.program;
+    let Some(module) = prog.namespace_target(compiler::ids::ModId::ROOT, alias) else {
+        return;
+    };
+    let module_info = prog.module(module);
+
+    let mut type_names: Vec<_> = module_info.types.keys().cloned().collect();
+    type_names.extend(module_info.public_imported_types.keys().cloned());
+    type_names.sort();
+    type_names.dedup();
+    for name in type_names {
+        let Some(def_id) = prog.resolve_pub_type_in(module, &name) else {
+            continue;
+        };
+        let def = prog.def(def_id);
+        let kind = match def.kind {
+            DefKind::Interface => CompletionItemKind::INTERFACE,
+            DefKind::TypeAlias | DefKind::ExternType => CompletionItemKind::CLASS,
+            _ => CompletionItemKind::STRUCT,
+        };
+        push(items, seen, def_id_to_completion(c, def_id, kind));
+    }
+
+    let mut value_names: Vec<_> = module_info.values.keys().cloned().collect();
+    value_names.extend(module_info.public_imported_values.keys().cloned());
+    value_names.sort();
+    value_names.dedup();
+    for name in value_names {
+        let Some(def_id) = prog.resolve_pub_value_in(module, &name) else {
+            continue;
+        };
+        let def = prog.def(def_id);
+        let kind = match def.kind {
+            DefKind::Function | DefKind::ExternFunction => CompletionItemKind::FUNCTION,
+            _ => CompletionItemKind::VARIABLE,
+        };
+        let mut item = def_id_to_completion(c, def_id, kind);
+        if let Some(sig) = stdlib_marker_signature(prog, def_id) {
+            item.detail = Some(sig.detail());
+        }
+        push(items, seen, item);
+    }
+}
+
 fn intrinsic_completion(name: &str, signature: &str, kind: CompletionItemKind) -> CompletionItem {
     CompletionItem {
         label: name.into(),
@@ -1632,15 +1908,27 @@ fn def_to_completion(
     CompletionItem {
         label: def.name.clone(),
         kind: Some(kind),
-        detail: Some(c.def_signature(def)),
+        detail: Some(c.def_signature_from_def(def)),
+        sort_text: Some("1".into()),
+        ..Default::default()
+    }
+}
+
+fn def_id_to_completion(c: &Compiled, def_id: DefId, kind: CompletionItemKind) -> CompletionItem {
+    let def = c.analysis.program.def(def_id);
+    CompletionItem {
+        label: def.name.clone(),
+        kind: Some(kind),
+        detail: Some(c.def_signature(def_id)),
         sort_text: Some("1".into()),
         ..Default::default()
     }
 }
 
 /// Build the Run/Build CodeLenses for a compiled document. Emits lenses above
-/// every top-level `function main` (sync or async — the runtime resolves async
-/// main through `block_on`, so the same CLI invocation works).
+/// every top-level `function main`; async `main` is driven by the runtime's
+/// private root-future driver, so the same CLI invocation works without a
+/// user-visible `block_on` API.
 fn collect_code_lenses(c: &Compiled, uri: &str) -> Vec<CodeLens> {
     let mut lenses = Vec::new();
     for item in &c.module.items {
@@ -2161,9 +2449,14 @@ pub(crate) fn find_active_call(text: &str, off: usize) -> Option<(usize, u32)> {
 
 fn build_signature_info(
     c: &Compiled,
-    def: &compiler::sema::symbols::Def,
+    def_id: DefId,
+    display_name: &str,
 ) -> Option<SignatureInformation> {
     use compiler::ast::ParamKind;
+    if let Some(sig) = stdlib_marker_signature(&c.analysis.program, def_id) {
+        return Some(signature_info_from_display(display_name, sig));
+    }
+    let def = c.analysis.program.def(def_id);
     let ItemKind::Function(f) = def.item.as_ref()? else {
         return None;
     };
@@ -2214,13 +2507,34 @@ fn build_signature_info(
     })
 }
 
+fn signature_info_from_display(
+    name: &str,
+    sig: crate::analysis::FunctionSignatureDisplay,
+) -> SignatureInformation {
+    let label = sig.label(name);
+    let mut params = Vec::new();
+    for (name, ty) in sig.params {
+        let needle = format!("{name}: {ty}");
+        if let Some(byte_off) = label.find(&needle) {
+            let start = label[..byte_off].encode_utf16().count() as u32;
+            let end = start + needle.encode_utf16().count() as u32;
+            params.push(ParameterInformation {
+                label: ParameterLabel::LabelOffsets([start, end]),
+                documentation: None,
+            });
+        }
+    }
+    SignatureInformation {
+        label,
+        documentation: None,
+        parameters: Some(params),
+        active_parameter: None,
+    }
+}
+
 fn builtin_signature_info(b: compiler::sema::Builtin) -> SignatureInformation {
     use compiler::sema::Builtin;
     let (label, parts): (&str, &[(&str, &str)]) = match b {
-        Builtin::Print => ("print(value: str)", &[("value", "str")]),
-        Builtin::Println => ("println(value: str)", &[("value", "str")]),
-        Builtin::Eprint => ("eprint(value: str)", &[("value", "str")]),
-        Builtin::Eprintln => ("eprintln(value: str)", &[("value", "str")]),
         Builtin::Panic => ("panic(message: str): never", &[("message", "str")]),
         Builtin::PanicWith => ("panic_with(value: dynamic): never", &[("value", "dynamic")]),
         Builtin::Exit => ("exit(code: i32): never", &[("code", "i32")]),
@@ -2372,6 +2686,19 @@ function main() {}
         let third = compile_document_with_cache(&docs, &cache, &uri).unwrap();
         assert!(!Arc::ptr_eq(&first, &third));
         assert!(third.diagnostics.is_empty(), "{:?}", third.diagnostics);
+    }
+
+    #[test]
+    fn builtin_signature_help_keeps_stdio_print_helpers_out_of_builtins() {
+        use compiler::sema::Builtin;
+
+        assert!(Builtin::from_name("print").is_none());
+        assert!(Builtin::from_name("println").is_none());
+        assert!(Builtin::from_name("eprint").is_none());
+        assert!(Builtin::from_name("eprintln").is_none());
+
+        let info = builtin_signature_info(Builtin::Panic);
+        assert_eq!(info.label, "panic(message: str): never");
     }
 
     #[test]
@@ -2551,6 +2878,256 @@ function main() {
 
     fn labels(items: &[CompletionItem]) -> Vec<&str> {
         items.iter().map(|i| i.label.as_str()).collect()
+    }
+
+    fn completion_detail<'a>(items: &'a [CompletionItem], label: &str) -> &'a str {
+        items
+            .iter()
+            .find(|item| item.label == label)
+            .and_then(|item| item.detail.as_deref())
+            .unwrap_or_else(|| panic!("{label} completion detail missing in {items:?}"))
+    }
+
+    fn completion_items_at(src: &str, marker: &str) -> Vec<CompletionItem> {
+        let c = Compiled::new(src.into());
+        let dot = src
+            .find(marker)
+            .unwrap_or_else(|| panic!("{marker} missing"))
+            + marker.trim_end_matches(".;").len();
+        let ctx = crate::analysis::dot_completion_context(&c.text, dot + 1).unwrap();
+        member_completions(&c, &ctx)
+    }
+
+    fn assert_completion_details(src: &str, marker: &str, expected: &[(&str, &str)]) {
+        let items = completion_items_at(src, marker);
+        for (label, detail_part) in expected {
+            let detail = completion_detail(&items, label);
+            assert!(
+                detail.contains(detail_part),
+                "{label} completion at {marker} must contain `{detail_part}`: {detail:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn completion_catalog_keeps_wait_capable_public_surfaces_future_returning() {
+        assert_completion_details(
+            "\
+import \"std:io\" as Io;
+function main() { Io.; }
+",
+            "Io.;",
+            &[
+                ("print", "Future<null>"),
+                ("println", "Future<null>"),
+                ("eprint", "Future<null>"),
+                ("eprintln", "Future<null>"),
+            ],
+        );
+        assert_completion_details(
+            "\
+import { stdin, stdout } from \"std:io\";
+function main() {
+  var input = stdin();
+  input.;
+  var output = stdout();
+  output.;
+}
+",
+            "input.;",
+            &[("read", "Future<i64 | IoError>")],
+        );
+        assert_completion_details(
+            "\
+import { stdin, stdout } from \"std:io\";
+function main() {
+  var input = stdin();
+  input.;
+  var output = stdout();
+  output.;
+}
+",
+            "output.;",
+            &[("write_all", "Future<null | IoError>")],
+        );
+
+        assert_completion_details(
+            "\
+import \"std:fs\" as Fs;
+function main() { Fs.; }
+",
+            "Fs.;",
+            &[
+                ("read_to_string", "Future<str | IoError>"),
+                ("write", "Future<null | IoError>"),
+                ("read_dir", "Future<DirEntries | IoError>"),
+            ],
+        );
+        assert_completion_details(
+            "\
+import { File } from \"std:fs\";
+function main() { File.; }
+",
+            "File.;",
+            &[("open", "Future<File | IoError>")],
+        );
+        assert_completion_details(
+            "\
+import { Path } from \"std:fs\";
+function main() { Path.new(\".\").; }
+",
+            "Path.new(\".\").;",
+            &[("metadata", "Future<Metadata | IoError>")],
+        );
+
+        assert_completion_details(
+            "\
+import \"std:net\" as Net;
+function main() { Net.; }
+",
+            "Net.;",
+            &[("resolve", "Future<List<IpAddr> | IoError>")],
+        );
+        assert_completion_details(
+            "\
+import { TcpStream } from \"std:net\";
+function main() { TcpStream.; }
+",
+            "TcpStream.;",
+            &[("connect", "Future<TcpStream | IoError>")],
+        );
+        assert_completion_details(
+            "\
+import { TcpStream } from \"std:net\";
+function inspect(stream: TcpStream) { stream.; }
+",
+            "stream.;",
+            &[
+                ("read", "Future<i64 | IoError>"),
+                ("peer_addr", "Future<SocketAddr | IoError>"),
+            ],
+        );
+        assert_completion_details(
+            "\
+import { TcpListener } from \"std:net\";
+function inspect(listener: TcpListener) { listener.; }
+",
+            "listener.;",
+            &[("accept", "Future<(TcpStream, SocketAddr) | IoError>")],
+        );
+        assert_completion_details(
+            "\
+import { UdpSocket } from \"std:net\";
+function inspect(socket: UdpSocket) { socket.; }
+",
+            "socket.;",
+            &[("recv_from", "Future<(i64, SocketAddr) | IoError>")],
+        );
+
+        assert_completion_details(
+            "\
+import \"std:process\" as Process;
+function main() { Process.; }
+",
+            "Process.;",
+            &[("args", "Future<List<str>>"), ("env", "Future<str | null>")],
+        );
+        assert_completion_details(
+            "\
+import { Command } from \"std:process\";
+function inspect(cmd: Command) { cmd.; }
+",
+            "cmd.;",
+            &[
+                ("status", "Future<ExitStatus | IoError>"),
+                ("spawn", "Future<Child | IoError>"),
+            ],
+        );
+        assert_completion_details(
+            "\
+import { Child } from \"std:process\";
+function inspect(child: Child) { child.; }
+",
+            "child.;",
+            &[
+                ("wait", "Future<ExitStatus | IoError>"),
+                ("kill", "Future<null | IoError>"),
+            ],
+        );
+
+        assert_completion_details(
+            "\
+import \"std:time\" as Time;
+import \"std:async\" as Async;
+function main() { Time.; Async.; }
+",
+            "Time.;",
+            &[("sleep", "Future<null>")],
+        );
+        assert_completion_details(
+            "\
+import \"std:time\" as Time;
+import \"std:async\" as Async;
+function main() { Time.; Async.; }
+",
+            "Async.;",
+            &[
+                ("yield_now", "Future<null>"),
+                ("sleep", "Future<null>"),
+                ("timeout", "Future<T | TimedOut>"),
+            ],
+        );
+        assert_completion_details(
+            "\
+import \"std:rand\" as Rand;
+function main() { Rand.; }
+",
+            "Rand.;",
+            &[
+                ("os_bytes", "Future<Bytes | RandomError>"),
+                ("thread_rng", "Future<ThreadRng | RandomError>"),
+            ],
+        );
+        assert_completion_details(
+            "\
+import \"std:hash\" as Hashing;
+function main() { Hashing.; }
+",
+            "Hashing.;",
+            &[("os_keyed_hasher", "Future<KeyedHasher | HashSeedError>")],
+        );
+        assert_completion_details(
+            "\
+import \"std:log\" as Log;
+function main() { Log.; }
+",
+            "Log.;",
+            &[
+                ("record", "Future<Record>"),
+                ("log_record", "Future<null>"),
+                ("info", "Future<null>"),
+                ("info_with", "Future<null>"),
+                ("warn", "Future<null>"),
+                ("error", "Future<null>"),
+            ],
+        );
+
+        assert_completion_details(
+            "\
+import { Receiver } from \"std:sync\";
+function inspect(rx: Receiver<i64>) { rx.; }
+",
+            "rx.;",
+            &[("recv", "Future<i64 | ChannelClosed>")],
+        );
+        assert_completion_details(
+            "\
+import { JoinHandle } from \"std:thread\";
+function inspect(handle: JoinHandle<i64>) { handle.; }
+",
+            "handle.;",
+            &[("join", "Future<Joined<i64> | Panicked>")],
+        );
     }
 
     fn unique_temp_project(name: &str) -> PathBuf {
@@ -2761,15 +3338,291 @@ function main() {
     }
 
     #[test]
-    fn member_completion_lists_std_fs_file_async_methods() {
+    fn member_completion_lists_std_collections_deque_reverse_methods() {
+        let src = "\
+import { Deque, deque } from \"std:collections\";
+function main() {
+  var q = deque<i64>();
+  q.;
+}
+";
+        let c = Compiled::new(src.into());
+        let dot = src.find("q.;").unwrap() + 1;
+        let ctx = crate::analysis::dot_completion_context(&c.text, dot + 1).unwrap();
+        let items = member_completions(&c, &ctx);
+        let names = labels(&items);
+        for must in ["reverse", "reversed", "push_front", "push_back"] {
+            assert!(names.contains(&must), "{must} missing in {names:?}");
+        }
+    }
+
+    #[test]
+    fn member_completion_lists_core_collections_set_helpers() {
+        let src = "\
+import { Set } from \"core:collections\";
+function main() {
+  var s = Set<i64>();
+  s.;
+}
+";
+        let c = Compiled::new(src.into());
+        let dot = src.find("s.;").unwrap() + 1;
+        let ctx = crate::analysis::dot_completion_context(&c.text, dot + 1).unwrap();
+        let items = member_completions(&c, &ctx);
+        let names = labels(&items);
+        for must in [
+            "insert",
+            "insert_all",
+            "is_subset",
+            "is_superset",
+            "is_disjoint",
+            "to_list",
+            "union",
+            "intersect",
+            "difference",
+        ] {
+            assert!(names.contains(&must), "{must} missing in {names:?}");
+        }
+    }
+
+    #[test]
+    fn member_completion_lists_std_bytes_insert_method() {
+        let src = "\
+import { Bytes } from \"std:bytes\";
+function main() {
+  var b = Bytes.new();
+  b.;
+}
+";
+        let c = Compiled::new(src.into());
+        let dot = src.find("b.;").unwrap() + 1;
+        let ctx = crate::analysis::dot_completion_context(&c.text, dot + 1).unwrap();
+        let items = member_completions(&c, &ctx);
+        let names = labels(&items);
+        for must in [
+            "insert",
+            "index_of",
+            "last_index_of",
+            "index_of_bytes",
+            "last_index_of_bytes",
+            "contains",
+            "contains_bytes",
+            "push",
+            "remove_at",
+            "resize",
+            "fill",
+            "truncate",
+            "cursor",
+        ] {
+            assert!(names.contains(&must), "{must} missing in {names:?}");
+        }
+    }
+
+    #[test]
+    fn member_completion_lists_std_json_helpers() {
+        let src = "\
+import { Json, json_array, json_bool } from \"std:json\";
+import { List } from \"core:collections\";
+function main() {
+  var items = List<Json>();
+  items.push(json_bool(true));
+  var value = json_array(items);
+  value.;
+}
+";
+        let c = Compiled::new(src.into());
+        let dot = c.text.find("value.;").unwrap() + 5;
+        let ctx = crate::analysis::dot_completion_context(&c.text, dot + 1).unwrap();
+        let items = member_completions(&c, &ctx);
+        let names = labels(&items);
+        for must in [
+            "is_null",
+            "is_bool",
+            "is_number",
+            "is_str",
+            "is_array",
+            "is_object",
+            "len",
+            "contains_key",
+            "keys",
+            "values",
+            "as_array",
+            "as_object",
+            "get",
+            "at",
+            "append",
+            "set_at",
+            "with_key",
+            "without_key",
+            "deep_eq",
+            "deep_clone",
+            "render",
+            "pretty",
+        ] {
+            assert!(names.contains(&must), "{must} missing in {names:?}");
+        }
+    }
+
+    #[test]
+    fn member_completion_lists_std_http_value_helpers() {
+        let src = "\
+import { Map } from \"core:collections\";
+import { Bytes } from \"std:bytes\";
+import { url } from \"std:net/types\";
+import { Headers, Status, headers, http_11, http_request, http_response, method_get } from \"std:http\";
+function main() {
+  var h = Headers.new();
+  h.;
+  var q = Map.new<str, str>();
+  var u = url(\"https\", null, \"example.com\", null, \"/\", q, null);
+  var req = http_request(method_get(), u, h, Bytes.new(), http_11());
+  req.;
+  var resp = http_response(Status.ok(), headers(), Bytes.new(), http_11());
+  resp.;
+}
+";
+        let c = Compiled::new(src.into());
+
+        let headers_dot = c.text.find("h.;").unwrap() + 1;
+        let headers_ctx =
+            crate::analysis::dot_completion_context(&c.text, headers_dot + 1).unwrap();
+        let header_items = member_completions(&c, &headers_ctx);
+        let header_names = labels(&header_items);
+        for must in [
+            "get",
+            "get_all",
+            "entries",
+            "names",
+            "set",
+            "append",
+            "remove",
+            "contains",
+            "size",
+            "is_empty",
+            "value_count",
+            "clear",
+        ] {
+            assert!(
+                header_names.contains(&must),
+                "{must} missing in {header_names:?}"
+            );
+        }
+
+        let req_dot = c.text.find("req.;").unwrap() + 3;
+        let req_ctx = crate::analysis::dot_completion_context(&c.text, req_dot + 1).unwrap();
+        let req_items = member_completions(&c, &req_ctx);
+        let req_names = labels(&req_items);
+        for must in [
+            "method",
+            "url",
+            "headers",
+            "body",
+            "version",
+            "with_method",
+            "with_url",
+            "with_headers",
+            "with_body",
+            "with_version",
+            "with_header",
+            "with_set_header",
+            "without_header",
+            "clear_headers",
+        ] {
+            assert!(req_names.contains(&must), "{must} missing in {req_names:?}");
+        }
+
+        let resp_dot = c.text.find("resp.;").unwrap() + 4;
+        let resp_ctx = crate::analysis::dot_completion_context(&c.text, resp_dot + 1).unwrap();
+        let resp_items = member_completions(&c, &resp_ctx);
+        let resp_names = labels(&resp_items);
+        for must in [
+            "status",
+            "headers",
+            "body",
+            "version",
+            "with_status",
+            "with_headers",
+            "with_body",
+            "with_version",
+            "with_header",
+            "with_set_header",
+            "without_header",
+            "clear_headers",
+        ] {
+            assert!(
+                resp_names.contains(&must),
+                "{must} missing in {resp_names:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn member_completion_lists_std_log_value_helpers() {
+        let src = "\
+import { Future } from \"core:prelude\";
+import { empty_fields, level_info, record } from \"std:log\";
+function main(): Future<null> async {
+  var level = level_info();
+  level.;
+  var r = await record(level_info(), \"msg\", \"mod\", empty_fields());
+  r.;
+  null
+}
+";
+        let c = Compiled::new(src.into());
+
+        let level_dot = c.text.find("level.;").unwrap() + 5;
+        let level_ctx = crate::analysis::dot_completion_context(&c.text, level_dot + 1).unwrap();
+        let level_items = member_completions(&c, &level_ctx);
+        let level_names = labels(&level_items);
+        for must in ["rank", "is_at_least", "equals"] {
+            assert!(
+                level_names.contains(&must),
+                "{must} missing in {level_names:?}"
+            );
+        }
+
+        let record_dot = c.text.find("r.;").unwrap() + 1;
+        let record_ctx = crate::analysis::dot_completion_context(&c.text, record_dot + 1).unwrap();
+        let record_items = member_completions(&c, &record_ctx);
+        let record_names = labels(&record_items);
+        for must in [
+            "level",
+            "message",
+            "module",
+            "fields",
+            "field",
+            "has_field",
+            "field_count",
+            "time",
+            "with_level",
+            "with_message",
+            "with_module",
+            "with_fields",
+            "with_field",
+            "without_field",
+            "clear_fields",
+            "with_time",
+        ] {
+            assert!(
+                record_names.contains(&must),
+                "{must} missing in {record_names:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn member_completion_marks_std_fs_file_io_methods_as_futures() {
         let src = "\
 import { File, Path } from \"std:fs\";
-function main() {
-  var opened = File.create(Path.new(\"/tmp/otter_fusion_lsp_file_async_methods.bin\"));
+import { Future } from \"core:prelude\";
+function main(): Future<null> async {
+  var opened = await File.create(Path.new(\"/tmp/otter_fusion_lsp_file_async_methods.bin\"));
   if opened is File {
     var file = opened as File;
     file.;
   }
+  null
 }
 ";
         let c = Compiled::new(src.into());
@@ -2778,6 +3631,16 @@ function main() {
         let items = member_completions(&c, &ctx);
         let names = labels(&items);
         for must in [
+            "read_to_string",
+            "write_string",
+            "append_string",
+            "close",
+            "read",
+            "read_to_end",
+            "write",
+            "write_all",
+            "flush",
+            "seek",
             "read_async",
             "read_to_end_async",
             "write_async",
@@ -2787,14 +3650,1205 @@ function main() {
         ] {
             assert!(names.contains(&must), "{must} missing in {names:?}");
         }
+        for (name, ret) in [
+            ("read_to_string", "Future<str | IoError>"),
+            ("write_string", "Future<null | IoError>"),
+            ("append_string", "Future<null | IoError>"),
+            ("close", "Future<null | IoError>"),
+            ("read", "Future<i64 | IoError>"),
+            ("read_to_end", "Future<i64 | IoError>"),
+            ("write", "Future<i64 | IoError>"),
+            ("write_all", "Future<null | IoError>"),
+            ("flush", "Future<null | IoError>"),
+            ("seek", "Future<i64 | IoError>"),
+            ("read_async", "Future<i64 | IoError>"),
+            ("read_to_end_async", "Future<i64 | IoError>"),
+            ("write_async", "Future<i64 | IoError>"),
+            ("write_all_async", "Future<null | IoError>"),
+            ("seek_async", "Future<i64 | IoError>"),
+            ("flush_async", "Future<null | IoError>"),
+        ] {
+            assert!(
+                completion_detail(&items, name).contains(ret),
+                "File.{name} must advertise its async Future return: {:?}",
+                completion_detail(&items, name)
+            );
+        }
+    }
+
+    #[test]
+    fn member_completion_marks_concrete_stdio_methods_as_futures() {
+        let src = "\
+import { stdin, stdout, stderr } from \"std:io\";
+function main() {
+  var input = stdin();
+  input.;
+  var output = stdout();
+  output.;
+  var err = stderr();
+  err.;
+}
+";
+        let c = Compiled::new(src.into());
+        let input_dot = src.find("input.;").unwrap() + 5;
+        let input_ctx = crate::analysis::dot_completion_context(&c.text, input_dot + 1).unwrap();
+        let input_items = member_completions(&c, &input_ctx);
+        let input_names = labels(&input_items);
+        for must in ["read", "read_to_end", "read_async", "read_to_end_async"] {
+            assert!(
+                input_names.contains(&must),
+                "{must} missing in {input_names:?}"
+            );
+        }
+        assert!(
+            completion_detail(&input_items, "read").contains("Future<i64 | IoError>"),
+            "Stdin.read must show its async Future return: {:?}",
+            completion_detail(&input_items, "read")
+        );
+        assert!(
+            completion_detail(&input_items, "read_to_end").contains("Future<i64 | IoError>"),
+            "Stdin.read_to_end must show its async Future return: {:?}",
+            completion_detail(&input_items, "read")
+        );
+        assert!(
+            completion_detail(&input_items, "read_async").contains("Future<i64 | IoError>"),
+            "Stdin.read_async must advertise its async Future return: {:?}",
+            completion_detail(&input_items, "read_async")
+        );
+        assert!(
+            completion_detail(&input_items, "read_to_end_async").contains("Future<i64 | IoError>"),
+            "Stdin.read_to_end_async must advertise its async Future return: {:?}",
+            completion_detail(&input_items, "read_to_end_async")
+        );
+
+        for (marker, label) in [("output.;", "Stdout"), ("err.;", "Stderr")] {
+            let dot = src.find(marker).unwrap() + marker.trim_end_matches(".;").len();
+            let ctx = crate::analysis::dot_completion_context(&c.text, dot + 1).unwrap();
+            let items = member_completions(&c, &ctx);
+            let names = labels(&items);
+            for must in [
+                "write",
+                "write_all",
+                "flush",
+                "write_async",
+                "write_all_async",
+                "flush_async",
+            ] {
+                assert!(names.contains(&must), "{must} missing in {names:?}");
+            }
+            for (name, expected) in [
+                ("write", "Future<i64 | IoError>"),
+                ("write_all", "Future<null | IoError>"),
+                ("flush", "Future<null | IoError>"),
+            ] {
+                assert!(
+                    completion_detail(&items, name).contains(expected),
+                    "{label}.{name} must show its async Future return: {:?}",
+                    completion_detail(&items, name)
+                );
+            }
+            for (name, expected) in [
+                ("write_async", "Future<i64 | IoError>"),
+                ("write_all_async", "Future<null | IoError>"),
+                ("flush_async", "Future<null | IoError>"),
+            ] {
+                assert!(
+                    completion_detail(&items, name).contains(expected),
+                    "{label}.{name} must advertise its async Future return: {:?}",
+                    completion_detail(&items, name)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn member_completion_marks_std_io_buffered_adapters_non_awaitable() {
+        let src = "\
+import { Bytes } from \"std:bytes\";
+import { buf_reader, buf_writer } from \"std:io\";
+function main() {
+  var reader = buf_reader(Bytes.from_str(\"abc\").cursor());
+  reader.;
+  var writer = buf_writer(Bytes.new());
+  writer.;
+}
+";
+        let c = Compiled::new(src.into());
+
+        let reader_dot = src.find("reader.;").unwrap() + 6;
+        let reader_ctx = crate::analysis::dot_completion_context(&c.text, reader_dot + 1).unwrap();
+        let reader_items = member_completions(&c, &reader_ctx);
+        let reader_names = labels(&reader_items);
+        for must in ["read", "read_to_end", "read_line", "lines"] {
+            assert!(
+                reader_names.contains(&must),
+                "{must} missing in {reader_names:?}"
+            );
+        }
+        for (name, expected) in [
+            ("read", "i64 | IoError"),
+            ("read_to_end", "i64 | IoError"),
+            ("read_line", "str | IoError"),
+            ("lines", "Iterator<str | IoError>"),
+        ] {
+            assert!(
+                completion_detail(&reader_items, name).contains(expected),
+                "BufReader.{name} completion must show ordinary return {expected}: {:?}",
+                completion_detail(&reader_items, name)
+            );
+            assert!(
+                !completion_detail(&reader_items, name).contains("Future<"),
+                "BufReader.{name} completion must not look awaitable: {:?}",
+                completion_detail(&reader_items, name)
+            );
+        }
+
+        let writer_dot = src.find("writer.;").unwrap() + 6;
+        let writer_ctx = crate::analysis::dot_completion_context(&c.text, writer_dot + 1).unwrap();
+        let writer_items = member_completions(&c, &writer_ctx);
+        let writer_names = labels(&writer_items);
+        for must in ["write", "write_all", "flush"] {
+            assert!(
+                writer_names.contains(&must),
+                "{must} missing in {writer_names:?}"
+            );
+        }
+        for (name, expected) in [
+            ("write", "i64 | IoError"),
+            ("write_all", "null | IoError"),
+            ("flush", "null | IoError"),
+        ] {
+            assert!(
+                completion_detail(&writer_items, name).contains(expected),
+                "BufWriter.{name} completion must show ordinary return {expected}: {:?}",
+                completion_detail(&writer_items, name)
+            );
+            assert!(
+                !completion_detail(&writer_items, name).contains("Future<"),
+                "BufWriter.{name} completion must not look awaitable: {:?}",
+                completion_detail(&writer_items, name)
+            );
+        }
+    }
+
+    #[test]
+    fn member_completion_lists_std_net_tcp_listener_options() {
+        let src = "\
+import { TcpListener } from \"std:net\";
+function inspect(listener: TcpListener) {
+  listener.;
+}
+";
+        let c = Compiled::new(src.into());
+        let dot = src.find("listener.;").unwrap() + 8;
+        let ctx = crate::analysis::dot_completion_context(&c.text, dot + 1).unwrap();
+        let items = member_completions(&c, &ctx);
+        let names = labels(&items);
+        for must in [
+            "accept",
+            "local_addr",
+            "take_error",
+            "set_nonblocking",
+            "ttl",
+            "set_ttl",
+            "close",
+        ] {
+            assert!(names.contains(&must), "{must} missing in {names:?}");
+        }
+        for (name, expected) in [
+            ("accept", "Future<(TcpStream, SocketAddr) | IoError>"),
+            ("local_addr", "Future<SocketAddr | IoError>"),
+            ("take_error", "Future<IoError | null>"),
+            ("set_nonblocking", "Future<null | IoError>"),
+            ("ttl", "Future<u32 | IoError>"),
+            ("set_ttl", "Future<null | IoError>"),
+            ("close", "Future<null | IoError>"),
+        ] {
+            assert!(
+                completion_detail(&items, name).contains(expected),
+                "TcpListener.{name} completion must show expected return {expected}: {:?}",
+                completion_detail(&items, name)
+            );
+            assert!(
+                completion_detail(&items, name).contains("Future<"),
+                "TcpListener.{name} completion must look awaitable: {:?}",
+                completion_detail(&items, name)
+            );
+        }
+    }
+
+    #[test]
+    fn member_completion_lists_std_net_tcp_stream_timeout_options() {
+        let src = "\
+import { TcpStream } from \"std:net\";
+function inspect(stream: TcpStream) {
+  stream.;
+}
+";
+        let c = Compiled::new(src.into());
+        let dot = src.find("stream.;").unwrap() + 6;
+        let ctx = crate::analysis::dot_completion_context(&c.text, dot + 1).unwrap();
+        let items = member_completions(&c, &ctx);
+        let names = labels(&items);
+        for must in [
+            "peer_addr",
+            "local_addr",
+            "take_error",
+            "nodelay",
+            "set_nodelay",
+            "set_nonblocking",
+            "read_timeout",
+            "set_read_timeout",
+            "write_timeout",
+            "set_write_timeout",
+            "peek",
+            "ttl",
+            "set_ttl",
+            "close",
+            "read",
+            "read_to_end",
+            "write",
+            "write_all",
+            "flush",
+        ] {
+            assert!(names.contains(&must), "{must} missing in {names:?}");
+        }
+        for (name, expected) in [
+            ("peer_addr", "Future<SocketAddr | IoError>"),
+            ("local_addr", "Future<SocketAddr | IoError>"),
+            ("take_error", "Future<IoError | null>"),
+            ("nodelay", "Future<bool | IoError>"),
+            ("set_nodelay", "Future<null | IoError>"),
+            ("set_nonblocking", "Future<null | IoError>"),
+            ("read_timeout", "Future<Duration | null | IoError>"),
+            ("set_read_timeout", "Future<null | IoError>"),
+            ("write_timeout", "Future<Duration | null | IoError>"),
+            ("set_write_timeout", "Future<null | IoError>"),
+            ("peek", "Future<i64 | IoError>"),
+            ("ttl", "Future<u32 | IoError>"),
+            ("set_ttl", "Future<null | IoError>"),
+            ("close", "Future<null | IoError>"),
+            ("read", "Future<i64 | IoError>"),
+            ("read_to_end", "Future<i64 | IoError>"),
+            ("write", "Future<i64 | IoError>"),
+            ("write_all", "Future<null | IoError>"),
+            ("flush", "Future<null | IoError>"),
+        ] {
+            assert!(
+                completion_detail(&items, name).contains(expected),
+                "TcpStream.{name} completion must show expected return {expected}: {:?}",
+                completion_detail(&items, name)
+            );
+            assert!(
+                completion_detail(&items, name).contains("Future<"),
+                "TcpStream.{name} completion must look awaitable: {:?}",
+                completion_detail(&items, name)
+            );
+        }
+    }
+
+    #[test]
+    fn member_completion_lists_std_net_async_tcp_stream_methods() {
+        let src = "\
+import { AsyncTcpStream, TcpStream } from \"std:net\";
+function inspect(stream: TcpStream) {
+  var async_stream = AsyncTcpStream.from_stream(stream);
+  async_stream.;
+}
+";
+        let c = Compiled::new(src.into());
+        let dot = src.find("async_stream.;").unwrap() + 12;
+        let ctx = crate::analysis::dot_completion_context(&c.text, dot + 1).unwrap();
+        let items = member_completions(&c, &ctx);
+        let names = labels(&items);
+        for must in [
+            "read_async",
+            "write_async",
+            "peek_async",
+            "into_stream",
+            "peer_addr",
+            "local_addr",
+            "close",
+        ] {
+            assert!(names.contains(&must), "{must} missing in {names:?}");
+        }
+        assert!(
+            completion_detail(&items, "read_async").contains("Future<i64 | IoError>"),
+            "read_async must advertise its async Future return: {:?}",
+            completion_detail(&items, "read_async")
+        );
+        assert!(
+            completion_detail(&items, "write_async").contains("Future<i64 | IoError>"),
+            "write_async must advertise its async Future return: {:?}",
+            completion_detail(&items, "write_async")
+        );
+        assert!(
+            completion_detail(&items, "peek_async").contains("Future<i64 | IoError>"),
+            "peek_async must advertise its async Future return: {:?}",
+            completion_detail(&items, "peek_async")
+        );
+        for (name, expected) in [("into_stream", "TcpStream")] {
+            assert!(
+                completion_detail(&items, name).contains(expected),
+                "AsyncTcpStream.{name} completion must show its ordinary conversion return: {:?}",
+                completion_detail(&items, name)
+            );
+            assert!(
+                !completion_detail(&items, name).contains("Future<"),
+                "AsyncTcpStream.{name} completion must not look awaitable: {:?}",
+                completion_detail(&items, name)
+            );
+        }
+        for (name, expected) in [
+            ("peer_addr", "Future<SocketAddr | IoError>"),
+            ("local_addr", "Future<SocketAddr | IoError>"),
+            ("close", "Future<null | IoError>"),
+        ] {
+            assert!(
+                completion_detail(&items, name).contains(expected),
+                "AsyncTcpStream.{name} completion must show its async Future return: {:?}",
+                completion_detail(&items, name)
+            );
+            assert!(
+                completion_detail(&items, name).contains("Future<"),
+                "AsyncTcpStream.{name} completion must look awaitable: {:?}",
+                completion_detail(&items, name)
+            );
+        }
+    }
+
+    #[test]
+    fn member_completion_rejects_copied_async_network_timeout_method_families() {
+        fn member_names(src: &str, marker: &str) -> Vec<String> {
+            let c = Compiled::new(src.into());
+            let dot = src.find(marker).unwrap() + marker.trim_end_matches(".;").len();
+            let ctx = crate::analysis::dot_completion_context(&c.text, dot + 1).unwrap();
+            member_completions(&c, &ctx)
+                .into_iter()
+                .map(|item| item.label)
+                .collect()
+        }
+
+        let stream_src = "\
+import { AsyncTcpStream, TcpStream } from \"std:net\";
+function inspect(stream: TcpStream) {
+  var async_stream = AsyncTcpStream.from_stream(stream);
+  async_stream.;
+}
+";
+        let stream_names = member_names(stream_src, "async_stream.;");
+        for forbidden in [
+            "read_timeout_async",
+            "write_timeout_async",
+            "peek_timeout_async",
+        ] {
+            assert!(
+                !stream_names.iter().any(|name| name == forbidden),
+                "AsyncTcpStream completion must not copy timeout convenience `{forbidden}`: {stream_names:?}"
+            );
+        }
+
+        let listener_src = "\
+import { AsyncTcpListener } from \"std:net\";
+function inspect(listener: AsyncTcpListener) {
+  listener.;
+}
+";
+        let listener_names = member_names(listener_src, "listener.;");
+        assert!(
+            !listener_names
+                .iter()
+                .any(|name| name == "accept_timeout_async"),
+            "AsyncTcpListener completion must not copy timeout convenience `accept_timeout_async`: {listener_names:?}"
+        );
+
+        let udp_src = "\
+import { AsyncUdpSocket } from \"std:net\";
+function inspect(socket: AsyncUdpSocket) {
+  socket.;
+}
+";
+        let udp_names = member_names(udp_src, "socket.;");
+        for forbidden in [
+            "send_timeout_async",
+            "recv_timeout_async",
+            "peek_timeout_async",
+            "send_to_timeout_async",
+            "recv_from_timeout_async",
+            "peek_from_timeout_async",
+        ] {
+            assert!(
+                !udp_names.iter().any(|name| name == forbidden),
+                "AsyncUdpSocket completion must not copy timeout convenience `{forbidden}`: {udp_names:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn type_namespace_completion_marks_tcp_connectors_awaitable() {
+        let plain_src = "\
+import { TcpStream } from \"std:net\";
+function main() {
+  var connected = TcpStream.;
+}
+";
+        let c = Compiled::new(plain_src.into());
+        let dot = plain_src.find("TcpStream.;").unwrap() + 9;
+        let ctx = crate::analysis::dot_completion_context(&c.text, dot + 1).unwrap();
+        let items = member_completions(&c, &ctx);
+        let names = labels(&items);
+        for must in ["connect", "connect_timeout"] {
+            assert!(names.contains(&must), "{must} missing in {names:?}");
+            assert!(
+                completion_detail(&items, must).contains("Future<TcpStream | IoError>"),
+                "TcpStream.{must} completion must advertise its Future return: {:?}",
+                completion_detail(&items, must)
+            );
+        }
+
+        let async_src = "\
+import { AsyncTcpStream } from \"std:net\";
+function main() {
+  var connected = AsyncTcpStream.;
+}
+";
+        let c = Compiled::new(async_src.into());
+        let dot = async_src.find("AsyncTcpStream.;").unwrap() + 14;
+        let ctx = crate::analysis::dot_completion_context(&c.text, dot + 1).unwrap();
+        let items = member_completions(&c, &ctx);
+        let names = labels(&items);
+        for must in ["connect", "connect_timeout"] {
+            assert!(names.contains(&must), "{must} missing in {names:?}");
+            assert!(
+                completion_detail(&items, must).contains("Future<AsyncTcpStream | IoError>"),
+                "async AsyncTcpStream.{must} completion must advertise its Future return: {:?}",
+                completion_detail(&items, must)
+            );
+        }
+    }
+
+    #[test]
+    fn type_namespace_completion_marks_async_net_setup_contracts() {
+        fn type_items(src: &str, marker: &str) -> Vec<CompletionItem> {
+            let c = Compiled::new(src.into());
+            let dot = src.find(marker).unwrap() + marker.trim_end_matches(".;").len();
+            let ctx = crate::analysis::dot_completion_context(&c.text, dot + 1).unwrap();
+            member_completions(&c, &ctx)
+        }
+
+        let stream_src = "\
+import { AsyncTcpStream, TcpStream } from \"std:net\";
+function main() {
+  AsyncTcpStream.;
+}
+";
+        let stream_items = type_items(stream_src, "AsyncTcpStream.;");
+        assert!(
+            completion_detail(&stream_items, "from_stream").contains("AsyncTcpStream"),
+            "AsyncTcpStream.from_stream completion must show its wrapper return: {:?}",
+            completion_detail(&stream_items, "from_stream")
+        );
+        assert!(
+            !completion_detail(&stream_items, "from_stream").contains("Future<"),
+            "AsyncTcpStream.from_stream completion must not look awaitable: {:?}",
+            completion_detail(&stream_items, "from_stream")
+        );
+
+        let listener_src = "\
+import { AsyncTcpListener, TcpListener } from \"std:net\";
+function main() {
+  AsyncTcpListener.;
+}
+";
+        let listener_items = type_items(listener_src, "AsyncTcpListener.;");
+        assert!(
+            completion_detail(&listener_items, "bind")
+                .contains("Future<AsyncTcpListener | IoError>"),
+            "AsyncTcpListener.bind completion must advertise its Future return: {:?}",
+            completion_detail(&listener_items, "bind")
+        );
+        assert!(
+            completion_detail(&listener_items, "bind").contains("Future<"),
+            "AsyncTcpListener.bind completion must look awaitable: {:?}",
+            completion_detail(&listener_items, "bind")
+        );
+        assert!(
+            completion_detail(&listener_items, "from_listener").contains("AsyncTcpListener"),
+            "AsyncTcpListener.from_listener completion must show its wrapper return: {:?}",
+            completion_detail(&listener_items, "from_listener")
+        );
+        assert!(
+            !completion_detail(&listener_items, "from_listener").contains("Future<"),
+            "AsyncTcpListener.from_listener completion must not look awaitable: {:?}",
+            completion_detail(&listener_items, "from_listener")
+        );
+
+        let udp_src = "\
+import { AsyncUdpSocket, UdpSocket } from \"std:net\";
+function main() {
+  AsyncUdpSocket.;
+}
+";
+        let udp_items = type_items(udp_src, "AsyncUdpSocket.;");
+        assert!(
+            completion_detail(&udp_items, "bind").contains("Future<AsyncUdpSocket | IoError>"),
+            "AsyncUdpSocket.bind completion must advertise its Future return: {:?}",
+            completion_detail(&udp_items, "bind")
+        );
+        assert!(
+            completion_detail(&udp_items, "from_socket").contains("AsyncUdpSocket"),
+            "AsyncUdpSocket.from_socket completion must show its wrapper return: {:?}",
+            completion_detail(&udp_items, "from_socket")
+        );
+        assert!(
+            !completion_detail(&udp_items, "from_socket").contains("Future<"),
+            "AsyncUdpSocket.from_socket completion must not look awaitable: {:?}",
+            completion_detail(&udp_items, "from_socket")
+        );
+    }
+
+    #[test]
+    fn namespace_completion_distinguishes_time_and_async_sleep() {
+        let src = "\
+import \"std:time\" as Time;
+import \"std:async\" as Async;
+function main() {
+  Time.;
+  Async.;
+}
+";
+        let c = Compiled::new(src.into());
+
+        let time_dot = src.find("Time.;").unwrap() + 4;
+        let time_ctx = crate::analysis::dot_completion_context(&c.text, time_dot + 1).unwrap();
+        let time_items = member_completions(&c, &time_ctx);
+        let time_names = labels(&time_items);
+        assert!(
+            time_names.contains(&"sleep"),
+            "Time.sleep missing in {time_names:?}"
+        );
+        assert!(
+            completion_detail(&time_items, "sleep").contains("(duration: Duration): Future<null>"),
+            "Time.sleep must advertise its async Future return: {:?}",
+            completion_detail(&time_items, "sleep")
+        );
+        assert!(
+            completion_detail(&time_items, "sleep").contains("Future<"),
+            "Time.sleep completion must look awaitable: {:?}",
+            completion_detail(&time_items, "sleep")
+        );
+
+        let async_dot = src.find("Async.;").unwrap() + 5;
+        let async_ctx = crate::analysis::dot_completion_context(&c.text, async_dot + 1).unwrap();
+        let async_items = member_completions(&c, &async_ctx);
+        let async_names = labels(&async_items);
+        assert!(
+            async_names.contains(&"sleep"),
+            "Async.sleep missing in {async_names:?}"
+        );
+        assert!(
+            completion_detail(&async_items, "sleep").contains("(ms: i64): Future<null>"),
+            "Async.sleep must advertise its executor-suspending Future return: {:?}",
+            completion_detail(&async_items, "sleep")
+        );
+    }
+
+    #[test]
+    fn marker_alias_signatures_stay_future_returning_across_lsp_surfaces() {
+        let src = "\
+import { Future } from \"core:prelude\";
+import { Duration, sleep as time_sleep } from \"std:time\";
+import { TimedOut, sleep as nap, timeout as race, yield_now as pause } from \"std:async\";
+function fast(): Future<i64> async { 7 }
+function main(): Future<null> async {
+  await pause();
+  await nap(1);
+  await time_sleep(Duration.from_millis(1));
+  var value: i64 | TimedOut = await race(fast(), 10);
+}
+";
+        let c = Compiled::new(src.into());
+        assert!(c.diagnostics.is_empty(), "unexpected: {:?}", c.diagnostics);
+
+        let cases = [
+            ("pause", "(): Future<null>", "pause(): Future<null>"),
+            (
+                "nap",
+                "(ms: i64): Future<null>",
+                "nap(ms: i64): Future<null>",
+            ),
+            (
+                "time_sleep",
+                "(duration: Duration): Future<null>",
+                "time_sleep(duration: Duration): Future<null>",
+            ),
+            (
+                "race",
+                "(future: Future<T>, ms: i64): Future<T | TimedOut>",
+                "race(future: Future<T>, ms: i64): Future<T | TimedOut>",
+            ),
+        ];
+
+        for (alias, detail, label) in cases {
+            let def = c
+                .analysis
+                .program
+                .resolve_value_in(ModId::ROOT, alias)
+                .unwrap_or_else(|| panic!("{alias} alias did not resolve"));
+            assert_eq!(
+                c.def_signature(def),
+                detail,
+                "{alias} completion/hover detail must advertise the async contract"
+            );
+            let sig = build_signature_info(&c, def, alias)
+                .unwrap_or_else(|| panic!("{alias} signature help missing"));
+            assert_eq!(
+                sig.label, label,
+                "{alias} signature help must keep the alias name and Future return"
+            );
+        }
+    }
+
+    #[test]
+    fn namespace_completion_marks_std_process_helpers_awaitable_where_they_touch_host_state() {
+        let src = "\
+import \"std:process\" as Process;
+function main() {
+  Process.;
+}
+";
+        let c = Compiled::new(src.into());
+        let dot = src.find("Process.;").unwrap() + 7;
+        let ctx = crate::analysis::dot_completion_context(&c.text, dot + 1).unwrap();
+        let items = member_completions(&c, &ctx);
+        let names = labels(&items);
+        for must in [
+            "command",
+            "exit_status",
+            "output",
+            "args",
+            "env",
+            "env_all",
+            "set_env",
+            "exit",
+            "abort",
+        ] {
+            assert!(names.contains(&must), "{must} missing in {names:?}");
+        }
+        for (name, expected) in [
+            ("command", "Command"),
+            ("exit_status", "ExitStatus"),
+            ("output", "Output"),
+            ("args", "Future<List<str>>"),
+            ("env", "Future<str | null>"),
+            ("env_all", "Future<Map<str, str>>"),
+            ("set_env", "Future<null>"),
+            ("exit", "never"),
+            ("abort", "never"),
+        ] {
+            assert!(
+                completion_detail(&items, name).contains(expected),
+                "Process.{name} completion must show return {expected}: {:?}",
+                completion_detail(&items, name)
+            );
+        }
+        for name in ["args", "env", "env_all", "set_env"] {
+            assert!(
+                completion_detail(&items, name).contains("Future<"),
+                "Process.{name} completion must look awaitable: {:?}",
+                completion_detail(&items, name)
+            );
+        }
+        for name in ["command", "exit_status", "output", "exit", "abort"] {
+            assert!(
+                !completion_detail(&items, name).contains("Future<"),
+                "Process.{name} completion must remain ordinary/non-returning: {:?}",
+                completion_detail(&items, name)
+            );
+        }
+    }
+
+    #[test]
+    fn namespace_completion_marks_std_io_helpers_async_where_they_touch_stdio() {
+        let src = "\
+import \"std:io\" as Io;
+function main() {
+  Io.;
+}
+";
+        let c = Compiled::new(src.into());
+        let dot = src.find("Io.;").unwrap() + 2;
+        let ctx = crate::analysis::dot_completion_context(&c.text, dot + 1).unwrap();
+        let items = member_completions(&c, &ctx);
+        let names = labels(&items);
+        for must in [
+            "stdin",
+            "stdout",
+            "stderr",
+            "print",
+            "println",
+            "eprint",
+            "eprintln",
+            "buf_reader",
+            "buf_writer",
+        ] {
+            assert!(names.contains(&must), "{must} missing in {names:?}");
+        }
+        for (name, expected) in [
+            ("stdin", "Stdin"),
+            ("stdout", "Stdout"),
+            ("stderr", "Stderr"),
+            ("buf_reader", "BufReader"),
+            ("buf_writer", "BufWriter"),
+        ] {
+            assert!(
+                completion_detail(&items, name).contains(expected),
+                "Io.{name} completion must show ordinary return {expected}: {:?}",
+                completion_detail(&items, name)
+            );
+            assert!(
+                !completion_detail(&items, name).contains("Future<"),
+                "Io.{name} completion must not look awaitable: {:?}",
+                completion_detail(&items, name)
+            );
+        }
+        for name in ["print", "println", "eprint", "eprintln"] {
+            assert!(
+                completion_detail(&items, name).contains("Future<null>"),
+                "Io.{name} completion must advertise async output: {:?}",
+                completion_detail(&items, name)
+            );
+            assert!(
+                completion_detail(&items, name).contains("Future<"),
+                "Io.{name} completion must look awaitable: {:?}",
+                completion_detail(&items, name)
+            );
+        }
+    }
+
+    #[test]
+    fn namespace_completion_marks_std_fs_helpers_awaitable_where_they_touch_storage() {
+        let src = "\
+import \"std:fs\" as Fs;
+function main() {
+  Fs.;
+}
+";
+        let c = Compiled::new(src.into());
+        let dot = src.find("Fs.;").unwrap() + 2;
+        let ctx = crate::analysis::dot_completion_context(&c.text, dot + 1).unwrap();
+        let items = member_completions(&c, &ctx);
+        let names = labels(&items);
+        for must in [
+            "open_options",
+            "read_to_string",
+            "write_string",
+            "append_string",
+            "read",
+            "write",
+            "remove",
+            "rename",
+            "create_dir",
+            "create_dir_all",
+            "canonicalize",
+            "read_dir",
+        ] {
+            assert!(names.contains(&must), "{must} missing in {names:?}");
+        }
+        for (name, expected) in [
+            ("open_options", "OpenOptions"),
+            ("read_to_string", "str | IoError"),
+            ("write_string", "null | IoError"),
+            ("append_string", "null | IoError"),
+            ("read", "Bytes | IoError"),
+            ("write", "null | IoError"),
+            ("remove", "null | IoError"),
+            ("rename", "null | IoError"),
+            ("create_dir", "null | IoError"),
+            ("create_dir_all", "null | IoError"),
+            ("canonicalize", "Path | IoError"),
+            ("read_dir", "DirEntries | IoError"),
+        ] {
+            assert!(
+                completion_detail(&items, name).contains(&format!("Future<{expected}>")),
+                "Fs.{name} completion must show future return {expected}: {:?}",
+                completion_detail(&items, name)
+            );
+            assert!(
+                completion_detail(&items, name).contains("Future<"),
+                "Fs.{name} completion must look awaitable: {:?}",
+                completion_detail(&items, name)
+            );
+        }
+    }
+
+    #[test]
+    fn member_completion_marks_std_fs_path_storage_queries_awaitable() {
+        let src = "\
+import { Path } from \"std:fs\";
+function main() {
+  Path.new(\".\").;
+}
+";
+        let c = Compiled::new(src.into());
+        let dot = src.find(".;").unwrap();
+        let ctx = crate::analysis::dot_completion_context(&c.text, dot + 1).unwrap();
+        let items = member_completions(&c, &ctx);
+        let names = labels(&items);
+        for must in [
+            "exists",
+            "is_file",
+            "is_dir",
+            "file_kind",
+            "byte_len",
+            "permissions",
+            "metadata",
+            "canonicalize",
+        ] {
+            assert!(names.contains(&must), "{must} missing in {names:?}");
+        }
+        for (name, expected) in [
+            ("exists", "Future<bool | IoError>"),
+            ("is_file", "Future<bool | IoError>"),
+            ("is_dir", "Future<bool | IoError>"),
+            ("file_kind", "Future<FileKind | IoError>"),
+            ("byte_len", "Future<u64 | IoError>"),
+            ("permissions", "Future<Permissions | IoError>"),
+            ("metadata", "Future<Metadata | IoError>"),
+            ("canonicalize", "Future<Path | IoError>"),
+        ] {
+            assert!(
+                completion_detail(&items, name).contains(expected),
+                "Path.{name} completion must show its future return: {:?}",
+                completion_detail(&items, name)
+            );
+        }
+        for (name, expected) in [("join", "Path"), ("as_str", "str"), ("normalize", "Path")] {
+            assert!(
+                completion_detail(&items, name).contains(expected),
+                "Path.{name} completion should keep pure value return {expected}: {:?}",
+                completion_detail(&items, name)
+            );
+            assert!(
+                !completion_detail(&items, name).contains("Future<"),
+                "Path.{name} completion must not look awaitable: {:?}",
+                completion_detail(&items, name)
+            );
+        }
+    }
+
+    #[test]
+    fn namespace_completion_marks_std_net_resolve_awaitable() {
+        let src = "\
+import \"std:net\" as Net;
+function main() {
+  Net.;
+}
+";
+        let c = Compiled::new(src.into());
+        let dot = src.find("Net.;").unwrap() + 3;
+        let ctx = crate::analysis::dot_completion_context(&c.text, dot + 1).unwrap();
+        let items = member_completions(&c, &ctx);
+        let names = labels(&items);
+        assert!(names.contains(&"resolve"), "resolve missing in {names:?}");
+        assert!(
+            completion_detail(&items, "resolve").contains("Future<List<IpAddr> | IoError>"),
+            "Net.resolve completion must show its future return: {:?}",
+            completion_detail(&items, "resolve")
+        );
+    }
+
+    #[test]
+    fn type_namespace_completion_marks_std_fs_file_constructors_awaitable() {
+        let src = "\
+import { File, Path, open_options } from \"std:fs\";
+function main() {
+  File.;
+}
+";
+        let c = Compiled::new(src.into());
+        let dot = src.find("File.;").unwrap() + 4;
+        let ctx = crate::analysis::dot_completion_context(&c.text, dot + 1).unwrap();
+        let items = member_completions(&c, &ctx);
+        let names = labels(&items);
+        for must in ["open", "create", "append", "open_with"] {
+            assert!(names.contains(&must), "{must} missing in {names:?}");
+            let detail = completion_detail(&items, must);
+            assert!(
+                detail.contains("Future<") && detail.contains("File") && detail.contains("IoError"),
+                "File.{must} completion must show its future constructor return: {:?}",
+                detail
+            );
+        }
+    }
+
+    #[test]
+    fn member_completion_lists_std_net_async_tcp_listener_methods() {
+        let src = "\
+import { AsyncTcpListener } from \"std:net\";
+function inspect(listener: AsyncTcpListener) {
+  listener.;
+}
+";
+        let c = Compiled::new(src.into());
+        let dot = src.find("listener.;").unwrap() + 8;
+        let ctx = crate::analysis::dot_completion_context(&c.text, dot + 1).unwrap();
+        let items = member_completions(&c, &ctx);
+        let names = labels(&items);
+        for must in [
+            "accept_async",
+            "into_listener",
+            "local_addr",
+            "take_error",
+            "ttl",
+            "set_ttl",
+            "close",
+        ] {
+            assert!(names.contains(&must), "{must} missing in {names:?}");
+        }
+        assert!(
+            completion_detail(&items, "accept_async")
+                .contains("Future<(AsyncTcpStream, SocketAddr) | IoError>"),
+            "accept_async must advertise its async Future return: {:?}",
+            completion_detail(&items, "accept_async")
+        );
+        for (name, expected) in [
+            ("into_listener", "TcpListener"),
+            ("local_addr", "Future<SocketAddr | IoError>"),
+            ("take_error", "Future<IoError | null>"),
+            ("ttl", "Future<u32 | IoError>"),
+            ("set_ttl", "Future<null | IoError>"),
+            ("close", "Future<null | IoError>"),
+        ] {
+            assert!(
+                completion_detail(&items, name).contains(expected),
+                "AsyncTcpListener.{name} completion must show expected return {expected}: {:?}",
+                completion_detail(&items, name)
+            );
+            if name == "into_listener" {
+                assert!(
+                    !completion_detail(&items, name).contains("Future<"),
+                    "AsyncTcpListener.{name} completion must not look awaitable: {:?}",
+                    completion_detail(&items, name)
+                );
+            } else {
+                assert!(
+                    completion_detail(&items, name).contains("Future<"),
+                    "AsyncTcpListener.{name} completion must look awaitable: {:?}",
+                    completion_detail(&items, name)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn member_completion_lists_std_net_udp_connected_methods() {
+        let src = "\
+import { UdpSocket } from \"std:net\";
+function inspect(socket: UdpSocket) {
+  socket.;
+}
+";
+        let c = Compiled::new(src.into());
+        let dot = src.find("socket.;").unwrap() + 6;
+        let ctx = crate::analysis::dot_completion_context(&c.text, dot + 1).unwrap();
+        let items = member_completions(&c, &ctx);
+        let names = labels(&items);
+        for must in [
+            "local_addr",
+            "connect",
+            "peer_addr",
+            "ttl",
+            "take_error",
+            "set_nonblocking",
+            "read_timeout",
+            "set_read_timeout",
+            "write_timeout",
+            "set_write_timeout",
+            "set_ttl",
+            "broadcast",
+            "set_broadcast",
+            "multicast_loop_v4",
+            "set_multicast_loop_v4",
+            "multicast_loop_v6",
+            "set_multicast_loop_v6",
+            "multicast_ttl_v4",
+            "set_multicast_ttl_v4",
+            "join_multicast_v4",
+            "leave_multicast_v4",
+            "join_multicast_v6",
+            "leave_multicast_v6",
+            "send_to",
+            "send",
+            "recv",
+            "peek",
+            "recv_from",
+            "peek_from",
+            "close",
+        ] {
+            assert!(names.contains(&must), "{must} missing in {names:?}");
+        }
+        for (name, expected) in [
+            ("local_addr", "Future<SocketAddr | IoError>"),
+            ("connect", "Future<null | IoError>"),
+            ("peer_addr", "Future<SocketAddr | IoError>"),
+            ("ttl", "Future<u32 | IoError>"),
+            ("take_error", "Future<IoError | null>"),
+            ("set_nonblocking", "Future<null | IoError>"),
+            ("read_timeout", "Future<Duration | null | IoError>"),
+            ("set_read_timeout", "Future<null | IoError>"),
+            ("write_timeout", "Future<Duration | null | IoError>"),
+            ("set_write_timeout", "Future<null | IoError>"),
+            ("set_ttl", "Future<null | IoError>"),
+            ("broadcast", "Future<bool | IoError>"),
+            ("set_broadcast", "Future<null | IoError>"),
+            ("multicast_loop_v4", "Future<bool | IoError>"),
+            ("set_multicast_loop_v4", "Future<null | IoError>"),
+            ("multicast_loop_v6", "Future<bool | IoError>"),
+            ("set_multicast_loop_v6", "Future<null | IoError>"),
+            ("multicast_ttl_v4", "Future<u32 | IoError>"),
+            ("set_multicast_ttl_v4", "Future<null | IoError>"),
+            ("join_multicast_v4", "Future<null | IoError>"),
+            ("leave_multicast_v4", "Future<null | IoError>"),
+            ("join_multicast_v6", "Future<null | IoError>"),
+            ("leave_multicast_v6", "Future<null | IoError>"),
+            ("send_to", "Future<i64 | IoError>"),
+            ("send", "Future<i64 | IoError>"),
+            ("recv", "Future<i64 | IoError>"),
+            ("peek", "Future<i64 | IoError>"),
+            ("recv_from", "Future<(i64, SocketAddr) | IoError>"),
+            ("peek_from", "Future<(i64, SocketAddr) | IoError>"),
+            ("close", "Future<null | IoError>"),
+        ] {
+            assert!(
+                completion_detail(&items, name).contains(expected),
+                "UdpSocket.{name} completion must show its awaitable return: {:?}",
+                completion_detail(&items, name)
+            );
+        }
+    }
+
+    #[test]
+    fn member_completion_lists_std_net_async_udp_methods() {
+        let src = "\
+import { AsyncUdpSocket } from \"std:net\";
+function inspect(socket: AsyncUdpSocket) {
+  socket.;
+}
+";
+        let c = Compiled::new(src.into());
+        let dot = src.find("socket.;").unwrap() + 6;
+        let ctx = crate::analysis::dot_completion_context(&c.text, dot + 1).unwrap();
+        let items = member_completions(&c, &ctx);
+        let names = labels(&items);
+        for must in [
+            "into_socket",
+            "local_addr",
+            "connect",
+            "peer_addr",
+            "ttl",
+            "take_error",
+            "set_ttl",
+            "broadcast",
+            "set_broadcast",
+            "multicast_loop_v4",
+            "set_multicast_loop_v4",
+            "multicast_loop_v6",
+            "set_multicast_loop_v6",
+            "multicast_ttl_v4",
+            "set_multicast_ttl_v4",
+            "join_multicast_v4",
+            "leave_multicast_v4",
+            "join_multicast_v6",
+            "leave_multicast_v6",
+            "send_async",
+            "recv_async",
+            "peek_async",
+            "send_to_async",
+            "recv_from_async",
+            "peek_from_async",
+            "close",
+        ] {
+            assert!(names.contains(&must), "{must} missing in {names:?}");
+        }
+        assert!(
+            completion_detail(&items, "send_async").contains("Future<i64 | IoError>"),
+            "send_async must advertise its async Future return: {:?}",
+            completion_detail(&items, "send_async")
+        );
+        assert!(
+            completion_detail(&items, "recv_async").contains("Future<i64 | IoError>"),
+            "recv_async must advertise its async Future return: {:?}",
+            completion_detail(&items, "recv_async")
+        );
+        assert!(
+            completion_detail(&items, "peek_async").contains("Future<i64 | IoError>"),
+            "peek_async must advertise its async Future return: {:?}",
+            completion_detail(&items, "peek_async")
+        );
+        assert!(
+            completion_detail(&items, "send_to_async").contains("Future<i64 | IoError>"),
+            "send_to_async must advertise its async Future return: {:?}",
+            completion_detail(&items, "send_to_async")
+        );
+        assert!(
+            completion_detail(&items, "recv_from_async")
+                .contains("Future<(i64, SocketAddr) | IoError>"),
+            "recv_from_async must advertise its async Future return: {:?}",
+            completion_detail(&items, "recv_from_async")
+        );
+        assert!(
+            completion_detail(&items, "peek_from_async")
+                .contains("Future<(i64, SocketAddr) | IoError>"),
+            "peek_from_async must advertise its async Future return: {:?}",
+            completion_detail(&items, "peek_from_async")
+        );
+        assert!(
+            completion_detail(&items, "into_socket").contains("UdpSocket"),
+            "AsyncUdpSocket.into_socket completion must show its wrapper return: {:?}",
+            completion_detail(&items, "into_socket")
+        );
+        assert!(
+            !completion_detail(&items, "into_socket").contains("Future<"),
+            "AsyncUdpSocket.into_socket completion must not look awaitable: {:?}",
+            completion_detail(&items, "into_socket")
+        );
+        for (name, expected) in [
+            ("local_addr", "Future<SocketAddr | IoError>"),
+            ("connect", "Future<null | IoError>"),
+            ("peer_addr", "Future<SocketAddr | IoError>"),
+            ("ttl", "Future<u32 | IoError>"),
+            ("take_error", "Future<IoError | null>"),
+            ("set_ttl", "Future<null | IoError>"),
+            ("broadcast", "Future<bool | IoError>"),
+            ("set_broadcast", "Future<null | IoError>"),
+            ("multicast_loop_v4", "Future<bool | IoError>"),
+            ("set_multicast_loop_v4", "Future<null | IoError>"),
+            ("multicast_loop_v6", "Future<bool | IoError>"),
+            ("set_multicast_loop_v6", "Future<null | IoError>"),
+            ("multicast_ttl_v4", "Future<u32 | IoError>"),
+            ("set_multicast_ttl_v4", "Future<null | IoError>"),
+            ("join_multicast_v4", "Future<null | IoError>"),
+            ("leave_multicast_v4", "Future<null | IoError>"),
+            ("join_multicast_v6", "Future<null | IoError>"),
+            ("leave_multicast_v6", "Future<null | IoError>"),
+            ("close", "Future<null | IoError>"),
+        ] {
+            assert!(
+                completion_detail(&items, name).contains(expected),
+                "AsyncUdpSocket.{name} completion must show its awaitable return: {:?}",
+                completion_detail(&items, name)
+            );
+        }
     }
 
     #[test]
     fn member_completion_lists_std_process_child_methods() {
         let src = "\
+import { Future } from \"core:prelude\";
 import { Command, Child } from \"std:process\";
-function main() {
-  var spawned = Command.new(\"true\").spawn();
+function main(): Future<null> async {
+  var spawned = await Command.new(\"true\").spawn();
   if spawned is Child {
     var child = spawned as Child;
     child.;
@@ -2807,6 +4861,333 @@ function main() {
         let items = member_completions(&c, &ctx);
         let names = labels(&items);
         for must in ["id", "stdin", "stdout", "stderr", "wait", "kill"] {
+            assert!(names.contains(&must), "{must} missing in {names:?}");
+        }
+        assert!(
+            completion_detail(&items, "wait").contains("Future<ExitStatus | IoError>"),
+            "Child.wait must show its async value return: {:?}",
+            completion_detail(&items, "wait")
+        );
+        assert!(
+            completion_detail(&items, "kill").contains("Future<null | IoError>"),
+            "Child.kill must show its async value return: {:?}",
+            completion_detail(&items, "kill")
+        );
+        assert!(
+            completion_detail(&items, "id").contains("u32"),
+            "Child.id must show its ordinary metadata return: {:?}",
+            completion_detail(&items, "id")
+        );
+        for (name, expected) in [
+            ("stdin", "null | AsyncWriter"),
+            ("stdout", "null | AsyncReader"),
+            ("stderr", "null | AsyncReader"),
+        ] {
+            assert!(
+                completion_detail(&items, name).contains(expected),
+                "Child.{name} must show its immediate async-stream-or-null field return: {:?}",
+                completion_detail(&items, name)
+            );
+        }
+        assert!(
+            !completion_detail(&items, "id").contains("Future<"),
+            "Child.id completion must not look awaitable: {:?}",
+            completion_detail(&items, "id")
+        );
+        for must in ["stdin", "stdout", "stderr"] {
+            assert!(
+                !completion_detail(&items, must).contains("Future<"),
+                "Child.{must} completion must not look awaitable: {:?}",
+                completion_detail(&items, must)
+            );
+        }
+    }
+
+    #[test]
+    fn member_completion_marks_std_process_execution_methods_awaitable() {
+        let src = "\
+import { Command } from \"std:process\";
+function main() {
+  var cmd = Command.new(\"true\");
+  cmd.;
+}
+";
+        let c = Compiled::new(src.into());
+        let dot = src.find("cmd.;").unwrap() + 3;
+        let ctx = crate::analysis::dot_completion_context(&c.text, dot + 1).unwrap();
+        let items = member_completions(&c, &ctx);
+        let names = labels(&items);
+        for must in ["status", "output", "spawn"] {
+            assert!(names.contains(&must), "{must} missing in {names:?}");
+        }
+        assert!(
+            completion_detail(&items, "status").contains("Future<ExitStatus | IoError>"),
+            "Command.status must show its async value return: {:?}",
+            completion_detail(&items, "status")
+        );
+        assert!(
+            completion_detail(&items, "output").contains("Future<Output | IoError>"),
+            "Command.output must show its async value return: {:?}",
+            completion_detail(&items, "output")
+        );
+        assert!(
+            completion_detail(&items, "spawn").contains("Future<Child | IoError>"),
+            "Command.spawn must show its async child-start return: {:?}",
+            completion_detail(&items, "spawn")
+        );
+    }
+
+    #[test]
+    fn member_completion_marks_std_process_command_values_non_awaitable() {
+        let src = "\
+import { Command } from \"std:process\";
+function main() {
+  var cmd = Command.new(\"true\");
+  cmd.;
+}
+";
+        let c = Compiled::new(src.into());
+        let dot = src.find("cmd.;").unwrap() + 3;
+        let ctx = crate::analysis::dot_completion_context(&c.text, dot + 1).unwrap();
+        let items = member_completions(&c, &ctx);
+        let names = labels(&items);
+        for must in [
+            "program",
+            "args",
+            "arg_count",
+            "env",
+            "env_var_value",
+            "has_env_var",
+            "env_count",
+            "cwd",
+            "with_program",
+            "with_args",
+            "arg",
+            "with_env",
+            "env_var",
+            "inherit_env",
+            "clear_env",
+            "with_cwd",
+            "clear_cwd",
+            "validation_error",
+            "validate",
+            "is_valid",
+        ] {
+            assert!(names.contains(&must), "{must} missing in {names:?}");
+        }
+        for (name, ret) in [
+            ("program", "str"),
+            ("args", "List<str>"),
+            ("arg_count", "i64"),
+            ("env", "Map<str, str> | null"),
+            ("env_var_value", "str | null"),
+            ("has_env_var", "bool"),
+            ("env_count", "i64"),
+            ("cwd", "Path | null"),
+            ("validation_error", "IoError | null"),
+            ("validate", "null | IoError"),
+            ("is_valid", "bool"),
+        ] {
+            assert!(
+                completion_detail(&items, name).contains(ret),
+                "Command.{name} must show ordinary value return {ret}: {:?}",
+                completion_detail(&items, name)
+            );
+        }
+        for name in [
+            "with_program",
+            "with_args",
+            "arg",
+            "with_env",
+            "env_var",
+            "inherit_env",
+            "clear_env",
+            "with_cwd",
+            "clear_cwd",
+        ] {
+            assert!(
+                completion_detail(&items, name).contains("Command"),
+                "Command.{name} must show fresh Command return: {:?}",
+                completion_detail(&items, name)
+            );
+        }
+        for must in [
+            "program",
+            "args",
+            "arg_count",
+            "env",
+            "env_var_value",
+            "has_env_var",
+            "env_count",
+            "cwd",
+            "with_program",
+            "with_args",
+            "arg",
+            "with_env",
+            "env_var",
+            "inherit_env",
+            "clear_env",
+            "with_cwd",
+            "clear_cwd",
+            "validation_error",
+            "validate",
+            "is_valid",
+        ] {
+            assert!(
+                !completion_detail(&items, must).contains("Future<"),
+                "Command.{must} completion must not look awaitable: {:?}",
+                completion_detail(&items, must)
+            );
+        }
+    }
+
+    #[test]
+    fn member_completion_lists_joinhandle_intrinsic_methods() {
+        let thread_src = "\
+import { Thread } from \"std:thread\";
+function main() {
+  var h = Thread.spawn(() => 7);
+  h.;
+}
+";
+        let c = Compiled::new(thread_src.into());
+        let dot = thread_src.find("h.;").unwrap() + 1;
+        let ctx = crate::analysis::dot_completion_context(&c.text, dot + 1).unwrap();
+        let items = member_completions(&c, &ctx);
+        let names = labels(&items);
+        for must in ["join", "detach"] {
+            assert!(names.contains(&must), "{must} missing in {names:?}");
+        }
+        assert!(
+            completion_detail(&items, "join").contains("Future<Joined<i64> | Panicked>"),
+            "thread JoinHandle.join must advertise its async Future return: {:?}",
+            completion_detail(&items, "join")
+        );
+        assert!(
+            completion_detail(&items, "detach").contains("(): null"),
+            "thread JoinHandle.detach must show its ordinary value return: {:?}",
+            completion_detail(&items, "detach")
+        );
+        assert!(
+            !completion_detail(&items, "detach").contains("Future<"),
+            "thread JoinHandle.detach completion must not look awaitable: {:?}",
+            completion_detail(&items, "detach")
+        );
+
+        let task_src = "\
+import { Task } from \"std:task\";
+function main() {
+  var h = Task.spawn(() async => { 7 });
+  h.;
+}
+";
+        let c = Compiled::new(task_src.into());
+        let dot = task_src.find("h.;").unwrap() + 1;
+        let ctx = crate::analysis::dot_completion_context(&c.text, dot + 1).unwrap();
+        let items = member_completions(&c, &ctx);
+        let names = labels(&items);
+        for must in ["join", "detach", "cancel", "abort"] {
+            assert!(names.contains(&must), "{must} missing in {names:?}");
+        }
+        assert!(
+            completion_detail(&items, "join")
+                .contains("Future<Joined<i64> | Panicked | Cancelled>"),
+            "task JoinHandle.join must advertise cancellation in its Future return: {:?}",
+            completion_detail(&items, "join")
+        );
+        for must in ["detach", "cancel", "abort"] {
+            assert!(
+                completion_detail(&items, must).contains("(): null"),
+                "task JoinHandle.{must} must show its ordinary value return: {:?}",
+                completion_detail(&items, must)
+            );
+            assert!(
+                !completion_detail(&items, must).contains("Future<"),
+                "task JoinHandle.{must} completion must not look awaitable: {:?}",
+                completion_detail(&items, must)
+            );
+        }
+    }
+
+    #[test]
+    fn member_completion_lists_channel_endpoint_intrinsic_methods() {
+        let src = "\
+import { channel } from \"std:sync\";
+function main() {
+  var pair = channel<i64>();
+  var tx = pair.0;
+  tx.;
+  var rx = pair.1;
+  rx.;
+}
+";
+        let c = Compiled::new(src.into());
+        let tx_dot = src.find("tx.;").unwrap() + 2;
+        let tx_ctx = crate::analysis::dot_completion_context(&c.text, tx_dot + 1).unwrap();
+        let tx_items = member_completions(&c, &tx_ctx);
+        let tx_names = labels(&tx_items);
+        assert!(tx_names.contains(&"send"), "send missing in {tx_names:?}");
+        assert!(
+            completion_detail(&tx_items, "send").contains("(value: i64): null | ChannelClosed"),
+            "Sender.send must show its ordinary value return: {:?}",
+            completion_detail(&tx_items, "send")
+        );
+        assert!(
+            !completion_detail(&tx_items, "send").contains("Future<"),
+            "Sender.send completion must not look awaitable: {:?}",
+            completion_detail(&tx_items, "send")
+        );
+
+        let rx_dot = src.find("rx.;").unwrap() + 2;
+        let rx_ctx = crate::analysis::dot_completion_context(&c.text, rx_dot + 1).unwrap();
+        let rx_items = member_completions(&c, &rx_ctx);
+        let rx_names = labels(&rx_items);
+        for must in ["recv", "try_recv"] {
+            assert!(rx_names.contains(&must), "{must} missing in {rx_names:?}");
+        }
+        assert!(
+            completion_detail(&rx_items, "recv").contains("Future<i64 | ChannelClosed>"),
+            "Receiver.recv must advertise its async Future return: {:?}",
+            completion_detail(&rx_items, "recv")
+        );
+        assert!(
+            completion_detail(&rx_items, "try_recv").contains("(): i64 | null"),
+            "Receiver.try_recv must show its immediate non-blocking poll return: {:?}",
+            completion_detail(&rx_items, "try_recv")
+        );
+        assert!(
+            !completion_detail(&rx_items, "try_recv").contains("Future<"),
+            "Receiver.try_recv completion must not look awaitable: {:?}",
+            completion_detail(&rx_items, "try_recv")
+        );
+    }
+
+    #[test]
+    fn member_completion_lists_std_process_exit_status_methods() {
+        let src = "\
+import { ExitStatus } from \"std:process\";
+function main() {
+  var status = ExitStatus.exited(0i32);
+  status.;
+}
+";
+        let c = Compiled::new(src.into());
+        let dot = src.find("status.;").unwrap() + 6;
+        let ctx = crate::analysis::dot_completion_context(&c.text, dot + 1).unwrap();
+        let items = member_completions(&c, &ctx);
+        let names = labels(&items);
+        for must in [
+            "code",
+            "signal",
+            "core_dumped",
+            "stopped_signal",
+            "continued",
+            "success",
+            "exited_normally",
+            "was_signaled",
+            "was_stopped",
+            "was_continued",
+        ] {
             assert!(names.contains(&must), "{must} missing in {names:?}");
         }
     }
@@ -3021,14 +5402,16 @@ function main() {
     #[test]
     fn analysis_accepts_std_net_resolve_import() {
         let src = "\
+import { Future } from \"core:prelude\";
 import { List } from \"core:collections\";
 import { IpAddr } from \"std:net/types\";
 import { resolve } from \"std:net\";
-function main() {
-  var resolved = resolve(\"127.0.0.1\");
+function main(): Future<null> async {
+  var resolved = await resolve(\"127.0.0.1\");
   if resolved is List<IpAddr> {
     var addrs = resolved as List<IpAddr>;
   }
+  null
 }
 ";
         let c = Compiled::new(src.into());
@@ -3057,25 +5440,71 @@ function main() {
     }
 
     #[test]
-    fn analysis_accepts_std_net_tcp_imports() {
+    fn analysis_accepts_std_net_tcp_imports_with_awaited_wait_surfaces() {
         let src = "\
-import { IoError } from \"std:io\";
-import { TcpStream, TcpListener } from \"std:net\";
+import { Future } from \"core:prelude\";
+import { AsyncReader, AsyncWriter, IoError } from \"std:io\";
+import { Bytes } from \"std:bytes\";
+import { TcpStream, AsyncTcpStream, AsyncTcpListener, TcpListener } from \"std:net\";
 import { SocketAddr, ip_v4, socket_addr } from \"std:net/types\";
-function main() {
+import { Duration } from \"std:time\";
+function read_via_async_protocol<T: AsyncReader>(reader: T): Future<i64 | IoError> {
+  reader.read_async(Bytes.from_str(\"xxxx\"))
+}
+function write_via_async_protocol<T: AsyncWriter>(writer: T): Future<i64 | IoError> {
+  writer.write_async(Bytes.from_str(\"x\"))
+}
+function main(): Future<null> async {
   var addr: SocketAddr = socket_addr(ip_v4(127u8, 0u8, 0u8, 1u8), 0u16);
-  var listener = TcpListener.bind(addr);
+  var listener = await TcpListener.bind(addr);
   if listener is TcpListener {
-    var local = (listener as TcpListener).local_addr();
+    var local = await (listener as TcpListener).local_addr();
+    var listener_pending_error = await (listener as TcpListener).take_error();
+    var listener_nonblocking = await (listener as TcpListener).set_nonblocking(true);
+    var listener_ttl = await (listener as TcpListener).ttl();
+    var listener_ttl_set = await (listener as TcpListener).set_ttl(64u32);
+    var accepted = await (listener as TcpListener).accept();
+    var async_listener = AsyncTcpListener.from_listener(listener as TcpListener);
+    var async_accept = await async_listener.accept_async();
+    var async_local = await async_listener.local_addr();
+    var async_pending_error = await async_listener.take_error();
+    var async_ttl = await async_listener.ttl();
+    var async_ttl_set = await async_listener.set_ttl(64u32);
+    var plain_listener = async_listener.into_listener();
   }
-  var stream = TcpStream.connect(addr);
+  var stream = await TcpStream.connect(addr);
+  var timed_stream = await TcpStream.connect_timeout(addr, Duration.from_millis(1));
   if stream is TcpStream {
-    var peer = (stream as TcpStream).peer_addr();
-    var nodelay = (stream as TcpStream).set_nodelay(true);
+    var peer = await (stream as TcpStream).peer_addr();
+    var stream_pending_error = await (stream as TcpStream).take_error();
+    var current = await (stream as TcpStream).nodelay();
+    var nodelay = await (stream as TcpStream).set_nodelay(true);
+    var stream_nonblocking = await (stream as TcpStream).set_nonblocking(true);
+    var stream_read_timeout_set = await (stream as TcpStream).set_read_timeout(Duration.from_millis(1));
+    var stream_read_timeout = await (stream as TcpStream).read_timeout();
+    var stream_read_timeout_clear = await (stream as TcpStream).set_read_timeout(null);
+    var stream_write_timeout_set = await (stream as TcpStream).set_write_timeout(Duration.from_millis(1));
+    var stream_write_timeout = await (stream as TcpStream).write_timeout();
+    var stream_write_timeout_clear = await (stream as TcpStream).set_write_timeout(null);
+    var peeked = await (stream as TcpStream).peek(Bytes.from_str(\"xxxx\"));
+    var ttl = await (stream as TcpStream).ttl();
+    var ttl_set = await (stream as TcpStream).set_ttl(64u32);
+    var async_stream = AsyncTcpStream.from_stream(stream as TcpStream);
+    var async_peer = await async_stream.peer_addr();
+    var async_read = await async_stream.read_async(Bytes.from_str(\"xxxx\"));
+    var async_write = await async_stream.write_async(Bytes.from_str(\"x\"));
+    var async_peek = await async_stream.peek_async(Bytes.from_str(\"xxxx\"));
+    var async_protocol_read = await read_via_async_protocol(async_stream);
+    var async_protocol_write = await write_via_async_protocol(async_stream);
+    var plain_stream = async_stream.into_stream();
   }
+  var async_connected = await AsyncTcpStream.connect(addr);
+  var async_timed_connected = await AsyncTcpStream.connect_timeout(addr, Duration.from_millis(1));
+  var async_bound = await AsyncTcpListener.bind(addr);
   if stream is IoError {
     var message = (stream as IoError).message;
   }
+  null
 }
 ";
         let c = Compiled::new(src.into());
@@ -3086,22 +5515,121 @@ function main() {
     fn analysis_accepts_std_net_udp_imports() {
         let src = "\
 import { Bytes } from \"std:bytes\";
+import { Future } from \"core:prelude\";
 import { IoError } from \"std:io\";
-import { UdpSocket } from \"std:net\";
-import { SocketAddr, ip_v4, socket_addr } from \"std:net/types\";
-function main() {
+import { AsyncUdpSocket, UdpSocket } from \"std:net\";
+import { SocketAddr, ip_v4, ip_v6, socket_addr } from \"std:net/types\";
+import { Duration } from \"std:time\";
+function main(): Future<null> async {
   var addr: SocketAddr = socket_addr(ip_v4(127u8, 0u8, 0u8, 1u8), 0u16);
-  var socket = UdpSocket.bind(addr);
+  var addr6: SocketAddr = socket_addr(ip_v6(0u16, 0u16, 0u16, 0u16, 0u16, 0u16, 0u16, 1u16), 0u16);
+  var socket = await UdpSocket.bind(addr);
   if socket is UdpSocket {
-    var local = (socket as UdpSocket).local_addr();
-    var sent = (socket as UdpSocket).send_to(Bytes.from_str(\"x\"), addr);
+    var local = await (socket as UdpSocket).local_addr();
+    var pending_error = await (socket as UdpSocket).take_error();
+    var nonblocking = await (socket as UdpSocket).set_nonblocking(true);
+    var read_timeout_set = await (socket as UdpSocket).set_read_timeout(Duration.from_millis(1));
+    var read_timeout = await (socket as UdpSocket).read_timeout();
+    var read_timeout_clear = await (socket as UdpSocket).set_read_timeout(null);
+    var write_timeout_set = await (socket as UdpSocket).set_write_timeout(Duration.from_millis(1));
+    var write_timeout = await (socket as UdpSocket).write_timeout();
+    var write_timeout_clear = await (socket as UdpSocket).set_write_timeout(null);
+    var ttl = await (socket as UdpSocket).ttl();
+    var ttl_set = await (socket as UdpSocket).set_ttl(64u32);
+    var broadcast = await (socket as UdpSocket).broadcast();
+    var broadcast_set = await (socket as UdpSocket).set_broadcast(true);
+    var loop_v4 = await (socket as UdpSocket).multicast_loop_v4();
+    var loop_v4_set = await (socket as UdpSocket).set_multicast_loop_v4(true);
+    var multicast_ttl = await (socket as UdpSocket).multicast_ttl_v4();
+    var multicast_ttl_set = await (socket as UdpSocket).set_multicast_ttl_v4(32u32);
+    var joined = await (socket as UdpSocket).join_multicast_v4(ip_v4(224u8, 0u8, 0u8, 251u8), ip_v4(0u8, 0u8, 0u8, 0u8));
+    var left = await (socket as UdpSocket).leave_multicast_v4(ip_v4(224u8, 0u8, 0u8, 251u8), ip_v4(0u8, 0u8, 0u8, 0u8));
+    var connected = await (socket as UdpSocket).connect(addr);
+    var peer = await (socket as UdpSocket).peer_addr();
+    var connected_sent = await (socket as UdpSocket).send(Bytes.from_str(\"x\"));
+    var connected_received = await (socket as UdpSocket).recv(Bytes.from_str(\"xxxx\"));
+    var connected_peeked = await (socket as UdpSocket).peek(Bytes.from_str(\"xxxx\"));
+    var sent = await (socket as UdpSocket).send_to(Bytes.from_str(\"x\"), addr);
     var buf = Bytes.from_str(\"xxxx\");
-    var received = (socket as UdpSocket).recv_from(buf);
-    var closed = (socket as UdpSocket).close();
+    var received = await (socket as UdpSocket).recv_from(buf);
+    var peeked = await (socket as UdpSocket).peek_from(buf);
+    var async_socket = AsyncUdpSocket.from_socket(socket as UdpSocket);
+    var async_connected = await async_socket.connect(addr);
+    var async_peer = await async_socket.peer_addr();
+    var async_sent = await async_socket.send_async(Bytes.from_str(\"x\"));
+    var async_received = await async_socket.recv_async(Bytes.from_str(\"xxxx\"));
+    var async_peeked = await async_socket.peek_async(Bytes.from_str(\"xxxx\"));
+    var async_sent_to = await async_socket.send_to_async(Bytes.from_str(\"x\"), addr);
+    var async_received_from = await async_socket.recv_from_async(Bytes.from_str(\"xxxx\"));
+    var async_peeked_from = await async_socket.peek_from_async(Bytes.from_str(\"xxxx\"));
+    var plain_socket = async_socket.into_socket();
+    var closed = await (socket as UdpSocket).close();
+  }
+  var socket6 = await UdpSocket.bind(addr6);
+  if socket6 is UdpSocket {
+    var loop_v6 = await (socket6 as UdpSocket).multicast_loop_v6();
+    var loop_v6_set = await (socket6 as UdpSocket).set_multicast_loop_v6(true);
+    var joined_v6 = await (socket6 as UdpSocket).join_multicast_v6(ip_v6(65282u16, 0u16, 0u16, 0u16, 0u16, 0u16, 0u16, 1u16), 0u32);
+    var left_v6 = await (socket6 as UdpSocket).leave_multicast_v6(ip_v6(65282u16, 0u16, 0u16, 0u16, 0u16, 0u16, 0u16, 1u16), 0u32);
   }
   if socket is IoError {
     var message = (socket as IoError).message;
   }
+  null
+}
+";
+        let c = Compiled::new(src.into());
+        assert!(c.diagnostics.is_empty(), "unexpected: {:?}", c.diagnostics);
+    }
+
+    #[test]
+    fn analysis_accepts_std_rand_weighted_helpers() {
+        let src = "\
+import { List } from \"core:collections\";
+import { SeededRng, choose_weighted, gen_bates_f64, gen_binomial, gen_irwin_hall_f64, gen_max_f64, gen_median_f64, gen_midrange_f64, gen_min_f64, gen_triangular_f64, sample, sample_indices, shuffled, weighted_index } from \"std:rand\";
+function main() {
+  var rng = SeededRng.from_seed(7u64);
+  var weights = List<u64>();
+  weights.push(1u64);
+  weights.push(3u64);
+  var values = List<i64>();
+  values.push(10);
+  values.push(20);
+  var index = weighted_index(rng, weights);
+  var item = choose_weighted(rng, values, weights);
+  var successes = gen_binomial(rng, 10, 1, 2);
+  var triangular = gen_triangular_f64(rng, 0.0, 1.0);
+  var bates = gen_bates_f64(rng, 3, 0.0, 1.0);
+  var irwin_hall = gen_irwin_hall_f64(rng, 3, 0.0, 1.0);
+  var minimum = gen_min_f64(rng, 3, 0.0, 1.0);
+  var maximum = gen_max_f64(rng, 3, 0.0, 1.0);
+  var midrange = gen_midrange_f64(rng, 3, 0.0, 1.0);
+  var median = gen_median_f64(rng, 3, 0.0, 1.0);
+  var indexes = sample_indices(rng, values.size(), 1);
+  var picked = sample(rng, values, 1);
+  var copy = shuffled(rng, values);
+}
+";
+        let c = Compiled::new(src.into());
+        assert!(c.diagnostics.is_empty(), "unexpected: {:?}", c.diagnostics);
+    }
+
+    #[test]
+    fn analysis_accepts_std_hash_os_keyed_helper() {
+        let src = "\
+import { Future } from \"core:prelude\";
+import { HashSeedError, KeyedHasher, os_keyed_hasher } from \"std:hash\";
+function main(): Future<null> async {
+  var seeded = await os_keyed_hasher();
+  match seeded {
+    KeyedHasher => {
+      var seed = (seeded as KeyedHasher).seed();
+    },
+    HashSeedError => {
+      var message = (seeded as HashSeedError).message();
+    },
+  }
+  null
 }
 ";
         let c = Compiled::new(src.into());
@@ -3156,6 +5684,27 @@ function main() { println(\"hi\"); }
     }
 
     #[test]
+    fn code_lens_targets_async_main_function() {
+        let src = "\
+import { Future } from \"core:prelude\";
+function main(): Future<null> async { null }
+";
+        let c = Compiled::new(src.into());
+        let lenses = collect_code_lenses(&c, "file:///tmp/x.otter");
+        assert!(
+            lenses
+                .iter()
+                .any(|l| l.command.as_ref().unwrap().title.contains("Run")),
+            "async main should use the same Run/Build CodeLens path"
+        );
+        let main_off = src.find("function main").unwrap() + "function ".len();
+        let main_line = src[..main_off].matches('\n').count() as u32;
+        for l in &lenses {
+            assert_eq!(l.range.start.line, main_line);
+        }
+    }
+
+    #[test]
     fn code_lens_empty_without_main() {
         let c = Compiled::new("function helper() {}\n".into());
         let lenses = collect_code_lenses(&c, "file:///tmp/x.otter");
@@ -3163,7 +5712,7 @@ function main() { println(\"hi\"); }
     }
 
     #[test]
-    fn default_completion_includes_locals_and_keywords() {
+    fn default_completion_includes_locals_builtins_and_keywords_without_stdio_helpers() {
         let src = "\
 function greet(name: str): str { name }
 function main() {
@@ -3175,8 +5724,10 @@ function main() {
         let names = labels(&items);
         assert!(names.contains(&"greet"));
         assert!(names.contains(&"who"));
-        assert!(names.contains(&"println"));
+        assert!(names.contains(&"panic"));
         assert!(names.contains(&"function"));
+        assert!(!names.contains(&"print"));
+        assert!(!names.contains(&"println"));
         // Each label appears only once even when several sources contribute it.
         let count = names.iter().filter(|n| **n == "greet").count();
         assert_eq!(count, 1);

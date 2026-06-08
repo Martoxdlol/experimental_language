@@ -4,6 +4,7 @@
 //~ one
 //~ small
 //~ big
+import { Future } from "core:prelude";
 import { println } from "std:io";
 function name(n: i64): str {
   match n {
@@ -12,8 +13,9 @@ function name(n: i64): str {
     _ => "big",
   }
 }
-function main() {
-  println(name(1));
-  println(name(5));
-  println(name(100));
+function main(): Future<null> async {
+  await println(name(1));
+  await println(name(5));
+  await println(name(100));
+  null
 }

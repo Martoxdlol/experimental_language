@@ -42,7 +42,7 @@ bench "interface_if_same_concrete" {
   var i = 0;
   var total = 0;
   while i < 1000 {
-    var s: Shape = if(i & 1) == 0 { Rect { w: i } as Shape } else { Rect { w: i + 1 } as Shape };
+    var s: Shape = if (i & 1) == 0 { Rect { w: i } as Shape } else { Rect { w: i + 1 } as Shape };
     total = total + s.area();
     i = i + 1;
   }
@@ -66,7 +66,7 @@ bench "interface_if_immediate_is" {
   var i = 0;
   var total = 0;
   while i < 1000 {
-    if(if(i & 1) == 0 { Rect { w: i } as Shape } else { Circle { r: i } as Shape })is Rect {
+    if (if (i & 1) == 0 { Rect { w: i } as Shape } else { Circle { r: i } as Shape }) is Rect {
       total = total + 1;
     }
     i = i + 1;
@@ -77,7 +77,7 @@ bench "interface_match_immediate_is" {
   var i = 0;
   var total = 0;
   while i < 1000 {
-    if(match i & 1 { 0 => Rect { w: i } as Shape, _ => Circle { r: i } as Shape })is Rect {
+    if (match i & 1 { 0 => Rect { w: i } as Shape, _ => Circle { r: i } as Shape }) is Rect {
       total = total + 1;
     }
     i = i + 1;
@@ -88,7 +88,8 @@ bench "interface_if_immediate_as" {
   var i = 0;
   var total = 0;
   while i < 1000 {
-    total = total + ((if true { Rect { w: i } as Shape } else { Circle { r: i } as Shape })as Rect).w;
+    total = total + ((if true { Rect { w: i } as Shape } else { Circle { r: i } as Shape }) as Rect)
+      .w;
     i = i + 1;
   }
 }
@@ -98,9 +99,9 @@ bench "interface_match_immediate_as" {
   var total = 0;
   while i < 1000 {
     total = total + ((match 0 {
-          0 => Rect { w: i } as Shape,
-          _ => Circle { r: i } as Shape
-        })as Rect).w;
+      0 => Rect { w: i } as Shape,
+      _ => Circle { r: i } as Shape
+    }) as Rect).w;
     i = i + 1;
   }
 }
@@ -109,7 +110,7 @@ bench "interface_direct_immediate_is" {
   var i = 0;
   var total = 0;
   while i < 1000 {
-    if(Rect { w: i } as Shape)is Rect {
+    if (Rect { w: i } as Shape) is Rect {
       total = total + 1;
     }
     i = i + 1;
@@ -120,7 +121,7 @@ bench "interface_direct_immediate_as" {
   var i = 0;
   var total = 0;
   while i < 1000 {
-    total = total + ((Rect { w: i } as Shape)as Rect).w;
+    total = total + ((Rect { w: i } as Shape) as Rect).w;
     i = i + 1;
   }
 }
@@ -129,7 +130,8 @@ bench "interface_if_receiver_direct" {
   var i = 0;
   var total = 0;
   while i < 1000 {
-    total = total + (if(i & 1) == 0 { Rect { w: i } as Shape } else { Circle { r: i } as Shape }).area();
+    total = total + (if (i & 1) == 0 { Rect { w: i } as Shape } else { Circle { r: i } as Shape })
+      .area();
     i = i + 1;
   }
 }
@@ -139,9 +141,9 @@ bench "interface_match_receiver_direct" {
   var total = 0;
   while i < 1000 {
     total = total + (match i & 1 {
-        0 => Rect { w: i } as Shape,
-        _ => Circle { r: i } as Shape
-      }).area();
+      0 => Rect { w: i } as Shape,
+      _ => Circle { r: i } as Shape
+    }).area();
     i = i + 1;
   }
 }
@@ -150,7 +152,7 @@ bench "interface_if_receiver_boxed_local" {
   var i = 0;
   var total = 0;
   while i < 1000 {
-    var s: Shape = if(i & 1) == 0 { Rect { w: i } as Shape } else { Circle { r: i } as Shape };
+    var s: Shape = if (i & 1) == 0 { Rect { w: i } as Shape } else { Circle { r: i } as Shape };
     total = total + s.area();
     i = i + 1;
   }
@@ -160,7 +162,7 @@ bench "interface_if_boxed_is_local" {
   var i = 0;
   var total = 0;
   while i < 1000 {
-    var s: Shape = if(i & 1) == 0 { Rect { w: i } as Shape } else { Circle { r: i } as Shape };
+    var s: Shape = if (i & 1) == 0 { Rect { w: i } as Shape } else { Circle { r: i } as Shape };
     if s is Rect {
       total = total + 1;
     }

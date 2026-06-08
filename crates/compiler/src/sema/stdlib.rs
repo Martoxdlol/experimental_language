@@ -63,7 +63,8 @@ pub struct ToolchainSourceSpec {
 /// as `core:prelude` and `core:collections`.
 pub trait StdProvider {
     /// Stable provider identity, used in diagnostics, lockfiles, and future
-    /// target metadata.
+    /// target metadata. Provider names must be non-empty ASCII identifiers
+    /// using letters, digits, `.`, `_`, or `-`.
     fn name(&self) -> &'static str;
 
     /// The modules exported by this provider.
@@ -77,6 +78,25 @@ pub trait StdProvider {
                 .copied()
                 .eq(path.iter().map(String::as_str))
         })
+    }
+}
+
+/// Whether a provider name is stable enough for diagnostics and future
+/// lockfile/sysroot metadata.
+pub fn valid_provider_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+}
+
+/// Render a catalog path with the public import spelling: one scheme separator
+/// (`core:` / `std:`), then slash-separated submodule segments.
+pub fn display_module_path(path: &[&str]) -> String {
+    match path {
+        [] => "<empty>".to_string(),
+        [root] => (*root).to_string(),
+        [root, rest @ ..] => format!("{root}:{}", rest.join("/")),
     }
 }
 
@@ -314,6 +334,8 @@ pub const TOOLCHAIN_MODULES: &[StdModuleSpec] = &[
         exports: &[
             "Reader",
             "Writer",
+            "AsyncReader",
+            "AsyncWriter",
             "Seeker",
             "SeekFrom",
             "Start",
@@ -410,15 +432,17 @@ pub const TOOLCHAIN_MODULES: &[StdModuleSpec] = &[
     StdModuleSpec {
         path: &["std", "hash"],
         tier: StdTier::Std,
-        implementation: StdImplementation::Otter,
+        implementation: StdImplementation::Mixed,
         exports: &[
             "Hasher",
             "DefaultHasher",
             "KeyedHasher",
+            "HashSeedError",
             "hash_value",
             "write_hash",
             "combine_hash",
             "keyed_hasher",
+            "os_keyed_hasher",
         ],
     },
     StdModuleSpec {
@@ -512,7 +536,15 @@ pub const TOOLCHAIN_MODULES: &[StdModuleSpec] = &[
         path: &["std", "net"],
         tier: StdTier::Std,
         implementation: StdImplementation::Mixed,
-        exports: &["TcpStream", "TcpListener", "UdpSocket", "resolve"],
+        exports: &[
+            "TcpStream",
+            "AsyncTcpStream",
+            "AsyncTcpListener",
+            "TcpListener",
+            "UdpSocket",
+            "AsyncUdpSocket",
+            "resolve",
+        ],
     },
     StdModuleSpec {
         path: &["std", "rand"],
@@ -526,18 +558,32 @@ pub const TOOLCHAIN_MODULES: &[StdModuleSpec] = &[
             "ThreadRng",
             "random_error",
             "os_rng",
+            "os_bytes",
             "thread_rng",
             "gen_range_i64",
             "gen_range_u64",
             "gen_f64",
             "gen_range_f64",
+            "gen_triangular_f64",
+            "gen_bates_f64",
+            "gen_irwin_hall_f64",
+            "gen_min_f64",
+            "gen_max_f64",
+            "gen_midrange_f64",
+            "gen_median_f64",
             "gen_bool",
+            "gen_binomial",
             "gen_index",
             "fill_bytes_n",
             "gen_bytes",
             "choose_index",
             "choose",
+            "weighted_index",
+            "choose_weighted",
+            "sample_indices",
+            "sample",
             "shuffle",
+            "shuffled",
         ],
     },
     StdModuleSpec {
@@ -553,6 +599,7 @@ pub const TOOLCHAIN_MODULES: &[StdModuleSpec] = &[
             "LogError",
             "Record",
             "LoggerAlreadySet",
+            "Logger",
             "level_trace",
             "level_debug",
             "level_info",
@@ -667,6 +714,17 @@ mod tests {
     use std::collections::HashSet;
 
     #[test]
+    fn display_module_path_uses_scheme_colon_and_slash_submodules() {
+        assert_eq!(display_module_path(&[]), "<empty>");
+        assert_eq!(display_module_path(&["std"]), "std");
+        assert_eq!(display_module_path(&["std", "io"]), "std:io");
+        assert_eq!(
+            display_module_path(&["core", "sync", "atomic"]),
+            "core:sync/atomic"
+        );
+    }
+
+    #[test]
     fn catalog_paths_match_tiers_and_are_unique() {
         let mut paths = HashSet::new();
         for spec in TOOLCHAIN_MODULES {
@@ -699,7 +757,13 @@ mod tests {
 
     #[test]
     fn toolchain_source_paths_are_addressable() {
+        let mut paths = HashSet::new();
         for spec in TOOLCHAIN_SOURCES {
+            assert!(
+                paths.insert(spec.path),
+                "duplicate toolchain source path {:?}",
+                spec.path
+            );
             assert!(
                 spec.path.len() >= 2,
                 "toolchain source paths must be scheme + module path"
@@ -800,7 +864,7 @@ mod tests {
                 assert!(
                     covered.contains(export),
                     "stdlib export `{}::{}` lacks require-import diagnostic coverage",
-                    spec.path.join(":"),
+                    display_module_path(spec.path),
                     export
                 );
             }
@@ -809,16 +873,12 @@ mod tests {
 
     #[test]
     fn catalog_has_otter_and_mixed_modules() {
-        assert!(
-            TOOLCHAIN_MODULES
-                .iter()
-                .any(|m| m.implementation == StdImplementation::Otter)
-        );
-        assert!(
-            TOOLCHAIN_MODULES
-                .iter()
-                .any(|m| m.implementation == StdImplementation::Mixed)
-        );
+        assert!(TOOLCHAIN_MODULES
+            .iter()
+            .any(|m| m.implementation == StdImplementation::Otter));
+        assert!(TOOLCHAIN_MODULES
+            .iter()
+            .any(|m| m.implementation == StdImplementation::Mixed));
     }
 
     #[test]
@@ -889,6 +949,314 @@ mod tests {
     }
 
     #[test]
+    fn wait_capable_stdlib_surfaces_stay_future_returning_at_source_level() {
+        fn source_for(path: &[&str]) -> &'static str {
+            TOOLCHAIN_SOURCES
+                .iter()
+                .find(|spec| spec.path == path)
+                .unwrap_or_else(|| panic!("missing toolchain source for {path:?}"))
+                .source
+        }
+
+        let cases: &[(&[&str], &[&str])] = &[
+            (
+                &["std", "io"],
+                &[
+                    "function print(s: str): Future<null> async",
+                    "function println(s: str): Future<null> async",
+                    "function eprint(s: str): Future<null> async",
+                    "function eprintln(s: str): Future<null> async",
+                    "function read(self, buf: Bytes): Future<i64 | IoError> async",
+                    "function read_to_end(self, buf: Bytes): Future<i64 | IoError> async",
+                    "function read_async(self, buf: Bytes): Future<i64 | IoError> async",
+                    "function read_to_end_async(self, buf: Bytes): Future<i64 | IoError> async",
+                    "function write(self, buf: Bytes): Future<i64 | IoError> async",
+                    "function write_all(self, buf: Bytes): Future<null | IoError> async",
+                    "function flush(self): Future<null | IoError> async",
+                    "function write_async(self, buf: Bytes): Future<i64 | IoError> async",
+                    "function write_all_async(self, buf: Bytes): Future<null | IoError> async",
+                    "function flush_async(self): Future<null | IoError> async",
+                ],
+            ),
+            (
+                &["std", "fs"],
+                &[
+                    "function read_to_string(path: Path): Future<str | IoError> async",
+                    "function write_string(path: Path, contents: str): Future<null | IoError> async",
+                    "function append_string(path: Path, contents: str): Future<null | IoError> async",
+                    "function read(path: Path): Future<Bytes | IoError> async",
+                    "function write(path: Path, data: Bytes): Future<null | IoError> async",
+                    "function remove(path: Path): Future<null | IoError> async",
+                    "function rename(from: Path, to: Path): Future<null | IoError> async",
+                    "function create_dir(path: Path): Future<null | IoError> async",
+                    "function create_dir_all(path: Path): Future<null | IoError> async",
+                    "function read_dir(path: Path): Future<DirEntries | IoError> async",
+                    "function canonicalize(path: Path): Future<Path | IoError> async",
+                    "function exists(self): Future<bool | IoError> async",
+                    "function is_file(self): Future<bool | IoError> async",
+                    "function is_dir(self): Future<bool | IoError> async",
+                    "function file_kind(self): Future<FileKind | IoError> async",
+                    "function byte_len(self): Future<u64 | IoError> async",
+                    "function permissions(self): Future<Permissions | IoError> async",
+                    "function metadata(self): Future<Metadata | IoError> async",
+                    "function canonicalize(self): Future<Path | IoError> async",
+                    "function open(path: Path): Future<File | IoError> async",
+                    "function create(path: Path): Future<File | IoError> async",
+                    "function append(path: Path): Future<File | IoError> async",
+                    "function open_with(path: Path, options: OpenOptions): Future<File | IoError> async",
+                    "function read_to_string(self): Future<str | IoError> async",
+                    "function write_string(self, contents: str): Future<null | IoError> async",
+                    "function append_string(self, contents: str): Future<null | IoError> async",
+                    "function close(self): Future<null | IoError> async",
+                    "function read_async(self, buf: Bytes): Future<i64 | IoError> async",
+                    "function read_to_end_async(self, buf: Bytes): Future<i64 | IoError> async",
+                    "function write_async(self, buf: Bytes): Future<i64 | IoError> async",
+                    "function write_all_async(self, buf: Bytes): Future<null | IoError> async",
+                    "function flush_async(self): Future<null | IoError> async",
+                    "function seek_async(self, pos: SeekFrom): Future<i64 | IoError> async",
+                    "function read(self, buf: Bytes): Future<i64 | IoError> async",
+                    "function read_to_end(self, buf: Bytes): Future<i64 | IoError> async",
+                    "function write(self, buf: Bytes): Future<i64 | IoError> async",
+                    "function write_all(self, buf: Bytes): Future<null | IoError> async",
+                    "function flush(self): Future<null | IoError> async",
+                    "function seek(self, pos: SeekFrom): Future<i64 | IoError> async",
+                ],
+            ),
+            (
+                &["std", "net"],
+                &[
+                    "function resolve(host: str): Future<List<IpAddr> | IoError> async",
+                    "function connect(addr: SocketAddr): Future<TcpStream | IoError> async",
+                    "function connect_timeout(addr: SocketAddr, timeout: Duration): Future<TcpStream | IoError> async",
+                    "function peer_addr(self): Future<SocketAddr | IoError> async",
+                    "function local_addr(self): Future<SocketAddr | IoError> async",
+                    "function nodelay(self): Future<bool | IoError> async",
+                    "function take_error(self): Future<IoError | null> async",
+                    "function set_nodelay(self, on: bool): Future<null | IoError> async",
+                    "function set_nonblocking(self, on: bool): Future<null | IoError> async",
+                    "function read_timeout(self): Future<Duration | null | IoError> async",
+                    "function set_read_timeout(self, timeout: Duration | null): Future<null | IoError> async",
+                    "function write_timeout(self): Future<Duration | null | IoError> async",
+                    "function set_write_timeout(self, timeout: Duration | null): Future<null | IoError> async",
+                    "function ttl(self): Future<u32 | IoError> async",
+                    "function set_ttl(self, ttl: u32): Future<null | IoError> async",
+                    "function close(self): Future<null | IoError> async",
+                    "function peek(self, buf: Bytes): Future<i64 | IoError> async",
+                    "function read(self, buf: Bytes): Future<i64 | IoError> async",
+                    "function read_to_end(self, buf: Bytes): Future<i64 | IoError> async",
+                    "function write(self, buf: Bytes): Future<i64 | IoError> async",
+                    "function write_all(self, buf: Bytes): Future<null | IoError> async",
+                    "function flush(self): Future<null | IoError> async",
+                    "function connect(addr: SocketAddr): Future<AsyncTcpStream | IoError> async",
+                    "function connect_timeout(addr: SocketAddr, timeout: Duration): Future<AsyncTcpStream | IoError> async",
+                    "function peer_addr(self): Future<SocketAddr | IoError> async",
+                    "function local_addr(self): Future<SocketAddr | IoError> async",
+                    "function close(self): Future<null | IoError> async",
+                    "function peek_async(self, buf: Bytes): Future<i64 | IoError> async",
+                    "function read_async(self, buf: Bytes): Future<i64 | IoError> async",
+                    "function write_async(self, buf: Bytes): Future<i64 | IoError> async",
+                    "function bind(addr: SocketAddr): Future<TcpListener | IoError> async",
+                    "function accept(self): Future<(TcpStream, SocketAddr) | IoError> async",
+                    "function bind(addr: SocketAddr): Future<AsyncTcpListener | IoError> async",
+                    "function accept_async(self): Future<(AsyncTcpStream, SocketAddr) | IoError> async",
+                    "function bind(addr: SocketAddr): Future<UdpSocket | IoError> async",
+                    "function connect(self, addr: SocketAddr): Future<null | IoError> async",
+                    "function broadcast(self): Future<bool | IoError> async",
+                    "function set_broadcast(self, on: bool): Future<null | IoError> async",
+                    "function multicast_loop_v4(self): Future<bool | IoError> async",
+                    "function set_multicast_loop_v4(self, on: bool): Future<null | IoError> async",
+                    "function multicast_loop_v6(self): Future<bool | IoError> async",
+                    "function set_multicast_loop_v6(self, on: bool): Future<null | IoError> async",
+                    "function multicast_ttl_v4(self): Future<u32 | IoError> async",
+                    "function set_multicast_ttl_v4(self, ttl: u32): Future<null | IoError> async",
+                    "function join_multicast_v4(self, group: IpAddr, iface: IpAddr): Future<null | IoError> async",
+                    "function leave_multicast_v4(self, group: IpAddr, iface: IpAddr): Future<null | IoError> async",
+                    "function join_multicast_v6(self, group: IpAddr, iface: u32): Future<null | IoError> async",
+                    "function leave_multicast_v6(self, group: IpAddr, iface: u32): Future<null | IoError> async",
+                    "function send_to(self, buf: Bytes, addr: SocketAddr): Future<i64 | IoError> async",
+                    "function send(self, buf: Bytes): Future<i64 | IoError> async",
+                    "function recv(self, buf: Bytes): Future<i64 | IoError> async",
+                    "function peek(self, buf: Bytes): Future<i64 | IoError> async",
+                    "function recv_from(self, buf: Bytes): Future<(i64, SocketAddr) | IoError> async",
+                    "function peek_from(self, buf: Bytes): Future<(i64, SocketAddr) | IoError> async",
+                    "function close(self): Future<null | IoError> async",
+                    "function bind(addr: SocketAddr): Future<AsyncUdpSocket | IoError> async",
+                    "function send_to_async(self, buf: Bytes, addr: SocketAddr): Future<i64 | IoError> async",
+                    "function send_async(self, buf: Bytes): Future<i64 | IoError> async",
+                    "function recv_async(self, buf: Bytes): Future<i64 | IoError> async",
+                    "function peek_async(self, buf: Bytes): Future<i64 | IoError> async",
+                    "function recv_from_async(self, buf: Bytes): Future<(i64, SocketAddr) | IoError> async",
+                    "function peek_from_async(self, buf: Bytes): Future<(i64, SocketAddr) | IoError> async",
+                ],
+            ),
+            (
+                &["std", "process"],
+                &[
+                    "function args(): Future<List<str>> async",
+                    "function env(name: str): Future<str | null> async",
+                    "function env_all(): Future<Map<str, str>> async",
+                    "function set_env(name: str, value: str): Future<null> async",
+                    "function status(self): Future<ExitStatus | IoError> async",
+                    "function output(self): Future<Output | IoError> async",
+                    "function spawn(self): Future<Child | IoError> async",
+                    "function wait(self): Future<ExitStatus | IoError> async",
+                    "function kill(self): Future<null | IoError> async",
+                ],
+            ),
+            (
+                &["std", "time"],
+                &[
+                    "function sleep(duration: Duration): Future<null> async",
+                    "function now(): Future<Instant> async",
+                    "function elapsed(self): Future<Duration> async",
+                    "function now(): Future<SystemTime> async",
+                    "function now_utc(): Future<DateTime> async",
+                    "function now_local(): Future<DateTime> async",
+                    "function from_system_time_local(t: SystemTime): Future<DateTime | TimeError> async",
+                ],
+            ),
+            (
+                &["std", "async"],
+                &[
+                    "function yield_now(): Future<null> async",
+                    "function sleep(ms: i64): Future<null> async",
+                    "function timeout<T>(future: Future<T>, ms: i64): Future<T | TimedOut> async",
+                ],
+            ),
+            (
+                &["std", "rand"],
+                &[
+                    "function os_bytes(count: i64): Future<Bytes | RandomError> async",
+                    "function thread_rng(): Future<ThreadRng | RandomError> async",
+                    "function try_next_u32(self): Future<u32 | RandomError> async",
+                    "function try_next_u64(self): Future<u64 | RandomError> async",
+                    "function try_fill_bytes(self, buf: Bytes): Future<null | RandomError> async",
+                    "function try_fill_bytes_n(self, buf: Bytes, count: i64): Future<null | RandomError> async",
+                ],
+            ),
+            (
+                &["std", "hash"],
+                &["function os_keyed_hasher(): Future<KeyedHasher | HashSeedError> async"],
+            ),
+            (
+                &["std", "log"],
+                &[
+                    "function log(self, r: Record): Future<null>",
+                    "function record(level: Level, message: str, module: str, fields: Map<str, str>): Future<Record> async",
+                    "function log_record(r: Record): Future<null> async",
+                    "function trace(message: str): Future<null> async",
+                    "function debug(message: str): Future<null> async",
+                    "function info(message: str): Future<null> async",
+                    "function warn(message: str): Future<null> async",
+                    "function error(message: str): Future<null> async",
+                    "function trace_with(message: str, fields: Map<str, str>): Future<null> async",
+                    "function debug_with(message: str, fields: Map<str, str>): Future<null> async",
+                    "function info_with(message: str, fields: Map<str, str>): Future<null> async",
+                    "function warn_with(message: str, fields: Map<str, str>): Future<null> async",
+                    "function error_with(message: str, fields: Map<str, str>): Future<null> async",
+                ],
+            ),
+        ];
+
+        for (path, snippets) in cases {
+            let source = source_for(path);
+            for snippet in *snippets {
+                assert!(
+                    source.contains(snippet),
+                    "{} must keep wait-capable public signature `{snippet}`",
+                    display_module_path(path)
+                );
+            }
+        }
+
+        let forbidden_cases: &[(&[&str], &[&str])] = &[
+            (
+                &["std", "fs"],
+                &[
+                    "function read_to_string(path: Path): str | IoError",
+                    "function write_string(path: Path, contents: str): null | IoError",
+                    "function append_string(path: Path, contents: str): null | IoError",
+                    "function read(path: Path): Bytes | IoError",
+                    "function write(path: Path, data: Bytes): null | IoError",
+                    "function read_dir(path: Path): DirEntries | IoError",
+                    "function canonicalize(path: Path): Path | IoError",
+                    "function open(path: Path): File | IoError",
+                    "function close(self): null | IoError",
+                ],
+            ),
+            (
+                &["std", "net"],
+                &[
+                    "function resolve(host: str): List<IpAddr> | IoError",
+                    "function connect(addr: SocketAddr): TcpStream | IoError",
+                    "function connect_timeout(addr: SocketAddr, timeout: Duration): TcpStream | IoError",
+                    "function bind(addr: SocketAddr): TcpListener | IoError",
+                    "function accept(self): (TcpStream, SocketAddr) | IoError",
+                    "function bind(addr: SocketAddr): UdpSocket | IoError",
+                    "function recv(self, buf: Bytes): i64 | IoError",
+                    "function recv_from(self, buf: Bytes): (i64, SocketAddr) | IoError",
+                    "function close(self): null | IoError",
+                ],
+            ),
+            (
+                &["std", "process"],
+                &[
+                    "function args(): List<str>",
+                    "function env(name: str): str | null",
+                    "function env_all(): Map<str, str>",
+                    "function status(self): ExitStatus | IoError",
+                    "function output(self): Output | IoError",
+                    "function spawn(self): Child | IoError",
+                    "function wait(self): ExitStatus | IoError",
+                    "function kill(self): null | IoError",
+                ],
+            ),
+            (
+                &["std", "time"],
+                &[
+                    "function sleep(duration: Duration): null",
+                    "function now(): Instant",
+                    "function now(): SystemTime",
+                    "function now_utc(): DateTime",
+                    "function now_local(): DateTime",
+                ],
+            ),
+            (
+                &["std", "async"],
+                &[
+                    "function yield_now(): null",
+                    "function sleep(ms: i64): null",
+                    "function timeout<T>(future: Future<T>, ms: i64): T | TimedOut",
+                ],
+            ),
+            (
+                &["std", "rand"],
+                &[
+                    "function os_bytes(count: i64): Bytes | RandomError",
+                    "function thread_rng(): ThreadRng | RandomError",
+                    "function try_next_u32(self): u32 | RandomError",
+                    "function try_next_u64(self): u64 | RandomError",
+                ],
+            ),
+            (
+                &["std", "hash"],
+                &["function os_keyed_hasher(): KeyedHasher | HashSeedError"],
+            ),
+        ];
+
+        for (path, snippets) in forbidden_cases {
+            let source = source_for(path);
+            for snippet in *snippets {
+                assert!(
+                    !source.contains(snippet),
+                    "{} must not expose old direct-result wait signature `{snippet}`",
+                    display_module_path(path)
+                );
+            }
+        }
+    }
+
+    #[test]
     fn operator_protocol_labels_are_not_catalog_exports() {
         let core_prelude = TOOLCHAIN_MODULES
             .iter()
@@ -940,20 +1308,14 @@ mod tests {
         assert_eq!(atomic.tier, StdTier::Core);
         assert_eq!(atomic.implementation, StdImplementation::Otter);
         assert!(atomic.exports.contains(&"Ordering"));
-        assert!(
-            provider
-                .module(&["std".to_string(), "sync".to_string(), "atomic".to_string()])
-                .is_none()
-        );
-        assert!(
-            provider
-                .module(&["core".to_string(), "error".to_string()])
-                .is_none()
-        );
-        assert!(
-            provider
-                .module(&["std".to_string(), "missing".to_string()])
-                .is_none()
-        );
+        assert!(provider
+            .module(&["std".to_string(), "sync".to_string(), "atomic".to_string()])
+            .is_none());
+        assert!(provider
+            .module(&["core".to_string(), "error".to_string()])
+            .is_none());
+        assert!(provider
+            .module(&["std".to_string(), "missing".to_string()])
+            .is_none());
     }
 }

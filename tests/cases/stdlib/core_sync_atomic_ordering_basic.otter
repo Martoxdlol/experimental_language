@@ -22,6 +22,7 @@
 //~ atomic-bool=true true false false true false true false
 //~ bool-clone=true/true
 
+import { Future } from "core:prelude";
 import { println } from "std:io";
 import {
   AcqRel,
@@ -46,16 +47,16 @@ function show(label: str, value: Ordering, expected: Ordering): str {
   "${label} ${value.debug()} ${value.equals(expected)}"
 }
 
-function main() {
+function main(): Future<null> async {
   var relaxed = ordering_relaxed();
-  println("${relaxed.to_str()} ${relaxed.debug()} ${relaxed.equals(Relaxed {})} ${relaxed.hash() == ordering_relaxed().hash()}");
-  println(show("acquire", ordering_acquire(), Acquire {}));
-  println(show("release", ordering_release(), Release {}));
-  println(show("acq_rel", ordering_acq_rel(), AcqRel {}));
-  println(show("seq_cst", ordering_seq_cst(), SeqCst {}));
+  await println("${relaxed.to_str()} ${relaxed.debug()} ${relaxed.equals(Relaxed {})} ${relaxed.hash() == ordering_relaxed().hash()}");
+  await println(show("acquire", ordering_acquire(), Acquire {}));
+  await println(show("release", ordering_release(), Release {}));
+  await println(show("acq_rel", ordering_acq_rel(), AcqRel {}));
+  await println(show("seq_cst", ordering_seq_cst(), SeqCst {}));
   var cloned = ordering_seq_cst().clone();
   var release: Ordering = Release {};
-  println("helper=${ordering_acquire().to_str() == "acquire"} hash=${ordering_release().hash() == release.hash()} clone=${cloned.debug()}");
+  await println("helper=${ordering_acquire().to_str() == "acquire"} hash=${ordering_release().hash() == release.hash()} clone=${cloned.debug()}");
 
   var atomic = AtomicI64.new(10);
   var first = atomic.load(SeqCst {});
@@ -63,17 +64,17 @@ function main() {
   var added = atomic.fetch_add(5, SeqCst {});
   var subbed = atomic.fetch_sub(3, SeqCst {});
   var final = atomic.load(SeqCst {});
-  println("atomic=${first} ${swapped} ${added} ${subbed} ${final}");
+  await println("atomic=${first} ${swapped} ${added} ${subbed} ${final}");
 
   var cas_success = atomic.compare_exchange(13, 99, SeqCst {}, SeqCst {});
   var after_success = atomic.load(SeqCst {});
   var cas_failure = atomic.compare_exchange(13, 123, SeqCst {}, SeqCst {});
   var after_failure = atomic.load(SeqCst {});
-  println("cas=${cas_success}/${after_success} ${cas_failure}/${after_failure}");
+  await println("cas=${cas_success}/${after_success} ${cas_failure}/${after_failure}");
 
   var copy = atomic.clone();
   copy.store(7, SeqCst {});
-  println("clone=${atomic.load(SeqCst {})}/${copy.load(SeqCst {})}");
+  await println("clone=${atomic.load(SeqCst {})}/${copy.load(SeqCst {})}");
 
   var atomic32 = AtomicI32.new((0 - 10) as i32);
   var first32 = atomic32.load(SeqCst {});
@@ -81,17 +82,17 @@ function main() {
   var added32 = atomic32.fetch_add(7 as i32, SeqCst {});
   var subbed32 = atomic32.fetch_sub(3 as i32, SeqCst {});
   var final32 = atomic32.load(SeqCst {});
-  println("atomic-i32=${first32} ${swapped32} ${added32} ${subbed32} ${final32}");
+  await println("atomic-i32=${first32} ${swapped32} ${added32} ${subbed32} ${final32}");
 
   var cas32_success = atomic32.compare_exchange((0 - 1) as i32, (0 - 42) as i32, SeqCst {}, SeqCst {});
   var after32_success = atomic32.load(SeqCst {});
   var cas32_failure = atomic32.compare_exchange((0 - 1) as i32, 123 as i32, SeqCst {}, SeqCst {});
   var after32_failure = atomic32.load(SeqCst {});
-  println("cas-i32=${cas32_success}/${after32_success} ${cas32_failure}/${after32_failure}");
+  await println("cas-i32=${cas32_success}/${after32_success} ${cas32_failure}/${after32_failure}");
 
   var copy32 = atomic32.clone();
   copy32.store(21 as i32, SeqCst {});
-  println("clone-i32=${atomic32.load(SeqCst {})}/${copy32.load(SeqCst {})}");
+  await println("clone-i32=${atomic32.load(SeqCst {})}/${copy32.load(SeqCst {})}");
 
   var atomic64u = AtomicU64.new(10u64);
   var first64u = atomic64u.load(SeqCst {});
@@ -99,17 +100,17 @@ function main() {
   var added64u = atomic64u.fetch_add(5u64, SeqCst {});
   var subbed64u = atomic64u.fetch_sub(3u64, SeqCst {});
   var final64u = atomic64u.load(SeqCst {});
-  println("atomic-u64=${first64u} ${swapped64u} ${added64u} ${subbed64u} ${final64u}");
+  await println("atomic-u64=${first64u} ${swapped64u} ${added64u} ${subbed64u} ${final64u}");
 
   var cas64u_success = atomic64u.compare_exchange(13u64, 99u64, SeqCst {}, SeqCst {});
   var after64u_success = atomic64u.load(SeqCst {});
   var cas64u_failure = atomic64u.compare_exchange(13u64, 123u64, SeqCst {}, SeqCst {});
   var after64u_failure = atomic64u.load(SeqCst {});
-  println("cas-u64=${cas64u_success}/${after64u_success} ${cas64u_failure}/${after64u_failure}");
+  await println("cas-u64=${cas64u_success}/${after64u_success} ${cas64u_failure}/${after64u_failure}");
 
   var copy64u = atomic64u.clone();
   copy64u.store(7u64, SeqCst {});
-  println("clone-u64=${atomic64u.load(SeqCst {})}/${copy64u.load(SeqCst {})}");
+  await println("clone-u64=${atomic64u.load(SeqCst {})}/${copy64u.load(SeqCst {})}");
 
   var atomic32u = AtomicU32.new(10u32);
   var first32u = atomic32u.load(SeqCst {});
@@ -117,17 +118,17 @@ function main() {
   var added32u = atomic32u.fetch_add(5u32, SeqCst {});
   var subbed32u = atomic32u.fetch_sub(3u32, SeqCst {});
   var final32u = atomic32u.load(SeqCst {});
-  println("atomic-u32=${first32u} ${swapped32u} ${added32u} ${subbed32u} ${final32u}");
+  await println("atomic-u32=${first32u} ${swapped32u} ${added32u} ${subbed32u} ${final32u}");
 
   var cas32u_success = atomic32u.compare_exchange(13u32, 99u32, SeqCst {}, SeqCst {});
   var after32u_success = atomic32u.load(SeqCst {});
   var cas32u_failure = atomic32u.compare_exchange(13u32, 123u32, SeqCst {}, SeqCst {});
   var after32u_failure = atomic32u.load(SeqCst {});
-  println("cas-u32=${cas32u_success}/${after32u_success} ${cas32u_failure}/${after32u_failure}");
+  await println("cas-u32=${cas32u_success}/${after32u_success} ${cas32u_failure}/${after32u_failure}");
 
   var copy32u = atomic32u.clone();
   copy32u.store(7u32, SeqCst {});
-  println("clone-u32=${atomic32u.load(SeqCst {})}/${copy32u.load(SeqCst {})}");
+  await println("clone-u32=${atomic32u.load(SeqCst {})}/${copy32u.load(SeqCst {})}");
 
   var flag = AtomicBool.new(true);
   var first_bool = flag.load(SeqCst {});
@@ -138,9 +139,10 @@ function main() {
   var or_old = flag.fetch_or(true, SeqCst {});
   var xor_old = flag.fetch_xor(true, SeqCst {});
   var final_bool = flag.load(SeqCst {});
-  println("atomic-bool=${first_bool} ${swapped_bool} ${cas_fail} ${cas_ok} ${and_old} ${or_old} ${xor_old} ${final_bool}");
+  await println("atomic-bool=${first_bool} ${swapped_bool} ${cas_fail} ${cas_ok} ${and_old} ${or_old} ${xor_old} ${final_bool}");
 
   var flag_copy = flag.clone();
   flag_copy.store(true, SeqCst {});
-  println("bool-clone=${flag.load(SeqCst {})}/${flag_copy.load(SeqCst {})}");
+  await println("bool-clone=${flag.load(SeqCst {})}/${flag_copy.load(SeqCst {})}");
+  null
 }

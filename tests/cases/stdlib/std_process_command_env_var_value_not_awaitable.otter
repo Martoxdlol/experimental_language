@@ -1,0 +1,11 @@
+//@ kind: compile-error
+//@ description: std:process Command.env_var_value is an immediate pure command environment accessor
+//@ stderr: `await` requires a `Future`
+
+import { Future } from "core:prelude";
+import { Command } from "std:process";
+
+function main(): Future<null> async {
+  var _value = await Command.new("true").env_var("MODE", "test").env_var_value("MODE");
+  null
+}

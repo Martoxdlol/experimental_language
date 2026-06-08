@@ -1,3 +1,4 @@
+import { Future } from "core:prelude";
 // Generic `extend` blocks (docs/11): methods on a generic concrete type. The
 // method body refers to the type's parameters; each call is monomorphized to
 // the receiver's concrete instantiation.
@@ -29,17 +30,18 @@ extend<T> Repeat<T>: Iterator<T> {
   }
 }
 
-function main() {
+function main(): Future<null> async {
   var p = Pair { first: 10, second: "ten" };
-  println("first  = ${p.fst() }");
-  println("second = ${p.snd() }");
+  await println("first  = ${p.fst()}");
+  await println("second = ${p.snd()}");
 
   var s = p.swap(); // Pair<str, i64>
-  println("swapped = ${s.snd() } ${s.fst() }");
+  await println("swapped = ${s.snd()} ${s.fst()}");
 
   var out = "";
-  for word in(Repeat { value: "ok ", times: 3 }) {
+  for word in (Repeat { value: "ok ", times: 3 }) {
     out = out + word;
   }
-  println("repeat = ${out }");
+  await println("repeat = ${out}");
+  null
 }

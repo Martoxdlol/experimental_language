@@ -1,0 +1,20 @@
+import { Future } from "core:async";
+import { println } from "std:io";
+import { Command, Output } from "std:process";
+import { IoError } from "std:io";
+
+function decode_output(result: Output | IoError): str {
+  if result is IoError {
+    "process-error"
+  } else {
+    var out = result as Output;
+    var decoded = out.stdout().decode_utf8();
+    if decoded is str { decoded as str } else { "utf8-error" }
+  }
+}
+
+function main(): Future<null> async {
+  var result = await Command.new("sh").arg("-c").arg("printf async-process").output();
+  await println("async process: ${decode_output(result)}");
+  null
+}

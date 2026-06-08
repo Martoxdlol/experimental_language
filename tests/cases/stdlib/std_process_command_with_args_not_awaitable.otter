@@ -1,0 +1,14 @@
+//@ kind: compile-error
+//@ description: std:process Command.with_args is an immediate pure command value builder
+//@ stderr: `await` requires a `Future`
+
+import { Future } from "core:prelude";
+import { List } from "core:collections";
+import { Command } from "std:process";
+
+function main(): Future<null> async {
+  var args = List<str>();
+  args.push("hello");
+  var _command = await Command.new("printf").with_args(args);
+  null
+}

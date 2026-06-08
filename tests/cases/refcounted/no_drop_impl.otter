@@ -3,12 +3,13 @@
 //@ description: @RefCounted without a Drop impl gives deterministic free (no crash) under GC stress
 //@ stdout:
 //~ sum 4950
+import { Future } from "core:prelude";
 import { println } from "std:io";
 
 @RefCounted
 struct Node { v: i64 }
 
-function main() {
+function main(): Future<null> async {
   var total: i64 = 0;
   var i: i64 = 0;
   while i < 100 {
@@ -16,5 +17,6 @@ function main() {
     total = total + n.v;
     i = i + 1;
   }
-  println("sum ${total}");
+  await println("sum ${total}");
+  null
 }

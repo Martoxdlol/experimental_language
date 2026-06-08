@@ -1,0 +1,11 @@
+//@ kind: compile-error
+//@ description: std:net TcpStream.set_read_timeout returns a Future and must be awaited
+//@ stderr: found `Future<
+
+import { IoError } from "std:io";
+import { TcpStream } from "std:net";
+import { Duration } from "std:time";
+
+function requires_await(stream: TcpStream) {
+  var _set: null | IoError = stream.set_read_timeout(Duration.from_millis(1));
+}

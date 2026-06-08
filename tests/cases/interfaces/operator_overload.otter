@@ -4,6 +4,7 @@
 //~ 4
 //~ 6
 //~ true
+import { Future } from "core:prelude";
 import { println } from "std:io";
 import { Eq } from "core:prelude";
 struct V2 { x: i64, y: i64 }
@@ -13,11 +14,12 @@ extend V2 {
 extend V2: Eq {
   function eq(self, other: V2): bool { self.x == other.x && self.y == other.y }
 }
-function main() {
+function main(): Future<null> async {
   var a = V2 { x: 1, y: 2 };
   var b = V2 { x: 3, y: 4 };
   var c = a + b;
-  println("${c.x}");
-  println("${c.y}");
-  println("${a == V2 { x: 1, y: 2 }}");
+  await println("${c.x}");
+  await println("${c.y}");
+  await println("${a == V2 { x: 1, y: 2 }}");
+  null
 }

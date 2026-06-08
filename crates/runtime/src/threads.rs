@@ -6,7 +6,7 @@
 //! spawning thread hands the environment over; the child runs it on a fresh OS
 //! thread. When the closure is **async** (`() -> Future<R>`,
 //! [`lang_thread_spawn_async`]) the worker calls it to build the future and then
-//! drives that future to completion on its own thread, publishing the awaited
+//! polls that future until it resolves on its own thread, publishing the awaited
 //! `R` — so the same `JoinHandle<R>` machinery serves both flavors.
 //! Results (and the environment) are pinned as global GC roots
 //! ([`gc::add_extra_root`]) for the cross-thread handoff window, so a
@@ -106,7 +106,7 @@ struct ThreadInner {
     /// this `None`; they deliberately have no hard-kill cancellation hook.
     task_cancel: Option<TaskCancelCtl>,
     /// The handle was detached, so no future joiner can consume a result/panic
-    /// handoff. Detached workers still run to completion, but terminal values
+    /// handoff. Detached workers still continue independently, but terminal values
     /// are discarded instead of pinned forever.
     detached: bool,
 }
@@ -134,6 +134,7 @@ struct TaskCancelCtl {
     task_id: u64,
     cancel_requested: Arc<AtomicBool>,
     done: Arc<AtomicBool>,
+    reschedule: Arc<AtomicBool>,
     held_locks: Arc<Mutex<Vec<u64>>>,
     poll_lock: Arc<Mutex<()>>,
     input: usize,
@@ -143,7 +144,7 @@ struct TaskCancelCtl {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TaskCancelInput {
     Future,
-    SyncClosure,
+    OrdinaryClosure,
 }
 
 fn registry() -> &'static RwLock<HashMap<u64, Arc<ThreadCtl>>> {
@@ -191,6 +192,13 @@ fn new_ctl_with_result_is_ptr(result_is_ptr: bool) -> Arc<ThreadCtl> {
             detached: false,
         }),
     })
+}
+
+fn spawn_os_thread_native_wait<F>(f: F) -> OsJoin<()>
+where
+    F: FnOnce() + Send + 'static,
+{
+    gc::native_wait(|| std::thread::spawn(f))
 }
 
 /// Publish a worker's result and wake every joiner suspended on it.
@@ -295,7 +303,7 @@ pub unsafe extern "C" fn lang_thread_spawn(env: *mut u8, float_kind: i64) -> u64
     let env_addr = env as usize;
 
     let worker = ctl.clone();
-    let os = std::thread::spawn(move || {
+    let os = spawn_os_thread_native_wait(move || {
         // Register as a mutator and gate on the world barrier before touching
         // managed memory, so the collector always accounts for this thread.
         gc::thread_start();
@@ -326,9 +334,9 @@ pub unsafe extern "C" fn lang_thread_spawn(env: *mut u8, float_kind: i64) -> u64
 }
 
 /// Spawn `fut` (a `Future<T>` interface-object box) onto a new OS worker that
-/// drives it to completion via the executor, returning a registry id for the
+/// polls it until it resolves via the executor, returning a registry id for the
 /// resulting `JoinHandle<T>` (`docs/21` §6 — `spawn`). `pending_tid` is the
-/// `Pending` type id the worker's `block_on` needs.
+/// `Pending` type id the private root driver needs.
 ///
 /// # Safety
 /// `fut` must be a valid `Future<T>` box (vtable slot 0 = `poll`).
@@ -352,6 +360,7 @@ pub unsafe extern "C" fn lang_async_spawn(
         task_id,
         cancel_requested: cancel_requested.clone(),
         done: done.clone(),
+        reschedule: reschedule.clone(),
         held_locks: held_locks.clone(),
         poll_lock: poll_lock.clone(),
         input: fut as usize,
@@ -386,7 +395,7 @@ pub unsafe extern "C" fn lang_async_spawn(
 //
 // The executor below is the runtime substrate for `spawn EXPR` and, through the
 // compiler-facing `lang_task_spawn*` aliases, `Task.spawn`. It deliberately does
-// not serve `Thread.spawn`: OS threads remain the blocking-friendly primitive.
+// not serve `Thread.spawn`: OS threads remain the dedicated-thread primitive.
 //
 // Shape: a small, lazily-started worker pool; each worker owns a local FIFO run
 // queue, there is a global injector for external submissions/wakes, and idle
@@ -395,7 +404,7 @@ pub unsafe extern "C" fn lang_async_spawn(
 #[derive(Clone)]
 enum TaskWork {
     Future { fut: usize, pending_tid: i64 },
-    SyncClosure { env: usize, float_kind: i64 },
+    OrdinaryClosure { env: usize, float_kind: i64 },
 }
 
 #[derive(Clone)]
@@ -505,7 +514,7 @@ impl Executor {
         let worker_count = executor_worker_count();
         let exec = Self::new_unstarted(worker_count);
         for id in 0..worker_count {
-            std::thread::spawn(move || worker_loop(id));
+            let _ = spawn_os_thread_native_wait(move || worker_loop(id));
         }
         exec
     }
@@ -796,7 +805,7 @@ fn poll_task(task: Task) {
             let ready = unsafe { ((result as usize + 8) as *const usize).read() };
             unsafe { (ready as *const i64).read() }
         }),
-        TaskWork::SyncClosure { env, float_kind } => {
+        TaskWork::OrdinaryClosure { env, float_kind } => {
             crate::panic_boundary::run_under_boundary(|| {
                 let fn_ptr = unsafe { (env as *const usize).read() };
                 match float_kind {
@@ -865,7 +874,7 @@ fn finish_task(task: &Task, outcome: Result<i64, usize>) {
 fn task_input(task: &Task) -> usize {
     match task.work {
         TaskWork::Future { fut, .. } => fut,
-        TaskWork::SyncClosure { env, .. } => env,
+        TaskWork::OrdinaryClosure { env, .. } => env,
     }
 }
 
@@ -914,16 +923,17 @@ pub unsafe extern "C" fn lang_task_spawn(env: *mut u8, float_kind: i64, value_is
         task_id,
         cancel_requested: cancel_requested.clone(),
         done: done.clone(),
+        reschedule: reschedule.clone(),
         held_locks: held_locks.clone(),
         poll_lock: poll_lock.clone(),
         input: env as usize,
-        input_kind: TaskCancelInput::SyncClosure,
+        input_kind: TaskCancelInput::OrdinaryClosure,
     });
     runtime_write_lock(registry()).insert(id, ctl.clone());
 
     let task = Task {
         id: task_id,
-        work: TaskWork::SyncClosure {
+        work: TaskWork::OrdinaryClosure {
             env: env as usize,
             float_kind,
         },
@@ -942,21 +952,22 @@ pub unsafe extern "C" fn lang_task_spawn(env: *mut u8, float_kind: i64, value_is
 }
 
 /// Spawn an **async** `() => Future<R>` closure on a new OS worker: call the
-/// lifted closure to construct its `Future<R>` box, then drive that future to
-/// completion on the worker via the executor (`docs/20` §1). The published
+/// lifted closure to construct its `Future<R>` box, then poll that future until
+/// it resolves on the worker via the private root driver (`docs/20` §1). The published
 /// result is the *awaited* `R` (widened to a machine word), so `join()` /
-/// `JoinHandle` machinery is identical to a synchronous worker's. This fuses the
-/// closure-call of [`lang_thread_spawn`] with the `block_on`-drive of
+/// `JoinHandle` machinery is identical to an ordinary non-async worker's. This
+/// fuses the closure-call of [`lang_thread_spawn`] with the private root-driver path of
 /// [`lang_async_spawn`].
 ///
-/// No `float_kind` is needed: `lang_block_on` carries the awaited value as its
-/// raw 8-byte representation (a float is already its bit pattern), exactly the
-/// form the joiner reads back.
+/// No `float_kind` is needed: the private root driver carries the awaited value
+/// as its raw 8-byte representation (a float is already its bit pattern),
+/// exactly the form the joiner reads back.
 ///
 /// # Safety
 /// `env` must be a valid closure environment whose lifted function has signature
 /// `extern "C" fn(*mut u8) -> *mut u8` returning a `Future<R>` box (vtable slot 0
-/// = `poll`). `pending_tid` is the worker's `Pending` type id for `block_on`.
+/// = `poll`). `pending_tid` is the worker's `Pending` type id for the private
+/// root driver.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lang_thread_spawn_async(env: *mut u8, pending_tid: i64) -> u64 {
     // Pin before any runtime-side setup for the same reason as
@@ -970,20 +981,21 @@ pub unsafe extern "C" fn lang_thread_spawn_async(env: *mut u8, pending_tid: i64)
     let env_addr = env as usize;
 
     let worker = ctl.clone();
-    let os = std::thread::spawn(move || {
+    let os = spawn_os_thread_native_wait(move || {
         gc::thread_start();
         let outcome = crate::panic_boundary::run_under_boundary(|| {
             // Call the lifted async closure to obtain its `Future<R>` box.
             let fn_ptr = unsafe { (env_addr as *const usize).read() };
             let f: extern "C" fn(*mut u8) -> *mut u8 = unsafe { std::mem::transmute(fn_ptr) };
             let fut = f(env_addr as *mut u8);
-            // Pin the future across the call→block_on window (unwind-scoped, so a
-            // panic in the body releases it). `env` stays pinned by the spawner
-            // until `finish_worker`.
+            // Pin the future across the call→root-driver window (unwind-scoped,
+            // so a panic in the body releases it). `env` stays pinned by the
+            // spawner until `finish_worker`.
             gc::pin_for_unwind(fut as usize);
-            // Drive the future to completion on this worker (the `spawn`-keyword
-            // path). The awaited `R` comes back widened to a machine word.
-            let result = unsafe { crate::async_rt::lang_block_on(fut, pending_tid) };
+            // Poll the future until it resolves on this worker (the
+            // `spawn`-keyword path). The awaited `R` comes back widened to a
+            // machine word.
+            let result = unsafe { crate::async_rt::lang_drive_root_future(fut, pending_tid) };
             gc::unpin_for_unwind(fut as usize);
             result
         });
@@ -1226,6 +1238,8 @@ fn cancel_task_by_id(id: u64) -> bool {
                 publish_cancelled(&ctl);
             }
         }
+    } else if cancel.input_kind == TaskCancelInput::Future {
+        cancel.reschedule.store(true, Ordering::Release);
     }
     true
 }
@@ -1472,7 +1486,7 @@ pub unsafe extern "C" fn lang_thread_join_future(
     bx
 }
 
-/// Construct a `std:task::JoinHandle<R>.join()` future. It shares the same
+/// Construct a `std:task` `JoinHandle<R>.join()` future. It shares the same
 /// polling machinery as OS-thread joins but passes a `Cancelled` variant tag so
 /// executor-task cancellation is surfaced instead of masquerading as a value.
 #[unsafe(no_mangle)]
@@ -1515,11 +1529,11 @@ pub unsafe extern "C" fn lang_task_cancel(id: u64) {
 }
 
 /// `JoinHandle<R>.detach()` (`docs/20` §1): relinquish the claim on a worker so
-/// it runs to completion in the background, fire-and-forget, with its result
-/// discarded. The worker thread holds its own `Arc<ThreadCtl>` clone, so it
-/// keeps running regardless; we drop the registry's claim and detach the OS
+/// it continues independently in the background, fire-and-forget, with its
+/// result discarded. The worker thread holds its own `Arc<ThreadCtl>` clone, so
+/// it keeps running regardless; we drop the registry's claim and detach the OS
 /// thread (drop its join handle without joining) so it is reclaimed on its own
-/// when it finishes. Works identically for synchronous and async workers.
+/// when it finishes. Works identically for ordinary non-async and async workers.
 ///
 /// # Safety
 /// `id` must be a live `JoinHandle` id produced by [`lang_thread_spawn`],
@@ -1572,32 +1586,82 @@ mod tests {
     fn task_marker(task: Task) -> usize {
         match task.work {
             TaskWork::Future { fut, .. } => fut,
-            TaskWork::SyncClosure { env, .. } => env,
+            TaskWork::OrdinaryClosure { env, .. } => env,
         }
     }
 
     #[test]
-    fn cancelling_sync_closure_does_not_treat_env_as_future_state() {
+    fn spawn_os_thread_helper_uses_native_state_marker() {
+        let joined = spawn_os_thread_native_wait(|| {}).join();
+        assert!(
+            joined.is_ok(),
+            "helper-spawned OS thread should join cleanly"
+        );
+    }
+
+    #[test]
+    fn executor_start_uses_native_wait_thread_creation_helper() {
+        let source = include_str!("threads.rs");
+        let start_body = source
+            .split("fn start() -> Self")
+            .nth(1)
+            .and_then(|rest| rest.split("fn spawn(&self").next())
+            .expect("Executor::start should remain in threads.rs");
+        assert!(
+            start_body.contains("spawn_os_thread_native_wait(move || worker_loop(id))"),
+            "executor worker startup must use the GC native-state thread creation helper"
+        );
+        assert!(
+            !start_body.contains("std::thread::spawn(move || worker_loop(id))"),
+            "executor worker startup must not bypass the GC native-state helper"
+        );
+    }
+
+    #[test]
+    fn executor_idle_wait_uses_runtime_native_no_roots_boundary() {
+        let source = include_str!("threads.rs");
+        let wait_body = source
+            .split("fn wait_for_task(id: usize, exec: &Executor) -> Task")
+            .nth(1)
+            .and_then(|rest| rest.split("fn worker_loop(id: usize)").next())
+            .expect("wait_for_task should remain in threads.rs");
+        assert!(
+            wait_body.contains("gc::enter_runtime_native_no_roots();"),
+            "executor worker idle wait must publish runtime-native/no-root state before parking"
+        );
+        assert!(
+            wait_body.contains(".cv")
+                && wait_body.contains(".wait(epoch)")
+                && wait_body.contains("gc::leave_native();"),
+            "executor worker idle wait must leave native state after the condvar wait resumes"
+        );
+    }
+
+    #[test]
+    fn cancelling_ordinary_closure_does_not_treat_env_as_future_state() {
         let _g = crate::gc::TEST_LOCK.lock().unwrap();
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
         let ctl = new_ctl();
         let cancel_requested = Arc::new(AtomicBool::new(false));
         let done = Arc::new(AtomicBool::new(false));
+        let reschedule = Arc::new(AtomicBool::new(false));
         let held_locks = Arc::new(Mutex::new(Vec::new()));
         let poll_lock = Arc::new(Mutex::new(()));
         let task_id = NEXT_TASK_ID.fetch_add(1, Ordering::Relaxed);
         // Deliberately put a non-null, invalid-looking word at offset 16. A
-        // regression in the cancellation path interpreted sync closure envs as
-        // generated future boxes and tried to call this word as a drop hook.
+        // regression in the cancellation path interpreted ordinary non-async
+        // closure envs as generated future boxes and tried to call this word as
+        // a drop hook.
         let env = Box::into_raw(Box::new([0usize, 0, usize::MAX])) as usize;
         ctl.inner.lock().unwrap().task_cancel = Some(TaskCancelCtl {
             task_id,
             cancel_requested: cancel_requested.clone(),
             done: done.clone(),
+            reschedule,
             held_locks,
             poll_lock,
             input: env,
-            input_kind: TaskCancelInput::SyncClosure,
+            input_kind: TaskCancelInput::OrdinaryClosure,
         });
         runtime_write_lock(registry()).insert(id, ctl.clone());
 
@@ -2159,7 +2223,7 @@ mod tests {
         Box::into_raw(fut) as *mut u8
     }
 
-    /// Block until the worker behind `id` publishes its result, then read it.
+    /// Wait for the worker behind `id` to publish its result, then read it.
     fn wait_result(id: u64) -> (i64, bool) {
         loop {
             let ctl = runtime_read_lock(registry())
@@ -2194,7 +2258,8 @@ mod tests {
         // env: one word = the lifted closure fn ptr (the closure ABI, `docs/09`).
         let env: Box<[usize; 1]> = Box::new([make_ready_future as *const () as usize]);
         let env_ptr = Box::into_raw(env) as *mut u8;
-        // Pending tid 9 here; the future is Ready (tag 7), so block_on returns.
+        // Pending tid 9 here; the future is Ready (tag 7), so the private root
+        // driver returns.
         let id = unsafe { lang_thread_spawn_async(env_ptr, 9) };
         assert_eq!(wait_result(id), (99, false));
     }
@@ -2257,9 +2322,9 @@ mod tests {
         Box::into_raw(union_box) as *mut u8
     }
 
-    /// A lifted sync worker that raises a language panic. `lang_panic` runs on
-    /// the worker thread (which has a boundary installed), so it must `longjmp`
-    /// back instead of terminating the process.
+    /// A lifted ordinary non-async worker that raises a language panic.
+    /// `lang_panic` runs on the worker thread (which has a boundary installed),
+    /// so it must `longjmp` back instead of terminating the process.
     extern "C" fn panicking_worker(_env: *mut u8) -> i64 {
         let msg = unsafe { crate::strings::lang_str_from_utf8(b"boom".as_ptr(), 4) };
         unsafe { crate::lang_panic(msg) };
@@ -2323,7 +2388,7 @@ mod tests {
     }
 
     #[test]
-    fn spawn_async_drives_suspending_future_to_completion() {
+    fn spawn_async_resolves_suspending_future() {
         let _g = crate::gc::TEST_LOCK.lock().unwrap();
         DRIVE_POLLS.store(0, O::SeqCst);
         let env: Box<[usize; 1]> = Box::new([make_yield_future as *const () as usize]);
@@ -2335,7 +2400,7 @@ mod tests {
     }
 
     #[test]
-    fn async_spawn_uses_executor_and_drives_suspending_future() {
+    fn async_spawn_uses_executor_and_resolves_suspending_future() {
         let _g = crate::gc::TEST_LOCK.lock().unwrap();
         EXEC_POLLS.store(0, O::SeqCst);
         let fut = make_future_box(executor_yield_once_poll);
@@ -2387,11 +2452,13 @@ mod tests {
         let poll_lock = Arc::new(Mutex::new(()));
         let done = Arc::new(AtomicBool::new(false));
         let cancel_requested = Arc::new(AtomicBool::new(false));
+        let reschedule = Arc::new(AtomicBool::new(false));
         let task_id = NEXT_TASK_ID.fetch_add(1, Ordering::Relaxed);
         ctl.inner.lock().unwrap().task_cancel = Some(TaskCancelCtl {
             task_id,
             cancel_requested: cancel_requested.clone(),
             done: done.clone(),
+            reschedule: reschedule.clone(),
             held_locks: held_locks.clone(),
             poll_lock: poll_lock.clone(),
             input: fut,
@@ -2461,6 +2528,7 @@ mod tests {
         let poll_lock = Arc::new(Mutex::new(()));
         let done = Arc::new(AtomicBool::new(false));
         let cancel_requested = Arc::new(AtomicBool::new(false));
+        let reschedule = Arc::new(AtomicBool::new(false));
         let fut = make_future_box(pending_never_poll) as usize;
         gc::add_extra_root(fut);
 
@@ -2468,6 +2536,7 @@ mod tests {
             task_id,
             cancel_requested: cancel_requested.clone(),
             done: done.clone(),
+            reschedule: reschedule.clone(),
             held_locks: held_locks.clone(),
             poll_lock: poll_lock.clone(),
             input: fut,
@@ -2540,6 +2609,66 @@ mod tests {
     }
 
     #[test]
+    fn cancellation_while_poll_lock_busy_requests_reschedule() {
+        let _g = crate::gc::TEST_LOCK.lock().unwrap();
+        let before_wakers = registered_task_waker_count();
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        let task_id = NEXT_TASK_ID.fetch_add(1, Ordering::Relaxed);
+        let ctl = new_ctl();
+        let held_locks = Arc::new(Mutex::new(Vec::new()));
+        let poll_lock = Arc::new(Mutex::new(()));
+        let done = Arc::new(AtomicBool::new(false));
+        let reschedule = Arc::new(AtomicBool::new(false));
+        let cancel_requested = Arc::new(AtomicBool::new(false));
+        let fut = make_future_box(pending_never_poll) as usize;
+        gc::add_extra_root(fut);
+
+        ctl.inner.lock().unwrap().task_cancel = Some(TaskCancelCtl {
+            task_id,
+            cancel_requested: cancel_requested.clone(),
+            done: done.clone(),
+            reschedule: reschedule.clone(),
+            held_locks: held_locks.clone(),
+            poll_lock: poll_lock.clone(),
+            input: fut,
+            input_kind: TaskCancelInput::Future,
+        });
+        runtime_write_lock(registry()).insert(id, ctl.clone());
+
+        let task = Task {
+            id: task_id,
+            work: TaskWork::Future {
+                fut,
+                pending_tid: 9,
+            },
+            ctl,
+            held_locks,
+            poll_lock: poll_lock.clone(),
+            polling: Arc::new(AtomicBool::new(false)),
+            queued: Arc::new(AtomicBool::new(false)),
+            reschedule: reschedule.clone(),
+            done: done.clone(),
+            cancel_requested: cancel_requested.clone(),
+        };
+        register_task_waker(task);
+        let _busy = poll_lock.lock().unwrap();
+
+        assert!(cancel_task_by_id(id));
+        assert!(cancel_requested.load(Ordering::Acquire));
+        assert!(
+            reschedule.load(Ordering::Acquire),
+            "busy-poll cancellation must force a follow-up poll to observe cancellation"
+        );
+        assert!(!done.load(Ordering::Acquire));
+
+        drop(_busy);
+        unregister_task_waker(task_id);
+        runtime_write_lock(registry()).remove(&id);
+        gc::remove_extra_root(fut);
+        assert_eq!(registered_task_waker_count(), before_wakers);
+    }
+
+    #[test]
     fn mass_cancellation_unregisters_task_wakers_and_releases_roots() {
         let _g = crate::gc::TEST_LOCK.lock().unwrap();
         let before_wakers = registered_task_waker_count();
@@ -2554,6 +2683,7 @@ mod tests {
             let poll_lock = Arc::new(Mutex::new(()));
             let done = Arc::new(AtomicBool::new(false));
             let cancel_requested = Arc::new(AtomicBool::new(false));
+            let reschedule = Arc::new(AtomicBool::new(false));
             let fut = make_future_box(pending_never_poll) as usize;
             gc::add_extra_root(fut);
 
@@ -2561,6 +2691,7 @@ mod tests {
                 task_id,
                 cancel_requested: cancel_requested.clone(),
                 done: done.clone(),
+                reschedule: reschedule.clone(),
                 held_locks: held_locks.clone(),
                 poll_lock: poll_lock.clone(),
                 input: fut,

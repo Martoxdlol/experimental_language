@@ -517,20 +517,20 @@ extend AtomicBool: Drop {
 
 extend<T> AtomicPtr<T> {
   function new(v: *T): AtomicPtr<T> {
-    AtomicPtr<T> { ptr: lang_atomic_ptr_new(v as*u8) }
+    AtomicPtr<T> { ptr: lang_atomic_ptr_new(v as *u8) }
   }
 
   function load(self, ord: Ordering): *T {
-    lang_atomic_ptr_load(self.ptr, __atomic_load_order(ord))as*T
+    lang_atomic_ptr_load(self.ptr, __atomic_load_order(ord)) as *T
   }
 
   function store(self, v: *T, ord: Ordering): null {
-    lang_atomic_ptr_store(self.ptr, v as*u8, __atomic_store_order(ord));
+    lang_atomic_ptr_store(self.ptr, v as *u8, __atomic_store_order(ord));
     null
   }
 
   function swap(self, v: *T, ord: Ordering): *T {
-    lang_atomic_ptr_swap(self.ptr, v as*u8, __atomic_order_code(ord))as*T
+    lang_atomic_ptr_swap(self.ptr, v as *u8, __atomic_order_code(ord)) as *T
   }
 
   function compare_exchange(self, expected: *T, new: *T, success: Ordering, failure: Ordering):
@@ -538,11 +538,11 @@ extend<T> AtomicPtr<T> {
     *T {
     lang_atomic_ptr_compare_exchange(
       self.ptr,
-      expected as*u8,
-      new as*u8,
+      expected as *u8,
+      new as *u8,
       __atomic_order_code(success),
       __atomic_failure_order(failure)
-    )as*T
+    ) as *T
   }
 }
 

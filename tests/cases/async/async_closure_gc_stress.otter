@@ -1,12 +1,12 @@
 //@ kind: run
 //@ env: OTTER_FUSION_GC=stress
-//@ description: under GC stress the captured cell and the state machine's saved slots stay live across suspends — repeated drives still see the shared counter and accumulated str (docs/21 §7, docs/16)
+//@ description: under GC stress the captured cell and the state machine's saved slots stay live across suspends — repeated awaits still see the shared counter and accumulated str (docs/21 §7, docs/16)
 //@ stdout:
 //~ seed-a#1
 //~ seed-a-b#2
 //~ counter=2
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { sleep } from "std:async";
 function main(): Future<null> async {
   var counter: i64 = 0;
@@ -19,7 +19,8 @@ function main(): Future<null> async {
   };
   var a: str = await bump("a");
   var b: str = await bump("b");
-  println(a);
-  println(b);
-  println("counter=${counter }");
+  await println(a);
+  await println(b);
+  await println("counter=${counter}");
+  null
 }

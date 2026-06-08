@@ -8,6 +8,7 @@
 //~ List[bytes[65,66], bytes[88]]
 //~ Map{asset: bytes[65,66]}
 //~ Set{bytes[65,66]}
+import { Future } from "core:prelude";
 import { println } from "std:io";
 import { List, Map, Set } from "core:collections";
 import { Debug } from "std:fmt";
@@ -20,7 +21,7 @@ function render(value: Debug): str {
   value.debug()
 }
 
-function main() {
+function main(): Future<null> async {
   var bytes = Bytes.new();
   bytes.push(65u8);
   bytes.push(66u8);
@@ -29,24 +30,25 @@ function main() {
   items.push(json_string("ok"));
   items.push(json_bool(true));
 
-  println(render(Duration.from_secs(1) + Duration.from_millis(500)));
-  println(render(bytes));
+  await println(render(Duration.from_secs(1) + Duration.from_millis(500)));
+  await println(render(bytes));
   var path = Path.new("/tmp/app.otter");
-  println(render(path));
-  println(render(json_array(items)));
+  await println(render(path));
+  await println(render(json_array(items)));
 
   var bytes2 = Bytes.new();
   bytes2.push(88u8);
   var byte_list = List<Bytes>();
   byte_list.push(bytes);
   byte_list.push(bytes2);
-  println(render(byte_list));
+  await println(render(byte_list));
 
   var map = Map<str, Bytes>();
   map["asset"] = bytes;
-  println(render(map));
+  await println(render(map));
 
   var set = Set<Bytes>();
   set.insert(bytes);
-  println(render(set));
+  await println(render(set));
+  null
 }

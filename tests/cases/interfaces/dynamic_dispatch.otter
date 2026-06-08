@@ -3,6 +3,7 @@
 //@ stdout:
 //~ woof
 //~ meow
+import { Future } from "core:prelude";
 import { println } from "std:io";
 interface Animal { function speak(self): str; }
 struct Dog {}
@@ -10,9 +11,10 @@ struct Cat {}
 extend Dog: Animal { function speak(self): str { "woof" } }
 extend Cat: Animal { function speak(self): str { "meow" } }
 function announce(a: Animal): str { a.speak() }
-function main() {
+function main(): Future<null> async {
   var d: Animal = Dog {};
   var c: Animal = Cat {};
-  println(announce(d));
-  println(announce(c));
+  await println(announce(d));
+  await println(announce(c));
+  null
 }

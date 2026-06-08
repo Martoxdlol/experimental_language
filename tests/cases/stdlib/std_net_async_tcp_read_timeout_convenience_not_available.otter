@@ -1,0 +1,19 @@
+//@ kind: compile-error
+//@ description: AsyncTcpStream operation deadlines use std:async.timeout today; no copied read_timeout_async convenience exists
+//@ stderr: no method `read_timeout_async`
+
+import { Future } from "core:prelude";
+import { Bytes } from "std:bytes";
+import { AsyncTcpStream, TcpStream } from "std:net";
+import { ip_v4, socket_addr } from "std:net/types";
+import { Duration } from "std:time";
+
+function main(): Future<null> async {
+  var connected = await TcpStream.connect(socket_addr(ip_v4(127u8, 0u8, 0u8, 1u8), 9u16));
+  if connected is TcpStream {
+    var stream = AsyncTcpStream.from_stream(connected as TcpStream);
+    var buf = Bytes.new();
+    var _read = await stream.read_timeout_async(buf, Duration.from_millis(1));
+  }
+  null
+}

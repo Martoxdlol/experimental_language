@@ -86,7 +86,7 @@ interface Container&lt;T&gt; { function get(self): T }
 extend&lt;T&gt; Box&lt;T&gt;: Container&lt;T&gt; { function get(self): T { self.value } }
 
 function bigger&lt;T: Ord&gt;(a: T, b: T): T { if a &gt; b { a } else { b } }
-function dump&lt;T: Printable + Clone&gt;(x: T) { print(x.clone().to_string()) }
+function dump&lt;T: Printable + Clone&gt;(x: T): Future&lt;null&gt; async { await print(x.clone().to_string()) }
 function consume&lt;T: Iterator&lt;i64&gt;&gt;(it: T) { ... }</code></pre>
 
 <p>Multiple bounds separate with <code>+</code>. A bound is an interface (possibly with its own generic arguments).</p>

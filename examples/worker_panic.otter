@@ -2,48 +2,49 @@
 //
 // A `panic` inside a spawned worker fails ONLY that worker — it never aborts the
 // process. `Thread.spawn(...).join()` surfaces it recoverably as `Panicked`,
-// while siblings spawned alongside run to completion. A panic inside a `Shared`
+// while siblings spawned alongside finish normally. A panic inside a `Shared`
 // lock body unwinds to the worker's boundary and RELEASES the lock (no
 // poisoning), so the cell stays usable afterwards.
 import { println } from "std:io";
-import { panic } from "core:prelude";
-import { Future } from "core:async";
+import { Future, panic } from "core:prelude";
 import { Shared, LockBusy } from "std:sync";
 import { Thread, JoinHandle, Joined, Panicked } from "std:thread";
 
 function checked_div(a: i64, b: i64): i64 {
-  if b == 0 { panic("cannot divide ${a } by zero"); }
+  if b == 0 { panic("cannot divide ${a} by zero"); }
   a / b
 }
 
-function describe(label: str, r: Joined<i64> | Panicked) {
+function describe(label: str, r: Joined<i64> | Panicked): Future<null> async {
   match r {
-    Joined<i64> j => println("${label }: ok ${j.value }"),
-    Panicked p => println("${label }: panicked — ${p.message }"),
+    Joined<i64> j => await println("${label}: ok ${j.value}"),
+    Panicked p => await println("${label}: panicked — ${p.message}"),
   };
+  null
 }
 
 function main(): Future<null> async {
   // One worker panics, a sibling succeeds — isolation keeps the program alive.
   var bad: JoinHandle<i64> = Thread.spawn(() => checked_div(10, 0));
   var good: JoinHandle<i64> = Thread.spawn(() => checked_div(84, 2));
-  describe("bad", await bad.join());
-  describe("good", await good.join());
+  await describe("bad", await bad.join());
+  await describe("good", await good.join());
 
   // A panic while holding a lock releases it: the cell is re-lockable, and holds
   // the mutation the panicking body made before it died (managed, in-place).
   var counter: Shared<i64> = Shared.new(0);
   var c: Shared<i64> = counter.clone();
   var worker: JoinHandle<null> = Thread.spawn(() async => {
-      await c.lock((n) => { panic("boom mid-update"); 0 });
-      null
-    });
+    await c.lock((n) => { panic("boom mid-update"); 0 });
+    null
+  });
   match await worker.join() {
-    Joined<null> j => println("lock worker: ok"),
-    Panicked p => println("lock worker: panicked — ${p.message }"),
+    Joined<null> j => await println("lock worker: ok"),
+    Panicked p => await println("lock worker: panicked — ${p.message}"),
   };
   match await counter.try_lock((n) => n) {
-    i64 n => println("lock reacquired: ${n }"),
-    LockBusy busy => println("lock still held (BUG)"),
+    i64 n => await println("lock reacquired: ${n}"),
+    LockBusy busy => await println("lock still held (BUG)"),
   };
+  null
 }

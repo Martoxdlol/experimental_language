@@ -81,13 +81,13 @@
 <p><code>v is T</code> evaluates to <code>bool</code>. True iff the runtime tag of <code>v</code>
 indicates it currently inhabits type <code>T</code>.</p>
 
-<pre><code>function describe(v: i64 | str | null) {
+<pre><code>function describe(v: i64 | str | null): Future&lt;null&gt; async {
   if v is i64 {
-    print("number")
+    await print("number")
   } else if v is str {
-    print("string")
+    await print("string")
   } else if v is null {
-    print("nothing")
+    await print("nothing")
   }
 }</code></pre>
 
@@ -284,7 +284,7 @@ plugin boundaries, ad-hoc heterogeneous collections.</p>
       <text x="14" y="132" font-size="11">    if d is i32 { use(d) }</text>
       <text x="14" y="150" font-size="11">    var p = d as Person</text>
       <text x="14" y="178" font-size="11">— is against an interface:</text>
-      <text x="14" y="196" font-size="11">    if d is ToStr { print(d.to_str()) }</text>
+      <text x="14" y="196" font-size="11">    if d is ToStr { await print(d.to_str()) }</text>
       <text x="14" y="224" font-size="11">— match with a wildcard arm:</text>
       <text x="14" y="242" font-size="11">    match d { i32 n =&gt; ..., _ =&gt; ... }</text>
       <text x="14" y="270" font-size="11">— Passing to a parameter typed dynamic.</text>
@@ -384,20 +384,20 @@ parameterises over the target type.</p>
 <!-- =========================================================== -->
 <h2 id="ex">7. Examples</h2>
 
-<pre><code>function process(input: i64 | str | null) {
+<pre><code>function process(input: i64 | str | null): Future&lt;null&gt; async {
   if input is null { return }
 
   // input: i64 | str
 
   if input is i64 &amp;&amp; input &gt; 0 {
     // input: i64, additionally positive
-    print(("positive: " + (input as str)))
+    await print(("positive: " + (input as str)))
   } else if input is str {
     // input: str
-    print("string: " + input)
+    await print("string: " + input)
   } else {
     // input: i64 (and not positive)
-    print("non-positive: " + (input as str))
+    await print("non-positive: " + (input as str))
   }
 }
 

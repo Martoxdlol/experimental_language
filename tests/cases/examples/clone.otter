@@ -11,6 +11,7 @@
 //~ box2 = 50
 //~ pair = 8 wide
 
+import { Future } from "core:prelude";
 // `Clone` (docs/10, docs/15 §8) — deep-copy entry point.
 //
 // `@Derive(Clone)` synthesises a field-by-field deep copy. Primitives and `str`
@@ -43,34 +44,35 @@ function duplicate<T: Clone>(value: T): T {
   value.clone()
 }
 
-function main() {
+function main(): Future<null> async {
   // A deep copy is independent of its source.
   var a: Line = Line { from: Point { x: 0, y: 0 }, to: Point { x: 3, y: 4 } };
   var b: Line = a.clone();
   b.to.x = 99;
-  println("a.to.x = " + (a.to.x as str));   // 3 — unaffected
-  println("b.to.x = " + (b.to.x as str));   // 99
+  await println("a.to.x = " + (a.to.x as str));   // 3 — unaffected
+  await println("b.to.x = " + (b.to.x as str));   // 99
 
   // Through a `T: Clone` bound, builtins clone intrinsically.
-  println("int  = " + (duplicate<i64>(7) as str));
-  println("str  = " + duplicate<str>("hello"));
+  await println("int  = " + (duplicate<i64>(7) as str));
+  await println("str  = " + duplicate<str>("hello"));
 
   // A cloned list is independent of the original.
   var xs: List<i64> = [1, 2, 3];
   var ys: List<i64> = xs.clone();
   ys.push(4);
-  println("xs.size = " + (xs.size() as str)); // 3
-  println("ys.size = " + (ys.size() as str)); // 4
+  await println("xs.size = " + (xs.size() as str)); // 3
+  await println("ys.size = " + (ys.size() as str)); // 4
 
   // Generic structs: a deep copy through the synthesised generic impl.
   var box: Box<Point> = Box { value: Point { x: 1, y: 2 } };
   var box2: Box<Point> = box.clone();
   box2.value.x = 50;
-  println("box  = " + (box.value.x as str));   // 1 — unaffected
-  println("box2 = " + (box2.value.x as str));  // 50
+  await println("box  = " + (box.value.x as str));   // 1 — unaffected
+  await println("box2 = " + (box2.value.x as str));  // 50
 
   // Tuple struct with inferred type arguments (`Pair<i64, str>`).
   var pair: Pair<i64, str> = Pair(8, "wide");
   var pair2 = pair.clone();
-  println("pair = " + (pair2.0 as str) + " " + pair2.1); // 8 wide
+  await println("pair = " + (pair2.0 as str) + " " + pair2.1); // 8 wide
+  null
 }

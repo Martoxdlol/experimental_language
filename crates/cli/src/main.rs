@@ -89,6 +89,14 @@ enum Command {
         #[arg(long)]
         release: bool,
     },
+    /// Delete build artifacts under a project's `target/` directory.
+    Clean {
+        /// Project directory or `project.toml`. Omit for the current directory.
+        file: Option<PathBuf>,
+        /// Report what would be removed without deleting any files.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Generate Markdown API documentation for a file or project's public items
     /// (`docs/23`), printed to stdout.
     Doc {
@@ -119,6 +127,7 @@ enum Command {
     /// Format `.otter` source (`docs/23`): normalize indentation and whitespace.
     /// Conservative — only whitespace changes (verified by re-lexing). Rewrites
     /// files in place; `--check` reports unformatted files and exits non-zero.
+    /// `--emit stdout` prints one formatted file without writing it.
     Fmt {
         /// A `.otter` file or a directory (formatted recursively). Omit for the
         /// current directory.
@@ -127,6 +136,9 @@ enum Command {
         /// any differ (the CI gate).
         #[arg(long)]
         check: bool,
+        /// Emit the formatted source instead of rewriting files.
+        #[arg(long, value_enum)]
+        emit: Option<FmtEmit>,
     },
     /// Report lint warnings (`docs/23`): unused local variables and unused
     /// private functions. Informational — exits zero even when warnings are found.
@@ -190,6 +202,9 @@ enum Command {
     Remove {
         /// The dependency name.
         name: String,
+        /// Print what would be removed without modifying `project.toml`.
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Resolve dependencies and write `project.lock` (`docs/23` §7).
     Lock {
@@ -199,7 +214,14 @@ enum Command {
     },
     /// Re-resolve dependencies to the newest compatible versions, updating the
     /// lockfile.
-    Update,
+    Update {
+        /// Resolve and report what would change without writing `project.lock`.
+        #[arg(long)]
+        dry_run: bool,
+        /// With `--dry-run`, print a deterministic line diff of the lockfile.
+        #[arg(long)]
+        verbose: bool,
+    },
     /// Print the resolved dependency graph as a tree.
     Tree,
     /// Explain why a package is in the dependency graph.
@@ -208,7 +230,11 @@ enum Command {
         name: String,
     },
     /// Copy resolved dependencies into `<project>/vendor/` (`docs/23` §3).
-    Vendor,
+    Vendor {
+        /// Report what would be vendored without modifying `<project>/vendor/`.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Store a registry authentication token in `~/.otter_fusion/credentials.toml`.
     Login {
         /// The bearer token to store.
@@ -273,6 +299,13 @@ enum EmitIr {
     Clif,
 }
 
+/// Output modes for `otter_fusion fmt --emit`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum FmtEmit {
+    /// Print the formatted source to stdout.
+    Stdout,
+}
+
 /// What to do after a successful check.
 enum Stage {
     Check,
@@ -301,6 +334,9 @@ fn main() -> ExitCode {
             output,
             release,
         } => drive(&Input::Auto(file), Stage::Build { output }, release, false),
+        Command::Clean { file, dry_run } => {
+            run_clean(&file.unwrap_or_else(|| PathBuf::from(".")), dry_run)
+        }
         Command::Run {
             file,
             release,
@@ -339,7 +375,9 @@ fn main() -> ExitCode {
         }
         Command::Explain { code } => run_explain(&code),
         Command::Repl => repl::run(),
-        Command::Fmt { file, check } => run_fmt(&file.unwrap_or_else(|| PathBuf::from(".")), check),
+        Command::Fmt { file, check, emit } => {
+            run_fmt(&file.unwrap_or_else(|| PathBuf::from(".")), check, emit)
+        }
         Command::Lint { file } => {
             run_lint(&Input::Auto(file.unwrap_or_else(|| PathBuf::from("."))))
         }
@@ -353,12 +391,12 @@ fn main() -> ExitCode {
             path,
             git,
         } => deps::add(&name, version, path, git),
-        Command::Remove { name } => deps::remove(&name),
+        Command::Remove { name, dry_run } => deps::remove(&name, dry_run),
         Command::Lock { check } => deps::lock(check),
-        Command::Update => deps::update(),
+        Command::Update { dry_run, verbose } => deps::update(dry_run, verbose),
         Command::Tree => deps::tree(),
         Command::Why { name } => deps::why(&name),
-        Command::Vendor => deps::vendor(),
+        Command::Vendor { dry_run } => deps::vendor(dry_run),
         Command::Login { token, registry } => deps::login(&token, registry),
         Command::Logout { registry } => deps::logout(registry),
         Command::Search { query } => deps::search(&query),
@@ -366,6 +404,54 @@ fn main() -> ExitCode {
         Command::Yank { version } => deps::yank(version),
         Command::Audit => deps::audit(),
         Command::Serve { dir, bind, token } => run_serve(dir, &bind, token),
+    }
+}
+
+/// `otter_fusion clean` — remove build artifacts for the discovered project.
+fn run_clean(path: &Path, dry_run: bool) -> ExitCode {
+    let project = match discover_clean_project(path) {
+        Ok(project) => project,
+        Err(e) => return fail(&e),
+    };
+    let target_dir = project.root.join("target");
+    if dry_run {
+        if target_dir.exists() {
+            println!("would remove {}", target_dir.display());
+        } else {
+            println!("nothing to clean at {}", target_dir.display());
+        }
+        return ExitCode::SUCCESS;
+    }
+    if !target_dir.exists() {
+        println!("nothing to clean at {}", target_dir.display());
+        return ExitCode::SUCCESS;
+    }
+    match std::fs::remove_dir_all(&target_dir) {
+        Ok(()) => {
+            println!("removed {}", target_dir.display());
+            ExitCode::SUCCESS
+        }
+        Err(e) => fail(&format!("cannot remove {}: {e}", target_dir.display())),
+    }
+}
+
+fn fail(msg: &str) -> ExitCode {
+    eprintln!("error: {msg}");
+    ExitCode::FAILURE
+}
+
+fn discover_clean_project(path: &Path) -> Result<ProjectContext, String> {
+    let is_manifest = path.file_name().and_then(|n| n.to_str()) == Some(pkg::MANIFEST_NAME);
+    if is_manifest {
+        return ProjectContext::load(path).map_err(|e| e.to_string());
+    }
+    match ProjectContext::discover(path).map_err(|e| e.to_string())? {
+        Some(project) => Ok(project),
+        None => Err(format!(
+            "clean requires a project (no `{}` found from `{}`)",
+            pkg::MANIFEST_NAME,
+            path.display()
+        )),
     }
 }
 
@@ -1026,8 +1112,13 @@ fn run_tests(path: &Path, bench: bool) -> ExitCode {
 /// file under a directory. Each file is reformatted and the result is verified
 /// to preserve the token stream (only whitespace may change) before it is
 /// written. With `check`, nothing is written: unformatted files are listed and
-/// the command exits non-zero (the CI gate).
-fn run_fmt(path: &Path, check: bool) -> ExitCode {
+/// the command exits non-zero (the CI gate). With `--emit stdout`, one formatted
+/// file is printed to stdout without rewriting.
+fn run_fmt(path: &Path, check: bool, emit: Option<FmtEmit>) -> ExitCode {
+    if matches!(emit, Some(FmtEmit::Stdout)) {
+        return run_fmt_emit_stdout(path, check);
+    }
+
     let mut files = Vec::new();
     collect_otter_files(path, &mut files);
     if files.is_empty() {
@@ -1081,6 +1172,35 @@ fn run_fmt(path: &Path, check: bool) -> ExitCode {
         println!("formatted {changed}, unchanged {unchanged}");
         ExitCode::SUCCESS
     }
+}
+
+fn run_fmt_emit_stdout(path: &Path, check: bool) -> ExitCode {
+    if check {
+        eprintln!("error: `fmt --emit stdout` cannot be combined with `--check`");
+        return ExitCode::FAILURE;
+    }
+    if !path.is_file() || !path.extension().is_some_and(|e| e == "otter") {
+        eprintln!("error: `fmt --emit stdout` requires a single `.otter` file path");
+        return ExitCode::FAILURE;
+    }
+    let src = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: cannot read `{}`: {e}", path.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let formatted = fmt::format_source(&src);
+    if !fmt::token_stream_preserved(&src, &formatted) {
+        eprintln!(
+            "error: refusing to format `{}` — the reformat would change tokens \
+             (please report this as a `fmt` bug)",
+            path.display()
+        );
+        return ExitCode::FAILURE;
+    }
+    print!("{formatted}");
+    ExitCode::SUCCESS
 }
 
 /// Collect `.otter` files: `path` itself if it is one, else every `.otter` file
@@ -1280,19 +1400,11 @@ fn build_executable(map: &SourceMap, analysis: &Analysis, exe: &Path) -> ExitCod
     for lib in &analysis.hir.link_libs {
         cmd.arg(format!("-l{lib}"));
     }
-    // A `@Variadic` extern call routes through `libffi` (`docs/19` §13): the
-    // `lang_variadic_call` runtime shim in `libruntime.a` references `libffi`'s
-    // `ffi_prep_cif_var`/`ffi_call`, so link the system `libffi` when the program
-    // declares any variadic import. (A `staticlib` does not bundle native libs,
-    // hence the explicit `-lffi` here in addition to the runtime's build script.)
-    let uses_variadic = analysis
-        .program
-        .defs
-        .iter()
-        .any(|d| d.attrs.iter().any(|a| a.name.name == "Variadic"));
-    if uses_variadic {
-        cmd.arg("-lffi");
-    }
+    // The runtime static library always contains the variadic-call shim, which
+    // references `libffi` even when the user program does not declare a
+    // `@Variadic` extern. A `staticlib` does not bundle native library edges, so
+    // native builds must link the system `libffi` explicitly here.
+    cmd.arg("-lffi");
 
     match cmd.status() {
         Ok(s) if s.success() => {
@@ -1696,7 +1808,7 @@ mod deps {
         }
     }
 
-    pub fn remove(name: &str) -> ExitCode {
+    pub fn remove(name: &str, dry_run: bool) -> ExitCode {
         let proj = match project() {
             Ok(p) => p,
             Err(e) => return fail(&e),
@@ -1710,6 +1822,10 @@ mod deps {
             Ok((new_text, removed)) => {
                 if !removed {
                     return fail(&format!("no dependency named `{name}`"));
+                }
+                if dry_run {
+                    println!("would remove dependency `{name}`");
+                    return ExitCode::SUCCESS;
                 }
                 if let Err(e) = std::fs::write(&manifest_path, new_text) {
                     return fail(&format!("cannot write manifest: {e}"));
@@ -1748,7 +1864,7 @@ mod deps {
         }
     }
 
-    pub fn update() -> ExitCode {
+    pub fn update(dry_run: bool, verbose: bool) -> ExitCode {
         let proj = match project() {
             Ok(p) => p,
             Err(e) => return fail(&e),
@@ -1773,10 +1889,24 @@ mod deps {
         let registries = Registries { by_name, default };
         match resolve(&proj.manifest, &proj.root, &registries, &store, None) {
             Ok(resolved) => {
-                if let Err(e) = std::fs::write(lock_path(&proj), resolved.lockfile.to_toml()) {
+                let lock_path = lock_path(&proj);
+                let new_text = resolved.lockfile.to_toml();
+                if dry_run {
+                    let current = std::fs::read_to_string(&lock_path).unwrap_or_default();
+                    if normalize_lock(&current) == normalize_lock(&new_text) {
+                        println!("lockfile is already up to date");
+                    } else {
+                        println!("would update {}", lock_path.display());
+                        if verbose {
+                            print!("{}", lock_diff(&current, &new_text));
+                        }
+                    }
+                    return ExitCode::SUCCESS;
+                }
+                if let Err(e) = std::fs::write(&lock_path, new_text) {
                     return fail(&format!("cannot write lockfile: {e}"));
                 }
-                println!("updated {}", lock_path(&proj).display());
+                println!("updated {}", lock_path.display());
                 ExitCode::SUCCESS
             }
             Err(e) => fail(&e.to_string()),
@@ -1814,7 +1944,7 @@ mod deps {
         }
     }
 
-    pub fn vendor() -> ExitCode {
+    pub fn vendor(dry_run: bool) -> ExitCode {
         let proj = match project() {
             Ok(p) => p,
             Err(e) => return fail(&e),
@@ -1824,6 +1954,14 @@ mod deps {
             Err(e) => return fail(&e),
         };
         let vendor_dir = proj.root.join("vendor");
+        if dry_run {
+            println!(
+                "would vendor {} package(s) into {}",
+                resolved.packages.len(),
+                vendor_dir.display()
+            );
+            return ExitCode::SUCCESS;
+        }
         for rp in &resolved.packages {
             let dirname = if resolved.has_duplicate_name(&rp.name) {
                 format!("{}-{}", rp.name, rp.version)
@@ -2036,6 +2174,53 @@ mod deps {
             .join("\n")
             .trim()
             .to_string()
+    }
+
+    fn lock_diff(old: &str, new: &str) -> String {
+        let old = normalize_lock(old);
+        let new = normalize_lock(new);
+        let old_lines: Vec<&str> = if old.is_empty() {
+            Vec::new()
+        } else {
+            old.lines().collect()
+        };
+        let new_lines: Vec<&str> = if new.is_empty() {
+            Vec::new()
+        } else {
+            new.lines().collect()
+        };
+        let mut out = String::new();
+        out.push_str("--- project.lock\n+++ project.lock (resolved)\n");
+        let max_len = old_lines.len().max(new_lines.len());
+        for i in 0..max_len {
+            match (old_lines.get(i), new_lines.get(i)) {
+                (Some(a), Some(b)) if a == b => {
+                    out.push(' ');
+                    out.push_str(a);
+                    out.push('\n');
+                }
+                (Some(a), Some(b)) => {
+                    out.push('-');
+                    out.push_str(a);
+                    out.push('\n');
+                    out.push('+');
+                    out.push_str(b);
+                    out.push('\n');
+                }
+                (Some(a), None) => {
+                    out.push('-');
+                    out.push_str(a);
+                    out.push('\n');
+                }
+                (None, Some(b)) => {
+                    out.push('+');
+                    out.push_str(b);
+                    out.push('\n');
+                }
+                (None, None) => {}
+            }
+        }
+        out
     }
 
     fn fail(msg: &str) -> ExitCode {

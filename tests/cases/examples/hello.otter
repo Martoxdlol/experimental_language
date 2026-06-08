@@ -4,6 +4,7 @@
 //~ hello, world
 //~ fib(20) = 6765
 
+import { Future } from "core:prelude";
 // A working program with string interpolation. Run: lang run examples/hello.lang
 import { println } from "std:io";
 
@@ -11,8 +12,9 @@ function fib(n: i64): i64 {
   if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
 }
 
-function main() {
+function main(): Future<null> async {
   var name = "world";
-  println("hello, $name");
-  println("fib(20) = ${fib(20)}");
+  await println("hello, $name");
+  await println("fib(20) = ${fib(20)}");
+  null
 }

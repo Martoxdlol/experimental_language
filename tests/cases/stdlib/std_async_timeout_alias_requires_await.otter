@@ -1,0 +1,12 @@
+//@ kind: compile-error
+//@ description: std:async timeout keeps its Future<T | TimedOut> contract when imported through an alias
+//@ stderr: expected `i64 | TimedOut`, found `Future<i64 | TimedOut>`
+
+import { Future } from "core:async";
+import { TimedOut, timeout as async_timeout } from "std:async";
+
+function fast(): Future<i64> async { 7 }
+
+function main() {
+  var result: i64 | TimedOut = async_timeout(fast(), 1);
+}

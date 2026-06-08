@@ -4,6 +4,7 @@
 //~ true
 //~ true
 //~ false
+import { Future } from "core:prelude";
 import { println } from "std:io";
 function is_even(n: i64): bool {
   if n == 0 { true } else { is_odd(n - 1) }
@@ -11,8 +12,9 @@ function is_even(n: i64): bool {
 function is_odd(n: i64): bool {
   if n == 0 { false } else { is_even(n - 1) }
 }
-function main() {
-  println("${is_even(10)}");
-  println("${is_odd(7)}");
-  println("${is_even(3)}");
+function main(): Future<null> async {
+  await println("${is_even(10)}");
+  await println("${is_odd(7)}");
+  await println("${is_even(3)}");
+  null
 }

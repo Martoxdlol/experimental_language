@@ -61,7 +61,8 @@
 <p class="lead">
   Tracing GC (Immix mark-region, optionally generational via StickyImmix), driven by precise
   stack maps emitted by Cranelift. Two disjoint heaps — managed and foreign. Drop is
-  best-effort, asynchronous, and not guaranteed to run — release resources explicitly.
+  best-effort, non-waiting, and not guaranteed to run — release resources explicitly
+  and await explicit cleanup when release may wait.
 </p>
 
 <div class="toc">
@@ -367,6 +368,58 @@ SSA values and stack slots hold managed pointers.</p>
   annotation — paid back many times over by tighter heap usage and the ability to evacuate.
 </div>
 
+<div class="callout">
+  <strong>Private provider waits enter native/runtime state</strong>
+  Generated loops and calls are ordinary safepoints, but a thread may also be
+  waiting inside private provider-backed runtime machinery behind explicit
+  async stdlib futures, such as filesystem IO, standard stream IO, process
+  starts/waits/child controls, process argument/environment snapshots and
+  environment mutation, TCP listener bind, TCP connect/read/read-to-end/write/
+  write-all/flush/peek/accept operations, TCP stream address/error/nodelay/
+  nonblocking/timeout/TTL controls, TCP listener address/error/nonblocking/TTL
+  controls, UDP bind/connect/send/recv/peek operations, UDP address/peer/error/
+  nonblocking/timeout/TTL/broadcast/multicast controls, local-time offset
+  lookup, <code>Thread.spawn</code> OS worker creation, async runtime timer/helper
+  thread creation, or <code>Task.spawn</code> executor worker-pool thread
+  creation.
+  OS entropy reads used by
+  <code>std:rand.OsRng</code> and entropy-seeded helpers use the same bracket. Those
+  operations bracket the host wait with a GC native-state marker:
+  the mutator publishes its current roots, marks itself non-running, and leaves
+  native state before allocating any Otter Fusion result value. A stop-the-world
+  collection can then proceed without waiting for the OS call to return, while
+  still scanning the language roots held across that boundary.
+  Helper-backed async stdio, filesystem, and network futures split that boundary:
+  spawning the helper thread is bracketed as native state by the caller, and the
+  helper's actual provider wait goes through the same private provider helper's
+  <code>gc::native_wait(...)</code> marker. Completion encodes and roots the Otter
+  Fusion result, then wakes the reactor after that wait, without a thread-wide
+  native-state enter/leave around completion.
+  The internal root-future driver used for async <code>main</code> and async
+  <code>Thread.spawn</code> workers also enters GC native state while parked
+  between <code>Pending</code> polls; there is still no user-visible
+  <code>block_on</code> API.
+  The shared async timer driver is also a registered runtime thread because it
+  invokes reactor wakers; timer-driver startup and concurrent startup waiters,
+  plus its idle and deadline condvar waits, publish runtime-native/no-root state
+  so they cannot hold the world as running mutators.
+  M:N task executor workers use the same runtime-native/no-root boundary while
+  parked waiting for work.
+  Internal <code>Shared&lt;T&gt;</code> registry/cell/held-lock mutex waits use that
+  runtime-native/no-root boundary too; source-level <code>Shared.lock</code>
+  contention still suspends the task through its FIFO waiter queue rather than
+  parking an executor worker.
+  Descriptor registries such as <code>std:fs.File</code> keep only short-lived table
+  locks around handle lookup/removal; the host descriptor wait itself runs under
+  a per-handle lock and the <code>gc::native_wait</code> marker, and explicit
+  descriptor close drops the removed host handle inside the same marker. Network
+  stream, listener, and UDP socket explicit close/release paths follow the same
+  remove-first, drop-inside-marker shape, as do <code>std:process.Child</code>
+  table release and the rare local provider-child drops after concurrent removal
+  races a child <code>wait()</code> or <code>kill()</code>. Unrelated handle management is
+  therefore not serialized behind one provider wait.
+</div>
+
 <!-- =========================================================== -->
 <h2 id="barriers">7. Write barriers</h2>
 
@@ -437,7 +490,7 @@ enqueued to the finalizer queue. A dedicated finalizer thread pops the queue and
     <g transform="translate(600, 0)">
       <rect width="280" height="60" rx="6" fill="#eef6f1" stroke="#2a6f4d" stroke-width="2"/>
       <text x="14" y="22" font-weight="700" fill="#2a6f4d">Enqueue for finalizer thread</text>
-      <text x="14" y="42" font-size="11">drop runs asynchronously</text>
+      <text x="14" y="42" font-size="11">drop runs best-effort</text>
     </g>
 
     <path d="M 540 70 L 600 90" stroke="#b54708" stroke-width="2" marker-end="url(#arrd)"/>
@@ -456,7 +509,7 @@ enqueued to the finalizer queue. A dedicated finalizer thread pops the queue and
       <text x="14" y="62" font-size="11">— Program exit makes a best-effort pass; objects may leak silently.</text>
     </g>
   </svg>
-  <div class="diagram-caption">Release resources explicitly when you need deterministic destruction — <code>Drop</code> is asynchronous and not guaranteed.</div>
+  <div class="diagram-caption">Release resources explicitly when you need deterministic destruction — <code>Drop</code> is best-effort and non-waiting.</div>
 </div>
 
 <table>
@@ -465,16 +518,17 @@ enqueued to the finalizer queue. A dedicated finalizer thread pops the queue and
     <tr><td>Reachable object, scope exits</td><td>Object stays alive — no drop yet (until unreachable).</td></tr>
     <tr><td>Unreachable object, regular GC</td><td>Drop runs <em>eventually</em> on the finalizer thread; no ordering across objects.</td></tr>
     <tr><td>Program exit</td><td>Best-effort pass; may skip finalizers.</td></tr>
-    <tr><td>Panicked thread</td><td>Stack roots released; objects become unreachable and follow the regular finalizer path. No synchronous drop on unwind.</td></tr>
+    <tr><td>Panicked thread</td><td>Stack roots released; objects become unreachable and follow the regular finalizer path. No <code>Drop</code> calls while abandoning frames.</td></tr>
   </tbody>
 </table>
 
 <div class="callout warn">
   <strong>Don't rely on <code>Drop</code> for correctness</strong>
   Programs that need deterministic finalization (file flushing, transaction commit, lock release)
-  must release resources <strong>explicitly</strong> by calling the relevant method
-  (<code>file.close()</code>, <code>lock.release()</code>, <code>tx.commit()</code>) before the
-  binding goes out of scope. There is no <em>general</em> language-level scope-exit hook — like
+  must release resources <strong>explicitly</strong> by awaiting the relevant async cleanup
+  operation (<code>await file.close()</code>, <code>await lock.release()</code>,
+  <code>await tx.commit()</code>) before the binding goes out of scope. There is no
+  <em>general</em> language-level scope-exit hook — like
   JavaScript, Python without <code>with</code>, or Java without try-with-resources, cleanup of
   ordinary managed objects is a manual responsibility.
 </div>
@@ -490,7 +544,7 @@ enqueued to the finalizer queue. A dedicated finalizer thread pops the queue and
   the instant that worker finishes, and <code>Sender.clone()</code> registers another producer.
   When the last sender is released the channel <strong>closes</strong> immediately — without
   waiting for a collection — so a drained <code>recv()</code> resolves to <code>ChannelClosed</code>
-  and a <code>for x in rx</code> loop terminates. This is a runtime/library mechanism layered on
+  and <code>for await x in rx</code> terminates. This is a runtime/library mechanism layered on
   top of the collector (the GC still reclaims the underlying queue once both ends are
   unreachable); it does <em>not</em> introduce a general user-facing destructor. The opt-in
   <a href="#refcounted"><code>@RefCounted</code></a> object kind (§8.1) generalizes this
@@ -508,17 +562,26 @@ tracing GC is retained purely as the <strong>cycle-collector backstop</strong> (
 counting alone leaks cycles; the collector reclaims them, Python-style).</p>
 
 <pre><code>@RefCounted
-struct Conn { fd: i64 }
+struct ResourceToken { id: i64 }
 
-extend Conn: Drop {
-  function drop(self) { close_fd(self.fd) }   // runs at strong-count 0, synchronously
+extend ResourceToken: Drop {
+  function drop(self) { release_token(self.id) }   // non-waiting cleanup at strong-count 0
 }
 
 function main() {
-  var a: Conn = Conn { fd: open() }   // strong count 1
-  var b: Conn = a                     // shared: count 2 (assignment retains)
+  var a: ResourceToken = ResourceToken { id: allocate_token() } // strong count 1
+  var b: ResourceToken = a                                    // shared: count 2
   use(b)
 }                                     // count 2 → 1 → 0: drop(self) runs here, then freed</code></pre>
+
+<div class="callout warn">
+  <strong><code>Drop</code> is not a wait API</strong>
+  A deterministic <code>Drop</code> body must not perform target-backed waits such as file,
+  socket, process, timer, DNS, stdin/stdout/stderr, lock, or child-process cleanup.
+  Those operations belong behind explicit async stdlib futures; <code>Drop</code> is for
+  non-waiting owned bookkeeping such as releasing in-memory tokens or decrementing
+  runtime-private references.
+</div>
 
 <table>
   <tr><th>Aspect</th><th>Behavior</th></tr>
@@ -530,7 +593,7 @@ function main() {
     <code>.clone()</code> makes an independent deep copy with its own count of 1 (it does
     <em>not</em> alias).</td></tr>
   <tr><td>Destruction</td><td>When the count reaches zero the type's <code>Drop</code> (if any)
-    runs <strong>synchronously</strong>, the strong references it owns (refcounted fields) are
+    runs immediately as non-waiting cleanup, the strong references it owns (refcounted fields) are
     released — cascading destruction through the owned graph — and the memory is reclaimed
     immediately.</td></tr>
   <tr><td>Drop is optional</td><td><code>@RefCounted</code> works with or without a
@@ -544,7 +607,7 @@ function main() {
 
 <div class="callout">
   <strong>The determinism boundary</strong>
-  Deterministic, synchronous drop is guaranteed for a <code>@RefCounted</code> value held by a
+  Deterministic, non-waiting drop is guaranteed for a <code>@RefCounted</code> value held by a
   <strong>local binding</strong> (released at end of its function or when re-bound/reassigned) or
   owned by a <strong>field of another struct/tuple</strong> (released when that owner is
   destroyed). A refcounted value that escapes into a <strong>GC-managed container or a wider
@@ -726,7 +789,7 @@ that:</p>
   <strong>Pin vs Handle — choosing</strong>
   <ul>
     <li><strong>Pin</strong> when the foreign side needs a <em>real pointer</em> to the object's
-    bytes (synchronous call passing a buffer to C, output-parameter writes).</li>
+    bytes (non-suspending foreign call passing a buffer to C, output-parameter writes).</li>
     <li><strong>Handle</strong> when the foreign side stores the reference and calls back later,
     or when many references are retained — anything where movement-blocking would hurt the
     heap.</li>
@@ -751,11 +814,12 @@ that:</p>
     <li>Tracing GC: <strong>MMTk</strong> with the <strong>Immix</strong> plan (StickyImmix for generational).</li>
     <li>Two-word object header: <code>[type ptr | mark/forwarding]</code>; pointer at the field boundary.</li>
     <li>Precise stack maps from Cranelift (<code>user_stack_maps</code>); safepoints at calls and loop back-edges.</li>
+    <li>Private provider/runtime waits that may park enter GC native state and leave it before allocating language result values.</li>
     <li>Write barriers inserted at IR-gen for cross-space and concurrent-marking correctness.</li>
     <li>Allocation spaces: <code>default</code> (Immix), <code>nonmoving</code> (for <code>@Pinnable</code>), <code>immortal</code>, <code>los</code>.</li>
     <li>Drop is best-effort by default — finalizer queue, no ordering.</li>
     <li><code>@RefCounted</code> opts a struct into deterministic, atomic reference counting:
-      <code>Drop</code> runs synchronously at strong-count zero; the GC is the cycle backstop (§8.1).</li>
+      <code>Drop</code> runs immediately as non-waiting cleanup at strong-count zero; the GC is the cycle backstop (§8.1).</li>
     <li>For ordinary managed objects there is no deterministic-drop hook — release resources explicitly.</li>
     <li>Pinning prevents <em>movement</em>, not reclamation. <code>@Pinnable</code> avoids dynamic pins.</li>
     <li>Handles for long-lived foreign rooting — movement-friendly alternative to pinning.</li>

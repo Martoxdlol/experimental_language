@@ -1,0 +1,9 @@
+//@ kind: compile-error
+//@ description: std:process set_env returns a Future and cannot be used as an immediate mutation result
+//@ stderr: Future<
+
+import { set_env } from "std:process";
+
+function main() {
+  var result: null = set_env("OTTER_FUSION_PROCESS_AWAIT_GUARD", "1");
+}

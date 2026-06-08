@@ -1,0 +1,12 @@
+//@ kind: compile-error
+//@ description: std:fs Path.is_file returns Future<bool | IoError> and must be awaited before use
+//@ stderr: expected `bool | IoError`, found `Future<bool | IoError>`
+
+import { Future } from "core:prelude";
+import { IoError } from "std:io";
+import { Path } from "std:fs";
+
+function main(): Future<null> async {
+  var _is_file: bool | IoError = Path.new(".").is_file();
+  null
+}

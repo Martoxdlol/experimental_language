@@ -3,9 +3,11 @@
 //@ stdout:
 //~ 10
 //~ 20
+import { Future } from "core:prelude";
 import { println } from "std:io";
-function main() {
+function main(): Future<null> async {
   var (a, b) = (10, 20);
-  println("${a}");
-  println("${b}");
+  await println("${a}");
+  await println("${b}");
+  null
 }

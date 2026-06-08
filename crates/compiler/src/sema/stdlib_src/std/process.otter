@@ -8,6 +8,9 @@ struct Command {
 struct ExitStatus {
   code: i32 | null,
   signal: i32 | null,
+  core_dumped: bool | null,
+  stopped_signal: i32 | null,
+  continued: bool | null,
 }
 
 struct Output {
@@ -20,9 +23,9 @@ struct Output {
 struct Child {
   handle: i64,
   process_id: u32,
-  stdin: Writer | null,
-  stdout: Reader | null,
-  stderr: Reader | null,
+  stdin: AsyncWriter | null,
+  stdout: AsyncReader | null,
+  stderr: AsyncReader | null,
 }
 
 struct ProcessField {
@@ -30,15 +33,15 @@ struct ProcessField {
   next: i64,
 }
 
-extern function lang_process_args(): str;
-extern function lang_process_env(name: str): str;
-extern function lang_process_env_all(): str;
-extern function lang_process_set_env(name: str, value: str): str;
-extern function lang_process_status(payload: str): str;
-extern function lang_process_output(payload: str): str;
-extern function lang_process_spawn(payload: str): str;
-extern function lang_process_child_wait(handle: i64): str;
-extern function lang_process_child_kill(handle: i64): str;
+extern function __otter_process_args_async(): Future<str>;
+extern function __otter_process_env_async(name: str): Future<str>;
+extern function __otter_process_env_all_async(): Future<str>;
+extern function __otter_process_set_env_async(name: str, value: str): Future<str>;
+extern function __otter_process_status_async(payload: str): Future<str>;
+extern function __otter_process_output_async(payload: str): Future<str>;
+extern function __otter_process_spawn_async(payload: str): Future<str>;
+extern function __otter_process_child_wait_async(handle: i64): Future<str>;
+extern function __otter_process_child_kill_async(handle: i64): Future<str>;
 extern function lang_process_child_release(handle: i64);
 
 function exit(code: i32) {}
@@ -49,7 +52,17 @@ function command(program: str): Command {
 }
 
 function exit_status(code: i32 | null, signal: i32 | null): ExitStatus {
-  ExitStatus { code: code, signal: signal }
+  var core_dumped: bool | null = null;
+  if code is i32 {
+    core_dumped = false;
+  }
+  ExitStatus {
+    code: code,
+    signal: signal,
+    core_dumped: core_dumped,
+    stopped_signal: null,
+    continued: null,
+  }
 }
 
 function output(status: ExitStatus, stdout: Bytes, stderr: Bytes): Output {
@@ -59,9 +72,9 @@ function output(status: ExitStatus, stdout: Bytes, stderr: Bytes): Output {
 function __process_child(
   handle: i64,
   process_id: u32,
-  stdin: Writer | null,
-  stdout: Reader | null,
-  stderr: Reader | null,
+  stdin: AsyncWriter | null,
+  stdout: AsyncReader | null,
+  stderr: AsyncReader | null,
 ): Child {
   Child {
     handle: handle,
@@ -89,7 +102,7 @@ function __process_digit_value(ch: str): i64 {
 function __process_parse_i64(text: str): i64 {
   if text.size() == 0 {
     panic("malformed process payload");
-    return-1;
+    return -1;
   }
   var value = 0;
   var i = 0;
@@ -97,7 +110,7 @@ function __process_parse_i64(text: str): i64 {
     var digit = __process_digit_value(text.substring(i, i + 1));
     if digit < 0 {
       panic("malformed process payload");
-      return-1;
+      return -1;
     }
     value = value * 10 + digit;
     i = i + 1;
@@ -177,7 +190,7 @@ function __process_read_field(payload: str, start: i64): ProcessField {
 }
 
 function __process_field(text: str): str {
-  (text.size()as str) + ":" + text
+  (text.size() as str) + ":" + text
 }
 
 function __process_i32_from_field(text: str): i32 | IoError {
@@ -198,34 +211,111 @@ function __process_u32_from_field(text: str): u32 | IoError {
   }
 }
 
-function __process_status_from_fields(code_text: str, signal_text: str): ExitStatus | IoError {
+function __process_core_dumped_from_field(text: str): bool | null | IoError {
+  __process_optional_bool_from_field(text, "core-dump status")
+}
+
+function __process_optional_bool_from_field(text: str, label: str): bool | null | IoError {
+  if text == "" {
+    null
+  } else if text == "0" {
+    false
+  } else if text == "1" {
+    true
+  } else {
+    __process_io_error("malformed process " + label + " payload")
+  }
+}
+
+function __process_optional_i32_from_field(text: str, label: str): i32 | null | IoError {
+  if text == "" {
+    null
+  } else {
+    var value = __process_i32_from_field(text);
+    if value is IoError {
+      __process_io_error("malformed process " + label + " payload")
+    } else {
+      value as i32
+    }
+  }
+}
+
+function __process_status_from_fields(
+  code_text: str,
+  signal_text: str,
+  core_dumped_text: str,
+  stopped_signal_text: str,
+  continued_text: str,
+): ExitStatus | IoError {
+  var core_dumped = __process_core_dumped_from_field(core_dumped_text);
+  if core_dumped is IoError {
+    return core_dumped as IoError;
+  }
+  var core_dumped_value: bool | null = null;
+  if core_dumped is bool {
+    core_dumped_value = core_dumped as bool;
+  }
+  var stopped_signal = __process_optional_i32_from_field(stopped_signal_text, "stopped-signal");
+  if stopped_signal is IoError {
+    return stopped_signal as IoError;
+  }
+  var stopped_signal_value: i32 | null = null;
+  if stopped_signal is i32 {
+    stopped_signal_value = stopped_signal as i32;
+  }
+  var continued = __process_optional_bool_from_field(continued_text, "continued status");
+  if continued is IoError {
+    return continued as IoError;
+  }
+  var continued_value: bool | null = null;
+  if continued is bool {
+    continued_value = continued as bool;
+  }
   if code_text != "" {
     var code = __process_i32_from_field(code_text);
     if code is IoError {
       code as IoError
     } else {
-      ExitStatus.exited(code as i32)
+      ExitStatus {
+        code: code as i32,
+        signal: null,
+        core_dumped: core_dumped_value,
+        stopped_signal: stopped_signal_value,
+        continued: continued_value,
+      }
     }
   } else if signal_text != "" {
     var signal = __process_i32_from_field(signal_text);
     if signal is IoError {
       signal as IoError
     } else {
-      ExitStatus.signaled(signal as i32)
+      ExitStatus {
+        code: null,
+        signal: signal as i32,
+        core_dumped: core_dumped_value,
+        stopped_signal: stopped_signal_value,
+        continued: continued_value,
+      }
     }
   } else {
-    ExitStatus.unknown()
+    ExitStatus {
+      code: null,
+      signal: null,
+      core_dumped: core_dumped_value,
+      stopped_signal: stopped_signal_value,
+      continued: continued_value,
+    }
   }
 }
 
 function __process_hex_value(ch: char): u8 | IoError {
   var cp = ch as i64;
   if cp >= 48 && cp <= 57 {
-    (cp - 48)as u8
+    (cp - 48) as u8
   } else if cp >= 97 && cp <= 102 {
-    (cp - 87)as u8
+    (cp - 87) as u8
   } else if cp >= 65 && cp <= 70 {
-    (cp - 55)as u8
+    (cp - 55) as u8
   } else {
     __process_io_error("invalid hexadecimal digit in process byte payload")
   }
@@ -256,7 +346,7 @@ function __process_hex_to_bytes(text: str): Bytes | IoError {
       if lo is IoError {
         return lo as IoError;
       }
-      out.push(((hi as u8) * 16u8 + (lo as u8))as u8);
+      out.push(((hi as u8) * 16u8 + (lo as u8)) as u8);
       i = i + 2;
     }
     out
@@ -266,13 +356,22 @@ function __process_hex_to_bytes(text: str): Bytes | IoError {
 function __process_decode_status_payload(payload: str, start: i64): ProcessStatusParse | IoError {
   var code_field = __process_read_field(payload, start);
   var signal_field = __process_read_field(payload, code_field.next);
-  var status = __process_status_from_fields(code_field.text, signal_field.text);
+  var core_dumped_field = __process_read_field(payload, signal_field.next);
+  var stopped_signal_field = __process_read_field(payload, core_dumped_field.next);
+  var continued_field = __process_read_field(payload, stopped_signal_field.next);
+  var status = __process_status_from_fields(
+    code_field.text,
+    signal_field.text,
+    core_dumped_field.text,
+    stopped_signal_field.text,
+    continued_field.text
+  );
   if status is IoError {
     return status as IoError;
   }
   ProcessStatusParse {
     status: status as ExitStatus,
-    next: signal_field.next,
+    next: continued_field.next,
   }
 }
 
@@ -295,8 +394,9 @@ function __process_decode_child_payload(payload: str): Child | IoError {
   }
 }
 
-function args(): List<str> {
-  var payload = __process_payload(lang_process_args());
+function args(): Future<List<str>> async {
+  var raw = await __otter_process_args_async();
+  var payload = __process_payload(raw);
   var out = List<str>();
   var pos = 0;
   while pos < payload.size() {
@@ -307,8 +407,9 @@ function args(): List<str> {
   out
 }
 
-function env(name: str): str | null {
-  var payload = __process_payload(lang_process_env(name));
+function env(name: str): Future<str | null> async {
+  var raw = await __otter_process_env_async(name);
+  var payload = __process_payload(raw);
   if payload.size() == 0 {
     panic("malformed process payload");
   }
@@ -322,8 +423,9 @@ function env(name: str): str | null {
   }
 }
 
-function env_all(): Map<str, str> {
-  var payload = __process_payload(lang_process_env_all());
+function env_all(): Future<Map<str, str>> async {
+  var raw = await __otter_process_env_all_async();
+  var payload = __process_payload(raw);
   var out = Map.new<str, str>();
   var pos = 0;
   while pos < payload.size() {
@@ -335,8 +437,9 @@ function env_all(): Map<str, str> {
   out
 }
 
-function set_env(name: str, value: str): null {
-  __process_payload(lang_process_set_env(name, value));
+function set_env(name: str, value: str): Future<null> async {
+  var raw = await __otter_process_set_env_async(name, value);
+  __process_payload(raw);
   null
 }
 
@@ -360,7 +463,7 @@ extend Command {
   function env(self): Map<str, str> | null {
     if self.env is Map<str, str> {
       var out = Map.new<str, str>();
-      for entry in(self.env as Map<str, str>).entries() {
+      for entry in (self.env as Map<str, str>).entries() {
         out[entry.key] = entry.value;
       }
       out
@@ -378,7 +481,7 @@ extend Command {
   }
 
   function has_env_var(self, key: str): bool {
-    self.env_var_value(key)is str
+    self.env_var_value(key) is str
   }
 
   function env_count(self): i64 {
@@ -425,7 +528,7 @@ extend Command {
 
   function env_var(self, key: str, value: str): Command {
     var env = if self.env is Map<str, str> {
-      self.env()as Map<str, str>
+      self.env() as Map<str, str>
     } else {
       Map.new<str, str>()
     };
@@ -454,7 +557,7 @@ extend Command {
       __process_io_error("process command program must not be empty")
     } else if self.env is Map<str, str> {
       var error: IoError | null = null;
-      for entry in(self.env as Map<str, str>).entries() {
+      for entry in (self.env as Map<str, str>).entries() {
         if error is null && !__process_valid_env_key(entry.key) {
           error =
             __process_io_error("process command environment keys must not be empty or contain '='");
@@ -476,12 +579,12 @@ extend Command {
   }
 
   function is_valid(self): bool {
-    self.validation_error()is null
+    self.validation_error() is null
   }
 
   function payload(self): str {
     var payload = __process_field(self.program);
-    payload = payload + __process_field(self.args.size()as str);
+    payload = payload + __process_field(self.args.size() as str);
     for value in self.args.iter() {
       payload = payload + __process_field(value);
     }
@@ -489,7 +592,7 @@ extend Command {
     if self.env is Map<str, str> {
       var env = self.env as Map<str, str>;
       payload = payload + __process_field("replace");
-      payload = payload + __process_field(env.size()as str);
+      payload = payload + __process_field(env.size() as str);
       for entry in env.entries() {
         payload = payload + __process_field(entry.key);
         payload = payload + __process_field(entry.value);
@@ -507,12 +610,13 @@ extend Command {
     payload
   }
 
-  function status(self): ExitStatus | IoError {
+  function status(self): Future<ExitStatus | IoError> async {
     var validation = self.validate();
     if validation is IoError {
       return validation as IoError;
     }
-    var decoded = __process_result(lang_process_status(self.payload()));
+    var raw = await __otter_process_status_async(self.payload());
+    var decoded = __process_result(raw);
     if decoded is IoError {
       decoded as IoError
     } else {
@@ -525,12 +629,13 @@ extend Command {
     }
   }
 
-  function output(self): Output | IoError {
+  function output(self): Future<Output | IoError> async {
     var validation = self.validate();
     if validation is IoError {
       return validation as IoError;
     }
-    var decoded = __process_result(lang_process_output(self.payload()));
+    var raw = await __otter_process_output_async(self.payload());
+    var decoded = __process_result(raw);
     if decoded is IoError {
       decoded as IoError
     } else {
@@ -555,12 +660,13 @@ extend Command {
     }
   }
 
-  function spawn(self): Child | IoError {
+  function spawn(self): Future<Child | IoError> async {
     var validation = self.validate();
     if validation is IoError {
       return validation as IoError;
     }
-    var decoded = __process_result(lang_process_spawn(self.payload()));
+    var raw = await __otter_process_spawn_async(self.payload());
+    var decoded = __process_result(raw);
     if decoded is IoError {
       decoded as IoError
     } else {
@@ -634,7 +740,7 @@ extend Command {
   function env_hash(self): u64 {
     if self.env is Map<str, str> {
       var out = "command:env:explicit".hash() % 4294967291u64;
-      for entry in(self.env as Map<str, str>).entries() {
+      for entry in (self.env as Map<str, str>).entries() {
         out = __process_hash_add(out, ("env:" + entry.key + "=" + entry.value).hash());
       }
       out
@@ -703,7 +809,7 @@ extend Command: Debug {
     var env = if self.env is Map<str, str> {
       var rendered = "{";
       var first_env = true;
-      for entry in(self.env as Map<str, str>).entries() {
+      for entry in (self.env as Map<str, str>).entries() {
         if first_env {
           first_env = false;
         } else {
@@ -735,14 +841,15 @@ extend Command: Debug {
 extend Child {
   function id(self): u32 { self.process_id }
 
-  function stdin(self): Writer | null { self.stdin }
+  function stdin(self): AsyncWriter | null { self.stdin }
 
-  function stdout(self): Reader | null { self.stdout }
+  function stdout(self): AsyncReader | null { self.stdout }
 
-  function stderr(self): Reader | null { self.stderr }
+  function stderr(self): AsyncReader | null { self.stderr }
 
-  function wait(self): ExitStatus | IoError {
-    var decoded = __process_result(lang_process_child_wait(self.handle));
+  function wait(self): Future<ExitStatus | IoError> async {
+    var raw = await __otter_process_child_wait_async(self.handle);
+    var decoded = __process_result(raw);
     if decoded is IoError {
       decoded as IoError
     } else {
@@ -755,8 +862,9 @@ extend Child {
     }
   }
 
-  function kill(self): null | IoError {
-    var decoded = __process_result(lang_process_child_kill(self.handle));
+  function kill(self): Future<null | IoError> async {
+    var raw = await __otter_process_child_kill_async(self.handle);
+    var decoded = __process_result(raw);
     if decoded is IoError {
       decoded as IoError
     } else {
@@ -788,15 +896,65 @@ extend Child: Debug {
 }
 
 extend ExitStatus {
-  function exited(code: i32): ExitStatus { ExitStatus { code: code, signal: null } }
+  function exited(code: i32): ExitStatus {
+    ExitStatus {
+      code: code,
+      signal: null,
+      core_dumped: false,
+      stopped_signal: null,
+      continued: null,
+    }
+  }
 
-  function signaled(signal: i32): ExitStatus { ExitStatus { code: null, signal: signal } }
+  function signaled(signal: i32): ExitStatus {
+    ExitStatus {
+      code: null,
+      signal: signal,
+      core_dumped: null,
+      stopped_signal: null,
+      continued: null,
+    }
+  }
 
-  function unknown(): ExitStatus { ExitStatus { code: null, signal: null } }
+  function stopped(signal: i32): ExitStatus {
+    ExitStatus {
+      code: null,
+      signal: null,
+      core_dumped: null,
+      stopped_signal: signal,
+      continued: null,
+    }
+  }
+
+  function continued_status(): ExitStatus {
+    ExitStatus {
+      code: null,
+      signal: null,
+      core_dumped: null,
+      stopped_signal: null,
+      continued: true,
+    }
+  }
+
+  function unknown(): ExitStatus {
+    ExitStatus {
+      code: null,
+      signal: null,
+      core_dumped: null,
+      stopped_signal: null,
+      continued: null,
+    }
+  }
 
   function code(self): i32 | null { self.code }
 
   function signal(self): i32 | null { self.signal }
+
+  function core_dumped(self): bool | null { self.core_dumped }
+
+  function stopped_signal(self): i32 | null { self.stopped_signal }
+
+  function continued(self): bool | null { self.continued }
 
   function success(self): bool {
     if self.code is i32 {
@@ -809,6 +967,16 @@ extend ExitStatus {
   function exited_normally(self): bool { self.code is i32 }
 
   function was_signaled(self): bool { self.signal is i32 }
+
+  function was_stopped(self): bool { self.stopped_signal is i32 }
+
+  function was_continued(self): bool {
+    if self.continued is bool {
+      self.continued as bool
+    } else {
+      false
+    }
+  }
 
   function same_code(self, other: ExitStatus): bool {
     if self.code is i32 {
@@ -833,17 +1001,63 @@ extend ExitStatus {
       other.signal is null
     }
   }
+
+  function same_core_dumped(self, other: ExitStatus): bool {
+    if self.core_dumped is bool {
+      if other.core_dumped is bool {
+        (self.core_dumped as bool) == (other.core_dumped as bool)
+      } else {
+        false
+      }
+    } else {
+      other.core_dumped is null
+    }
+  }
+
+  function same_stopped_signal(self, other: ExitStatus): bool {
+    if self.stopped_signal is i32 {
+      if other.stopped_signal is i32 {
+        (self.stopped_signal as i32) == (other.stopped_signal as i32)
+      } else {
+        false
+      }
+    } else {
+      other.stopped_signal is null
+    }
+  }
+
+  function same_continued(self, other: ExitStatus): bool {
+    if self.continued is bool {
+      if other.continued is bool {
+        (self.continued as bool) == (other.continued as bool)
+      } else {
+        false
+      }
+    } else {
+      other.continued is null
+    }
+  }
 }
 
 extend ExitStatus: Eq {
   function eq(self, other: ExitStatus): bool {
-    self.same_code(other) && self.same_signal(other)
+    self.same_code(other)
+      && self.same_signal(other)
+      && self.same_core_dumped(other)
+      && self.same_stopped_signal(other)
+      && self.same_continued(other)
   }
 }
 
 extend ExitStatus: Clone {
   function clone(self): ExitStatus {
-    ExitStatus { code: self.code, signal: self.signal }
+    ExitStatus {
+      code: self.code,
+      signal: self.signal,
+      core_dumped: self.core_dumped,
+      stopped_signal: self.stopped_signal,
+      continued: self.continued,
+    }
   }
 }
 
@@ -851,20 +1065,46 @@ extend ExitStatus: Hash {
   function hash(self): u64 {
     var text = "unknown";
     if self.code is i32 {
-      text = "code:" + ((self.code as i32)as str);
+      text = "code:" + ((self.code as i32) as str);
     } else if self.signal is i32 {
-      text = "signal:" + ((self.signal as i32)as str);
+      text = "signal:" + ((self.signal as i32) as str);
     }
-    text.hash()
+    var core = if self.core_dumped is bool {
+      if self.core_dumped as bool { "core:true" } else { "core:false" }
+    } else {
+      "core:null"
+    };
+    var stopped = if self.stopped_signal is i32 {
+      "stopped:" + ((self.stopped_signal as i32) as str)
+    } else {
+      "stopped:null"
+    };
+    var continued = if self.continued is bool {
+      if self.continued as bool { "continued:true" } else { "continued:false" }
+    } else {
+      "continued:null"
+    };
+    var out = __process_hash_mix(text.hash(), core.hash());
+    out = __process_hash_mix(out, stopped.hash());
+    __process_hash_mix(out, continued.hash())
   }
 }
 
 extend ExitStatus: ToStr {
   function to_str(self): str {
     if self.code is i32 {
-      "exit status " + ((self.code as i32)as str)
+      "exit status " + ((self.code as i32) as str)
     } else if self.signal is i32 {
-      "signal " + ((self.signal as i32)as str)
+      "signal " + ((self.signal as i32) as str)+if self.core_dumped is bool
+        && (self.core_dumped as bool) {
+        " (core dumped)"
+      } else {
+        ""
+      }
+    } else if self.stopped_signal is i32 {
+      "stopped signal " + ((self.stopped_signal as i32) as str)
+    } else if self.was_continued() {
+      "continued"
     } else {
       "exit status unknown"
     }
@@ -873,9 +1113,34 @@ extend ExitStatus: ToStr {
 
 extend ExitStatus: Debug {
   function debug(self): str {
-    var code = if self.code is i32 { (self.code as i32)as str } else { "null" };
-    var signal = if self.signal is i32 { (self.signal as i32)as str } else { "null" };
-    "ExitStatus { code: " + code + ", signal: " + signal + " }"
+    var code = if self.code is i32 { (self.code as i32) as str } else { "null" };
+    var signal = if self.signal is i32 { (self.signal as i32) as str } else { "null" };
+    var core_dumped = if self.core_dumped is bool {
+      if self.core_dumped as bool { "true" } else { "false" }
+    } else {
+      "null"
+    };
+    var stopped_signal = if self.stopped_signal is i32 {
+      (self.stopped_signal as i32) as str
+    } else {
+      "null"
+    };
+    var continued = if self.continued is bool {
+      if self.continued as bool { "true" } else { "false" }
+    } else {
+      "null"
+    };
+    "ExitStatus { code: "
+      + code
+      + ", signal: "
+      + signal
+      + ", core_dumped: "
+      + core_dumped
+      + ", stopped_signal: "
+      + stopped_signal
+      + ", continued: "
+      + continued
+      + " }"
   }
 }
 

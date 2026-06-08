@@ -4,9 +4,9 @@
 //@ description: long-lived workers allocate heavily and RETURN a heap graph (List) consumed on the main thread; exercises thread-exit alloc-log drain + cross-thread result reachability across collections under the world-barrier STW
 //@ stdout:
 //~ total=6000
+import { Future } from "core:prelude";
 import { println } from "std:io";
 import { List } from "core:collections";
-import { Future } from "core:prelude";
 import { Thread, JoinHandle, Joined, Panicked } from "std:thread";
 
 // Build a list of `n` numbers after churning a lot of garbage first, so a
@@ -54,5 +54,6 @@ function main(): Future<null> async {
   var t = 0;
   while t < 6 { handles.push(Thread.spawn(() => work(1000))); t = t + 1; }
   var total: i64 = await gather(handles);
-  println("total=${total }");
+  await println("total=${total}");
+  null
 }

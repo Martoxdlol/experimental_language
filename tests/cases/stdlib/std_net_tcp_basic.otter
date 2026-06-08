@@ -1,8 +1,8 @@
 //@ kind: run
 //@ serial
-//@ description: std:net TcpListener/TcpStream support a loopback round trip with Reader/Writer IO and socket addresses
+//@ description: std:net TcpListener.accept and TcpStream byte IO are awaitable over a loopback round trip
 //@ stdout:
-//~ tcp=true true ping pong 1 0
+//~ tcp=true true true true true true true ping pong pong 1 0
 
 import { Future } from "core:prelude";
 import { Bytes } from "std:bytes";
@@ -10,6 +10,7 @@ import { println, IoError } from "std:io";
 import { TcpStream, TcpListener } from "std:net";
 import { SocketAddr, ip_v4, socket_addr } from "std:net/types";
 import { Thread, JoinHandle, Joined, Panicked } from "std:thread";
+import { Duration } from "std:time";
 
 function trim_read_buffer(buf: Bytes, request_len: i64): Bytes {
   var i = 0;
@@ -20,14 +21,14 @@ function trim_read_buffer(buf: Bytes, request_len: i64): Bytes {
   buf
 }
 
-function read_text(stream: TcpStream, len: i64): str {
+function read_text(stream: TcpStream, len: i64): Future<str> async {
   var buf = Bytes.new();
   var i = 0;
   while i < len {
     buf.push(0u8);
     i = i + 1;
   }
-  var read = stream.read(buf);
+  var read = await stream.read(buf);
   if read is IoError || (read as i64) != len {
     "read-error"
   } else {
@@ -36,40 +37,107 @@ function read_text(stream: TcpStream, len: i64): str {
   }
 }
 
-function serve(listener: TcpListener): i64 {
-  var accepted = listener.accept();
+function peek_text(stream: TcpStream, len: i64): Future<str> async {
+  var buf = Bytes.new();
+  var i = 0;
+  while i < len {
+    buf.push(0u8);
+    i = i + 1;
+  }
+  var read = await stream.peek(buf);
+  if read is IoError || (read as i64) != len {
+    "peek-error"
+  } else {
+    var decoded = trim_read_buffer(buf, len).decode_utf8();
+    if decoded is str { decoded as str } else { "utf8-error" }
+  }
+}
+
+function stream_timeout_options_ok(stream: TcpStream): Future<bool> async {
+  var timeout = Duration.from_millis(1);
+  var read_set = await stream.set_read_timeout(timeout);
+  var read_timeout = await stream.read_timeout();
+  var read_clear = await stream.set_read_timeout(null);
+  var read_cleared = await stream.read_timeout();
+  var write_set = await stream.set_write_timeout(timeout);
+  var write_timeout = await stream.write_timeout();
+  var write_clear = await stream.set_write_timeout(null);
+  var write_cleared = await stream.write_timeout();
+  !(read_set is IoError)
+    && read_timeout is Duration
+    && (read_timeout as Duration).as_millis() == 1
+    && !(read_clear is IoError)
+    && read_cleared is null
+    && !(write_set is IoError)
+    && write_timeout is Duration
+    && (write_timeout as Duration).as_millis() == 1
+    && !(write_clear is IoError)
+    && write_cleared is null
+}
+
+function serve(listener: TcpListener): Future<i64> async {
+  var accepted = await listener.accept();
   if accepted is IoError {
     return -1;
   }
 
   var pair = accepted as (TcpStream, SocketAddr);
   var stream = pair.0;
-  var request = read_text(stream, 4);
+  var pending_error = await stream.take_error();
+  if !(pending_error is null) {
+    return -12;
+  }
+  var nonblocking_on = await stream.set_nonblocking(true);
+  var nonblocking_off = await stream.set_nonblocking(false);
+  if nonblocking_on is IoError || nonblocking_off is IoError {
+    return -13;
+  }
+  var stream_timeout_ok = await stream_timeout_options_ok(stream);
+  if !stream_timeout_ok {
+    return -14;
+  }
+  var peeked = await peek_text(stream, 4);
+  if peeked != "ping" {
+    return -15;
+  }
+  var request = await read_text(stream, 4);
   if request != "ping" {
     return -2;
   }
 
-  var nodelay = stream.set_nodelay(true);
+  var nodelay = await stream.set_nodelay(true);
   if nodelay is IoError {
     return -3;
   }
+  var nodelay_state = await stream.nodelay();
+  if nodelay_state is IoError || !(nodelay_state as bool) {
+    return -9;
+  }
+  var ttl_set = await stream.set_ttl(64u32);
+  if ttl_set is IoError {
+    return -10;
+  }
+  var ttl = await stream.ttl();
+  if ttl is IoError || (ttl as u32) != 64u32 {
+    return -11;
+  }
 
-  var write = stream.write_all(Bytes.from_str("pong"));
+  var write = await stream.write_all(Bytes.from_str("pong"));
   if write is IoError {
     return -4;
   }
 
-  var flush = stream.flush();
+  var flush = await stream.flush();
   if flush is IoError {
     return -5;
   }
 
-  var close_stream = stream.close();
+  var close_stream = await stream.close();
   if close_stream is IoError {
     return -6;
   }
 
-  var close_listener = listener.close();
+  var close_listener = await listener.close();
   if close_listener is IoError {
     return -7;
   }
@@ -85,36 +153,71 @@ function joined_value(result: Joined<i64> | Panicked): i64 {
 }
 
 function main(): Future<null> async {
-  var bound = TcpListener.bind(socket_addr(ip_v4(127u8, 0u8, 0u8, 1u8), 0u16));
+  var bound = await TcpListener.bind(socket_addr(ip_v4(127u8, 0u8, 0u8, 1u8), 0u16));
   if bound is IoError {
-    println("tcp=false false bind-error bind-error -1 -1");
+    await println("tcp=false false bind-error bind-error -1 -1");
     return null;
   }
 
   var listener = bound as TcpListener;
-  var local = listener.local_addr();
+  var listener_pending_error = await listener.take_error();
+  var listener_error_ok = listener_pending_error is null;
+  var listener_ttl_set = await listener.set_ttl(64u32);
+  var listener_ttl = await listener.ttl();
+  var listener_ttl_ok = !(listener_ttl_set is IoError)
+    && listener_ttl is u32
+    && (listener_ttl as u32) == 64u32;
+  var listener_nonblocking_on = await listener.set_nonblocking(true);
+  var listener_nonblocking_off = await listener.set_nonblocking(false);
+  var listener_nonblocking_ok = !(listener_nonblocking_on is IoError)
+    && !(listener_nonblocking_off is IoError);
+  var local = await listener.local_addr();
   if local is IoError {
-    println("tcp=false false local-error local-error -1 -1");
+    await println("tcp=false false local-error local-error -1 -1");
     return null;
   }
 
   var addr = local as SocketAddr;
-  var worker: JoinHandle<i64> = Thread.spawn(() => serve(listener.clone()));
-  var connected = TcpStream.connect(addr);
+  var worker: JoinHandle<i64> = Thread.spawn(() async => await serve(listener.clone()));
+  var connected = await TcpStream.connect_timeout(addr, Duration.from_secs(1));
   if connected is IoError {
-    println("tcp=false false connect-error connect-error -1 -1");
+    await println("tcp=false false connect-error connect-error -1 -1");
     return null;
   }
 
   var client = connected as TcpStream;
-  var peer = client.peer_addr();
+  var peer = await client.peer_addr();
   var peer_matches = peer is SocketAddr && (peer as SocketAddr).port() == addr.port();
-  var nodelay = client.set_nodelay(true);
-  var write = client.write_all(Bytes.from_str("ping"));
-  var request_ok = !(write is IoError) && !(nodelay is IoError);
-  var response = if request_ok { read_text(client, 4) } else { "write-error" };
-  var close_client = client.close();
+  var client_pending_error = await client.take_error();
+  var client_error_ok = client_pending_error is null;
+  var nodelay = await client.set_nodelay(true);
+  var nodelay_state = await client.nodelay();
+  var ttl_set = await client.set_ttl(64u32);
+  var ttl = await client.ttl();
+  var nonblocking_on = await client.set_nonblocking(true);
+  var nonblocking_off = await client.set_nonblocking(false);
+  var timeout_ok = await stream_timeout_options_ok(client);
+  var option_ok = false;
+  if nodelay_state is bool && ttl is u32 {
+    option_ok = client_error_ok
+      && !(nodelay is IoError)
+      && (nodelay_state as bool)
+      && !(ttl_set is IoError)
+      && (ttl as u32) == 64u32
+      && !(nonblocking_on is IoError)
+      && !(nonblocking_off is IoError)
+      && timeout_ok;
+  }
+  var write = await client.write_all(Bytes.from_str("ping"));
+  var request_ok = !(write is IoError) && option_ok;
+  var response_peek = "write-error";
+  var response = "write-error";
+  if request_ok {
+    response_peek = await peek_text(client, 4);
+    response = await read_text(client, 4);
+  }
+  var close_client = await client.close();
   var joined = await worker.join();
-  println("tcp=${request_ok} ${peer_matches} ping ${response} ${joined_value(joined)} ${if close_client is IoError { 1 } else { 0 }}");
+  await println("tcp=${request_ok} ${listener_error_ok} ${listener_ttl_ok} ${listener_nonblocking_ok} ${peer_matches} ${option_ok} ${timeout_ok} ping ${response_peek} ${response} ${joined_value(joined)} ${if close_client is IoError { 1 } else { 0 }}");
   null
 }

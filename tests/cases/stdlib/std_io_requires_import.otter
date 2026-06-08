@@ -2,6 +2,8 @@
 //@ description: std:io follows the near-empty prelude rule; contracts, values, streams, and helpers require imports
 //@ stderr: cannot find type `Reader`
 //@ stderr: cannot find type `Writer`
+//@ stderr: cannot find type `AsyncReader`
+//@ stderr: cannot find type `AsyncWriter`
 //@ stderr: cannot find type `Seeker`
 //@ stderr: cannot find type `SeekFrom`
 //@ stderr: cannot find type `Start`
@@ -31,6 +33,7 @@
 //@ stderr: cannot find value `eprint` in scope
 //@ stderr: cannot find value `eprintln` in scope
 
+import { Future } from "core:prelude";
 import { Bytes } from "std:bytes";
 
 function use_reader(reader: Reader): i64 | IoError {
@@ -39,6 +42,14 @@ function use_reader(reader: Reader): i64 | IoError {
 
 function use_writer(writer: Writer): null | IoError {
   writer.flush()
+}
+
+function use_async_reader(reader: AsyncReader): Future<i64 | IoError> async {
+  await reader.read_async(Bytes.new())
+}
+
+function use_async_writer(writer: AsyncWriter): Future<i64 | IoError> async {
+  await writer.write_async(Bytes.new())
 }
 
 function use_seeker(seeker: Seeker, pos: SeekFrom): i64 | IoError {

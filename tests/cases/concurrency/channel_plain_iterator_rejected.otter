@@ -1,0 +1,13 @@
+//@ kind: compile-error
+//@ description: Receiver<T> has no plain Iterator surface; channel drains must use `for await`
+//@ stderr: is not iterable
+
+import { channel } from "std:sync";
+
+function main() {
+  var ends = channel<i64>();
+  var rx = ends.1;
+  for n in rx {
+    var _value = n;
+  }
+}

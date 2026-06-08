@@ -4,12 +4,13 @@
 //~ ptr-values=10/10/30/10/10/10
 //~ ptr-addrs=true true true true true true
 //~ ptr-clone=20/20 true
+import { Future } from "core:prelude";
 import { AtomicPtr, SeqCst } from "core:sync/atomic";
 import { println } from "std:io";
 
 extern struct Cell { value: i64 }
 
-function main() {
+function main(): Future<null> async {
   var a = Cell { value: 10 };
   var b = Cell { value: 20 };
   var c = Cell { value: 30 };
@@ -26,12 +27,17 @@ function main() {
   var cas_failure = atomic.compare_exchange(pc, pb, SeqCst {}, SeqCst {});
   var after_failure = atomic.load(SeqCst {});
 
-  println("ptr-values=${(*first).value}/${(*swapped).value}/${(*cas_success).value}/${(*after_success).value}/${(*cas_failure).value}/${(*after_failure).value}");
-  println("ptr-addrs=${(first as usize) == (pa as usize)} ${(swapped as usize) == (pa as usize)} ${(cas_success as usize) == (pc as usize)} ${(after_success as usize) == (pa as usize)} ${(cas_failure as usize) == (pa as usize)} ${(after_failure as usize) == (pa as usize)}");
+  var values_line = "ptr-values=${(*first).value}/${(*swapped).value}/${(*cas_success).value}/${(*after_success).value}/${(*cas_failure).value}/${(*after_failure).value}";
+  var addrs_line = "ptr-addrs=${(first as usize) == (pa as usize)} ${(swapped as usize) == (pa as usize)} ${(cas_success as usize) == (pc as usize)} ${(after_success as usize) == (pa as usize)} ${(cas_failure as usize) == (pa as usize)} ${(after_failure as usize) == (pa as usize)}";
 
   var copy = atomic.clone();
   copy.store(pb, SeqCst {});
   var original_load = atomic.load(SeqCst {});
   var copy_load = copy.load(SeqCst {});
-  println("ptr-clone=${(*original_load).value}/${(*copy_load).value} ${(original_load as usize) == (copy_load as usize)}");
+  var clone_line = "ptr-clone=${(*original_load).value}/${(*copy_load).value} ${(original_load as usize) == (copy_load as usize)}";
+
+  await println(values_line);
+  await println(addrs_line);
+  await println(clone_line);
+  null
 }

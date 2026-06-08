@@ -5,8 +5,8 @@
 //@ stdout:
 //~ count=64 total=6240 closed=1
 
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { List } from "core:collections";
 import { Thread } from "std:thread";
 import { Receiver, ChannelClosed, channel } from "std:sync";
@@ -55,5 +55,6 @@ function main(): Future<null> async {
       },
     }
   }
-  println("count=${count } total=${total } closed=${closed }");
+  await println("count=${count} total=${total} closed=${closed}");
+  null
 }

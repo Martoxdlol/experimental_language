@@ -4,8 +4,8 @@
 //@ description: multiple Task.spawn JoinHandle.join() futures can wait on the same executor task and are all woken with the completed result
 //@ stdout:
 //~ first=42 second=42 total=84
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { Task, JoinHandle, Joined, Panicked, Cancelled } from "std:task";
 import { sleep } from "std:async";
 
@@ -27,5 +27,6 @@ function main(): Future<null> async {
   var j2: Future<Joined<i64> | Panicked | Cancelled> = h.join();
   var a = joined_value(await j1);
   var b = joined_value(await j2);
-  println("first=${a } second=${b } total=${a + b }");
+  await println("first=${a} second=${b} total=${a + b}");
+  null
 }

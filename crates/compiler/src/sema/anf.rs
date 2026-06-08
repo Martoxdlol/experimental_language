@@ -5,7 +5,7 @@
 //! returning an async block — `(p) => async { E }` — so they reuse the existing
 //! closure-environment + async-block state-machine codegen with no special case
 //! (`docs/21` §7). Calling the closure builds the future (capturing `p` and the
-//! outer environment) without running `E`; `await` then drives it.
+//! outer environment) without running `E`; `await` then polls it until it resolves.
 //!
 //! The async state machine (`docs/21`) can only suspend at *statement-level*
 //! positions — a `var`/assign right-hand side, a bare expression statement, a
@@ -458,7 +458,8 @@ fn rewrite(e: Expr, pre: &mut Vec<Stmt>) -> Expr {
             // Desugar an async closure `(p) async => E` into a plain closure
             // returning an async block — `(p) => async { E }` (`docs/21` §7).
             // Calling it constructs the future (capturing `p` + the outer
-            // environment) without running `E`; `await` then drives it. This
+            // environment) without running `E`; `await` then polls it until it
+            // resolves. This
             // reuses the closure-environment + async-block state-machine codegen
             // verbatim — there is no separate "async closure" lowering.
             let body = if is_async {
@@ -693,7 +694,7 @@ fn contains_await(e: &Expr) -> bool {
         ExprKind::Return(v) | ExprKind::Break(v) => v.as_ref().is_some_and(|e| contains_await(e)),
 
         // Control-flow expressions used as *operands* carry their inner `await`s
-        // with them. `contains_await` drives the atomization of unconditional
+        // with them. `contains_await` triggers atomization of unconditional
         // operands (call args, arithmetic operands, …), so it must see an `await`
         // anywhere a same-scope state machine would suspend — including inside a
         // branch, arm, or loop body. Detecting it lets the operand be hoisted to

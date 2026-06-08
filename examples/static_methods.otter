@@ -1,3 +1,4 @@
+import { Future } from "core:prelude";
 // Static methods (docs/10 §10): functions in an `extend`/`interface` block that
 // take no `self`, called as `Type.method(args)` — the `.` analogue of Rust's
 // `Type::method(args)`. There is no `static` keyword; absence of `self` is the
@@ -26,6 +27,12 @@ extend Config: Default {
   function default(): Config { Config { verbose: 0, level: 1 } }
 }
 
+// Primitive names are extendable type names too, so their static methods use
+// the same syntax.
+extend i32: Default {
+  function default(): i32 { 0 }
+}
+
 // Generic code can call a static method through a bound: `T.default()` resolves
 // to whatever concrete type `T` is instantiated with (monomorphized).
 function build<T: Default>(): T {
@@ -40,18 +47,20 @@ extend<T> Box<T> {
   function new(v: T): Box<T> { Box { value: v } }
 }
 
-function main() {
+function main(): Future<null> async {
   var o: Point = Point.origin();
   var p: Point = Point.at(3, 4);
-  println("origin manhattan = " + (o.manhattan()as str));
-  println("p manhattan = " + (p.manhattan()as str));
+  await println("origin manhattan = " + (o.manhattan() as str));
+  await println("p manhattan = " + (p.manhattan() as str));
 
   var c: Config = build<Config>();
-  println("config level = " + (c.level as str));
+  await println("config level = " + (c.level as str));
+  await println("primitive default = " + (i32.default() as str));
 
   // No `<i64>`/`<str>` here — the receiver's type args fall out of the args.
   var bi = Box.new(7);
   var bs = Box.new("hi");
-  println("box i = " + (bi.value as str));
-  println("box s = " + bs.value);
+  await println("box i = " + (bi.value as str));
+  await println("box s = " + bs.value);
+  null
 }

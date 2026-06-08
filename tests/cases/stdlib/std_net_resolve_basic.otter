@@ -1,29 +1,31 @@
 //@ kind: run
-//@ description: std:net resolves host/IP names through the provider into std:net/types IP values
+//@ description: std:net asynchronously resolves host/IP names through the provider into std:net/types IP values
 //@ stdout:
 //~ resolve-v4=true 1 true 127.0.0.1
 //~ resolve-bad=true true
 
+import { Future } from "core:prelude";
 import { List } from "core:collections";
 import { IpAddr } from "std:net/types";
 import { IoError } from "std:io";
 import { resolve } from "std:net";
 import { println } from "std:io";
 
-function main() {
-  var resolved = resolve("127.0.0.1");
+function main(): Future<null> async {
+  var resolved = await resolve("127.0.0.1");
   if resolved is List<IpAddr> {
     var addrs = resolved as List<IpAddr>;
     var first = addrs[0];
-    println("resolve-v4=true ${addrs.size()} ${first.is_v4()} ${first.to_str()}");
+    await println("resolve-v4=true ${addrs.size()} ${first.is_v4()} ${first.to_str()}");
   } else {
-    println("resolve-v4=false 0 false none");
+    await println("resolve-v4=false 0 false none");
   }
 
-  var bad = resolve("");
+  var bad = await resolve("");
   if bad is IoError {
-    println("resolve-bad=true ${(bad as IoError).message().size() > 0}");
+    await println("resolve-bad=true ${(bad as IoError).message().size() > 0}");
   } else {
-    println("resolve-bad=false false");
+    await println("resolve-bad=false false");
   }
+  null
 }

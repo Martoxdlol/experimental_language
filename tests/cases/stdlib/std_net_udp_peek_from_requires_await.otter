@@ -1,0 +1,12 @@
+//@ kind: compile-error
+//@ description: std:net UdpSocket.peek_from returns a Future and must be awaited
+//@ stderr: expected `IoError | (i64, SocketAddr)`, found `Future<IoError | (i64, SocketAddr)>`
+
+import { Bytes } from "std:bytes";
+import { IoError } from "std:io";
+import { UdpSocket } from "std:net";
+import { SocketAddr } from "std:net/types";
+
+function requires_await(socket: UdpSocket) {
+  var _peeked: (i64, SocketAddr) | IoError = socket.peek_from(Bytes.new());
+}

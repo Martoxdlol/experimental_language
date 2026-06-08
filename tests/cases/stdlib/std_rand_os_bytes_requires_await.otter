@@ -1,0 +1,10 @@
+//@ kind: compile-error
+//@ description: std:rand OS byte helper returns a Future and must be awaited
+//@ stderr: expected `Bytes | RandomError`, found `Future<Bytes | RandomError>`
+
+import { Bytes } from "std:bytes";
+import { RandomError, os_bytes } from "std:rand";
+
+function requires_await() {
+  var bytes: Bytes | RandomError = os_bytes(4);
+}

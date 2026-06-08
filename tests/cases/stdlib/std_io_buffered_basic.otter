@@ -1,13 +1,14 @@
 //@ kind: run
-//@ description: std:io exposes buffered Reader and Writer adapters
+//@ description: std:io exposes buffered Reader and Writer adapters for non-blocking in-memory streams
 //@ stdout:
 //~ bufread=2 bytes[97,10] true 2 true true
 //~ buffered-writer
 //~ bufwrite=9 9 true
+import { Future } from "core:prelude";
 import { Bytes } from "std:bytes";
-import { println, stdout, buf_reader, buf_writer, BufReader, BufWriter, Reader, Writer } from "std:io";
+import { print, println, buf_reader, buf_writer, BufReader, BufWriter, Reader, Writer } from "std:io";
 
-function main() {
+function main(): Future<null> async {
   var source = Bytes.from_str("a\nbcd\nef\ngh");
   var reader = buf_reader(source.cursor());
   var request = Bytes.new();
@@ -33,12 +34,18 @@ function main() {
       line_count = line_count + 1;
     }
   }
-  println("bufread=${read_count as i64} ${payload.to_str()} ${line_ok} ${line_count} ${saw_ef} ${saw_gh}");
+  await println("bufread=${read_count as i64} ${payload.to_str()} ${line_ok} ${line_count} ${saw_ef} ${saw_gh}");
 
-  var writer = buf_writer(stdout());
+  var sink = Bytes.new();
+  var writer = buf_writer(sink);
   var first = writer.write(Bytes.from_str("buffered-"));
   var buffered_after_first = writer.buffered_len();
   var second = writer.write(Bytes.from_str("writer\n"));
   var flushed = writer.flush();
-  println("bufwrite=${first as i64} ${buffered_after_first} ${flushed is null}");
+  var decoded = sink.decode_utf8();
+  if decoded is str {
+    await print(decoded as str);
+  }
+  await println("bufwrite=${first as i64} ${buffered_after_first} ${flushed is null}");
+  null
 }

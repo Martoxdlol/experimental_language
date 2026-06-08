@@ -3,11 +3,13 @@
 //@ stdout:
 //~ 42
 //~ 84
+import { Future } from "core:prelude";
 import { println } from "std:io";
-function main() {
+function main(): Future<null> async {
   var inc = (n: i64): i64 => n + 1;
-  println("${inc(41) }");
+  await println("${inc(41)}");
   var factor = 2;
   var scale = (n: i64): i64 => n * factor;
-  println("${scale(42) }");
+  await println("${scale(42)}");
+  null
 }

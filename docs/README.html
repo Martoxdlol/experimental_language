@@ -348,7 +348,7 @@ assumes the ones it points back to.</p>
   <a class="chapter-card system" href="13-error-handling.html"><span class="num">13 · System</span><span class="title">Error handling</span><span class="desc"><code>T | E</code>, <code>?</code>, <code>Try</code> interface.</span></a>
   <a class="chapter-card system" href="14-panics.html"><span class="num">14 · System</span><span class="title">Panics</span><span class="desc"><code>panic</code>, panic sources, integer overflow.</span></a>
   <a class="chapter-card system" href="15-operators.html"><span class="num">15 · System</span><span class="title">Operators</span><span class="desc">Operator overloading; built-in interfaces; <code>ToStr</code>.</span></a>
-  <a class="chapter-card system" href="16-memory.html"><span class="num">16 · System</span><span class="title">Memory model</span><span class="desc">Tracing GC (MMTk · Immix), object layout, async best-effort drop.</span></a>
+  <a class="chapter-card system" href="16-memory.html"><span class="num">16 · System</span><span class="title">Memory model</span><span class="desc">Tracing GC (MMTk · Immix), object layout, non-waiting Drop finalizers.</span></a>
   <a class="chapter-card system" href="17-modules.html"><span class="num">17 · System</span><span class="title">Modules &amp; imports</span><span class="desc">Layout, <code>pub mod</code>, path forms, <code>pub import</code> re-exports.</span></a>
 
   <a class="chapter-card platform" href="18-stdlib.html"><span class="num">18 · Platform</span><span class="title">Standard library</span><span class="desc">The prelude rule, <code>core:collections</code>, and the <code>std:*</code> module index.</span></a>
@@ -379,7 +379,7 @@ and how it asks you to organise code. Each maps to a specific chapter.</p>
   </div>
   <div class="pillar orange">
     <h4>Memory</h4>
-    <p>Tracing GC (MMTk · Immix) with precise stack maps from Cranelift. Drop is async and best-effort — release resources explicitly. Pinning and handles for FFI.</p>
+    <p>Tracing GC (MMTk · Immix) with precise stack maps from Cranelift. Drop finalizers are best-effort and non-waiting; release wait-capable resources through explicit async cleanup. Pinning and handles for FFI.</p>
   </div>
   <div class="pillar green">
     <h4>Mutation</h4>

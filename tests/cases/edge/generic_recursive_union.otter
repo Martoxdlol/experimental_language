@@ -2,6 +2,7 @@
 //@ description: a recursive generic struct in a union (Node<T> | null) summed by recursion + match — exercises monomorphization of a self-referential generic type
 //@ stdout:
 //~ 6
+import { Future } from "core:prelude";
 import { println } from "std:io";
 struct Node<T> { value: T, next: Node<T> | null }
 function sum(n: Node<i64> | null): i64 {
@@ -10,9 +11,10 @@ function sum(n: Node<i64> | null): i64 {
     null => 0,
   }
 }
-function main() {
+function main(): Future<null> async {
   var c = Node { value: 3, next: null };
   var b = Node { value: 2, next: c };
   var a = Node { value: 1, next: b };
-  println("${sum(a)}");
+  await println("${sum(a)}");
+  null
 }

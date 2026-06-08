@@ -8,8 +8,9 @@ import { Future, Ready, Pending, Context } from "core:async";
 function accepts_future(f: Future<i64>): str { "future" }
 function accepts_context(ctx: *Context): str { "context" }
 
-function main() {
+function main(): Future<null> async {
   var ready = Ready { value: 7 };
   var pending = Pending {};
-  println("ready=${ready.value} pending=${pending is Pending}");
+  await println("ready=${ready.value} pending=${pending is Pending}");
+  null
 }

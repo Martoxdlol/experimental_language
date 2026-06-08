@@ -1,0 +1,11 @@
+//@ kind: compile-error
+//@ description: std:net TcpStream.peer_addr returns a Future and must be awaited
+//@ stderr: found `Future<
+
+import { IoError } from "std:io";
+import { TcpStream } from "std:net";
+import { SocketAddr } from "std:net/types";
+
+function requires_await(stream: TcpStream) {
+  var _addr: SocketAddr | IoError = stream.peer_addr();
+}

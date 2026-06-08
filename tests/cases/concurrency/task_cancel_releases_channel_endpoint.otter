@@ -4,8 +4,8 @@
 //@ stdout:
 //~ recv = closed
 
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { Task, JoinHandle } from "std:task";
 import { Sender, Receiver, ChannelClosed, channel } from "std:sync";
 import { sleep } from "std:async";
@@ -26,7 +26,8 @@ function make_cancelled_receiver(): Receiver<i64> {
 function main(): Future<null> async {
   var rx = make_cancelled_receiver();
   match await rx.recv() {
-    i64 n => println("recv = value ${n }"),
-    ChannelClosed c => println("recv = closed"),
+    i64 n => await println("recv = value ${n}"),
+    ChannelClosed c => await println("recv = closed"),
   };
+  null
 }

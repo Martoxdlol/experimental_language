@@ -6,8 +6,8 @@
 //@ stdout:
 //~ closed=128
 
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { List } from "core:collections";
 import { Sender, Receiver, ChannelClosed, channel } from "std:sync";
 import { sleep } from "std:async";
@@ -51,5 +51,6 @@ function main(): Future<null> async {
     wave = wave + 1;
   }
 
-  println("closed=${closed }");
+  await println("closed=${closed}");
+  null
 }

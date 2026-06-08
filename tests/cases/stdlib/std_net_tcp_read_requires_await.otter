@@ -1,0 +1,11 @@
+//@ kind: compile-error
+//@ description: std:net TcpStream.read returns a Future and must be awaited before using the byte count
+//@ stderr: expected `i64 | IoError`, found `Future<i64 | IoError>`
+
+import { Bytes } from "std:bytes";
+import { IoError } from "std:io";
+import { TcpStream } from "std:net";
+
+function inspect(stream: TcpStream) {
+  var _read: i64 | IoError = stream.read(Bytes.new());
+}

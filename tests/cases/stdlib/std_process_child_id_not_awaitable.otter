@@ -1,0 +1,14 @@
+//@ kind: compile-error
+//@ description: std:process Child.id is an immediate child metadata accessor, not a future-returning process wait surface
+//@ stderr: `await` requires a `Future`
+
+import { Future } from "core:prelude";
+import { Child, Command } from "std:process";
+
+function main(): Future<null> async {
+  var spawned = await Command.new("true").spawn();
+  if spawned is Child {
+    var _id = await (spawned as Child).id();
+  }
+  null
+}

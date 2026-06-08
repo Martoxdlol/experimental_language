@@ -4,14 +4,16 @@
 //~ true
 //~ false
 //~ true
+import { Future } from "core:prelude";
 import { println } from "std:io";
 import { Ord } from "core:prelude";
 @Derive(Ord)
 struct V { a: i64, b: i64 }
-function main() {
+function main(): Future<null> async {
   var p = V { a: 1, b: 2 };
   var q = V { a: 1, b: 5 };
-  println("${p < q}");
-  println("${p > q}");
-  println("${p <= q}");
+  await println("${p < q}");
+  await println("${p > q}");
+  await println("${p <= q}");
+  null
 }

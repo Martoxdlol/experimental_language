@@ -1,9 +1,11 @@
 //@ kind: panic
 //@ description: casting an out-of-range float to an integer panics
 //@ stderr: cast from float to integer is out of range or NaN
+import { Future } from "core:prelude";
 import { println } from "std:io";
-function main() {
+function main(): Future<null> async {
   var f = 1e30;
   var n = f as i32;
-  println("${n}");
+  await println("${n}");
+  null
 }

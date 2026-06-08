@@ -1,0 +1,11 @@
+//@ kind: compile-error
+//@ description: std:net AsyncUdpSocket.leave_multicast_v6 returns a Future and must be awaited
+//@ stderr: found `Future<
+
+import { IoError } from "std:io";
+import { AsyncUdpSocket } from "std:net";
+import { SocketAddr, ip_v4, ip_v6, socket_addr } from "std:net/types";
+
+function requires_await(socket: AsyncUdpSocket) {
+  var _value: null | IoError = socket.leave_multicast_v6(ip_v6(65282u16, 0u16, 0u16, 0u16, 0u16, 0u16, 0u16, 1u16), 0u32);
+}

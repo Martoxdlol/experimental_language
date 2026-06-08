@@ -1,0 +1,16 @@
+//@ kind: compile-error
+//@ description: std:net AsyncTcpStream.into_stream returns the plain TcpStream handle value, not a Future
+//@ stderr: `await` requires a `Future`
+
+import { Future } from "core:prelude";
+import { AsyncTcpStream, TcpStream } from "std:net";
+import { ip_v4, socket_addr } from "std:net/types";
+
+function main(): Future<null> async {
+  var connected = await TcpStream.connect(socket_addr(ip_v4(127u8, 0u8, 0u8, 1u8), 9u16));
+  if connected is TcpStream {
+    var async_stream = AsyncTcpStream.from_stream(connected as TcpStream);
+    var _stream = await async_stream.into_stream();
+  }
+  null
+}

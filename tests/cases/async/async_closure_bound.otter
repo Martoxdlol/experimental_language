@@ -1,9 +1,9 @@
 //@ kind: run
-//@ description: an async closure `function(p): Future<T> async { … }` bound to a local, capturing an outer var and suspending on `await sleep`, then driven with `await` (docs/21 §7)
+//@ description: an async closure `function(p): Future<T> async { … }` bound to a local, capturing an outer var and suspending on `await sleep`, then awaited until it resolves (docs/21 §7)
 //@ stdout:
 //~ v=105
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { sleep } from "std:async";
 function main(): Future<null> async {
   var base: i64 = 100;
@@ -12,5 +12,6 @@ function main(): Future<null> async {
     base + x
   };
   var v: i64 = await f(5);
-  println("v=${v }");
+  await println("v=${v}");
+  null
 }

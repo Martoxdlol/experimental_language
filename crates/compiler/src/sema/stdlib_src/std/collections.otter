@@ -84,9 +84,9 @@ extend<T> Deque<T> {
   }
 
   function front(self): T | null {
-    if!self.front.is_empty() {
+    if !self.front.is_empty() {
       self.front[self.front.size() - 1]
-    } else if!self.back.is_empty() {
+    } else if !self.back.is_empty() {
       self.back[0]
     } else {
       null
@@ -94,9 +94,9 @@ extend<T> Deque<T> {
   }
 
   function back(self): T | null {
-    if!self.back.is_empty() {
+    if !self.back.is_empty() {
       self.back[self.back.size() - 1]
-    } else if!self.front.is_empty() {
+    } else if !self.front.is_empty() {
       self.front[0]
     } else {
       null
@@ -161,6 +161,20 @@ extend<T> Deque<T> {
   function clear(self) {
     self.front.clear();
     self.back.clear();
+  }
+
+  function reversed(self): Deque<T> {
+    var out = deque<T>();
+    for value in self.iter() {
+      out.push_front(value);
+    }
+    out
+  }
+
+  function reverse(self) {
+    var out = self.reversed();
+    self.front = out.front;
+    self.back = out.back;
   }
 }
 

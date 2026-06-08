@@ -783,7 +783,7 @@ pub enum CallKind {
     Direct { def: DefId, type_args: Vec<Ty> },
     /// A method call `recv.m(..)` or static `Type.m(..)` / `T.m(..)`. `def` is
     /// the resolved (interface or `extend`) method. `recv_static` is the
-    /// receiver type for a static call (a `Named`/`Param`), so codegen can
+    /// receiver type for a static call (any extendable type or `Param`), so codegen can
     /// resolve an interface static method to its concrete impl; `is_static`
     /// tells codegen not to prepend a `self` receiver (was `static_calls` +
     /// `static_recv`).
@@ -830,9 +830,10 @@ pub enum Intrinsic {
     /// `channel<T>()`. Was `channel_news`.
     ChannelNew,
     /// `Thread.spawn { … }` — `output` is the worker's result type `R`. When the
-    /// closure is **async** (`() => Future<R>`, `is_async` set), the worker drives
-    /// the future to completion and the handle joins on the awaited `R` (`docs/20`
-    /// §1); `output` is then the awaited `R`, not `Future<R>`. Was `thread_spawns`.
+    /// closure is **async** (`() => Future<R>`, `is_async` set), the worker polls
+    /// the future until it resolves and the handle joins on the awaited `R`
+    /// (`docs/20` §1); `output` is then the awaited `R`, not `Future<R>`. Was
+    /// `thread_spawns`.
     ThreadSpawn {
         output: Ty,
         is_async: bool,
@@ -850,14 +851,14 @@ pub enum Intrinsic {
     /// `JoinHandle<R>.detach()` — relinquish the worker, fire-and-forget
     /// (`docs/20` §1). Yields `null`.
     ThreadDetach,
-    /// `std:task::JoinHandle<R>.join()` — resolves to
+    /// `std:task` `JoinHandle<R>.join()` — resolves to
     /// `Joined<R> | Panicked | Cancelled`.
     TaskJoin {
         output: Ty,
     },
-    /// `std:task::JoinHandle<R>.detach()` — relinquish the executor task.
+    /// `std:task` `JoinHandle<R>.detach()` — relinquish the executor task.
     TaskDetach,
-    /// `std:task::JoinHandle<R>.cancel()` / `.abort()` — request cooperative
+    /// `std:task` `JoinHandle<R>.cancel()` / `.abort()` — request cooperative
     /// cancellation and release suspended task state at the next suspension
     /// boundary.
     TaskCancel,
@@ -865,29 +866,129 @@ pub enum Intrinsic {
     YieldNow,
     /// `sleep(ms)`. Was `async_sleeps`.
     AsyncSleep,
+    /// `std:time.sleep(Duration)` — duration-based timer Future over the same
+    /// runtime timer/reactor substrate as `std:async.sleep(ms)`.
+    TimeSleep,
     /// `timeout(fut, ms): Future<T | TimedOut>` — `output` is the success type
     /// `T` (so codegen can pass its type id + pointer-ness to the runtime).
     AsyncTimeout {
         output: Ty,
     },
-    /// Private `std:io` marker futures that run blocking stdio on a helper and
-    /// wake through the reactor without blocking executor workers.
+    /// Private `std:io` marker futures that perform provider stdio waits on a
+    /// helper and wake through the reactor without blocking executor workers.
     IoStdinReadAsync,
     IoStdinReadToEndAsync,
     IoStdoutWriteAsync,
     IoStderrWriteAsync,
     IoStdoutFlushAsync,
     IoStderrFlushAsync,
+    /// Private `std:fs` marker futures for target-backed filesystem helpers.
+    FsReadTextAsync,
+    FsWriteTextAsync,
+    FsAppendTextAsync,
+    FsReadBytesAsync,
+    FsWriteBytesAsync,
+    FsExistsAsync,
+    FsIsFileAsync,
+    FsIsDirAsync,
+    FsKindAsync,
+    FsLenAsync,
+    FsReadOnlyAsync,
+    FsExecutableAsync,
+    FsRemoveAsync,
+    FsRenameAsync,
+    FsCreateDirAsync,
+    FsCreateDirAllAsync,
+    FsCanonicalizeAsync,
+    FsReadDirAsync,
     /// Private `std:fs.File` marker futures for descriptor-backed file I/O.
+    FsFileOpenAsync,
+    FsFileCloseAsync,
     FsFileReadAsync,
     FsFileReadToEndAsync,
     FsFileWriteAsync,
     FsFileFlushAsync,
     FsFileSeekAsync,
-    /// `std:time.Instant.now()` runtime hook: monotonic nanoseconds.
-    TimeMonotonicNanos,
-    /// `std:time.SystemTime.now()` runtime hook: Unix epoch nanoseconds.
-    TimeSystemNanos,
+    /// Private `std:rand` marker future for target-backed entropy bytes.
+    RandOsBytesAsync,
+    /// Private `std:process` marker futures for process execution and child control.
+    ProcessArgsAsync,
+    ProcessEnvAsync,
+    ProcessEnvAllAsync,
+    ProcessSetEnvAsync,
+    ProcessStatusAsync,
+    ProcessOutputAsync,
+    ProcessSpawnAsync,
+    ProcessChildWaitAsync,
+    ProcessChildKillAsync,
+    /// Private `std:net` marker futures for DNS and explicit network adapters.
+    NetResolveAsync,
+    NetTcpConnectAsync,
+    NetTcpConnectTimeoutAsync,
+    NetTcpStreamReadAsync,
+    NetTcpStreamReadToEndAsync,
+    NetTcpStreamWriteAsync,
+    NetTcpStreamWriteAllAsync,
+    NetTcpStreamFlushAsync,
+    NetTcpStreamPeekAsync,
+    NetTcpStreamCloseAsync,
+    NetTcpStreamPeerAddrAsync,
+    NetTcpStreamLocalAddrAsync,
+    NetTcpStreamTakeErrorAsync,
+    NetTcpStreamNodelayAsync,
+    NetTcpStreamSetNodelayAsync,
+    NetTcpStreamSetNonblockingAsync,
+    NetTcpStreamReadTimeoutAsync,
+    NetTcpStreamSetReadTimeoutAsync,
+    NetTcpStreamWriteTimeoutAsync,
+    NetTcpStreamSetWriteTimeoutAsync,
+    NetTcpStreamTtlAsync,
+    NetTcpStreamSetTtlAsync,
+    NetTcpListenerBindAsync,
+    NetTcpListenerCloseAsync,
+    NetTcpListenerAcceptAsync,
+    NetTcpListenerLocalAddrAsync,
+    NetTcpListenerTakeErrorAsync,
+    NetTcpListenerSetNonblockingAsync,
+    NetTcpListenerTtlAsync,
+    NetTcpListenerSetTtlAsync,
+    NetUdpSendAsync,
+    NetUdpRecvAsync,
+    NetUdpPeekAsync,
+    NetUdpSendToAsync,
+    NetUdpRecvFromAsync,
+    NetUdpPeekFromAsync,
+    NetUdpBindAsync,
+    NetUdpCloseAsync,
+    NetUdpConnectAsync,
+    NetUdpLocalAddrAsync,
+    NetUdpPeerAddrAsync,
+    NetUdpTakeErrorAsync,
+    NetUdpSetNonblockingAsync,
+    NetUdpReadTimeoutAsync,
+    NetUdpSetReadTimeoutAsync,
+    NetUdpWriteTimeoutAsync,
+    NetUdpSetWriteTimeoutAsync,
+    NetUdpTtlAsync,
+    NetUdpSetTtlAsync,
+    NetUdpBroadcastAsync,
+    NetUdpSetBroadcastAsync,
+    NetUdpMulticastLoopV4Async,
+    NetUdpSetMulticastLoopV4Async,
+    NetUdpMulticastLoopV6Async,
+    NetUdpSetMulticastLoopV6Async,
+    NetUdpMulticastTtlV4Async,
+    NetUdpSetMulticastTtlV4Async,
+    NetUdpJoinMulticastV4Async,
+    NetUdpLeaveMulticastV4Async,
+    NetUdpJoinMulticastV6Async,
+    NetUdpLeaveMulticastV6Async,
+    /// Private `std:time` marker future for a monotonic clock read.
+    TimeMonotonicNanosAsync,
+    /// Private `std:time` marker future for a wall-clock read.
+    TimeSystemNanosAsync,
+    /// Private `std:time` marker future for provider-backed local UTC offset lookup.
+    TimeLocalOffsetSecondsAsync,
     /// `fut.cancel()` — cancels runtime futures that expose cancellation
     /// metadata (currently `spawn EXPR` futures), otherwise a safe no-op. Was
     /// `future_cancels`.
@@ -914,19 +1015,22 @@ pub enum Intrinsic {
 pub enum ForDriver {
     /// The `List<T>` fast path: index the backing buffer directly. `elem` is `T`.
     ListFast { elem: Ty },
-    /// The synchronous `Iterator` protocol.
+    /// The ordinary `Iterator` protocol.
     Iter(ForIter),
     /// `for entry in map` — `(key, value, Entry<K,V>)` types.
     Map { key: Ty, value: Ty, entry: Ty },
     /// `for await x in stream` — the `AsyncIterator` protocol.
     AsyncIter(ForAsyncIter),
+    /// `for await x in rx` over a `Receiver<T>` — await `recv()` each step and
+    /// terminate when the channel resolves to `ChannelClosed`.
+    ChannelAsync {
+        elem: Ty,
+        union_ty: Ty,
+        closed_ty: Ty,
+    },
     /// `for ch in s` over a `str` — desugars to iterating `s.chars()`
     /// (`docs/18` §4); codegen snapshots the scalars and index-loops them.
     StrChars,
-    /// `for n in rx` over a `Receiver<T>` (`docs/20` §2): blocking-recv each
-    /// message, terminating (`Done`) once the channel is closed and drained.
-    /// `elem` is `T`.
-    Channel { elem: Ty },
 }
 
 /// One arm of a `match`.

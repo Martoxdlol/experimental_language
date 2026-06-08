@@ -1,0 +1,10 @@
+//@ kind: compile-error
+//@ description: std:fs File.create returns Future<File | IoError> and must be awaited before use
+//@ stderr: found `Future<
+
+import { File, Path } from "std:fs";
+import { IoError } from "std:io";
+
+function main() {
+  var _file: File | IoError = File.create(Path.new("target/tmp/otter_fusion_file_create_requires_await.bin"));
+}

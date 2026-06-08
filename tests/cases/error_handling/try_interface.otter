@@ -3,6 +3,7 @@
 //@ stdout:
 //~ ok=106
 //~ err=neg
+import { Future } from "core:prelude";
 import { println } from "std:io";
 import { Try, FromResidual } from "core:prelude";
 struct Either<T> { ok: T, err: str, has_err: bool }
@@ -23,7 +24,8 @@ function process(n: i64): i64 | AppError {
   var x = find(n)?;
   x + 1
 }
-function main() {
-  match process(5) { i64 n => println("ok=${n}"), AppError e => println("err=${e.msg}") }
-  match process(0 - 1) { i64 n => println("ok=${n}"), AppError e => println("err=${e.msg}") }
+function main(): Future<null> async {
+  match process(5) { i64 n => await println("ok=${n}"), AppError e => await println("err=${e.msg}") }
+  match process(0 - 1) { i64 n => await println("ok=${n}"), AppError e => await println("err=${e.msg}") }
+  null
 }

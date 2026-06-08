@@ -3,8 +3,8 @@
 //@ description: Task.spawn schedules one thousand async workers on the M:N executor and joins every handle deterministically
 //@ stdout:
 //~ total=499500
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { List } from "core:collections";
 import { Task, JoinHandle, Joined, Panicked, Cancelled } from "std:task";
 import { yield_now } from "std:async";
@@ -36,5 +36,6 @@ function main(): Future<null> async {
     j = j + 1;
   }
 
-  println("total=${total }");
+  await println("total=${total}");
+  null
 }

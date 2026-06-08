@@ -42,6 +42,17 @@ fn lower(src: &str) -> (Analysis, Hir) {
     (a, hir)
 }
 
+fn lower_raw(src: &str) -> (Analysis, Hir) {
+    let (tokens, le) = lex(src, FileId(0));
+    assert!(le.is_empty(), "lex: {le:?}");
+    let (module, pe) = parse(src, &tokens);
+    assert!(pe.is_empty(), "parse: {pe:?}");
+    let a = analyze(&module);
+    assert!(a.errors.is_empty(), "analysis errors: {:?}", a.errors);
+    let hir = a.hir.clone();
+    (a, hir)
+}
+
 /// True if any expression in `name`'s body satisfies `pred` (walks the whole
 /// body tree). Scopes the search to a single user function so the ~97-def
 /// prelude can't accidentally satisfy a predicate.
@@ -362,7 +373,7 @@ fn direct_and_builtin_calls_classified() {
         function helper(n: i64): i64 { n }
         function main() {
             var x = helper(7);
-            println("hi");
+            panic("hi");
         }
         "#,
     );
@@ -373,13 +384,13 @@ fn direct_and_builtin_calls_classified() {
         if let ExprKind::Call { kind, .. } = &e.kind {
             match kind {
                 CallKind::Direct { .. } => direct = true,
-                CallKind::Builtin(Builtin::Println) => builtin = true,
+                CallKind::Builtin(Builtin::Panic) => builtin = true,
                 _ => {}
             }
         }
     });
     assert!(direct, "helper(7) should be a Direct call");
-    assert!(builtin, "println should be a Builtin call");
+    assert!(builtin, "panic should be a Builtin call");
 }
 
 #[test]
@@ -498,6 +509,7 @@ function main() {
   var z = sleep(1);
 }
 ";
+
     let (a, hir) = lower(src);
     let mut seen: Vec<std::mem::Discriminant<Intrinsic>> = Vec::new();
     let body = body_named(&a, &hir, "main");
@@ -522,6 +534,27 @@ function main() {
             seen.len()
         );
     }
+}
+
+#[test]
+fn std_time_sleep_lowers_to_duration_timer_intrinsic() {
+    let src = "\
+import { Duration, sleep } from \"std:time\";
+function main() {
+  var z = sleep(Duration.from_millis(1));
+}
+";
+    let (a, hir) = lower_raw(src);
+    assert!(
+        any_in(&a, &hir, "main", |e| matches!(
+            &e.kind,
+            ExprKind::Intrinsic {
+                intrinsic: Intrinsic::TimeSleep,
+                ..
+            }
+        )),
+        "expected std:time.sleep to lower to TimeSleep intrinsic"
+    );
 }
 
 #[test]
@@ -649,7 +682,7 @@ fn thread_spawn_lowers_with_output_from_join_handle_type() {
     );
     assert!(
         !is_async,
-        "a synchronous `() => R` closure is not an async worker"
+        "an ordinary non-async `() => R` closure is not an async worker"
     );
 }
 
@@ -1354,6 +1387,35 @@ function f() { var c = Count { n: 3 }; for x in c { var y = x; } }
         }
     });
     assert!(iter_driver, "expected a `for` with the Iterator driver");
+}
+
+#[test]
+fn receiver_for_await_lowers_with_channel_async_driver() {
+    let src = "\
+function f(rx: Receiver<i64>): Future<i64> async {
+  var total = 0;
+  for await n in rx { total = total + n; }
+  total
+}
+";
+    let (a, hir) = lower(src);
+    let body = body_named(&a, &hir, "f");
+    let mut channel_driver = false;
+    walk_block(&body.block, &mut |e| {
+        if matches!(
+            &e.kind,
+            ExprKind::For {
+                driver: ForDriver::ChannelAsync { .. },
+                ..
+            }
+        ) {
+            channel_driver = true;
+        }
+    });
+    assert!(
+        channel_driver,
+        "expected `for await` over Receiver<T> to use ChannelAsync"
+    );
 }
 
 #[test]

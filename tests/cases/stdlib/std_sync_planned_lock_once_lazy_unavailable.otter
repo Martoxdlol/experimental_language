@@ -1,0 +1,13 @@
+//@ kind: compile-error
+//@ description: planned std:sync RwLock/Once/Lazy names are not live ordinary wait-capable APIs
+//@ stderr: no `RwLock` in the imported module
+//@ stderr: no `Once` in the imported module
+//@ stderr: no `Lazy` in the imported module
+
+import { RwLock, Once, Lazy } from "std:sync";
+
+function main() {
+  var lock = RwLock.new(1);
+  var once = Once.new();
+  var lazy = Lazy.new(() => 1);
+}

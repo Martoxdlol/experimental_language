@@ -1,0 +1,12 @@
+//@ kind: compile-error
+//@ description: std:fs read_dir returns Future<DirEntries | IoError> and must be awaited before use
+//@ stderr: found `Future<
+
+import { Future } from "core:prelude";
+import { IoError } from "std:io";
+import { DirEntries, Path, read_dir } from "std:fs";
+
+function main(): Future<null> async {
+  var _entries: DirEntries | IoError = read_dir(Path.new("."));
+  null
+}

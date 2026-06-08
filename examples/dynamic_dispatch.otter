@@ -1,3 +1,4 @@
+import { Future } from "core:prelude";
 // Interface objects (docs/11 §5): using an interface *name* as a value type
 // (a var, parameter, field, or list element) creates an interface object — a
 // fat pointer of {vtable, data}. Method calls dispatch dynamically through the
@@ -26,14 +27,14 @@ extend Rect: Shape {
 
 // A function over the interface type accepts any implementor.
 function describe(s: Shape): str {
-  s.name() + " has area " + (s.area()as str)
+  s.name() + " has area " + (s.area() as str)
 }
 
-function main() {
+function main(): Future<null> async {
   var a: Shape = Square { side: 5 };
   var b: Shape = Rect { w: 3, h: 4 };
-  println(describe(a));
-  println(describe(b));
+  await println(describe(a));
+  await println(describe(b));
 
   // A heterogeneous collection of interface objects.
   var shapes: List<Shape> = [Square { side: 2 }, Rect { w: 10, h: 2 }, Square { side: 3 }];
@@ -41,12 +42,13 @@ function main() {
   for s in shapes {
     total = total + s.area();
   }
-  println("total area = ${total}");   // 4 + 20 + 9 = 33
+  await println("total area = ${total}");   // 4 + 20 + 9 = 33
 
   // `is`/`as` recover the concrete type from an interface object.
   if a is Square {
     var sq = a as Square;
-    println("a is a square of side ${sq.side }");
+    await println("a is a square of side ${sq.side}");
   }
-  println("b is a square: ${b is Square}");   // false
+  await println("b is a square: ${b is Square}");   // false
+  null
 }

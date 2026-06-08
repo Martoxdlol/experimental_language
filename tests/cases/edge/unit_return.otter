@@ -3,11 +3,14 @@
 //@ stdout:
 //~ hi ada
 //~ hi bob
+import { Future } from "core:prelude";
 import { println } from "std:io";
-function greet(name: str) {
-  println("hi " + name);
+function greet(name: str): Future<null> async {
+  await println("hi " + name);
+  null
 }
-function main() {
-  greet("ada");
-  greet("bob");
+function main(): Future<null> async {
+  await greet("ada");
+  await greet("bob");
+  null
 }

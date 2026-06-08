@@ -1,9 +1,11 @@
 //@ kind: panic
 //@ description: indexing a Map with an absent key panics
 //@ stderr: map key not found
+import { Future } from "core:prelude";
 import { Map } from "core:collections";
 import { println } from "std:io";
-function main() {
+function main(): Future<null> async {
   var m: Map<str, i64> = { "a": 1 };
-  println("${m["z"]}");
+  await println("${m["z"]}");
+  null
 }

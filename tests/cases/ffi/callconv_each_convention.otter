@@ -5,6 +5,7 @@
 //~ system=0
 //~ stdcall=0
 //~ fastcall=0
+import { Future } from "core:prelude";
 import { println } from "std:io";
 import { CString } from "core:ffi";
 @CallConv("c")
@@ -15,11 +16,12 @@ extern function strcmp(a: *u8, b: *u8): i32;
 extern function memcmp(a: *u8, b: *u8, n: u64): i32;
 @CallConv("fastcall")
 extern function strncmp(a: *u8, b: *u8, n: u64): i32;
-function main() {
+function main(): Future<null> async {
   var a = CString.from_str("hello");
   var b = CString.from_str("hello");
-  println("c=${strlen(a.as_ptr())}");
-  println("system=${strcmp(a.as_ptr(), b.as_ptr())}");
-  println("stdcall=${memcmp(a.as_ptr(), b.as_ptr(), 5u64)}");
-  println("fastcall=${strncmp(a.as_ptr(), b.as_ptr(), 5u64)}");
+  await println("c=${strlen(a.as_ptr())}");
+  await println("system=${strcmp(a.as_ptr(), b.as_ptr())}");
+  await println("stdcall=${memcmp(a.as_ptr(), b.as_ptr(), 5u64)}");
+  await println("fastcall=${strncmp(a.as_ptr(), b.as_ptr(), 5u64)}");
+  null
 }

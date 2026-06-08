@@ -15,13 +15,25 @@
 //~ keyed=true false true 42
 //~ keyed-state=true true false KeyedHasher { seed: 42, state: 127004758 }
 //~ keyed-next=false false KeyedHasher(seed=42, state=1088631160)
+//~ hash-seed=true true true true HashSeedError { message: "OS hash seed unavailable" }
 
+import { Future } from "core:prelude";
 import { Hash } from "core:prelude";
 import { Clone, Eq, ToStr } from "core:prelude";
 import { println } from "std:io";
 import { Bytes } from "std:bytes";
 import { Debug } from "std:fmt";
-import { DefaultHasher, Hasher, KeyedHasher, combine_hash, hash_value, keyed_hasher, write_hash } from "std:hash";
+import {
+  DefaultHasher,
+  HashSeedError,
+  Hasher,
+  KeyedHasher,
+  combine_hash,
+  hash_value,
+  keyed_hasher,
+  os_keyed_hasher,
+  write_hash
+} from "std:hash";
 
 struct Point {
   x: i64,
@@ -48,9 +60,9 @@ function render_debug(value: Debug): str {
   value.debug()
 }
 
-function main() {
+function main(): Future<null> async {
   var p = Point { x: 2, y: 5 };
-  println("${hash_value(p)}");
+  await println("${hash_value(p)}");
 
   var a = DefaultHasher.new();
   a.write_i64(2);
@@ -63,13 +75,13 @@ function main() {
   b.write_bool(true);
   b.write_str("otter");
   b.write_hash(p);
-  println("${a.finish() == b.finish()}");
-  println("${a.finish()}");
+  await println("${a.finish() == b.finish()}");
+  await println("${a.finish()}");
 
   var seeded = DefaultHasher.with_seed(42u64);
   seeded.write_hash(p);
-  println("${seeded.finish() == a.finish()}");
-  println("${finish_with_interface(DefaultHasher.new())}");
+  await println("${seeded.finish() == a.finish()}");
+  await println("${finish_with_interface(DefaultHasher.new())}");
 
   var generic_default = DefaultHasher.new();
   write_hash(generic_default, p);
@@ -79,7 +91,7 @@ function main() {
   write_hash(generic_keyed, p);
   var method_keyed = keyed_hasher(42u64);
   method_keyed.write_hash(p);
-  println("write-hash=${generic_default.finish() == method_default.finish()} ${generic_keyed.finish() == method_keyed.finish()} ${generic_default.finish()}");
+  await println("write-hash=${generic_default.finish() == method_default.finish()} ${generic_keyed.finish() == method_keyed.finish()} ${generic_default.finish()}");
 
   var bytes = Bytes.new();
   bytes.push(1u8);
@@ -96,15 +108,15 @@ function main() {
   reversed.push(2u8);
   reversed.push(1u8);
 
-  println("${direct.finish() == manual.finish()}");
-  println("${write_bytes_with_interface(DefaultHasher.new(), bytes) == direct.finish()}");
-  println("${write_bytes_with_interface(DefaultHasher.new(), reversed) == direct.finish()}");
+  await println("${direct.finish() == manual.finish()}");
+  await println("${write_bytes_with_interface(DefaultHasher.new(), bytes) == direct.finish()}");
+  await println("${write_bytes_with_interface(DefaultHasher.new(), reversed) == direct.finish()}");
 
   var state = DefaultHasher.new();
   var state_copy = state.clone();
-  println("hasher-state=${state == state_copy} ${state.hash() == state_copy.hash()} ${render_debug(state)}");
+  await println("hasher-state=${state == state_copy} ${state.hash() == state_copy.hash()} ${render_debug(state)}");
   state.write_u64(42u64);
-  println("hasher-next=${state == state_copy} ${state.hash() == state_copy.hash()} ${state.to_str()}");
+  await println("hasher-next=${state == state_copy} ${state.hash() == state_copy.hash()} ${state.to_str()}");
 
   var keyed_a = keyed_hasher(42u64);
   keyed_a.write_hash(p);
@@ -112,11 +124,17 @@ function main() {
   keyed_b.write_hash(p);
   var keyed_c = KeyedHasher.new(7u64);
   keyed_c.write_hash(p);
-  println("keyed=${keyed_a.finish() == keyed_b.finish()} ${keyed_a.finish() == keyed_c.finish()} ${finish_with_interface(KeyedHasher.new(42u64)) != finish_with_interface(KeyedHasher.new(7u64))} ${keyed_a.seed()}");
+  await println("keyed=${keyed_a.finish() == keyed_b.finish()} ${keyed_a.finish() == keyed_c.finish()} ${finish_with_interface(KeyedHasher.new(42u64)) != finish_with_interface(KeyedHasher.new(7u64))} ${keyed_a.seed()}");
 
   var keyed_state = KeyedHasher.new(42u64);
   var keyed_state_copy = keyed_state.clone();
-  println("keyed-state=${keyed_state == keyed_state_copy} ${keyed_state.hash() == keyed_state_copy.hash()} ${keyed_state == KeyedHasher.new(7u64)} ${render_debug(keyed_state)}");
+  await println("keyed-state=${keyed_state == keyed_state_copy} ${keyed_state.hash() == keyed_state_copy.hash()} ${keyed_state == KeyedHasher.new(7u64)} ${render_debug(keyed_state)}");
   keyed_state.write_u64(42u64);
-  println("keyed-next=${keyed_state == keyed_state_copy} ${keyed_state.hash() == keyed_state_copy.hash()} ${keyed_state.to_str()}");
+  await println("keyed-next=${keyed_state == keyed_state_copy} ${keyed_state.hash() == keyed_state_copy.hash()} ${keyed_state.to_str()}");
+
+  var seeded = await os_keyed_hasher();
+  var seed_ok = seeded is KeyedHasher || seeded is HashSeedError;
+  var error = HashSeedError {};
+  await println("hash-seed=${seed_ok} ${error == error.clone()} ${error.hash() == error.clone().hash()} ${error.message() == error.to_str()} ${render_debug(error)}");
+  null
 }

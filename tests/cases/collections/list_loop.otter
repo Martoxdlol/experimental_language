@@ -3,13 +3,15 @@
 //@ stdout:
 //~ 6
 //~ 6
+import { Future } from "core:prelude";
 import { println } from "std:io";
-function main() {
+function main(): Future<null> async {
   var xs = [1, 2, 3];
   var sum = 0;
   for x in xs { sum = sum + x; }
-  println("${sum }");
+  await println("${sum}");
   var total = 0;
   xs.each { total = total + it; };
-  println("${total }");
+  await println("${total}");
+  null
 }

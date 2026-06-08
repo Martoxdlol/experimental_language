@@ -1,0 +1,12 @@
+//@ kind: compile-error
+//@ description: std:task Cancelled equality is an ordinary marker value comparison, not an async task operation
+//@ stderr: `await` requires a `Future`
+
+import { Eq, Future } from "core:prelude";
+import { Cancelled } from "std:task";
+
+function main(): Future<null> async {
+  var cancelled = Cancelled {};
+  var _same = await (cancelled == Cancelled {});
+  null
+}

@@ -3,9 +3,11 @@
 //@ stderr: boom
 //@ stdout:
 //~ before
+import { Future } from "core:prelude";
 import { println } from "std:io";
 import { panic } from "core:prelude";
-function main() {
-  println("before");
+function main(): Future<null> async {
+  await println("before");
   panic("boom");
+  null
 }

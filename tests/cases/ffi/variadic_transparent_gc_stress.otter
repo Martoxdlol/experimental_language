@@ -3,16 +3,18 @@
 //@ description: docs/19 §13/§3 — a @Transparent newtype crosses the variadic boundary by its inner scalar representation (sign-extension preserved), and the marshalling survives GC stress
 //@ stdout:
 //~ cents=199 neg=-50
+import { Future } from "core:prelude";
 import { println } from "std:io";
 import { CString, CStr, Buffer } from "core:ffi";
 @Transparent
 struct Cents(i32)
 @Variadic
 extern function snprintf(buf: *u8, size: u64, fmt: *u8): i32;
-function main() {
+function main(): Future<null> async {
   var b = Buffer.alloc(64u64) as Buffer;
   var f = CString.from_str("cents=%d neg=%d");
   snprintf(b.data, 64u64, f.as_ptr(), Cents(199i32), Cents(-50i32));
-  println(CStr.from_ptr(b.data).to_str());
+  await println(CStr.from_ptr(b.data).to_str());
   b.free();
+  null
 }

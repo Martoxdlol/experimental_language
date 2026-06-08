@@ -2,10 +2,12 @@
 //@ description: moderately deep recursion sums 1..=1000
 //@ stdout:
 //~ 500500
+import { Future } from "core:prelude";
 import { println } from "std:io";
 function sum_to(n: i64): i64 {
   if n == 0 { 0 } else { n + sum_to(n - 1) }
 }
-function main() {
-  println("${sum_to(1000)}");
+function main(): Future<null> async {
+  await println("${sum_to(1000)}");
+  null
 }

@@ -1,0 +1,11 @@
+//@ kind: compile-error
+//@ description: std:net UdpSocket.set_read_timeout returns a Future and must be awaited
+//@ stderr: found `Future<
+
+import { IoError } from "std:io";
+import { UdpSocket } from "std:net";
+import { Duration } from "std:time";
+
+function requires_await(socket: UdpSocket) {
+  var _value: null | IoError = socket.set_read_timeout(Duration.from_millis(1));
+}

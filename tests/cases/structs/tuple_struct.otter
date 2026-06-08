@@ -3,10 +3,12 @@
 //@ stdout:
 //~ 3
 //~ 4
+import { Future } from "core:prelude";
 import { println } from "std:io";
 struct Pair(i64, i64)
-function main() {
+function main(): Future<null> async {
   var p = Pair(3, 4);
-  println("${p.0}");
-  println("${p.1}");
+  await println("${p.0}");
+  await println("${p.1}");
+  null
 }

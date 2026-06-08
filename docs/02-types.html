@@ -344,11 +344,11 @@ language's unit type: a function that returns nothing returns <code>null</code>;
 expression evaluates to <code>null</code>.</p>
 
 <pre><code>function side_effect(): null {   // explicit
-  print("hi")
+  null
 }
 
 function side_effect() {         // implicit — equivalent
-  print("hi")
+  null
 }
 
 var x: i64 | null = null          // absence via union</code></pre>

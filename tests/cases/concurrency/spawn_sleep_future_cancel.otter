@@ -4,8 +4,8 @@
 //@ stdout:
 //~ spawn sleep cancelled
 
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { sleep } from "std:async";
 
 function main(): Future<null> async {
@@ -13,5 +13,6 @@ function main(): Future<null> async {
   var _started = await sleep(10);
   fut.cancel();
   var _settled = await sleep(10);
-  println("spawn sleep cancelled");
+  await println("spawn sleep cancelled");
+  null
 }

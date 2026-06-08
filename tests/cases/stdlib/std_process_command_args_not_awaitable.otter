@@ -1,0 +1,11 @@
+//@ kind: compile-error
+//@ description: std:process Command.args is an immediate pure command value snapshot
+//@ stderr: `await` requires a `Future`
+
+import { Future } from "core:prelude";
+import { Command } from "std:process";
+
+function main(): Future<null> async {
+  var _args = await Command.new("true").args();
+  null
+}

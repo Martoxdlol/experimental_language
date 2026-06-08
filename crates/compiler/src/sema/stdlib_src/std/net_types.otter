@@ -196,17 +196,17 @@ function __net_encode_codepoint(cp: i64): str {
   if cp <= 0x7f {
     __net_percent_byte(cp as u8)
   } else if cp <= 0x7ff {
-    __net_percent_byte((0xc0 + (cp / 64))as u8)
-      + __net_percent_byte((0x80 + (cp % 64))as u8)
+    __net_percent_byte((0xc0 + (cp / 64)) as u8)
+      + __net_percent_byte((0x80 + (cp % 64)) as u8)
   } else if cp <= 0xffff {
-    __net_percent_byte((0xe0 + (cp / 4096))as u8)
-      + __net_percent_byte((0x80 + ((cp / 64) % 64))as u8)
-      + __net_percent_byte((0x80 + (cp % 64))as u8)
+    __net_percent_byte((0xe0 + (cp / 4096)) as u8)
+      + __net_percent_byte((0x80 + ((cp / 64) % 64)) as u8)
+      + __net_percent_byte((0x80 + (cp % 64)) as u8)
   } else {
-    __net_percent_byte((0xf0 + (cp / 262144))as u8)
-      + __net_percent_byte((0x80 + ((cp / 4096) % 64))as u8)
-      + __net_percent_byte((0x80 + ((cp / 64) % 64))as u8)
-      + __net_percent_byte((0x80 + (cp % 64))as u8)
+    __net_percent_byte((0xf0 + (cp / 262144)) as u8)
+      + __net_percent_byte((0x80 + ((cp / 4096) % 64)) as u8)
+      + __net_percent_byte((0x80 + ((cp / 64) % 64)) as u8)
+      + __net_percent_byte((0x80 + (cp % 64)) as u8)
   }
 }
 
@@ -227,9 +227,9 @@ function __net_decode_percent_bytes(bytes: List<u8>, position: i64): str | Parse
   var out = "";
   var i = 0;
   while i < bytes.size() {
-    var first = bytes[i]as i64;
+    var first = bytes[i] as i64;
     if first < 0x80 {
-      out = out + (first as char)as str;
+      out = out + (first as char) as str;
       i = i + 1;
     } else {
       var needed = 0;
@@ -257,7 +257,7 @@ function __net_decode_percent_bytes(bytes: List<u8>, position: i64): str | Parse
 
       var j = 1;
       while j <= needed {
-        var next = bytes[i + j]as i64;
+        var next = bytes[i + j] as i64;
         if next < 0x80 || next > 0xbf {
           return __net_parse_error("invalid UTF-8 continuation byte", position + i + j);
         }
@@ -268,7 +268,7 @@ function __net_decode_percent_bytes(bytes: List<u8>, position: i64): str | Parse
       if value < min || value > 0x10ffff || (value >= 0xd800 && value <= 0xdfff) {
         return __net_parse_error("invalid UTF-8 percent scalar", position + i);
       }
-      out = out + (value as char)as str;
+      out = out + (value as char) as str;
       i = i + needed + 1;
     }
   }
@@ -306,10 +306,10 @@ function percent_decode_component(text: str): str | ParseError {
       if high < 0 || low < 0 {
         return __net_parse_error("expected percent hex digit", i);
       }
-      bytes.push((high * 16 + low)as u8);
+      bytes.push((high * 16 + low) as u8);
       i = i + 3;
     } else {
-      if!bytes.is_empty() {
+      if !bytes.is_empty() {
         var decoded = __net_decode_percent_bytes(bytes, byte_start);
         if decoded is ParseError {
           return decoded as ParseError;
@@ -322,7 +322,7 @@ function percent_decode_component(text: str): str | ParseError {
     }
   }
 
-  if!bytes.is_empty() {
+  if !bytes.is_empty() {
     var decoded_tail = __net_decode_percent_bytes(bytes, byte_start);
     if decoded_tail is ParseError {
       return decoded_tail as ParseError;
@@ -393,7 +393,7 @@ function __net_valid_zone_id(text: str, position: i64): null | ParseError {
         || cp == 45
         || cp == 46
         || cp == 95;
-      if!ok {
+      if !ok {
         return __net_parse_error("expected IPv6 zone id character", position + i);
       }
       i = i + 1;
@@ -429,7 +429,7 @@ function __net_parse_ipv6_side(text: str, position: i64): List<u16> | ParseError
         if parsed is ParseError {
           return parsed as ParseError;
         }
-        groups.push((parsed as i64)as u16);
+        groups.push((parsed as i64) as u16);
       }
       offset = offset + part.size() + 1;
       i = i + 1;
@@ -459,7 +459,7 @@ function parse_ip_v4(text: str): IpAddr | ParseError {
     var d = __net_parse_decimal(parts[3], pos, 255);
     if d is ParseError { return d as ParseError; }
 
-    ip_v4((a as i64)as u8, (b as i64)as u8, (c as i64)as u8, (d as i64)as u8)
+    ip_v4((a as i64) as u8, (b as i64) as u8, (c as i64) as u8, (d as i64) as u8)
   }
 }
 
@@ -557,7 +557,7 @@ function parse_ipv4_socket_addr(text: str): SocketAddr | ParseError {
       if parsed_port is ParseError {
         parsed_port as ParseError
       } else {
-        socket_addr(parsed_ip as IpAddr, (parsed_port as i64)as u16)
+        socket_addr(parsed_ip as IpAddr, (parsed_port as i64) as u16)
       }
     }
   }
@@ -576,7 +576,7 @@ function parse_socket_addr(text: str): SocketAddr | ParseError {
       var end = close as i64;
       var host = text.substring(1, end);
       var rest = text.substring(end + 1, text.size());
-      if!rest.starts_with(":") {
+      if !rest.starts_with(":") {
         return __net_parse_error("expected host:port", end + 1);
       }
 
@@ -589,7 +589,7 @@ function parse_socket_addr(text: str): SocketAddr | ParseError {
       if parsed_port is ParseError {
         parsed_port as ParseError
       } else {
-        socket_addr(parsed_ip as IpAddr, (parsed_port as i64)as u16)
+        socket_addr(parsed_ip as IpAddr, (parsed_port as i64) as u16)
       }
     }
   } else {
@@ -746,7 +746,7 @@ function parse_url(text: str): Url | ParseError {
 
       var rest_host = host_port.substring(end + 1, host_port.size());
       if rest_host != "" {
-        if!rest_host.starts_with(":") {
+        if !rest_host.starts_with(":") {
           return __net_parse_error("expected URL host/port delimiter", host_offset + end + 1);
         }
         var port_text = rest_host.substring(1, rest_host.size());
@@ -754,7 +754,7 @@ function parse_url(text: str): Url | ParseError {
         if port_value is ParseError {
           return port_value as ParseError;
         }
-        port = (port_value as i64)as u16;
+        port = (port_value as i64) as u16;
       }
     } else {
       var colon = host_port.index_of(":");
@@ -766,7 +766,7 @@ function parse_url(text: str): Url | ParseError {
         if port_value is ParseError {
           return port_value as ParseError;
         }
-        port = (port_value as i64)as u16;
+        port = (port_value as i64) as u16;
       }
     }
     if host == "" {
@@ -795,7 +795,7 @@ extend IpAddr {
         if digit != 0 || started {
           started = true;
           if digit < 10 {
-            out = out + ((digit as i64)as str);
+            out = out + ((digit as i64) as str);
           } else if digit == 10 {
             out = out + "a";
           } else if digit == 11 {
@@ -819,7 +819,7 @@ extend IpAddr {
 
   function render(self): str {
     if self.is_v4() {
-      "${self.a as u8 }.${self.b as u8 }.${self.c as u8 }.${self.d as u8 }"
+      "${self.a as u8}.${self.b as u8}.${self.c as u8}.${self.d as u8}"
     } else {
       var out = self.render_hex_group(self.a)
         + ":"
@@ -1132,10 +1132,10 @@ extend Url {
     }
     out = out + self.host;
     if self.port is u16 {
-      out = out + ":" + ((self.port as u16)as str);
+      out = out + ":" + ((self.port as u16) as str);
     }
     out = out + self.path;
-    if!self.query.is_empty() {
+    if !self.query.is_empty() {
       out = out + "?" + self.query_string();
     }
     if self.fragment is str {
@@ -1153,7 +1153,7 @@ extend Url {
     }
     out = __net_hash_add(out, ("host:" + self.host).hash());
     if self.port is u16 {
-      out = __net_hash_add(out, ("port:" + ((self.port as u16)as str)).hash());
+      out = __net_hash_add(out, ("port:" + ((self.port as u16) as str)).hash());
     } else {
       out = __net_hash_add(out, "port:null".hash());
     }
@@ -1236,7 +1236,7 @@ extend Url: Debug {
 
 extend ParseError: Debug {
   function debug(self): str {
-    "ParseError { message: \"" + self.message + "\", position: ${self.position } }"
+    "ParseError { message: \"" + self.message + "\", position: ${self.position} }"
   }
 }
 

@@ -1,0 +1,11 @@
+//@ kind: compile-error
+//@ description: std:net UdpSocket.send returns a Future and must be awaited
+//@ stderr: expected `i64 | IoError`, found `Future<i64 | IoError>`
+
+import { Bytes } from "std:bytes";
+import { IoError } from "std:io";
+import { UdpSocket } from "std:net";
+
+function requires_await(socket: UdpSocket) {
+  var _sent: i64 | IoError = socket.send(Bytes.from_str("ping"));
+}

@@ -1,0 +1,16 @@
+//@ kind: compile-error
+//@ description: std:fs File.write returns Future<i64 | IoError> and must be awaited before use
+//@ stderr: expected `i64 | IoError`, found `Future<i64 | IoError>`
+
+import { Bytes } from "std:bytes";
+import { File, Path } from "std:fs";
+import { Future } from "core:prelude";
+import { IoError } from "std:io";
+
+function main(): Future<null> async {
+  var opened = await File.create(Path.new("target/tmp/otter_fusion_file_write_requires_await.bin"));
+  if opened is File {
+    var _written: i64 | IoError = (opened as File).write(Bytes.from_str("x"));
+  }
+  null
+}

@@ -20,7 +20,7 @@ use crate::sema::diag::{SemaError, SemaErrorKind};
 use crate::sema::resolve_ctx::ResolveContext;
 use crate::sema::stdlib::StdProvider;
 use crate::span::Span;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// The diagnostic for a scheme used without project context (`docs/17` §17.13).
 fn no_project_message(scheme: Scheme) -> String {
@@ -177,6 +177,14 @@ pub struct Def {
     pub is_static: bool,
 }
 
+#[derive(Clone, Debug)]
+pub struct ModuleImport {
+    pub item: ImportItem,
+    pub public: bool,
+    pub target: Option<ModId>,
+    pub toolchain: bool,
+}
+
 /// A node in the module tree.
 #[derive(Clone, Debug)]
 pub struct ModuleInfo {
@@ -200,15 +208,27 @@ pub struct ModuleInfo {
     /// All `extend` blocks declared directly in this module.
     pub extends: Vec<DefId>,
     /// `import` declarations in this module, in source order.
-    pub imports: Vec<ImportItem>,
+    pub imports: Vec<ModuleImport>,
     /// Names brought into scope by `import { … } from "…"`, in the type
     /// namespace (resolved by [`Program::resolve_imports`]).
     pub imported_types: HashMap<String, DefId>,
     /// As [`Self::imported_types`], for the value namespace.
     pub imported_values: HashMap<String, DefId>,
+    /// Publicly re-exported named imports in the type namespace.
+    pub public_imported_types: HashMap<String, DefId>,
+    /// Publicly re-exported named imports in the value namespace.
+    pub public_imported_values: HashMap<String, DefId>,
     /// `import "path" as M` aliases: `M` → the aliased module. Member access
     /// `M.foo` resolves against that module's public definitions.
     pub namespace_imports: HashMap<String, ModId>,
+    /// Publicly re-exported namespace imports (`pub import "path" as M`).
+    pub public_namespace_imports: HashMap<String, ModId>,
+    /// Modules imported by any source import form. Their `extend` blocks are
+    /// visible for method/interface resolution in this module (`docs/17` §17.5).
+    pub extension_imports: Vec<ModId>,
+    /// Public imports whose extension activation is re-exported by this module
+    /// (`docs/17` §17.10), so importers see those `extend` blocks transitively.
+    pub public_extension_imports: Vec<ModId>,
 }
 
 impl ModuleInfo {
@@ -227,7 +247,12 @@ impl ModuleInfo {
             imports: Vec::new(),
             imported_types: HashMap::new(),
             imported_values: HashMap::new(),
+            public_imported_types: HashMap::new(),
+            public_imported_values: HashMap::new(),
             namespace_imports: HashMap::new(),
+            public_namespace_imports: HashMap::new(),
+            extension_imports: Vec::new(),
+            public_extension_imports: Vec::new(),
         }
     }
 }
@@ -244,66 +269,66 @@ pub struct Program {
     pub map_def: DefId,
     /// The builtin `Set<T>` type definition (from `core:collections`).
     pub set_def: DefId,
-    /// `core:prelude::Item<T>` — the iterator protocol's element wrapper.
+    /// `core:prelude` `Item<T>` — the iterator protocol's element wrapper.
     pub item_def: DefId,
-    /// `core:prelude::Done` — the iterator protocol's end marker.
+    /// `core:prelude` `Done` — the iterator protocol's end marker.
     pub done_def: DefId,
-    /// `core:prelude::Iterator<T>`.
+    /// `core:prelude` `Iterator<T>`.
     pub iterator_def: DefId,
     /// `core:collections::Entry<K, V>` — yielded by `for entry in map`.
     pub entry_def: DefId,
-    /// `core:prelude::FromResidual<R>` — error conversion for `?` (`docs/13`).
+    /// `core:prelude` `FromResidual<R>` — error conversion for `?` (`docs/13`).
     pub from_residual_def: DefId,
-    /// `core:prelude::Try<Output, Residual>` — lets a non-union wrapper type
+    /// `core:prelude` `Try<Output, Residual>` — lets a non-union wrapper type
     /// participate in `?` (`docs/13` §3): `branch(self)` splits the wrapper
     /// into its success and failure variants.
     pub try_def: DefId,
-    /// `core:prelude::Clone` — deep-copy entry point (`docs/10`/`docs/15`).
+    /// `core:prelude` `Clone` — deep-copy entry point (`docs/10`/`docs/15`).
     pub clone_def: DefId,
-    /// `core:prelude::Drop` — finalizer run before reclamation (`docs/16` §8).
+    /// `core:prelude` `Drop` — finalizer run before reclamation (`docs/16` §8).
     pub drop_def: DefId,
-    /// `std:thread::JoinHandle<R>` — `Thread.spawn`'s result (`docs/20`).
+    /// `std:thread` `JoinHandle<R>` — `Thread.spawn`'s result (`docs/20`).
     pub join_handle_def: DefId,
-    /// `std:task::JoinHandle<R>` — `Task.spawn`'s result (`docs/20`, `docs/21`).
+    /// `std:task` `JoinHandle<R>` — `Task.spawn`'s result (`docs/20`, `docs/21`).
     pub task_join_handle_def: DefId,
-    /// `std:thread::Joined<R>` — a worker's value after `join` (`docs/20`).
+    /// `std:thread` `Joined<R>` — a worker's value after `join` (`docs/20`).
     pub joined_def: DefId,
-    /// `std:thread::Panicked` — a worker that panicked (`docs/20`).
+    /// `std:thread` `Panicked` — a worker that panicked (`docs/20`).
     pub panicked_def: DefId,
-    /// `std:task::Cancelled` — a cooperatively cancelled executor task.
+    /// `std:task` `Cancelled` — a cooperatively cancelled executor task.
     pub cancelled_def: DefId,
-    /// `std:sync::Sender<T>` — a channel's sending end (`docs/20` §2).
+    /// `std:sync` `Sender<T>` — a channel's sending end (`docs/20` §2).
     pub sender_def: DefId,
-    /// `std:sync::Receiver<T>` — a channel's receiving end (`docs/20` §2).
+    /// `std:sync` `Receiver<T>` — a channel's receiving end (`docs/20` §2).
     pub receiver_def: DefId,
-    /// `std:sync::ChannelClosed` — returned by a closed channel.
+    /// `std:sync` `ChannelClosed` — returned by a closed channel.
     pub channel_closed_def: DefId,
-    /// `std:sync::Shared<T>` — a mutex handle (`docs/20` §4).
+    /// `std:sync` `Shared<T>` — a mutex handle (`docs/20` §4).
     pub shared_def: DefId,
-    /// `std:sync::LockBusy` — `try_lock` failure.
+    /// `std:sync` `LockBusy` — `try_lock` failure.
     pub lock_busy_def: DefId,
-    /// `core:async::Pending` — a future that is not yet ready (`docs/21` §1).
+    /// `core:async` `Pending` — a future that is not yet ready (`docs/21` §1).
     pub pending_def: DefId,
-    /// `core:async::Ready<T>` — a completed future's value (`docs/21` §1).
+    /// `core:async` `Ready<T>` — a completed future's value (`docs/21` §1).
     pub ready_def: DefId,
-    /// `core:async::Future<Output>` — the async state-machine shape.
+    /// `core:async` `Future<Output>` — the async state-machine shape.
     pub future_def: DefId,
-    /// `core:async::Context` — carries the waker (`docs/21` §2).
+    /// `core:async` `Context` — carries the waker (`docs/21` §2).
     pub context_def: DefId,
-    /// `core:async::AsyncIterator<T>` — async streams (`docs/21` §10).
+    /// `core:async` `AsyncIterator<T>` — async streams (`docs/21` §10).
     pub async_iterator_def: DefId,
     /// `std:async::TimedOut` — `timeout` loser marker (`docs/21` §9).
     pub timed_out_def: DefId,
-    /// `core:prelude::Eq` — structural equality (`docs/15`); the `T: Eq`
+    /// `core:prelude` `Eq` — structural equality (`docs/15`); the `T: Eq`
     /// bound for `@Derive(Eq)` on generic structs.
     pub eq_def: DefId,
-    /// `core:prelude::Ord` — total ordering (`docs/15`); the `T: Ord` bound for
+    /// `core:prelude` `Ord` — total ordering (`docs/15`); the `T: Ord` bound for
     /// `@Derive(Ord)` on generic structs.
     pub ord_def: DefId,
-    /// `core:prelude::ToStr` — string rendering (`docs/15`/`docs/01` §8); the
+    /// `core:prelude` `ToStr` — string rendering (`docs/15`/`docs/01` §8); the
     /// `T: ToStr` bound for `@Derive(ToStr)` on generic structs.
     pub to_str_def: DefId,
-    /// `core:prelude::Hash` — structural hashing (`docs/15` §7); the
+    /// `core:prelude` `Hash` — structural hashing (`docs/15` §7); the
     /// `T: Hash` bound for `@Derive(Hash)` on generic structs and for
     /// `Map<K, V>` keys.
     pub hash_def: DefId,
@@ -479,7 +504,11 @@ impl Program {
         provider: &dyn StdProvider,
     ) -> Program {
         let mut p = Program::new();
-        p.std_provider_name = provider.name().to_string();
+        p.std_provider_name = if crate::sema::stdlib::valid_provider_name(provider.name()) {
+            provider.name().to_string()
+        } else {
+            "<invalid>".to_string()
+        };
         // Toolchain definitions live in `__builtins__` — *not* `ROOT` — so
         // their names do not pollute user scope (`docs/17` §17.8: every named
         // symbol requires an import). Built-in *syntax* still resolves via the
@@ -611,12 +640,10 @@ impl Program {
         self.str_bytes_def = self.toolchain_type("StrBytes").unwrap_or(DefId(0));
         // Map the marker functions to their builtin intrinsics. A call resolving
         // to one of these defs lowers to the builtin (`docs/14`, `docs/24`).
+        // `std:io` print helpers are deliberately not here: public stream writes
+        // are async stdlib functions, not immediate compiler intrinsics.
         use crate::sema::results::Builtin;
         for (name, b) in [
-            ("print", Builtin::Print),
-            ("println", Builtin::Println),
-            ("eprint", Builtin::Eprint),
-            ("eprintln", Builtin::Eprintln),
             ("panic", Builtin::Panic),
             ("panic_with", Builtin::PanicWith),
             ("exit", Builtin::Exit),
@@ -797,20 +824,31 @@ impl Program {
             crate::span::BytePos(0),
             crate::span::BytePos(0),
         );
+        let provider_name = provider.name();
+        if !crate::sema::stdlib::valid_provider_name(provider_name) {
+            let display_name = if provider_name.is_empty() {
+                "<empty>"
+            } else {
+                provider_name
+            };
+            self.errors.push(SemaError::new(
+                SemaErrorKind::Message(format!(
+                    "stdlib provider name `{display_name}` is invalid; provider names must be \
+                     non-empty ASCII identifiers using letters, digits, `.`, `_`, or `-`"
+                )),
+                span,
+            ));
+            return;
+        }
         let mut seen_paths = std::collections::HashSet::new();
         for spec in provider.modules() {
             let path_vec: Vec<String> = spec.path.iter().map(|s| s.to_string()).collect();
-            let display_path = if spec.path.is_empty() {
-                "<empty>".to_string()
-            } else {
-                spec.path.join(":")
-            };
+            let display_path = crate::sema::stdlib::display_module_path(spec.path);
             if !seen_paths.insert(path_vec.clone()) {
                 self.errors.push(SemaError::new(
                     SemaErrorKind::Message(format!(
                         "stdlib provider `{}` defines duplicate module `{}`",
-                        provider.name(),
-                        display_path
+                        provider_name, display_path
                     )),
                     span,
                 ));
@@ -820,8 +858,7 @@ impl Program {
                 self.errors.push(SemaError::new(
                     SemaErrorKind::Message(format!(
                         "stdlib provider `{}` module `{}` must include a scheme and module path",
-                        provider.name(),
-                        display_path
+                        provider_name, display_path
                     )),
                     span,
                 ));
@@ -836,9 +873,7 @@ impl Program {
                 self.errors.push(SemaError::new(
                     SemaErrorKind::Message(format!(
                         "stdlib provider `{}` module `{}` contains invalid path segment `{}`",
-                        provider.name(),
-                        display_path,
-                        display_segment
+                        provider_name, display_path, display_segment
                     )),
                     span,
                 ));
@@ -852,7 +887,7 @@ impl Program {
                 self.errors.push(SemaError::new(
                     SemaErrorKind::Message(format!(
                         "stdlib provider `{}` module `{}` has tier `{:?}` but path root is not `{}`",
-                        provider.name(),
+                        provider_name,
                         display_path,
                         spec.tier,
                         expected_root
@@ -870,9 +905,7 @@ impl Program {
                     self.errors.push(SemaError::new(
                         SemaErrorKind::Message(format!(
                             "stdlib provider `{}` module `{}` defines duplicate export `{}`",
-                            provider.name(),
-                            display_path,
-                            name
+                            provider_name, display_path, name
                         )),
                         span,
                     ));
@@ -902,9 +935,7 @@ impl Program {
                         SemaErrorKind::Message(format!(
                             "stdlib provider `{}` module `{}` exports `{}`, but the bundled \
                              toolchain source does not define that symbol",
-                            provider.name(),
-                            display_path,
-                            name
+                            provider_name, display_path, name
                         )),
                         span,
                     ));
@@ -1012,11 +1043,100 @@ impl Program {
             .copied()
     }
 
-    /// Resolve a *public* value defined directly in `module` (for namespaced
-    /// access `M.foo`, which only reaches the module's own exported items).
+    /// Resolve a type exported by `module`, including public named re-exports.
+    pub fn resolve_pub_type_in(&self, module: ModId, name: &str) -> Option<DefId> {
+        let mut seen = HashSet::new();
+        self.resolve_pub_type_in_inner(module, name, &mut seen)
+    }
+
+    fn resolve_pub_type_in_inner(
+        &self,
+        module: ModId,
+        name: &str,
+        seen: &mut HashSet<(ModId, String)>,
+    ) -> Option<DefId> {
+        if !seen.insert((module, name.to_string())) {
+            return None;
+        }
+        let m = &self.modules[module.index()];
+        if let Some(def) = m.types.get(name).copied() {
+            return (self.is_builtin_view_module(module) || self.defs[def.index()].public)
+                .then_some(def);
+        }
+        if let Some(def) = m.public_imported_types.get(name).copied() {
+            return Some(def);
+        }
+        for module_import in &m.imports {
+            if !module_import.public {
+                continue;
+            }
+            let Some(target) = module_import.target else {
+                continue;
+            };
+            let ImportKind::Named(names) = &module_import.item.kind else {
+                continue;
+            };
+            for import_name in names {
+                let bind = import_name
+                    .alias
+                    .as_ref()
+                    .unwrap_or(&import_name.name)
+                    .name
+                    .as_str();
+                if bind == name {
+                    return self.resolve_pub_type_in_inner(target, &import_name.name.name, seen);
+                }
+            }
+        }
+        None
+    }
+
+    /// Resolve a value exported by `module`, including public named re-exports.
     pub fn resolve_pub_value_in(&self, module: ModId, name: &str) -> Option<DefId> {
-        let def = *self.modules[module.index()].values.get(name)?;
-        (self.is_builtin_view_module(module) || self.defs[def.index()].public).then_some(def)
+        let mut seen = HashSet::new();
+        self.resolve_pub_value_in_inner(module, name, &mut seen)
+    }
+
+    fn resolve_pub_value_in_inner(
+        &self,
+        module: ModId,
+        name: &str,
+        seen: &mut HashSet<(ModId, String)>,
+    ) -> Option<DefId> {
+        if !seen.insert((module, name.to_string())) {
+            return None;
+        }
+        let m = &self.modules[module.index()];
+        if let Some(def) = m.values.get(name).copied() {
+            return (self.is_builtin_view_module(module) || self.defs[def.index()].public)
+                .then_some(def);
+        }
+        if let Some(def) = m.public_imported_values.get(name).copied() {
+            return Some(def);
+        }
+        for module_import in &m.imports {
+            if !module_import.public {
+                continue;
+            }
+            let Some(target) = module_import.target else {
+                continue;
+            };
+            let ImportKind::Named(names) = &module_import.item.kind else {
+                continue;
+            };
+            for import_name in names {
+                let bind = import_name
+                    .alias
+                    .as_ref()
+                    .unwrap_or(&import_name.name)
+                    .name
+                    .as_str();
+                if bind == name {
+                    return self.resolve_pub_value_in_inner(target, &import_name.name.name, seen);
+                }
+            }
+        }
+        None
     }
 
     /// Resolve a value exported by an importable toolchain view.
@@ -1027,26 +1147,46 @@ impl Program {
     }
 
     /// The `extend` blocks visible from `module` for method resolution: the
-    /// module's own plus all toolchain source modules, since built-in protocol
-    /// impls — `List`/`Map`/`str` iterators, etc. — are program-wide
-    /// (`docs/17` §17.8, orphan rule). The current module is not double-counted
-    /// when it is itself a hidden stdlib source module.
+    /// module's own, every directly imported source module, plus all toolchain
+    /// source modules. Built-in protocol impls — `List`/`Map`/`str` iterators,
+    /// etc. — are program-wide (`docs/17` §17.8, orphan rule). User-authored
+    /// extensions stay module-bound and become visible through explicit imports
+    /// (`docs/17` §17.5).
     pub fn visible_extends(&self, module: ModId) -> Vec<DefId> {
-        let mut out = self.modules[module.index()].extends.clone();
-        if module != self.builtin_module {
-            out.extend(
-                self.modules[self.builtin_module.index()]
-                    .extends
-                    .iter()
-                    .copied(),
-            );
+        let mut out = Vec::new();
+        let mut seen = HashSet::new();
+        self.push_extension_module(&mut out, &mut seen, module);
+        for imported in self.modules[module.index()]
+            .extension_imports
+            .iter()
+            .copied()
+        {
+            self.push_extension_module(&mut out, &mut seen, imported);
         }
+        self.push_extension_module(&mut out, &mut seen, self.builtin_module);
         for source in self.builtin_source_modules.values().copied() {
-            if source != module {
-                out.extend(self.modules[source.index()].extends.iter().copied());
-            }
+            self.push_extension_module(&mut out, &mut seen, source);
         }
         out
+    }
+
+    fn push_extension_module(
+        &self,
+        out: &mut Vec<DefId>,
+        seen: &mut HashSet<ModId>,
+        module: ModId,
+    ) {
+        if !seen.insert(module) {
+            return;
+        }
+        out.extend(self.modules[module.index()].extends.iter().copied());
+        for reexport in self.modules[module.index()]
+            .public_extension_imports
+            .iter()
+            .copied()
+        {
+            self.push_extension_module(out, seen, reexport);
+        }
     }
 
     /// The module an `import … as alias` brings into scope in `module`.
@@ -1055,6 +1195,42 @@ impl Program {
             .namespace_imports
             .get(alias)
             .copied()
+    }
+
+    /// The module a public namespace re-export exposes from `module`.
+    pub fn public_namespace_target(&self, module: ModId, alias: &str) -> Option<ModId> {
+        let mut seen = HashSet::new();
+        self.public_namespace_target_inner(module, alias, &mut seen)
+    }
+
+    fn public_namespace_target_inner(
+        &self,
+        module: ModId,
+        alias: &str,
+        seen: &mut HashSet<(ModId, String)>,
+    ) -> Option<ModId> {
+        if !seen.insert((module, alias.to_string())) {
+            return None;
+        }
+        let m = &self.modules[module.index()];
+        if let Some(target) = m.public_namespace_imports.get(alias).copied() {
+            return Some(target);
+        }
+        for module_import in &m.imports {
+            if !module_import.public {
+                continue;
+            }
+            let Some(target) = module_import.target else {
+                continue;
+            };
+            let ImportKind::Namespace(import_alias) = &module_import.item.kind else {
+                continue;
+            };
+            if import_alias.name == alias {
+                return Some(target);
+            }
+        }
+        None
     }
 
     /// Walk the module tree from the root along `segments` (e.g.
@@ -1075,7 +1251,8 @@ impl Program {
         for mid in 0..self.modules.len() {
             let imports = self.modules[mid].imports.clone();
             let mod_path = self.modules[mid].path.clone();
-            for imp in &imports {
+            for (import_index, module_import) in imports.iter().enumerate() {
+                let imp = &module_import.item;
                 let raw = import_path_string(&imp.path);
                 let span = imp.path.span;
                 let parsed = match crate::imports::classify(&raw) {
@@ -1113,9 +1290,13 @@ impl Program {
                         let mut key = vec![parsed.scheme.keyword().to_string()];
                         key.extend(parsed.segments.iter().cloned());
                         match self.builtin_modules.get(&key).copied() {
-                            Some(target) => {
-                                self.bind_import(mid, target, imp, /* toolchain = */ true)
-                            }
+                            Some(target) => self.record_resolved_import(
+                                mid,
+                                import_index,
+                                target,
+                                /* toolchain = */ true,
+                                module_import.public,
+                            ),
                             None => {
                                 let message =
                                     if crate::sema::stdlib::TOOLCHAIN_MODULES.iter().any(|spec| {
@@ -1135,14 +1316,26 @@ impl Program {
                         }
                     }
                     Scheme::SelfRoot => match self.resolve_self_root(&parsed.segments) {
-                        Ok(target) => self.bind_import(mid, target, imp, false),
+                        Ok(target) => self.record_resolved_import(
+                            mid,
+                            import_index,
+                            target,
+                            false,
+                            module_import.public,
+                        ),
                         Err(msg) => self
                             .errors
                             .push(SemaError::new(SemaErrorKind::Message(msg), span)),
                     },
                     Scheme::SelfRel => {
                         match self.resolve_self_rel(&mod_path, &parsed, ctx, &file_to_module) {
-                            Ok(target) => self.bind_import(mid, target, imp, false),
+                            Ok(target) => self.record_resolved_import(
+                                mid,
+                                import_index,
+                                target,
+                                false,
+                                module_import.public,
+                            ),
                             Err(msg) => self
                                 .errors
                                 .push(SemaError::new(SemaErrorKind::Message(msg), span)),
@@ -1204,7 +1397,13 @@ impl Program {
                             continue;
                         };
                         match self.resolve_pkg_subpath(pkg_root, parsed.package_subpath(), &name) {
-                            Ok(target) => self.bind_import(mid, target, imp, false),
+                            Ok(target) => self.record_resolved_import(
+                                mid,
+                                import_index,
+                                target,
+                                false,
+                                module_import.public,
+                            ),
                             Err(msg) => self
                                 .errors
                                 .push(SemaError::new(SemaErrorKind::Message(msg), span)),
@@ -1215,7 +1414,13 @@ impl Program {
                         // the loaded target module (`docs/17` §17.4).
                         match self.check_file_import(&mod_path, &parsed, ctx) {
                             Ok(target) => match self.file_modules.get(&target).copied() {
-                                Some(m) => self.bind_import(mid, m, imp, false),
+                                Some(m) => self.record_resolved_import(
+                                    mid,
+                                    import_index,
+                                    m,
+                                    false,
+                                    module_import.public,
+                                ),
                                 None => self.errors.push(SemaError::new(
                                     SemaErrorKind::Message(format!(
                                         "`{}` could not be loaded (expected file `{}`)",
@@ -1232,6 +1437,40 @@ impl Program {
                     }
                 }
             }
+        }
+        for mid in 0..self.modules.len() {
+            let imports = self.modules[mid].imports.clone();
+            for module_import in &imports {
+                let Some(target) = module_import.target else {
+                    continue;
+                };
+                self.bind_import(
+                    mid,
+                    target,
+                    &module_import.item,
+                    module_import.toolchain,
+                    module_import.public,
+                );
+            }
+        }
+    }
+
+    fn record_resolved_import(
+        &mut self,
+        mid: usize,
+        import_index: usize,
+        target: ModId,
+        toolchain: bool,
+        public: bool,
+    ) {
+        let module_import = &mut self.modules[mid].imports[import_index];
+        module_import.target = Some(target);
+        module_import.toolchain = toolchain;
+        if !self.modules[mid].extension_imports.contains(&target) {
+            self.modules[mid].extension_imports.push(target);
+        }
+        if public && !self.modules[mid].public_extension_imports.contains(&target) {
+            self.modules[mid].public_extension_imports.push(target);
         }
     }
 
@@ -1404,11 +1643,24 @@ impl Program {
     /// `toolchain` is set the visibility gate is skipped (toolchain modules
     /// export their documented catalog surface; those definitions are not
     /// user-authored `pub` items).
-    fn bind_import(&mut self, mid: usize, target: ModId, imp: &ImportItem, toolchain: bool) {
+    fn bind_import(
+        &mut self,
+        mid: usize,
+        target: ModId,
+        imp: &ImportItem,
+        toolchain: bool,
+        public: bool,
+    ) {
+        if !self.modules[mid].extension_imports.contains(&target) {
+            self.modules[mid].extension_imports.push(target);
+        }
+        if public && !self.modules[mid].public_extension_imports.contains(&target) {
+            self.modules[mid].public_extension_imports.push(target);
+        }
         match &imp.kind {
             ImportKind::Named(names) => {
                 for n in names {
-                    self.resolve_named_import(mid, target, n, toolchain);
+                    self.resolve_named_import(mid, target, n, toolchain, public);
                 }
             }
             // `import "path" as M` — bind the alias to the module so `M.foo`
@@ -1427,6 +1679,11 @@ impl Program {
                 self.modules[mid]
                     .namespace_imports
                     .insert(alias.name.clone(), target);
+                if public {
+                    self.modules[mid]
+                        .public_namespace_imports
+                        .insert(alias.name.clone(), target);
+                }
             }
             // Ambient (extension-only) imports: extensions are module-bound and
             // already active program-wide; no names are bound.
@@ -1437,31 +1694,46 @@ impl Program {
     /// Bind one `import { name as alias }` entry from `target` into module
     /// `mid`. `toolchain` skips the `pub` gate for built-in (`core:`/`std:`)
     /// modules, whose exported surface is not marked user-`pub`.
-    fn resolve_named_import(&mut self, mid: usize, target: ModId, n: &ImportName, toolchain: bool) {
+    fn resolve_named_import(
+        &mut self,
+        mid: usize,
+        target: ModId,
+        n: &ImportName,
+        toolchain: bool,
+        public: bool,
+    ) {
         let src = n.name.name.clone();
         let bind = n.alias.as_ref().unwrap_or(&n.name).name.clone();
         let tmod = &self.modules[target.index()];
-        let as_type = tmod.types.get(&src).copied();
-        let as_value = tmod.values.get(&src).copied();
+        let as_type = if toolchain {
+            tmod.types.get(&src).copied()
+        } else {
+            self.resolve_pub_type_in(target, &src)
+        };
+        let as_value = if toolchain {
+            tmod.values.get(&src).copied()
+        } else {
+            self.resolve_pub_value_in(target, &src)
+        };
         if as_type.is_none() && as_value.is_none() {
+            let private = !toolchain
+                && tmod
+                    .types
+                    .get(&src)
+                    .or_else(|| tmod.values.get(&src))
+                    .is_some_and(|d| !self.defs[d.index()].public);
+            if private {
+                self.errors.push(SemaError::new(
+                    SemaErrorKind::Message(format!("`{src}` is private")),
+                    n.span,
+                ));
+                return;
+            }
             self.errors.push(SemaError::new(
                 SemaErrorKind::Message(format!("no `{src}` in the imported module")),
                 n.span,
             ));
             return;
-        }
-        // Both namespaces an item occupies (e.g. a unit struct) must be public —
-        // except for toolchain modules, whose surface is not user-`pub`.
-        if !toolchain {
-            for d in [as_type, as_value].into_iter().flatten() {
-                if !self.defs[d.index()].public {
-                    self.errors.push(SemaError::new(
-                        SemaErrorKind::Message(format!("`{src}` is private")),
-                        n.span,
-                    ));
-                    return;
-                }
-            }
         }
         if self.named_import_collides(mid, &bind) {
             self.errors.push(SemaError::new(
@@ -1474,15 +1746,25 @@ impl Program {
         }
         if let Some(d) = as_type {
             self.modules[mid].imported_types.insert(bind.clone(), d);
+            if public {
+                self.modules[mid]
+                    .public_imported_types
+                    .insert(bind.clone(), d);
+            }
         }
         if let Some(d) = as_value {
-            self.modules[mid].imported_values.insert(bind, d);
+            self.modules[mid].imported_values.insert(bind.clone(), d);
+            if public {
+                self.modules[mid].public_imported_values.insert(bind, d);
+            }
         }
     }
 
     fn named_import_collides(&self, mid: usize, bind: &str) -> bool {
         let module = &self.modules[mid];
-        module.imported_types.contains_key(bind)
+        module.types.contains_key(bind)
+            || module.values.contains_key(bind)
+            || module.imported_types.contains_key(bind)
             || module.imported_values.contains_key(bind)
             || module.namespace_imports.contains_key(bind)
     }
@@ -1697,7 +1979,12 @@ impl Program {
             }
             ItemKind::Extern(ext) => self.collect_extern(module, item, ext, public),
             ItemKind::Import(imp) => {
-                self.modules[module.index()].imports.push(imp.clone());
+                self.modules[module.index()].imports.push(ModuleImport {
+                    item: imp.clone(),
+                    public,
+                    target: None,
+                    toolchain: false,
+                });
             }
             ItemKind::Test(t) => {
                 // A test is a zero-arg unit body run by `otter_fusion test`. It is
@@ -2339,6 +2626,30 @@ mod tests {
         }
     }
 
+    struct EmptyNameProvider;
+
+    impl crate::sema::stdlib::StdProvider for EmptyNameProvider {
+        fn name(&self) -> &'static str {
+            ""
+        }
+
+        fn modules(&self) -> &'static [crate::sema::stdlib::StdModuleSpec] {
+            CORE_COLLECTIONS_ONLY_MODULES
+        }
+    }
+
+    struct PathLikeNameProvider;
+
+    impl crate::sema::stdlib::StdProvider for PathLikeNameProvider {
+        fn name(&self) -> &'static str {
+            "bad/provider"
+        }
+
+        fn modules(&self) -> &'static [crate::sema::stdlib::StdModuleSpec] {
+            CORE_COLLECTIONS_ONLY_MODULES
+        }
+    }
+
     struct CustomStdProvider;
 
     impl crate::sema::stdlib::StdProvider for CustomStdProvider {
@@ -2348,6 +2659,52 @@ mod tests {
 
         fn modules(&self) -> &'static [crate::sema::stdlib::StdModuleSpec] {
             CUSTOM_STD_PROVIDER_MODULES
+        }
+    }
+
+    #[test]
+    fn explicit_provider_rejects_invalid_provider_names() {
+        let root = parse_module("import { List } from \"core:collections\";\nfunction main() {}");
+        for (provider, expected_name) in [
+            (
+                &EmptyNameProvider as &dyn crate::sema::stdlib::StdProvider,
+                "<empty>",
+            ),
+            (
+                &PathLikeNameProvider as &dyn crate::sema::stdlib::StdProvider,
+                "bad/provider",
+            ),
+        ] {
+            let p = Program::collect_multi_ctx_with_provider(
+                &root,
+                &Externals::new(),
+                &ResolveContext::direct(),
+                provider,
+            );
+            assert!(
+                p.errors.iter().any(|e| {
+                    let msg = e.kind.to_string();
+                    msg.contains(&format!(
+                        "stdlib provider name `{expected_name}` is invalid"
+                    )) && msg.contains("non-empty ASCII identifiers")
+                }),
+                "{:?}",
+                p.errors
+            );
+            assert!(
+                !p.module(ModId::ROOT).imported_types.contains_key("List"),
+                "provider with invalid identity must not expose module views"
+            );
+            assert_eq!(p.std_provider_name, "<invalid>");
+            assert!(
+                p.errors.iter().all(|e| {
+                    !e.kind
+                        .to_string()
+                        .contains(&format!("stdlib provider `{expected_name}`"))
+                }),
+                "invalid provider identity must not leak into downstream provider diagnostics: {:?}",
+                p.errors
+            );
         }
     }
 
@@ -2671,6 +3028,62 @@ mod tests {
             p.errors
                 .iter()
                 .any(|e| e.kind.to_string().contains("private")),
+            "{:?}",
+            p.errors
+        );
+    }
+
+    #[test]
+    fn public_named_imports_are_reexported() {
+        let root = parse_module(
+            "mod model;\n\
+             mod facade;\n\
+             import { CrateBox, make_box } from \"self:facade\";\n\
+             function main() {}\n",
+        );
+        let model = parse_module(
+            "pub struct Box { pub value: i64 }\n\
+             pub function make_box(v: i64): Box { Box { value: v } }\n",
+        );
+        let facade =
+            parse_module("pub import { Box as CrateBox, make_box } from \"self:model\";\n");
+        let mut externals = Externals::new();
+        externals.insert(vec!["model".into()], model);
+        externals.insert(vec!["facade".into()], facade);
+        let ctx = ResolveContext {
+            project: true,
+            ..Default::default()
+        };
+        let p = Program::collect_multi_ctx(&root, &externals, &ctx);
+        assert!(p.errors.is_empty(), "{:?}", p.errors);
+        let root_mod = p.module(ModId::ROOT);
+        assert!(root_mod.imported_types.contains_key("CrateBox"));
+        assert!(root_mod.imported_values.contains_key("make_box"));
+    }
+
+    #[test]
+    fn private_named_imports_are_not_reexported() {
+        let root = parse_module(
+            "mod model;\n\
+             mod facade;\n\
+             import { Box } from \"self:facade\";\n\
+             function main() {}\n",
+        );
+        let model = parse_module("pub struct Box { pub value: i64 }\n");
+        let facade = parse_module("import { Box } from \"self:model\";\n");
+        let mut externals = Externals::new();
+        externals.insert(vec!["model".into()], model);
+        externals.insert(vec!["facade".into()], facade);
+        let ctx = ResolveContext {
+            project: true,
+            ..Default::default()
+        };
+        let p = Program::collect_multi_ctx(&root, &externals, &ctx);
+        assert!(
+            p.errors.iter().any(|e| e
+                .kind
+                .to_string()
+                .contains("no `Box` in the imported module")),
             "{:?}",
             p.errors
         );

@@ -5,8 +5,8 @@
 //@ stdout:
 //~ first = timed out
 //~ second = joined 42
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { Task, JoinHandle, Joined, Panicked, Cancelled } from "std:task";
 import { sleep, timeout, TimedOut } from "std:async";
 
@@ -17,16 +17,17 @@ function main(): Future<null> async {
     });
 
   match await timeout(h.join(), 5) {
-    Joined<i64> j => println("first = joined ${j.value }"),
-    Panicked p => println("first = panicked"),
-    Cancelled c => println("first = cancelled"),
-    TimedOut t => println("first = timed out"),
+    Joined<i64> j => await println("first = joined ${j.value}"),
+    Panicked p => await println("first = panicked"),
+    Cancelled c => await println("first = cancelled"),
+    TimedOut t => await println("first = timed out"),
   };
 
   var _settled = await sleep(60);
   match await h.join() {
-    Joined<i64> j => println("second = joined ${j.value }"),
-    Panicked p => println("second = panicked"),
-    Cancelled c => println("second = cancelled"),
+    Joined<i64> j => await println("second = joined ${j.value}"),
+    Panicked p => await println("second = panicked"),
+    Cancelled c => await println("second = cancelled"),
   };
+  null
 }

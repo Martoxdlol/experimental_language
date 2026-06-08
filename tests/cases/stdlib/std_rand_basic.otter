@@ -8,9 +8,23 @@
 //~ 5
 //~ ranges=195 100 bools=false false true false
 //~ floats=0.02315984728420506 0.02315984728420506 10.023159847284205 5
+//~ triangular=15 12.5 5
+//~ bates=15 12.5 5 5
+//~ irwin-hall=45 50 0 0
+//~ order-stat=15/15 10/15 5/5 5/5
+//~ midrange=15 12.5 5 5
+//~ median=15 10 12.5 5 5
+//~ binomial=3 0 0 0 5
 //~ indices=2 true true true
 //~ c
 //~ empty=true
+//~ weighted=0 1 2 true true true true
+//~ weighted-choice=20 true
+//~ sample-indices=3 234
+//~ sample-indices-edge=4 0123 0 0
+//~ sample=3 cda input=4ad
+//~ sample-edge=4 ad 0 0
+//~ shuffled=acdb input=4ad
 //~ abc
 //~ 8
 //~ 36
@@ -21,16 +35,99 @@
 //~ rand-error=OS entropy unavailable true true true RandomError { message: "OS entropy unavailable" }
 //~ os-u32=true 1
 //~ os-fill=true true
+//~ os-bytes=true true
 //~ bytes-n=5 5 true
 //~ os-fill-n=true true
 //~ thread-rng=true 8 0
 
+import { Future } from "core:prelude";
 import { List } from "core:collections";
 import { println } from "std:io";
 import { Bytes } from "std:bytes";
 import { Clone, Eq, Hash, ToStr } from "core:prelude";
 import { Debug } from "std:fmt";
-import { OsRng, RandomError, Rng, SeededRng, ThreadRng, choose, choose_index, fill_bytes_n, gen_bool, gen_bytes, gen_f64, gen_index, gen_range_f64, gen_range_i64, gen_range_u64, os_rng, random_error, shuffle, thread_rng } from "std:rand";
+import {
+  OsRng,
+  RandomError,
+  Rng,
+  SeededRng,
+  ThreadRng,
+  choose,
+  choose_index,
+  choose_weighted,
+  fill_bytes_n,
+  gen_bool,
+  gen_bytes,
+  gen_binomial,
+  gen_bates_f64,
+  gen_f64,
+  gen_irwin_hall_f64,
+  gen_index,
+  gen_max_f64,
+  gen_median_f64,
+  gen_midrange_f64,
+  gen_min_f64,
+  gen_range_f64,
+  gen_range_i64,
+  gen_range_u64,
+  gen_triangular_f64,
+  os_bytes,
+  os_rng,
+  random_error,
+  sample,
+  sample_indices,
+  shuffle,
+  shuffled,
+  thread_rng,
+  weighted_index
+} from "std:rand";
+
+struct FixedRng {
+  value: u64,
+}
+
+extend FixedRng: Rng {
+  function next_u32(self): u32 { self.value as u32 }
+
+  function next_u64(self): u64 { self.value }
+
+  function fill_bytes(self, buf: Bytes): null { null }
+}
+
+struct SequenceRng {
+  values: List<u64>,
+  index: i64,
+}
+
+extend SequenceRng: Rng {
+  function next_u32(self): u32 { self.next_u64() as u32 }
+
+  function next_u64(self): u64 {
+    var value = self.values[self.index % self.values.size()];
+    self.index = self.index + 1;
+    value
+  }
+
+  function fill_bytes(self, buf: Bytes): null { null }
+}
+
+function sequence_rng(): SequenceRng {
+  var values = List<u64>();
+  values.push(0u64);
+  values.push(1u64);
+  values.push(2u64);
+  values.push(3u64);
+  values.push(0u64);
+  values.push(3u64);
+  SequenceRng { values: values, index: 0 }
+}
+
+function half_sequence_rng(): SequenceRng {
+  var values = List<u64>();
+  values.push(0u64);
+  values.push(4503599627370496u64);
+  SequenceRng { values: values, index: 0 }
+}
 
 function next_from_interface(rng: Rng): u32 {
   rng.next_u32()
@@ -40,79 +137,131 @@ function render_debug(value: Debug): str {
   value.debug()
 }
 
-function main() {
+function main(): Future<null> async {
   var a = SeededRng.from_seed(7u64);
   var b = SeededRng.from_seed(7u64);
-  println("${a.next_u32()}");
-  println("${b.next_u32()}");
-  println("${a.next_u64()}");
-  println("${gen_range_i64(a, 10, 20)}");
-  println("${gen_range_i64(a, 5, 5)}");
+  await println("${a.next_u32()}");
+  await println("${b.next_u32()}");
+  await println("${a.next_u64()}");
+  await println("${gen_range_i64(a, 10, 20)}");
+  await println("${gen_range_i64(a, 5, 5)}");
   var ranges = SeededRng.from_seed(7u64);
-  println("ranges=${gen_range_u64(ranges, 100u64, 200u64)} ${gen_range_u64(ranges, 100u64, 100u64)} bools=${gen_bool(SeededRng.from_seed(7u64), 1, 2)} ${gen_bool(SeededRng.from_seed(7u64), 0, 2)} ${gen_bool(SeededRng.from_seed(7u64), 2, 2)} ${gen_bool(SeededRng.from_seed(7u64), 1, 0)}");
-  println("floats=${gen_f64(SeededRng.from_seed(7u64))} ${gen_f64(SeededRng.from_seed(7u64))} ${gen_range_f64(SeededRng.from_seed(7u64), 10.0, 11.0)} ${gen_range_f64(SeededRng.from_seed(7u64), 5.0, 5.0)}");
+  await println("ranges=${gen_range_u64(ranges, 100u64, 200u64)} ${gen_range_u64(ranges, 100u64, 100u64)} bools=${gen_bool(SeededRng.from_seed(7u64), 1, 2)} ${gen_bool(SeededRng.from_seed(7u64), 0, 2)} ${gen_bool(SeededRng.from_seed(7u64), 2, 2)} ${gen_bool(SeededRng.from_seed(7u64), 1, 0)}");
+  await println("floats=${gen_f64(SeededRng.from_seed(7u64))} ${gen_f64(SeededRng.from_seed(7u64))} ${gen_range_f64(SeededRng.from_seed(7u64), 10.0, 11.0)} ${gen_range_f64(SeededRng.from_seed(7u64), 5.0, 5.0)}");
+  await println("triangular=${gen_triangular_f64(FixedRng { value: 4503599627370496u64 }, 10.0, 20.0)} ${gen_triangular_f64(half_sequence_rng(), 10.0, 20.0)} ${gen_triangular_f64(sequence_rng(), 5.0, 5.0)}");
+  await println("bates=${gen_bates_f64(FixedRng { value: 4503599627370496u64 }, 3, 10.0, 20.0)} ${gen_bates_f64(half_sequence_rng(), 4, 10.0, 20.0)} ${gen_bates_f64(sequence_rng(), 0, 5.0, 9.0)} ${gen_bates_f64(sequence_rng(), 4, 5.0, 5.0)}");
+  await println("irwin-hall=${gen_irwin_hall_f64(FixedRng { value: 4503599627370496u64 }, 3, 10.0, 20.0)} ${gen_irwin_hall_f64(half_sequence_rng(), 4, 10.0, 20.0)} ${gen_irwin_hall_f64(sequence_rng(), 0, 5.0, 9.0)} ${gen_irwin_hall_f64(sequence_rng(), 4, 5.0, 5.0)}");
+  await println("order-stat=${gen_min_f64(FixedRng { value: 4503599627370496u64 }, 3, 10.0, 20.0)}/${gen_max_f64(FixedRng { value: 4503599627370496u64 }, 3, 10.0, 20.0)} ${gen_min_f64(half_sequence_rng(), 2, 10.0, 20.0)}/${gen_max_f64(half_sequence_rng(), 2, 10.0, 20.0)} ${gen_min_f64(sequence_rng(), 0, 5.0, 9.0)}/${gen_max_f64(sequence_rng(), 0, 5.0, 9.0)} ${gen_min_f64(sequence_rng(), 3, 5.0, 5.0)}/${gen_max_f64(sequence_rng(), 3, 5.0, 5.0)}");
+  await println("midrange=${gen_midrange_f64(FixedRng { value: 4503599627370496u64 }, 3, 10.0, 20.0)} ${gen_midrange_f64(half_sequence_rng(), 2, 10.0, 20.0)} ${gen_midrange_f64(sequence_rng(), 0, 5.0, 9.0)} ${gen_midrange_f64(sequence_rng(), 3, 5.0, 5.0)}");
+  await println("median=${gen_median_f64(FixedRng { value: 4503599627370496u64 }, 3, 10.0, 20.0)} ${gen_median_f64(half_sequence_rng(), 3, 10.0, 20.0)} ${gen_median_f64(half_sequence_rng(), 4, 10.0, 20.0)} ${gen_median_f64(sequence_rng(), 0, 5.0, 9.0)} ${gen_median_f64(sequence_rng(), 3, 5.0, 5.0)}");
+  await println("binomial=${gen_binomial(sequence_rng(), 6, 2, 4)} ${gen_binomial(sequence_rng(), 0, 2, 4)} ${gen_binomial(sequence_rng(), 6, 0, 4)} ${gen_binomial(sequence_rng(), 6, 2, 0)} ${gen_binomial(sequence_rng(), 5, 4, 4)}");
 
   var values = List<str>();
   values.push("a");
   values.push("b");
   values.push("c");
-  println("indices=${gen_index(SeededRng.from_seed(7u64), values.size()) as i64} ${gen_index(SeededRng.from_seed(7u64), 0) is null} ${choose_index(SeededRng.from_seed(7u64), values) is i64} ${choose_index(SeededRng.from_seed(7u64), List<str>()) is null}");
+  await println("indices=${gen_index(SeededRng.from_seed(7u64), values.size()) as i64} ${gen_index(SeededRng.from_seed(7u64), 0) is null} ${choose_index(SeededRng.from_seed(7u64), values) is i64} ${choose_index(SeededRng.from_seed(7u64), List<str>()) is null}");
   match choose(b, values) {
-    str item => println(item),
-    null => println("none"),
+    str item => await println(item),
+    null => await println("none"),
   }
   var empty = List<str>();
-  println("empty=${choose(b, empty) is null}");
+  await println("empty=${choose(b, empty) is null}");
+
+  var weights = List<u64>();
+  weights.push(1u64);
+  weights.push(3u64);
+  weights.push(6u64);
+  var zero_weights = List<u64>();
+  zero_weights.push(0u64);
+  zero_weights.push(0u64);
+  var overflow_weights = List<u64>();
+  overflow_weights.push(18446744073709551615u64);
+  overflow_weights.push(1u64);
+  await println("weighted=${weighted_index(FixedRng { value: 0u64 }, weights) as i64} ${weighted_index(FixedRng { value: 1u64 }, weights) as i64} ${weighted_index(FixedRng { value: 9u64 }, weights) as i64} ${weighted_index(FixedRng { value: 0u64 }, zero_weights) is null} ${weighted_index(FixedRng { value: 0u64 }, List<u64>()) is null} ${weighted_index(FixedRng { value: 0u64 }, overflow_weights) is null} ${weighted_index(FixedRng { value: 3u64 }, weights) is i64}");
+  var weighted_values = List<i64>();
+  weighted_values.push(10);
+  weighted_values.push(20);
+  weighted_values.push(30);
+  var short_weights = List<u64>();
+  short_weights.push(1u64);
+  await println("weighted-choice=${choose_weighted(FixedRng { value: 2u64 }, weighted_values, weights) as i64} ${choose_weighted(FixedRng { value: 0u64 }, weighted_values, short_weights) is null}");
+
+  var picked_indices = sample_indices(FixedRng { value: 2u64 }, 5, 3);
+  await println("sample-indices=${picked_indices.size()} ${picked_indices[0]}${picked_indices[1]}${picked_indices[2]}");
+  var all_indices = sample_indices(FixedRng { value: 0u64 }, 4, 8);
+  var no_indices = sample_indices(FixedRng { value: 0u64 }, 4, 0);
+  var empty_indices = sample_indices(FixedRng { value: 0u64 }, 0, 2);
+  await println("sample-indices-edge=${all_indices.size()} ${all_indices[0]}${all_indices[1]}${all_indices[2]}${all_indices[3]} ${no_indices.size()} ${empty_indices.size()}");
+
+  var sample_values = List<str>();
+  sample_values.push("a");
+  sample_values.push("b");
+  sample_values.push("c");
+  sample_values.push("d");
+  var picked = sample(FixedRng { value: 2u64 }, sample_values, 3);
+  await println("sample=${picked.size()} ${picked[0]}${picked[1]}${picked[2]} input=${sample_values.size()}${sample_values[0]}${sample_values[3]}");
+  var too_many = sample(FixedRng { value: 0u64 }, sample_values, 8);
+  var none = sample(FixedRng { value: 0u64 }, sample_values, 0);
+  var empty_sample = sample(FixedRng { value: 0u64 }, List<str>(), 2);
+  await println("sample-edge=${too_many.size()} ${too_many[0]}${too_many[3]} ${none.size()} ${empty_sample.size()}");
+  var copy = shuffled(FixedRng { value: 1u64 }, sample_values);
+  await println("shuffled=${copy[0]}${copy[1]}${copy[2]}${copy[3]} input=${sample_values.size()}${sample_values[0]}${sample_values[3]}");
 
   shuffle(b, values);
-  println(values[0] + values[1] + values[2]);
+  await println(values[0] + values[1] + values[2]);
 
   var bytes = Bytes.new();
   b.fill_bytes(bytes);
-  println("${bytes.size()}");
+  await println("${bytes.size()}");
   var first = bytes.get(0);
   if first is u8 {
-    println("${first as u8}");
+    await println("${first as u8}");
   }
 
-  println("${next_from_interface(SeededRng.from_seed(7u64))}");
+  await println("${next_from_interface(SeededRng.from_seed(7u64))}");
 
   var snap = SeededRng.from_seed(7u64);
   var snap_copy = snap.clone();
-  println("rng-state=${snap == snap_copy} ${snap.hash() == snap_copy.hash()} ${snap.to_str() == snap_copy.to_str()} ${render_debug(snap)}");
-  println("rng-next=${snap.next_u32() == snap_copy.next_u32()} ${snap == SeededRng.from_seed(7u64)}");
-  println(snap_copy.to_str());
+  await println("rng-state=${snap == snap_copy} ${snap.hash() == snap_copy.hash()} ${snap.to_str() == snap_copy.to_str()} ${render_debug(snap)}");
+  await println("rng-next=${snap.next_u32() == snap_copy.next_u32()} ${snap == SeededRng.from_seed(7u64)}");
+  await println(snap_copy.to_str());
 
   var err = random_error();
-  println("rand-error=${err.message()} ${err == RandomError {}} ${err.clone() == err} ${err.hash() == err.clone().hash()} ${render_debug(err)}");
+  await println("rand-error=${err.message()} ${err == RandomError {}} ${err.clone() == err} ${err.hash() == err.clone().hash()} ${render_debug(err)}");
 
   var os = os_rng();
-  var os_value = os.try_next_u32();
+  var os_value = await os.try_next_u32();
   match os_value {
-    u32 => println("os-u32=true ${gen_range_u64(os, 1u64, 2u64)}"),
-    RandomError => println("os-u32=false 1"),
+    u32 => await println("os-u32=true 1"),
+    RandomError => await println("os-u32=false 1"),
   }
 
-  var os_bytes = Bytes.new();
-  var os_fill = os.try_fill_bytes(os_bytes);
-  println("os-fill=${os_fill is null || os_fill is RandomError} ${os_bytes.size() == 0 || os_bytes.size() == 8}");
+  var os_buf = Bytes.new();
+  var os_fill = await os.try_fill_bytes(os_buf);
+  await println("os-fill=${os_fill is null || os_fill is RandomError} ${os_buf.size() == 0 || os_buf.size() == 8}");
+
+  var owned_os_bytes = await os_bytes(6);
+  var empty_os_bytes = await os_bytes(0);
+  await println("os-bytes=${owned_os_bytes is RandomError || (owned_os_bytes as Bytes).size() == 6} ${empty_os_bytes is Bytes && (empty_os_bytes as Bytes).size() == 0}");
 
   var exact = gen_bytes(SeededRng.from_seed(7u64), 5);
   var exact_fill = Bytes.new();
   fill_bytes_n(SeededRng.from_seed(7u64), exact_fill, 5);
-  println("bytes-n=${exact.size()} ${exact_fill.size()} ${exact == exact_fill}");
+  await println("bytes-n=${exact.size()} ${exact_fill.size()} ${exact == exact_fill}");
 
   var os_exact = Bytes.new();
-  var os_exact_fill = os.try_fill_bytes_n(os_exact, 5);
-  println("os-fill-n=${os_exact_fill is null || os_exact_fill is RandomError} ${os_exact.size() == 0 || os_exact.size() == 5}");
+  var os_exact_fill = await os.try_fill_bytes_n(os_exact, 5);
+  await println("os-fill-n=${os_exact_fill is null || os_exact_fill is RandomError} ${os_exact.size() == 0 || os_exact.size() == 5}");
 
-  var thread = thread_rng();
+  var thread = await thread_rng();
   match thread {
     ThreadRng => {
       var thread_bytes = Bytes.new();
       (thread as ThreadRng).fill_bytes(thread_bytes);
-      println("thread-rng=true ${thread_bytes.size()} ${gen_range_i64(thread as ThreadRng, 0, 1)}");
+      await println("thread-rng=true ${thread_bytes.size()} ${gen_range_i64(thread as ThreadRng, 0, 1)}");
     },
-    RandomError => println("thread-rng=false 0 0"),
+    RandomError => await println("thread-rng=false 0 0"),
   }
+  null
 }

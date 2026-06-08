@@ -1,0 +1,77 @@
+//@ kind: run
+//@ serial
+//@ description: example: async network operation deadlines use std:async.timeout around explicit async futures
+//@ stdout:
+//~ async-network-timeout=true keep 4
+
+import { Future } from "core:prelude";
+import { Bytes } from "std:bytes";
+import { sleep, timeout, TimedOut } from "std:async";
+import { println, IoError } from "std:io";
+import { AsyncUdpSocket } from "std:net";
+import { SocketAddr, ip_v4, socket_addr } from "std:net/types";
+
+// Async network operation deadlines are expressed with std:async.timeout(...)
+// around the explicit async operation. The async UDP adapter deliberately does
+// not grow copied recv_timeout_async/send_timeout_async method families.
+
+function filled_buffer(len: i64): Bytes {
+  var buf = Bytes.new();
+  var i = 0;
+  while i < len {
+    buf.push(0u8);
+    i = i + 1;
+  }
+  buf
+}
+
+function appended_text(buf: Bytes, original_len: i64): str {
+  var i = 0;
+  while i < original_len {
+    var _ = buf.remove_at(0);
+    i = i + 1;
+  }
+  var decoded = buf.decode_utf8();
+  if decoded is str { decoded as str } else { "utf8-error" }
+}
+
+function recv_text(socket: AsyncUdpSocket, len: i64): Future<str> async {
+  var buf = filled_buffer(len);
+  var received = await socket.recv_from_async(buf);
+  if received is IoError || (received as (i64, SocketAddr)).0 != len {
+    "recv-error"
+  } else {
+    appended_text(buf, len)
+  }
+}
+
+function main(): Future<null> async {
+  var receiver_result = await AsyncUdpSocket.bind(socket_addr(ip_v4(127u8, 0u8, 0u8, 1u8), 0u16));
+  var sender_result = await AsyncUdpSocket.bind(socket_addr(ip_v4(127u8, 0u8, 0u8, 1u8), 0u16));
+  if receiver_result is IoError || sender_result is IoError {
+    await println("async-network-timeout=false bind-error");
+    return null;
+  }
+
+  var receiver = receiver_result as AsyncUdpSocket;
+  var sender = sender_result as AsyncUdpSocket;
+  var addr = await receiver.local_addr();
+  if addr is IoError {
+    await println("async-network-timeout=false addr-error");
+    return null;
+  }
+
+  var stale_buf = filled_buffer(4);
+  var timed = await timeout(receiver.recv_from_async(stale_buf), 1);
+  var timed_out = timed is TimedOut;
+
+  var _stale = await sender.send_to_async(Bytes.from_str("drop"), addr as SocketAddr);
+  var _settle = await sleep(10);
+  var sent = await sender.send_to_async(Bytes.from_str("keep"), addr as SocketAddr);
+  var fresh = await recv_text(receiver, 4);
+  var _sender_close = await sender.close();
+  var _receiver_close = await receiver.close();
+
+  await println("async-network-timeout=${timed_out} ${fresh} ${if sent is i64 { sent as i64 } else { -1 }}");
+  null
+}

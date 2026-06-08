@@ -3,12 +3,14 @@
 //@ stdout:
 //~ 11 22
 //~ 7 14
+import { Future } from "core:prelude";
 import { println } from "std:io";
 extern struct Pair { a: i64, b: i64 }
 function make(x: i64, y: i64): Pair { Pair { a: x, b: y } }
-function main() {
+function main(): Future<null> async {
   var p = make(11, 22);
-  println("${p.a} ${p.b}");
+  await println("${p.a} ${p.b}");
   var q = make(7, 14);
-  println("${q.a} ${q.b}");
+  await println("${q.a} ${q.b}");
+  null
 }

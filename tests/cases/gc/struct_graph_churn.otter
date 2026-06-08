@@ -3,6 +3,7 @@
 //@ description: building and dropping a linked structure repeatedly under GC stress
 //@ stdout:
 //~ len=20
+import { Future } from "core:prelude";
 import { println } from "std:io";
 struct Node { v: i64, next: Node | null }
 function build(n: i64): Node | null {
@@ -20,9 +21,10 @@ function len(head: Node | null): i64 {
   }
   n
 }
-function main() {
+function main(): Future<null> async {
   var total = 0;
   var k = 0;
   while k < 30 { total = len(build(20)); k = k + 1; }
-  println("len=${total}");
+  await println("len=${total}");
+  null
 }

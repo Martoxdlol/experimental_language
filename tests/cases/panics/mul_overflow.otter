@@ -1,8 +1,10 @@
 //@ kind: panic
 //@ description: integer multiplication overflow panics
 //@ stderr: attempt to multiply with overflow
+import { Future } from "core:prelude";
 import { println } from "std:io";
-function main() {
+function main(): Future<null> async {
   var x = 9223372036854775807;
-  println("${x * 2}");
+  await println("${x * 2}");
+  null
 }

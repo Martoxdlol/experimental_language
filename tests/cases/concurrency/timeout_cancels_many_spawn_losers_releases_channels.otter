@@ -5,8 +5,8 @@
 //@ stdout:
 //~ timed_out=512 closed=512
 
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { List } from "core:collections";
 import { Sender, Receiver, ChannelClosed, channel } from "std:sync";
 import { sleep, timeout, TimedOut } from "std:async";
@@ -51,5 +51,6 @@ function main(): Future<null> async {
     j = j + 1;
   }
 
-  println("timed_out=${timed_out } closed=${closed }");
+  await println("timed_out=${timed_out} closed=${closed}");
+  null
 }

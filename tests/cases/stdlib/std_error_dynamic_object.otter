@@ -4,6 +4,7 @@
 //~ message=disk missing
 //~ text=io:disk missing
 //~ cause=none
+import { Future } from "core:prelude";
 import { println } from "std:io";
 import { Error } from "std:error";
 
@@ -15,11 +16,12 @@ extend IoError: Error {
   function to_str(self): str { "io:" + self.msg }
 }
 
-function main() {
+function main(): Future<null> async {
   var e: Error = IoError { msg: "disk missing" };
-  println("message=${e.message()}");
-  println("text=${e.to_str()}");
+  await println("message=${e.message()}");
+  await println("text=${e.to_str()}");
   if e.cause() is null {
-    println("cause=none");
+    await println("cause=none");
   }
+  null
 }

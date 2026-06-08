@@ -1,0 +1,17 @@
+//@ kind: compile-error
+//@ description: std:io AsyncWriter is an explicit async contract and does not accept ordinary in-memory Writer-only values
+//@ stderr: type `Bytes` does not implement `AsyncWriter`
+
+import { Future } from "core:prelude";
+import { Bytes } from "std:bytes";
+import { AsyncWriter, IoError } from "std:io";
+
+function write_async_only<T: AsyncWriter>(writer: T): Future<i64 | IoError> async {
+  await writer.write_async(Bytes.from_str("nope"))
+}
+
+function main(): Future<null> async {
+  var sink = Bytes.new();
+  var _ = await write_async_only(sink);
+  null
+}

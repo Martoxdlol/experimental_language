@@ -1,0 +1,16 @@
+//@ kind: compile-error
+//@ description: std:net AsyncTcpListener.to_str is ordinary stringification, not an async accept operation
+//@ stderr: `await` requires a `Future`
+
+import { Future } from "core:prelude";
+import { AsyncTcpListener, TcpListener } from "std:net";
+import { ip_v4, socket_addr } from "std:net/types";
+
+function main(): Future<null> async {
+  var bound = await TcpListener.bind(socket_addr(ip_v4(127u8, 0u8, 0u8, 1u8), 0u16));
+  if bound is TcpListener {
+    var listener = AsyncTcpListener.from_listener(bound as TcpListener);
+    var _text = await listener.to_str();
+  }
+  null
+}

@@ -4,14 +4,16 @@
 //~ is int
 //~ 42
 //~ is str
+import { Future } from "core:prelude";
 import { println } from "std:io";
 function describe(x: i64 | str): str {
   if x is i64 { "is int" } else { "is str" }
 }
-function main() {
+function main(): Future<null> async {
   var a: i64 | str = 42;
-  println(describe(a));
-  if a is i64 { println("${a as i64}"); }
+  await println(describe(a));
+  if a is i64 { await println("${a as i64}"); }
   var b: i64 | str = "hello";
-  println(describe(b));
+  await println(describe(b));
+  null
 }

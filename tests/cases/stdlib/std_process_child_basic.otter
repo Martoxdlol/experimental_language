@@ -1,5 +1,5 @@
 //@ kind: run
-//@ description: std:process supports live Child handles with spawn, id, wait, cached wait, clone sharing, kill, and validation/provider errors
+//@ description: async std:process supports live Child handles with spawn, id, wait, cached wait, clone sharing, kill, and validation/provider errors
 //@ stdout:
 //~ spawn=true true true true
 //~ wait=true true true
@@ -7,6 +7,7 @@
 //~ missing=true invalid=true
 //~ kill=true true true
 
+import { Future } from "core:prelude";
 import { Command, Child, ExitStatus } from "std:process";
 import { IoError } from "std:io";
 import { println } from "std:io";
@@ -27,36 +28,37 @@ function status_not_success(value: ExitStatus | IoError): bool {
   }
 }
 
-function main() {
-  var spawned = Command.new("true").spawn();
+function main(): Future<null> async {
+  var spawned = await Command.new("true").spawn();
   if spawned is IoError {
-    println("spawn=false false false false");
-    println("wait=false false false");
-    println("clone-wait=false false");
+    await println("spawn=false false false false");
+    await println("wait=false false false");
+    await println("clone-wait=false false");
   } else {
     var child = spawned as Child;
-    println("spawn=${child.id() > 0u32} ${child.stdin() is null} ${child.stdout() is null} ${child.stderr() is null}");
+    await println("spawn=${child.id() > 0u32} ${child.stdin() is null} ${child.stdout() is null} ${child.stderr() is null}");
 
-    var waited = child.wait();
-    var waited_again = child.wait();
-    println("wait=${status_success(waited)} ${status_success(waited_again)} ${(waited as ExitStatus) == (waited_again as ExitStatus)}");
+    var waited = await child.wait();
+    var waited_again = await child.wait();
+    await println("wait=${status_success(waited)} ${status_success(waited_again)} ${(waited as ExitStatus) == (waited_again as ExitStatus)}");
 
     var clone = child.clone();
-    var clone_waited = clone.wait();
-    println("clone-wait=${status_success(clone_waited)} ${(clone_waited as ExitStatus) == (waited as ExitStatus)}");
+    var clone_waited = await clone.wait();
+    await println("clone-wait=${status_success(clone_waited)} ${(clone_waited as ExitStatus) == (waited as ExitStatus)}");
   }
 
-  var missing = Command.new("__otter_fusion_missing_process_child_for_stdlib_test__").spawn();
-  var invalid = Command.new("").spawn();
-  println("missing=${missing is IoError} invalid=${invalid is IoError}");
+  var missing = await Command.new("__otter_fusion_missing_process_child_for_stdlib_test__").spawn();
+  var invalid = await Command.new("").spawn();
+  await println("missing=${missing is IoError} invalid=${invalid is IoError}");
 
-  var sleeper = Command.new("sleep").arg("5").spawn();
+  var sleeper = await Command.new("sleep").arg("5").spawn();
   if sleeper is IoError {
-    println("kill=false false false");
+    await println("kill=false false false");
   } else {
     var child = sleeper as Child;
-    var killed = child.kill();
-    var status = child.wait();
-    println("kill=${killed is null} ${status is ExitStatus} ${status_not_success(status)}");
+    var killed = await child.kill();
+    var status = await child.wait();
+    await println("kill=${killed is null} ${status is ExitStatus} ${status_not_success(status)}");
   }
+  null
 }

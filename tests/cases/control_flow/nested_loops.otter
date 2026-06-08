@@ -2,8 +2,9 @@
 //@ description: nested loops with inner break
 //@ stdout:
 //~ 9
+import { Future } from "core:prelude";
 import { println } from "std:io";
-function main() {
+function main(): Future<null> async {
   var count = 0;
   var i = 0;
   while i < 3 {
@@ -15,5 +16,6 @@ function main() {
     }
     i = i + 1;
   }
-  println("${count }");
+  await println("${count}");
+  null
 }

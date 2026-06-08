@@ -315,17 +315,18 @@ resources, log, etc.</p>
 
 <h3>When <code>drop</code> runs</h3>
 <ul>
-  <li><strong>Unreachable object, regular GC</strong> — asynchronously, from the finalizer queue, in unspecified order. See <a href="16-memory.html#drop">16-memory §8</a>.</li>
+  <li><strong>Unreachable object, regular GC</strong> — best-effort, from the non-waiting finalizer queue, in unspecified order. See <a href="16-memory.html#drop">16-memory §8</a>.</li>
   <li><strong>Program exit</strong> — best-effort pass; may skip finalizers entirely.</li>
 </ul>
 
 <div class="callout warn">
-  <strong>Drop is asynchronous and not guaranteed</strong>
+  <strong>Drop is best-effort and non-waiting</strong>
   <code>drop</code> runs <em>eventually</em>, on a finalizer thread, in unspecified order, only
   after the collector observes the object as unreachable. It may never run (at program exit, or
   if the object is leaked). A panicking <code>Drop</code> impl aborts the process. For any
-  resource that needs deterministic release (files, locks, transactions, handles), call the
-  release method <em>explicitly</em> — the language provides no scope-exit hook.
+  wait-capable resource that needs deterministic release (files, locks, transactions, handles),
+  call the explicit async release method and await it; <code>Drop</code> is not a public
+  async cleanup hook, and the language provides no scope-exit hook.
 </div>
 
 <div class="callout">

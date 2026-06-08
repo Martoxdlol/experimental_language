@@ -1,0 +1,13 @@
+//@ kind: compile-error
+//@ description: std:thread Panicked.debug is ordinary marker value rendering, not an async join operation
+//@ stderr: `await` requires a `Future`
+
+import { Future } from "core:prelude";
+import { Debug } from "std:fmt";
+import { Panicked } from "std:thread";
+
+function main(): Future<null> async {
+  var panic_value = Panicked { message: "boom" };
+  var _debug = await panic_value.debug();
+  null
+}

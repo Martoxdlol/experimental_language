@@ -1,0 +1,13 @@
+//@ kind: compile-error
+//@ description: std:io BufWriter.write_all is an ordinary in-memory buffered-writer boundary, not an async surface
+//@ stderr: `await` requires a `Future`
+
+import { Future } from "core:prelude";
+import { Bytes } from "std:bytes";
+import { buf_writer } from "std:io";
+
+function main(): Future<null> async {
+  var writer = buf_writer(Bytes.new());
+  var _written = await writer.write_all(Bytes.from_str("x"));
+  null
+}

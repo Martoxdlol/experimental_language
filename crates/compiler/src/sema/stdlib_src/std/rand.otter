@@ -16,14 +16,82 @@ struct ThreadRng {
   inner: SeededRng,
 }
 
-extern function lang_rand_os_u32(): i64;
+extern function __otter_rand_os_bytes_async(count: i64): Future<str>;
 
 function random_error(): RandomError { RandomError {} }
 
 function os_rng(): OsRng { OsRng {} }
 
-function thread_rng(): ThreadRng | RandomError {
-  var seed = OsRng {}.try_next_u64();
+function __rand_status_is_error(result: str): bool {
+  result.size() == 0 || result.substring(0, 1) == "1"
+}
+
+function __rand_status_payload(result: str): str {
+  if result.size() <= 1 { "" } else { result.substring(1, result.size()) }
+}
+
+function __rand_hex_value(ch: char): u8 | RandomError {
+  var cp = ch as i64;
+  if cp >= 48 && cp <= 57 {
+    (cp - 48) as u8
+  } else if cp >= 97 && cp <= 102 {
+    (cp - 87) as u8
+  } else if cp >= 65 && cp <= 70 {
+    (cp - 55) as u8
+  } else {
+    RandomError {}
+  }
+}
+
+function __rand_hex_at(text: str, index: i64): u8 | RandomError {
+  var result: u8 | RandomError = RandomError {};
+  for ch in text.substring(index, index + 1).chars() {
+    result = __rand_hex_value(ch);
+  }
+  result
+}
+
+function __rand_hex_to_bytes(hex: str): Bytes | RandomError {
+  if hex.size() % 2 != 0 {
+    RandomError {}
+  } else {
+    var out = Bytes.new();
+    var i = 0;
+    while i < hex.size() {
+      var hi = __rand_hex_at(hex, i);
+      if hi is RandomError {
+        return hi as RandomError;
+      }
+      var lo = __rand_hex_at(hex, i + 1);
+      if lo is RandomError {
+        return lo as RandomError;
+      }
+      out.push((hi as u8) * 16u8 + (lo as u8));
+      i = i + 2;
+    }
+    out
+  }
+}
+
+function __rand_decode_bytes(result: str): Bytes | RandomError {
+  if __rand_status_is_error(result) {
+    RandomError {}
+  } else {
+    __rand_hex_to_bytes(__rand_status_payload(result))
+  }
+}
+
+function os_bytes(count: i64): Future<Bytes | RandomError> async {
+  if count <= 0 {
+    Bytes.new()
+  } else {
+    var raw = await __otter_rand_os_bytes_async(count);
+    __rand_decode_bytes(raw)
+  }
+}
+
+function thread_rng(): Future<ThreadRng | RandomError> async {
+  var seed = await OsRng {}.try_next_u64();
   match seed {
     u64 => ThreadRng { inner: SeededRng.from_seed(seed as u64) },
     RandomError => seed as RandomError,
@@ -45,8 +113,8 @@ function gen_range_i64(rng: Rng, low: i64, high: i64): i64 {
   if high <= low {
     low
   } else {
-    var width = (high - low)as u64;
-    low + (rng.next_u64() % width)as i64
+    var width = (high - low) as u64;
+    low + (rng.next_u64() % width) as i64
   }
 }
 
@@ -59,7 +127,7 @@ function gen_range_u64(rng: Rng, low: u64, high: u64): u64 {
 }
 
 function gen_f64(rng: Rng): f64 {
-  (rng.next_u64() % 9007199254740992u64)as f64 / 9007199254740992.0
+  (rng.next_u64() % 9007199254740992u64) as f64 / 9007199254740992.0
 }
 
 function gen_range_f64(rng: Rng, low: f64, high: f64): f64 {
@@ -70,6 +138,128 @@ function gen_range_f64(rng: Rng, low: f64, high: f64): f64 {
   }
 }
 
+function gen_triangular_f64(rng: Rng, low: f64, high: f64): f64 {
+  if high <= low {
+    low
+  } else {
+    low + ((gen_f64(rng) + gen_f64(rng)) / 2.0) * (high - low)
+  }
+}
+
+function gen_bates_f64(rng: Rng, draws: i64, low: f64, high: f64): f64 {
+  if draws <= 0 || high <= low {
+    low
+  } else {
+    var total = 0.0;
+    var i = 0;
+    while i < draws {
+      total = total + gen_f64(rng);
+      i = i + 1;
+    }
+    low + (total / (draws as f64)) * (high - low)
+  }
+}
+
+function gen_irwin_hall_f64(rng: Rng, draws: i64, low: f64, high: f64): f64 {
+  if draws <= 0 || high <= low {
+    0.0
+  } else {
+    var total = 0.0;
+    var i = 0;
+    while i < draws {
+      total = total + gen_range_f64(rng, low, high);
+      i = i + 1;
+    }
+    total
+  }
+}
+
+function gen_min_f64(rng: Rng, draws: i64, low: f64, high: f64): f64 {
+  if draws <= 0 || high <= low {
+    low
+  } else {
+    var value = gen_range_f64(rng, low, high);
+    var i = 1;
+    while i < draws {
+      var next = gen_range_f64(rng, low, high);
+      if next < value {
+        value = next;
+      }
+      i = i + 1;
+    }
+    value
+  }
+}
+
+function gen_max_f64(rng: Rng, draws: i64, low: f64, high: f64): f64 {
+  if draws <= 0 || high <= low {
+    low
+  } else {
+    var value = gen_range_f64(rng, low, high);
+    var i = 1;
+    while i < draws {
+      var next = gen_range_f64(rng, low, high);
+      if next > value {
+        value = next;
+      }
+      i = i + 1;
+    }
+    value
+  }
+}
+
+function gen_midrange_f64(rng: Rng, draws: i64, low: f64, high: f64): f64 {
+  if draws <= 0 || high <= low {
+    low
+  } else {
+    var observed_low = gen_range_f64(rng, low, high);
+    var observed_high = observed_low;
+    var i = 1;
+    while i < draws {
+      var next = gen_range_f64(rng, low, high);
+      if next < observed_low {
+        observed_low = next;
+      } else if next > observed_high {
+        observed_high = next;
+      }
+      i = i + 1;
+    }
+    var midpoint = (observed_low + observed_high) / 2.0;
+    midpoint
+  }
+}
+
+function gen_median_f64(rng: Rng, draws: i64, low: f64, high: f64): f64 {
+  if draws <= 0 || high <= low {
+    low
+  } else {
+    var values = List<f64>();
+    var i = 0;
+    while i < draws {
+      var sample = gen_range_f64(rng, low, high);
+      var inserted = false;
+      var j = 0;
+      while j < values.size() && !inserted {
+        if sample < values[j] {
+          values.insert(j, sample);
+          inserted = true;
+        }
+        j = j + 1;
+      }
+      if !inserted {
+        values.push(sample);
+      }
+      i = i + 1;
+    }
+    var mid = draws / 2;
+    if draws % 2 == 1 {
+      values[mid]
+    } else {
+      (values[mid - 1] + values[mid]) / 2.0
+    }
+  }
+}
+
 function gen_bool(rng: Rng, numerator: i64, denominator: i64): bool {
   if denominator <= 0 || numerator <= 0 {
     false
@@ -77,6 +267,24 @@ function gen_bool(rng: Rng, numerator: i64, denominator: i64): bool {
     true
   } else {
     gen_range_i64(rng, 0, denominator) < numerator
+  }
+}
+
+function gen_binomial(rng: Rng, trials: i64, numerator: i64, denominator: i64): i64 {
+  if trials <= 0 || denominator <= 0 || numerator <= 0 {
+    0
+  } else if numerator >= denominator {
+    trials
+  } else {
+    var successes = 0;
+    var i = 0;
+    while i < trials {
+      if gen_bool(rng, numerator, denominator) {
+        successes = successes + 1;
+      }
+      i = i + 1;
+    }
+    successes
   }
 }
 
@@ -94,7 +302,7 @@ function fill_bytes_n(rng: Rng, buf: Bytes, count: i64): null {
     var value = rng.next_u64();
     var i = 0;
     while i < 8 && written < count {
-      buf.push((value % 256u64)as u8);
+      buf.push((value % 256u64) as u8);
       value = value / 256u64;
       i = i + 1;
       written = written + 1;
@@ -122,6 +330,91 @@ function choose<T>(rng: Rng, list: List<T>): T | null {
   }
 }
 
+function weighted_total(weights: List<u64>): u64 | null {
+  var total = 0u64;
+  var max = 18446744073709551615u64;
+  var i = 0;
+  while i < weights.size() {
+    var weight = weights[i];
+    if weight > 0u64 {
+      if weight > max - total {
+        return null;
+      }
+      total = total + weight;
+    }
+    i = i + 1;
+  }
+  if total == 0u64 {
+    null
+  } else {
+    total
+  }
+}
+
+function weighted_index(rng: Rng, weights: List<u64>): i64 | null {
+  var total = weighted_total(weights);
+  match total {
+    u64 => {
+      var remaining = gen_range_u64(rng, 0u64, total as u64);
+      var i = 0;
+      while i < weights.size() {
+        var weight = weights[i];
+        if weight > 0u64 {
+          if remaining < weight {
+            return i;
+          }
+          remaining = remaining - weight;
+        }
+        i = i + 1;
+      }
+      null
+    },
+    null => null,
+  }
+}
+
+function choose_weighted<T>(rng: Rng, list: List<T>, weights: List<u64>): T | null {
+  if list.size() != weights.size() {
+    null
+  } else {
+    var index = weighted_index(rng, weights);
+    if index is null {
+      null
+    } else {
+      list[index as i64]
+    }
+  }
+}
+
+function sample_indices(rng: Rng, len: i64, count: i64): List<i64> {
+  var out = List<i64>();
+  if len <= 0 || count <= 0 {
+    out
+  } else {
+    var pool = List<i64>();
+    var i = 0;
+    while i < len {
+      pool.push(i);
+      i = i + 1;
+    }
+    while out.size() < count && pool.size() > 0 {
+      var index = gen_range_i64(rng, 0, pool.size());
+      out.push(pool[index]);
+      var _ = pool.remove(index);
+    }
+    out
+  }
+}
+
+function sample<T>(rng: Rng, list: List<T>, count: i64): List<T> {
+  var out = List<T>();
+  var indexes = sample_indices(rng, list.size(), count);
+  for index in indexes {
+    out.push(list[index]);
+  }
+  out
+}
+
 function shuffle<T>(rng: Rng, list: List<T>): null {
   var i = list.size() - 1;
   while i > 0 {
@@ -132,6 +425,15 @@ function shuffle<T>(rng: Rng, list: List<T>): null {
     list.set(j, a);
     i = i - 1;
   }
+}
+
+function shuffled<T>(rng: Rng, list: List<T>): List<T> {
+  var out = List<T>();
+  for value in list {
+    out.push(value);
+  }
+  shuffle(rng, out);
+  out
 }
 
 extend SeededRng {
@@ -147,8 +449,8 @@ extend SeededRng: Rng {
   }
 
   function next_u64(self): u64 {
-    var high = self.next_u32()as u64;
-    var low = self.next_u32()as u64;
+    var high = self.next_u32() as u64;
+    var low = self.next_u32() as u64;
     high * rand_modulus() + low
   }
 
@@ -156,7 +458,7 @@ extend SeededRng: Rng {
     var value = self.next_u64();
     var i = 0;
     while i < 8 {
-      buf.push((value % 256u64)as u8);
+      buf.push((value % 256u64) as u8);
       value = value / 256u64;
       i = i + 1;
     }
@@ -208,22 +510,40 @@ extend RandomError: Debug {
 }
 
 extend OsRng {
-  function try_next_u32(self): u32 | RandomError {
-    var value = lang_rand_os_u32();
-    if value < 0 {
-      RandomError {}
-    } else {
-      value as u32
+  function try_next_u32(self): Future<u32 | RandomError> async {
+    var out = Bytes.new();
+    var result = await self.try_fill_bytes_n(out, 4);
+    match result {
+      null => {
+        var value = 0u32;
+        var factor = 1u32;
+        var read = 0;
+        for b in out.iter() {
+          if read < 4 {
+            value = value + (b as u32) * factor;
+            if read < 3 {
+              factor = factor * 256u32;
+            }
+            read = read + 1;
+          }
+        }
+        if read == 4 {
+          value
+        } else {
+          RandomError {}
+        }
+      },
+      RandomError => result as RandomError,
     }
   }
 
-  function try_next_u64(self): u64 | RandomError {
-    var high = self.try_next_u32();
+  function try_next_u64(self): Future<u64 | RandomError> async {
+    var high = await self.try_next_u32();
     match high {
       u32 => {
-        var low = self.try_next_u32();
+        var low = await self.try_next_u32();
         match low {
-          u32 => ((high as u32)as u64) * 4294967296u64 + ((low as u32)as u64),
+          u32 => ((high as u32) as u64) * 4294967296u64 + ((low as u32) as u64),
           RandomError => low as RandomError,
         }
       },
@@ -231,67 +551,25 @@ extend OsRng {
     }
   }
 
-  function try_fill_bytes(self, buf: Bytes): null | RandomError {
-    var value = self.try_next_u64();
-    match value {
-      u64 => {
-        var current = value as u64;
-        var i = 0;
-        while i < 8 {
-          buf.push((current % 256u64)as u8);
-          current = current / 256u64;
-          i = i + 1;
-        }
-        null
-      },
-      RandomError => value as RandomError,
-    }
+  function try_fill_bytes(self, buf: Bytes): Future<null | RandomError> async {
+    await self.try_fill_bytes_n(buf, 8)
   }
 
-  function try_fill_bytes_n(self, buf: Bytes, count: i64): null | RandomError {
-    var written = 0;
-    while written < count {
-      var value = self.try_next_u64();
-      match value {
-        u64 => {
-          var current = value as u64;
-          var i = 0;
-          while i < 8 && written < count {
-            buf.push((current % 256u64)as u8);
-            current = current / 256u64;
-            i = i + 1;
-            written = written + 1;
+  function try_fill_bytes_n(self, buf: Bytes, count: i64): Future<null | RandomError> async {
+    if count <= 0 {
+      null
+    } else {
+      var raw = await __otter_rand_os_bytes_async(count);
+      var bytes = __rand_decode_bytes(raw);
+      match bytes {
+        Bytes => {
+          for b in (bytes as Bytes).iter() {
+            buf.push(b);
           }
+          null
         },
-        RandomError => return value as RandomError,
+        RandomError => bytes as RandomError,
       }
-    }
-    null
-  }
-}
-
-extend OsRng: Rng {
-  function next_u32(self): u32 {
-    var value = self.try_next_u32();
-    match value {
-      u32 => value as u32,
-      RandomError => panic((value as RandomError).message()),
-    }
-  }
-
-  function next_u64(self): u64 {
-    var value = self.try_next_u64();
-    match value {
-      u64 => value as u64,
-      RandomError => panic((value as RandomError).message()),
-    }
-  }
-
-  function fill_bytes(self, buf: Bytes): null {
-    var result = self.try_fill_bytes(buf);
-    match result {
-      null => null,
-      RandomError => panic((result as RandomError).message()),
     }
   }
 }

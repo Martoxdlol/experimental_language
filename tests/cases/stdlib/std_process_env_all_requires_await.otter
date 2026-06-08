@@ -1,0 +1,10 @@
+//@ kind: compile-error
+//@ description: std:process env_all returns a Future and cannot be used as an immediate environment snapshot
+//@ stderr: Future<
+
+import { Map } from "core:collections";
+import { env_all } from "std:process";
+
+function main() {
+  var all: Map<str, str> = env_all();
+}

@@ -1,6 +1,6 @@
 //@ kind: run
 //@ serial
-//@ description: a panicking `Thread.spawn` worker is isolated — it surfaces as `Panicked { message }` on `join` (with the exact panic message) while a sibling worker spawned alongside runs to completion and returns its value (docs/20 §1, docs/21 §11).
+//@ description: a panicking `Thread.spawn` worker is isolated — it surfaces as `Panicked { message }` on `join` (with the exact panic message) while a sibling worker spawned alongside finishes normally and returns its value (docs/20 §1, docs/21 §11).
 //@ stdout:
 //~ a = panicked: worker 0 down
 //~ b = ok 25
@@ -19,19 +19,21 @@ function maybe_panic(n: i64): i64 {
 // explicit `panic`.
 function div(a: i64, b: i64): i64 { a / b }
 
-function show(label: str, r: Joined<i64> | Panicked) {
+function show(label: str, r: Joined<i64> | Panicked): Future<null> async {
   match r {
-    Joined<i64> j => println(label + " = ok " + (j.value as str)),
-    Panicked p => println(label + " = panicked: " + p.message),
+    Joined<i64> j => await println(label + " = ok " + (j.value as str)),
+    Panicked p => await println(label + " = panicked: " + p.message),
   };
+  null
 }
 
 function main(): Future<null> async {
   var a: JoinHandle<i64> = Thread.spawn(() => maybe_panic(0));
   var b: JoinHandle<i64> = Thread.spawn(() => maybe_panic(5));
   var c: JoinHandle<i64> = Thread.spawn(() => div(10, 0));
-  show("a", await a.join());
-  show("b", await b.join());
-  show("c", await c.join());
-  println("done");
+  await show("a", await a.join());
+  await show("b", await b.join());
+  await show("c", await c.join());
+  await println("done");
+  null
 }

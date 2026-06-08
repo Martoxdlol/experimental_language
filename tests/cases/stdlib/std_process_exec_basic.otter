@@ -1,41 +1,56 @@
 //@ kind: run
-//@ description: std:process runs commands to completion and captures output
+//@ description: async std:process command-completion APIs execute commands and capture output
 //@ stdout:
-//~ status=true exit status 0
+//~ status=true true true exit status 0
 //~ output=true true true
+//~ exact-output=true true true
 //~ missing=true true
 //~ invalid=true true
 
+import { Future } from "core:prelude";
 import { args } from "std:process";
 import { Command, ExitStatus, Output } from "std:process";
+import { Bytes } from "std:bytes";
 import { println } from "std:io";
 import { IoError } from "std:io";
 
-function main() {
-  var exe = args()[0];
+function main(): Future<null> async {
+  var argv = await args();
+  var exe = argv[0];
   var checked = Command.new("true");
   var version = Command.new(exe).arg("--version");
 
-  var status = checked.status();
+  var status = await checked.status();
   if status is IoError {
-    println("status=false ${(status as IoError).message()}");
+    await println("status=false ${(status as IoError).message()}");
   } else {
-    println("status=${(status as ExitStatus).success()} ${(status as ExitStatus).to_str()}");
+    var core_dumped = (status as ExitStatus).core_dumped();
+    var continued = (status as ExitStatus).continued();
+    await println("status=${(status as ExitStatus).success()} ${!(core_dumped is bool && (core_dumped as bool))} ${continued is null || !(continued as bool)} ${(status as ExitStatus).to_str()}");
   }
 
-  var captured = version.output();
+  var captured = await version.output();
   if captured is IoError {
-    println("output=false false false");
+    await println("output=false false false");
   } else {
     var out = captured as Output;
-    println("output=${out.status().success()} ${out.stdout().size() > 0} ${out.stderr().size() == 0}");
+    await println("output=${out.status().success()} ${out.stdout().size() > 0} ${out.stderr().size() == 0}");
   }
 
-  var missing_status = Command.new("__otter_fusion_missing_process_for_stdlib_test__").status();
-  var missing_output = Command.new("__otter_fusion_missing_process_for_stdlib_test__").output();
-  println("missing=${missing_status is IoError} ${missing_output is IoError}");
+  var exact = await Command.new("sh").arg("-c").arg("printf abcd; printf wxyz >&2").output();
+  if exact is IoError {
+    await println("exact-output=false false false");
+  } else {
+    var exact_out = exact as Output;
+    await println("exact-output=${exact_out.status().success()} ${exact_out.stdout() == Bytes.from_str("abcd")} ${exact_out.stderr() == Bytes.from_str("wxyz")}");
+  }
 
-  var empty_program_status = Command.new("").status();
-  var invalid_env_output = Command.new(exe).env_var("BAD=KEY", "value").output();
-  println("invalid=${empty_program_status is IoError} ${invalid_env_output is IoError}");
+  var missing_status = await Command.new("__otter_fusion_missing_process_for_stdlib_test__").status();
+  var missing_output = await Command.new("__otter_fusion_missing_process_for_stdlib_test__").output();
+  await println("missing=${missing_status is IoError} ${missing_output is IoError}");
+
+  var empty_program_status = await Command.new("").status();
+  var invalid_env_output = await Command.new(exe).env_var("BAD=KEY", "value").output();
+  await println("invalid=${empty_program_status is IoError} ${invalid_env_output is IoError}");
+  null
 }

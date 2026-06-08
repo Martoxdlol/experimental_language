@@ -56,9 +56,10 @@ pub const KIND_MAP: u64 = 3;
 /// for GC tracing, but carrying a hidden **atomic strong-count** word at
 /// field-block offset 0 (user fields shift up by 8). The compiler emits
 /// retain/release (`lang_rc_retain`/`lang_rc_release`) around every binding; the
-/// count reaching zero runs the type's `Drop` synchronously and frees the object
-/// without waiting for a collection. The tracing GC is retained only as the
-/// **cycle-collector backstop** (refcounting alone leaks reference cycles).
+/// count reaching zero runs the type's `Drop` immediately as non-waiting
+/// cleanup and frees the object without waiting for a collection. The tracing
+/// GC is retained only as the **cycle-collector backstop** (refcounting alone
+/// leaks reference cycles).
 pub const KIND_REFCOUNTED: u64 = 4;
 
 #[inline]
@@ -736,15 +737,15 @@ unsafe fn scan_stack_roots_from(mut fp: usize) -> Vec<usize> {
 //
 // With multiple OS threads sharing one managed heap, a collection must observe
 // *every* live thread's precise roots. We use cooperative safepoints: generated
-// code polls [`lang_gc_safepoint`] at loop back-edges, and blocking runtime
-// calls bracket themselves with [`enter_native`]/[`leave_native`]. To collect, a
+// code polls [`lang_gc_safepoint`] at loop back-edges, and private runtime
+// waits bracket themselves with [`enter_native`]/[`leave_native`]. To collect, a
 // thread sets the global stop flag and waits until every *other* mutator is
 // parked at a safepoint or sitting in native code — its frame pointer recorded
 // either way — then scans all stacks, mark-sweeps, and releases the world.
 
 const M_RUNNING: u8 = 0;
 const M_PARKED: u8 = 1; // stopped at a safepoint; `fp` valid
-const M_NATIVE: u8 = 2; // inside a blocking runtime call; `fp` valid
+const M_NATIVE: u8 = 2; // inside a private native wait; `fp` valid
 
 /// Per-thread mutator record. The collector reads `state`/`fp` of every thread.
 struct Mutator {
@@ -849,10 +850,11 @@ fn any_finalizers() -> bool {
 // field-block offset 0. The compiler emits balanced [`lang_rc_retain`] /
 // [`lang_rc_release`] around every binding (bind/copy/param/return/capture +
 // heap stores). When the count reaches zero the object is destroyed *now*: its
-// `Drop` (if any) runs synchronously, its owned refcounted children are
-// released (cascading the destruction through the owned graph), and its memory
-// is reclaimed — no wait for a collection. Reference cycles keep their counts
-// above zero and are left to the tracing GC backstop (`collect`).
+// `Drop` (if any) runs immediately as non-waiting cleanup, its owned
+// refcounted children are released (cascading the destruction through the owned
+// graph), and its memory is reclaimed — no wait for a collection. Reference
+// cycles keep their counts above zero and are left to the tracing GC backstop
+// (`collect`).
 
 /// View a refcounted object's hidden strong-count word (field-block offset 0).
 ///
@@ -939,7 +941,7 @@ unsafe fn rc_finalize(obj: usize) {
     if tid != 0 {
         let f = lock_unpoison(drop_fns()).get(&tid).copied();
         if let Some(f) = f {
-            f(obj as *mut u8); // user `drop(self)`, run synchronously
+            f(obj as *mut u8); // user `drop(self)`, immediate non-waiting cleanup
         }
     }
     // Release the refcounted strong references this object owned (cascade).
@@ -1004,8 +1006,8 @@ pub extern "C" fn lang_gc_unpin(p: *mut u8) {
 }
 
 thread_local! {
-    /// Transient global pins this thread holds across a `poll` (e.g. the future
-    /// `block_on` is driving). On the normal path they are released by the
+    /// Transient global pins this thread holds across a `poll` (e.g. the root
+    /// future driver is driving). On the normal path they are released by the
     /// matching [`unpin_for_unwind`]; if a worker panics, the `longjmp` skips
     /// that release, so the panic boundary calls [`release_unwind_pins`] to drop
     /// them — otherwise the worker's abandoned objects would stay pinned (and
@@ -1016,7 +1018,7 @@ thread_local! {
 /// Pin `p` globally *and* record it as an unwind-scoped pin on this thread, so a
 /// worker panic boundary can release it if the matching [`unpin_for_unwind`] is
 /// skipped by a `longjmp`. Use for pins held across a `poll` on a thread that
-/// may panic (the async executor's driven future).
+/// may panic (the async executor's polled future).
 pub fn pin_for_unwind(p: usize) {
     add_extra_root(p);
     UNWIND_PINS.with(|v| v.borrow_mut().push(p));
@@ -1082,7 +1084,7 @@ thread_local! {
     };
 }
 
-/// Block until the in-progress collection releases the world.
+/// Wait until the in-progress collection releases the world.
 fn wait_for_resume() {
     let mut g = lock_unpoison(&RESUME_GEN);
     while STOP.load(Ordering::Acquire) {
@@ -1169,7 +1171,7 @@ pub extern "C" fn lang_gc_safepoint() {
 }
 
 /// Cooperative safepoint for runtime scheduler loops that may run generated
-/// poll functions back-to-back without entering a blocking native wait.
+/// poll functions back-to-back without entering a runtime native wait.
 ///
 /// The scheduler pins task inputs as extra roots before polling them, so a
 /// runtime-frame-only stack scan is sufficient here: language state lives in the
@@ -1186,7 +1188,7 @@ pub fn runtime_safepoint() {
 /// world barrier, so it cannot begin running program code while a collection is
 /// in progress. Call once at the very top of a spawned thread, before any
 /// managed code. Its only live managed state here (the closure environment) is
-/// pinned by the spawner, so blocking on the barrier is safe even though no
+/// pinned by the spawner, so parking on the barrier is safe even though no
 /// generated frame yet exists to scan.
 pub fn thread_start() {
     ME.with(|h| {
@@ -1211,16 +1213,16 @@ pub fn thread_start() {
     });
 }
 
-/// Mark the current thread as entering a blocking runtime call (channel recv,
-/// thread join, …). Its stack is scannable from the recorded frame while
-/// blocked, so a collection on another thread need not wait for it. Pair with
-/// [`leave_native`].
+/// Mark the current thread as entering a private runtime wait (channel recv,
+/// thread join, provider IO, …). Its stack is scannable from the recorded frame
+/// while parked in native state, so a collection on another thread need not wait
+/// for it. Pair with [`leave_native`].
 ///
 /// We record the **caller's** frame pointer, not this function's: `enter_native`
 /// returns before the caller blocks, so its own frame is gone by collection
 /// time. The caller's frame (the runtime function that then waits) stays live,
 /// and its return address is the safepoint key carrying the language-level
-/// roots held across the blocking call.
+/// roots held across the native wait.
 #[inline(never)]
 pub fn enter_native() {
     let fp = current_fp();
@@ -1248,7 +1250,7 @@ pub fn enter_runtime_native_no_roots() {
     });
 }
 
-/// Leave a blocking runtime call. If a collection is in progress, wait for it
+/// Leave a private runtime wait. If a collection is in progress, wait for it
 /// before resuming mutation (our stack was already scanned in native state).
 pub fn leave_native() {
     ME.with(|h| {
@@ -1269,6 +1271,28 @@ pub fn leave_native() {
             break;
         }
     });
+}
+
+struct NativeCallGuard;
+
+impl Drop for NativeCallGuard {
+    fn drop(&mut self) {
+        leave_native();
+    }
+}
+
+/// Run a host/runtime operation while this mutator is marked as native.
+///
+/// Use this only around the actual private provider/runtime wait. Decode arguments
+/// before entering and encode any Otter/GC-managed result after returning, so
+/// the thread is not marked native while allocating language objects.
+pub fn native_wait<T>(f: impl FnOnce() -> T) -> T {
+    if !gc_enabled() {
+        return f();
+    }
+    enter_native();
+    let _guard = NativeCallGuard;
+    f()
 }
 
 /// Stop every other mutator and gather the precise roots of all threads. Caller
@@ -1546,7 +1570,7 @@ mod tests {
                 dropped().lock().unwrap().is_empty(),
                 "no drop while count > 0"
             );
-            lang_rc_release(p as *mut u8); // count 0 — drop runs synchronously, freed
+            lang_rc_release(p as *mut u8); // count 0 — drop runs immediately, freed
             assert_eq!(dropped().lock().unwrap().as_slice(), &[42]);
             assert_eq!(live_count(), 0, "freed at count zero without a collection");
         }

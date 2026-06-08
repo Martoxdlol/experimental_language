@@ -1,9 +1,9 @@
 //@ kind: run
-//@ description: an async closure captures by reference (docs/09 §7) — a mutation inside the body across an `await` is visible to the next drive and to the enclosing scope (docs/21 §7)
+//@ description: an async closure captures by reference (docs/09 §7) — a mutation inside the body across an `await` is visible to the next poll and to the enclosing scope (docs/21 §7)
 //@ stdout:
 //~ a=1 b=2 counter=2
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { sleep } from "std:async";
 function main(): Future<null> async {
   var counter: i64 = 0;
@@ -14,5 +14,6 @@ function main(): Future<null> async {
   };
   var a: i64 = await bump();
   var b: i64 = await bump();
-  println("a=${a } b=${b } counter=${counter }");
+  await println("a=${a} b=${b} counter=${counter}");
+  null
 }

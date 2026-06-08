@@ -1,0 +1,14 @@
+//@ kind: compile-error
+//@ description: std:process Child.stdin is a non-Future current-stdio placeholder accessor; streamed child stdin remains planned async-stream work
+//@ stderr: `await` requires a `Future`
+
+import { Future } from "core:prelude";
+import { Child, Command } from "std:process";
+
+function main(): Future<null> async {
+  var spawned = await Command.new("true").spawn();
+  if spawned is Child {
+    var _stdin = await (spawned as Child).stdin();
+  }
+  null
+}

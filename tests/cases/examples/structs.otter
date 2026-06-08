@@ -4,6 +4,7 @@
 //~ manhattan = 7
 //~ Alice is 30
 
+import { Future } from "core:prelude";
 // Structs and methods. Run: lang run examples/structs.lang
 import { println } from "std:io";
 
@@ -21,11 +22,12 @@ extend Point {
   }
 }
 
-function main() {
+function main(): Future<null> async {
   var origin = Point { x: 0, y: 0 };
   var p = origin.shifted(3, -4);
-  println("manhattan = " + (p.manhattan() as str));
+  await println("manhattan = " + (p.manhattan() as str));
 
   var alice = Person { name: "Alice", age: 30 };
-  println(alice.name + " is " + (alice.age as str));
+  await println(alice.name + " is " + (alice.age as str));
+  null
 }

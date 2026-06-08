@@ -5,15 +5,17 @@
 //~ 2
 //~ 99
 //~ 2
+import { Future } from "core:prelude";
 import { println } from "std:io";
 struct P { x: i64, y: i64 }
-function main() {
+function main(): Future<null> async {
   var x = 1;
   var y = 2;
   var a = P { x, y };
-  println("${a.x}");
-  println("${a.y}");
+  await println("${a.x}");
+  await println("${a.y}");
   var b = P { x: 99, ..a };
-  println("${b.x}");
-  println("${b.y}");
+  await println("${b.x}");
+  await println("${b.y}");
+  null
 }

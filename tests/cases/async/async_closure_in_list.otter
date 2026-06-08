@@ -1,9 +1,9 @@
 //@ kind: run
-//@ description: a list of async closures driven in turn — the first suspends on `await sleep`, the second is immediately ready (docs/21 §7)
+//@ description: a list of async closures awaited in turn — the first suspends on `await sleep`, the second is immediately ready (docs/21 §7)
 //@ stdout:
 //~ total=302
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { List } from "core:collections";
 import { sleep } from "std:async";
 function main(): Future<null> async {
@@ -13,5 +13,6 @@ function main(): Future<null> async {
   jobs.push(function(x: i64): Future<i64> async { base * x });
   var total: i64 = 0;
   for j in jobs { total = total+await j(2); }
-  println("total=${total }");
+  await println("total=${total}");
+  null
 }

@@ -1,0 +1,16 @@
+//@ kind: compile-error
+//@ description: std:fs File.write_all returns Future<null | IoError> and must be awaited before use
+//@ stderr: expected `null | IoError`, found `Future<null | IoError>`
+
+import { Bytes } from "std:bytes";
+import { File, Path } from "std:fs";
+import { Future } from "core:prelude";
+import { IoError } from "std:io";
+
+function main(): Future<null> async {
+  var file = await File.create(Path.new("/tmp/otter_fusion_requires_await.txt"));
+  if file is File {
+    var _written: null | IoError = (file as File).write_all(Bytes.from_str("x"));
+  }
+  null
+}

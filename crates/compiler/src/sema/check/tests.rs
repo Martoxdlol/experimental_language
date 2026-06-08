@@ -457,6 +457,44 @@ fn await_non_future_errors() {
 }
 
 #[test]
+fn async_sleep_marker_returns_future_not_null() {
+    let errs = check(
+        "import { yield_now as aliased_yield, sleep as aliased_sleep, timeout as aliased_timeout } from \"std:async\";\n\
+         function fast(): Future<i64> async { 1 }\n\
+         function f(): Future<null> async {\n\
+           var yielded: null = aliased_yield();\n\
+           var slept: null = aliased_sleep(1);\n\
+           var timed: null = aliased_timeout(fast(), 1);\n\
+           null\n\
+         }",
+    );
+    let mismatches = errs
+        .iter()
+        .filter(|e| matches!(e.kind, SemaErrorKind::TypeMismatch { .. }))
+        .count();
+    assert!(
+        mismatches >= 3,
+        "expected std:async marker aliases to type as Futures, got {errs:?}"
+    );
+}
+
+#[test]
+fn time_sleep_marker_returns_future_not_null() {
+    let errs = check(
+        "import { Duration, sleep as time_sleep } from \"std:time\";\n\
+         function f(): Future<null> async {\n\
+           var x: null = time_sleep(Duration.from_millis(1));\n\
+           null\n\
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| matches!(e.kind, SemaErrorKind::TypeMismatch { .. })),
+        "expected std:time.sleep marker to type as Future<null>, got {errs:?}"
+    );
+}
+
+#[test]
 fn forgot_to_await_lint() {
     let errs = check(
         "function inner(): Future<i64> async { 1 }\n\
@@ -531,8 +569,8 @@ fn shared_lock_async_body_flattens() {
 }
 
 #[test]
-fn shared_lock_in_sync_function_errors() {
-    // Locking is await-only; a synchronous context cannot lock.
+fn shared_lock_in_non_async_function_errors() {
+    // Locking is await-only; a non-async context cannot lock.
     let errs = check(
         "function f() {\n\
              \tvar s: Shared<i64> = Shared.new(0);\n\
@@ -607,7 +645,7 @@ fn shared_lock_mutating_cell_and_return_ok() {
 
 #[test]
 fn shared_lock_in_thread_spawn_worker_errors() {
-    // A *synchronous* `Thread.spawn` closure cannot lock (docs/20 §1/§4).
+    // An ordinary non-async `Thread.spawn` closure cannot lock (docs/20 §1/§4).
     let errs = check(
         "function f(): Future<null> async {\n\
              \tvar s: Shared<i64> = Shared.new(0);\n\
@@ -651,7 +689,7 @@ fn async_thread_spawn_worker_not_future_handle() {
 
 #[test]
 fn async_thread_spawn_worker_can_lock() {
-    // An *async* `Thread.spawn` worker drives its future with a real
+    // An *async* `Thread.spawn` worker polls its future with a real
     // executor, so it MAY `await` and lock a `Shared<T>` (docs/20 §1/§4).
     assert_ok(
         "struct C { value: i64 }\n\
@@ -691,10 +729,10 @@ fn async_thread_spawn_trailing_closure_form() {
 }
 
 #[test]
-fn task_spawn_sync_and_async_closures_return_joinhandle() {
+fn task_spawn_ordinary_and_async_closures_return_joinhandle() {
     // `Task.spawn` mirrors `Thread.spawn`'s surface, but the backend schedules
-    // it on the shared executor. Both sync and async worker closures join on
-    // the final `R`.
+    // it on the shared executor. Both ordinary non-async and async worker
+    // closures join on the final `R`.
     assert_ok(
         "import { Task, JoinHandle as TaskJoinHandle, Cancelled } from \"std:task\";\n\
              function f(): Future<null> async {\n\
@@ -781,6 +819,21 @@ fn thread_joinhandle_has_no_abort_method() {
             |e| matches!(&e.kind, SemaErrorKind::Message(m) if m.contains("no method `abort`"))
         ),
         "expected Thread JoinHandle abort rejection, got {errs:?}"
+    );
+}
+
+#[test]
+fn receiver_plain_for_loop_is_rejected() {
+    let errs = check(
+        "function main() {\n\
+             \tvar ends = channel<i64>();\n\
+             \tvar rx = ends.1;\n\
+             \tfor n in rx { var value = n; }\n\
+             }",
+    );
+    assert!(
+        has_msg(&errs, "is not iterable"),
+        "expected Receiver<T> to reject plain non-`for await` loop, got {errs:?}"
     );
 }
 

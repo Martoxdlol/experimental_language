@@ -1,7 +1,7 @@
 //@ kind: compile-error
 //@ stderr: escape
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { Shared } from "std:sync";
 struct X { value: i64 }
 struct Counter { x: X }

@@ -4,6 +4,7 @@
 //~ ok=42
 //~ err=load config: parse:bad config
 //~ debug=Annotated { note: "load config", source: parse:bad config }
+import { Future } from "core:prelude";
 import { println } from "std:io";
 import { Debug } from "std:fmt";
 import { Error, Annotated, with_context } from "std:error";
@@ -30,16 +31,17 @@ function render_debug(value: Debug): str {
   value.debug()
 }
 
-function main() {
+function main(): Future<null> async {
   match load(false) {
-    Config c => println("ok=${c.ok}"),
-    Annotated e => println("unexpected=${e.to_str()}"),
+    Config c => await println("ok=${c.ok}"),
+    Annotated e => await println("unexpected=${e.to_str()}"),
   }
   match load(true) {
-    Config c => println("unexpected=${c.ok}"),
+    Config c => await println("unexpected=${c.ok}"),
     Annotated e => {
-      println("err=${e.to_str()}");
-      println("debug=${render_debug(e)}");
+      await println("err=${e.to_str()}");
+      await println("debug=${render_debug(e)}");
     },
   }
+  null
 }

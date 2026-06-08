@@ -8,14 +8,16 @@
 //~ ELLO
 //~ hello
 //~ trimmed
+import { Future } from "core:prelude";
 import { println } from "std:io";
-function main() {
+function main(): Future<null> async {
   var s = "hello";
-  println("${s.size()}");
-  println("${s.contains("ell")}");
-  println("${s.starts_with("he")}");
-  println("${s.ends_with("lo")}");
-  println("${"hello".substring(1, 5).to_upper()}");
-  println("${"HELLO".to_lower()}");
-  println("${"  trimmed  ".trim()}");
+  await println("${s.size()}");
+  await println("${s.contains("ell")}");
+  await println("${s.starts_with("he")}");
+  await println("${s.ends_with("lo")}");
+  await println("${"hello".substring(1, 5).to_upper()}");
+  await println("${"HELLO".to_lower()}");
+  await println("${"  trimmed  ".trim()}");
+  null
 }

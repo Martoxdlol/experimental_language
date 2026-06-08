@@ -29,5 +29,6 @@ function main(): Future<null> async {
     });
   b.value = 9;
   var captured = joined_value(await h.join());
-  println("captured=${captured } parent=${b.value }");
+  await println("captured=${captured} parent=${b.value}");
+  null
 }

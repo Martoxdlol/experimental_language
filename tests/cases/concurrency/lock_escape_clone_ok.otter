@@ -3,8 +3,8 @@
 //@ stdout:
 //~ shared = 1
 //~ escaped = -1
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { Shared } from "std:sync";
 import { Clone } from "core:prelude";
 @Derive(Clone)
@@ -19,6 +19,7 @@ function main(): Future<null> async {
   // Mutating the detached clone is harmless — it is not aliased into the cell.
   (escaped as X).value = -1;
   var snap: i64 = await state.lock((c) => c.x.value);
-  println("shared = " + (snap as str));
-  println("escaped = " + ((escaped as X).value as str));
+  await println("shared = " + (snap as str));
+  await println("escaped = " + ((escaped as X).value as str));
+  null
 }

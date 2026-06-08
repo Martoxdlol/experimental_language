@@ -1,8 +1,9 @@
-// Task.spawn (docs/20 §1): thread-like JoinHandle ergonomics on the shared
-// work-stealing executor. Use Thread.spawn for blocking/dedicated OS-thread
-// work; use Task.spawn when you want many lightweight async or CPU-small tasks.
-import { println } from "std:io";
 import { Future } from "core:prelude";
+// Task.spawn (docs/20 §1): thread-like JoinHandle ergonomics on the shared
+// work-stealing executor. Use Thread.spawn only when CPU-heavy or
+// OS-thread-affine work needs one OS thread per worker; use Task.spawn when
+// you want many lightweight async, CPU-small, or explicit async-I/O tasks.
+import { println } from "std:io";
 import { Task, JoinHandle, Joined, Panicked, Cancelled } from "std:task";
 import { Shared } from "std:sync";
 import { sleep, yield_now } from "std:async";
@@ -18,26 +19,27 @@ function value_of(r: Joined<i64> | Panicked | Cancelled): i64 {
 }
 
 function main(): Future<null> async {
-  var sync_worker: JoinHandle<i64> = Task.spawn(() => 21 + 21);
+  var ordinary_worker: JoinHandle<i64> = Task.spawn(() => 21 + 21);
 
   var counter: Shared<Counter> = Shared.new(Counter { value: 0 });
   var c: Shared<Counter> = counter.clone();
   var async_worker: JoinHandle<i64> = Task.spawn(() async => {
-      var _ = await yield_now();
-      await c.lock((state) => {
-          state.value = state.value + 1;
-          state.value
-        })
-    });
+    var _ = await yield_now();
+    await c.lock((state) => {
+      state.value = state.value + 1;
+      state.value
+    })
+  });
 
   var cancelled_worker: JoinHandle<i64> = Task.spawn(() async => {
-      var _ = await sleep(1000);
-      99
-    });
+    var _ = await sleep(1000);
+    99
+  });
   var _started = await sleep(5);
   cancelled_worker.cancel();
 
-  println("sync task = ${value_of(await sync_worker.join()) }");
-  println("async task = ${value_of(await async_worker.join()) }");
-  println("cancelled task = ${value_of(await cancelled_worker.join()) }");
+  await println("ordinary task = ${value_of(await ordinary_worker.join())}");
+  await println("async task = ${value_of(await async_worker.join())}");
+  await println("cancelled task = ${value_of(await cancelled_worker.join())}");
+  null
 }

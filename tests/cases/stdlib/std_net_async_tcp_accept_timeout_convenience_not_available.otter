@@ -1,0 +1,17 @@
+//@ kind: compile-error
+//@ description: AsyncTcpListener accept deadlines use std:async.timeout today; no copied accept_timeout_async convenience exists
+//@ stderr: no method `accept_timeout_async`
+
+import { Future } from "core:prelude";
+import { AsyncTcpListener } from "std:net";
+import { ip_v4, socket_addr } from "std:net/types";
+import { Duration } from "std:time";
+
+function main(): Future<null> async {
+  var bound = await AsyncTcpListener.bind(socket_addr(ip_v4(127u8, 0u8, 0u8, 1u8), 0u16));
+  if bound is AsyncTcpListener {
+    var listener = bound as AsyncTcpListener;
+    var _accepted = await listener.accept_timeout_async(Duration.from_millis(1));
+  }
+  null
+}

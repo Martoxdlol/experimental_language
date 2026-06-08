@@ -21,13 +21,14 @@ function main(): Future<null> async {
       null
     });
   match await h.join() {
-    Joined<null> j => println("worker = ok"),
-    Panicked p => println("worker = panicked: " + p.message),
+    Joined<null> j => await println("worker = ok"),
+    Panicked p => await println("worker = panicked: " + p.message),
   };
   // The lock must have been released during unwinding. Use try_lock so a
   // regression (lock left held) reports `still held` instead of hanging.
   match await state.try_lock((c) => c.x.value) {
-    i64 n => println("reacquired = " + (n as str)),
-    LockBusy busy => println("reacquired = still held"),
+    i64 n => await println("reacquired = " + (n as str)),
+    LockBusy busy => await println("reacquired = still held"),
   };
+  null
 }

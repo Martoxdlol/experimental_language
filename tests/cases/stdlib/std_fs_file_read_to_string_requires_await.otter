@@ -1,0 +1,15 @@
+//@ kind: compile-error
+//@ description: std:fs File.read_to_string returns Future<str | IoError> and must be awaited before use
+//@ stderr: expected `str | IoError`, found `Future<str | IoError>`
+
+import { Future } from "core:prelude";
+import { IoError } from "std:io";
+import { File, Path } from "std:fs";
+
+function main(): Future<null> async {
+  var file = await File.create(Path.new("/tmp/otter_fusion_requires_await.txt"));
+  if file is File {
+    var _text: str | IoError = (file as File).read_to_string();
+  }
+  null
+}

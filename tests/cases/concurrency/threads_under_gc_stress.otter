@@ -4,8 +4,8 @@
 //@ description: Thread.spawn/join while the GC runs aggressively
 //@ stdout:
 //~ 30
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { Thread, JoinHandle, Joined, Panicked } from "std:thread";
 function sum_to(n: i64): i64 {
   var acc = 0;
@@ -20,5 +20,6 @@ function main(): Future<null> async {
   var h: JoinHandle<i64> = Thread.spawn(() => sum_to(5));
   var other = sum_to(5);
   var r: Joined<i64> | Panicked = await h.join();
-  println("${value_of(r) + other + 10 }");
+  await println("${value_of(r) + other + 10}");
+  null
 }

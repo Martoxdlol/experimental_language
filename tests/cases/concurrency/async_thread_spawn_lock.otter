@@ -1,10 +1,10 @@
 //@ kind: run
 //@ serial
-//@ description: an async `Thread.spawn` worker (`() => Future<R>`) drives its future to completion on its own OS thread, awaiting and locking a `Shared<T>` 50 times; the handle joins on the awaited `R` (docs/20 §1/§4)
+//@ description: an async `Thread.spawn` worker (`() => Future<R>`) polls its future until it resolves on its own OS thread, awaiting and locking a `Shared<T>` 50 times; the handle joins on the awaited `R` (docs/20 §1/§4)
 //@ stdout:
 //~ worker=50 total=50
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { Shared } from "std:sync";
 import { Thread, JoinHandle, Joined, Panicked } from "std:thread";
 struct C { value: i64 }
@@ -14,8 +14,8 @@ function value_of(r: Joined<i64> | Panicked): i64 {
 function main(): Future<null> async {
   var state: Shared<C> = Shared.new(C { value: 0 });
   var s: Shared<C> = state.clone();
-  // An async worker MAY await and lock — it drives the future with a real
-  // executor and waker, unlike a synchronous `Thread.spawn` closure.
+  // An async worker MAY await and lock — it polls the future with a real
+  // executor and waker, unlike an ordinary non-async `Thread.spawn` closure.
   var h: JoinHandle<i64> = Thread.spawn(() async => {
       var i: i64 = 0;
       while i < 50 {
@@ -26,5 +26,6 @@ function main(): Future<null> async {
     });
   var r: Joined<i64> | Panicked = await h.join();
   var total: i64 = await state.lock((c) => c.value);
-  println("worker=${value_of(r) } total=${total }");
+  await println("worker=${value_of(r)} total=${total}");
+  null
 }

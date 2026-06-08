@@ -5,6 +5,7 @@
 //~ 25
 //~ 10
 //~ 15
+import { Future } from "core:prelude";
 import { MacroContext, ASTNode } from "core:compiler";
 import { println } from "std:io";
 
@@ -32,10 +33,11 @@ pub function Outer(ctx: MacroContext, input: ASTNode): ASTNode { ctx.parse_expr(
 @Named
 struct Point { x: i64, y: i64 }
 
-function main() {
+function main(): Future<null> async {
   var p = Point { x: 1, y: 2 };
-  println(p.type_name());
-  println(@Square(5) as str);
-  println(@AsBlock { 4 + 6 } as str);
-  println(@Outer() as str);
+  await println(p.type_name());
+  await println(@Square(5) as str);
+  await println(@AsBlock { 4 + 6 } as str);
+  await println(@Outer() as str);
+  null
 }

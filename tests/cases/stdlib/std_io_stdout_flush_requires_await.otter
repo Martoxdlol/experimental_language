@@ -1,0 +1,9 @@
+//@ kind: compile-error
+//@ description: concrete std:io stdout().flush returns Future<null | IoError> and must be awaited before use
+//@ stderr: expected `null | IoError`, found `Future<null | IoError>`
+
+import { IoError, stdout } from "std:io";
+
+function main() {
+  var _flushed: null | IoError = stdout().flush();
+}

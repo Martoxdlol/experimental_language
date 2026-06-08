@@ -4,13 +4,15 @@
 //~ has value
 //~ 7
 //~ empty
+import { Future } from "core:prelude";
 import { println } from "std:io";
-function main() {
+function main(): Future<null> async {
   var x: i64 | null = 7;
   if x is i64 {
-    println("has value");
-    println("${x as i64}");
+    await println("has value");
+    await println("${x as i64}");
   }
   var y: i64 | null = null;
-  if y is null { println("empty"); }
+  if y is null { await println("empty"); }
+  null
 }

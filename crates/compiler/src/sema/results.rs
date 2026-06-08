@@ -24,22 +24,13 @@ pub enum ValueRes {
     Global(DefId),
     /// A unit/tuple struct used as a value constructor (the bare name).
     StructCtor(DefId),
-    /// A compiler-provided builtin function (temporary prelude until the real
-    /// `std:io`/`core:prelude` modules are wired in).
+    /// A compiler-provided builtin function.
     Builtin(Builtin),
 }
 
-/// Compiler-provided builtin functions available without import (for now).
+/// Compiler-provided builtin functions.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum Builtin {
-    /// `print(str): null` — write to stdout, no newline.
-    Print,
-    /// `println(str): null` — write to stdout with a trailing newline.
-    Println,
-    /// `eprint(str): null` — write to stderr, no newline.
-    Eprint,
-    /// `eprintln(str): null` — write to stderr with a trailing newline.
-    Eprintln,
     /// `panic(str): never` — terminate the thread with a message (`docs/14`).
     Panic,
     /// `panic_with(value: dynamic): never` — terminate the thread, attaching a
@@ -54,10 +45,6 @@ pub enum Builtin {
 impl Builtin {
     pub fn from_name(name: &str) -> Option<Builtin> {
         match name {
-            "print" => Some(Builtin::Print),
-            "println" => Some(Builtin::Println),
-            "eprint" => Some(Builtin::Eprint),
-            "eprintln" => Some(Builtin::Eprintln),
             "panic" => Some(Builtin::Panic),
             "panic_with" => Some(Builtin::PanicWith),
             "exit" => Some(Builtin::Exit),

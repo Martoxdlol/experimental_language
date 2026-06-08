@@ -4,11 +4,13 @@
 //~ 42
 //~ hi
 //~ 99
+import { Future } from "core:prelude";
 import { println } from "std:io";
 function id<T>(x: T): T { x }
 function pick<T>(a: T, b: T, first: bool): T { if first { a } else { b } }
-function main() {
-  println("${id(42)}");
-  println(id("hi"));
-  println("${pick(1, 99, false)}");
+function main(): Future<null> async {
+  await println("${id(42)}");
+  await println(id("hi"));
+  await println("${pick(1, 99, false)}");
+  null
 }

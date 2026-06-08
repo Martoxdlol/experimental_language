@@ -125,19 +125,19 @@
       <td><code>Otter</code></td>
       <td>The surface and behavior can be authored in Otter Fusion source:
       interfaces, value wrappers, adapters, pure helpers, and portable library logic.</td>
-      <td><code>std:error</code>, <code>std:bytes</code>, <code>std:fmt</code>, <code>std:time.Duration</code>, <code>std:fs.Path</code>, <code>std:fs.DirEntry</code>, <code>core:sync/atomic.Ordering</code>, <code>std:hash</code>, <code>std:http</code>, <code>std:net/types</code></td>
+      <td><code>std:error</code>, <code>std:bytes</code>, <code>std:fmt</code>, <code>std:time.Duration</code>, <code>std:fs.Path</code>, <code>std:fs.DirEntry</code>, <code>core:sync/atomic.Ordering</code>, <code>std:http</code>, <code>std:net/types</code></td>
     </tr>
     <tr>
       <td><code>RustBacked</code></td>
       <td>The behavior is a compiler/runtime intrinsic, and the Otter surface is a
       small importable marker or function set.</td>
-      <td><code>std:io.print</code>, <code>std:io.eprintln</code>, <code>core:prelude.panic</code>, <code>std:process.exit</code>/<code>abort</code>, future target-only hooks and provider shims</td>
+      <td><code>core:prelude.panic</code>, <code>std:process.exit</code>/<code>abort</code>, future target-only hooks and provider shims</td>
     </tr>
     <tr>
       <td><code>Mixed</code></td>
       <td>The public API is ordinary Otter Fusion, but some operations call Rust
       runtime hooks or compiler intrinsics.</td>
-      <td><code>std:io</code>, <code>core:ffi</code>, <code>core:sync/atomic</code> handles, <code>std:sync</code>, <code>std:fs.File</code> handles and file helpers, <code>std:time.Instant</code>/<code>SystemTime</code>, <code>std:process</code> host environment/execution/child helpers, <code>std:net</code> resolver/socket handles, <code>std:rand.OsRng</code>/<code>ThreadRng</code></td>
+      <td><code>std:io</code>, <code>core:ffi</code>, <code>core:sync/atomic</code> handles, awaitable <code>std:hash.os_keyed_hasher</code>, <code>std:sync</code>, awaitable <code>std:fs.File</code> handles and file helpers, awaitable <code>std:time.Instant</code>/<code>SystemTime</code> clock reads and local-time conversion, awaitable <code>std:process</code> host environment/execution/child helpers, awaitable <code>std:net</code> resolver/socket handles, awaitable <code>std:rand.OsRng</code>/<code>ThreadRng</code> entropy construction</td>
     </tr>
   </tbody>
 </table>
@@ -184,11 +184,13 @@ import semantics.</p>
   compiler-only glue just because they exist in hidden toolchain source owners.
 </div>
 
-<p>Malformed provider entries are rejected before they become importable views.
-Duplicate module paths, root-only paths, unaddressable path segments, tier/root
-mismatches, duplicate exports, and missing exported symbols all produce provider
-diagnostics instead of silently exposing a partial or wrongly-tiered
-<code>core:*</code>/<code>std:*</code> module.</p>
+<p>Malformed provider metadata is rejected before it becomes importable. Provider
+names must be stable non-empty ASCII identifiers using letters, digits,
+<code>.</code>, <code>_</code>, or <code>-</code>. Duplicate module paths, root-only
+paths, unaddressable path segments, tier/root mismatches, duplicate exports, and
+missing exported symbols all produce provider diagnostics instead of silently
+exposing a partial or wrongly-tiered <code>core:*</code>/<code>std:*</code>
+module.</p>
 
 <!-- =========================================================== -->
 <h2 id="add-core">4. Adding a <code>core:*</code> module</h2>
@@ -269,8 +271,10 @@ contract. Do not make a new builtin by only special-casing the checker or backen
   pattern until that runtime ABI is renamed project-wide.</li>
   <li>Hooks must define ownership, pinning, allocation, panic, and GC-root behavior
   explicitly.</li>
-  <li>Anything that can allocate, block, suspend, panic, or hold a resource needs
-  tests for that behavior.</li>
+  <li>Anything that can allocate, suspend, panic, hold a resource, or wait on
+  host/runtime state needs tests for that behavior. Any host/runtime wait must
+  remain private implementation machinery behind an async, future-returning
+  public contract.</li>
 </ul>
 
 <h3>Backend calls</h3>
@@ -319,7 +323,9 @@ layer from the active target/sysroot:</p>
   advanced sysroot operation and must preserve language ABI, compiler expectations,
   and semantic contracts.</li>
   <li>Provider identity, ABI version, and exported module set must be lockfile- and
-  diagnostic-visible once external sysroots are implemented.</li>
+  diagnostic-visible once external sysroots are implemented. Provider names are
+  validated before module views are materialized so diagnostics and future
+  lockfile metadata cannot contain empty or path-like identities.</li>
 </ul>
 
 <p>Ordinary packages must not shadow <code>std:*</code> through <code>pkg:</code>. A custom
@@ -360,12 +366,15 @@ modules, the default expectation is broad coverage, not a single happy-path case
   <tbody>
     <tr>
       <td>Catalog</td>
-      <td>Unique paths, tier/path agreement, unique exports, provider lookup,
+      <td>Provider-name validation, unique catalog and source-manifest paths,
+      tier/path agreement, unique exports, provider lookup,
       provider-added modules, and implementation kind coverage, including
       provider-export materialization. Every catalog export must also appear in
       a focused require-import negative e2e case; the stdlib catalog tests scan
       those diagnostics and fail if a newly exported name lacks import-gating
-      coverage.</td>
+      coverage. Catalog/provider diagnostics must render module paths with the
+      public import spelling, using only one scheme colon and slash-separated
+      submodules such as <code>core:sync/atomic</code>.</td>
     </tr>
     <tr>
       <td>Imports</td>
@@ -409,7 +418,10 @@ examples updated.</p>
   <li><span class="pill req">required</span> All public names require explicit imports
   unless they are syntax-only compiler desugar targets.</li>
   <li><span class="pill req">required</span> Rust-backed hooks have clear ownership,
-  GC, panic, blocking, and native-linking behavior.</li>
+  GC, panic, private native-wait, and native-linking behavior.</li>
+  <li><span class="pill req">required</span> Public operations that can wait on
+  target state keep source-level future-contract regressions in the toolchain
+  stdlib catalog tests.</li>
   <li><span class="pill req">required</span> Tests include success, failure, import,
   and runtime/codegen cases appropriate to the module.</li>
   <li><span class="pill req">required</span> ROADMAP, goals, docs index, examples, and

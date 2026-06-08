@@ -3,6 +3,7 @@
 //@ stdout:
 //~ 25
 //~ 5
+import { Future } from "core:prelude";
 import { MacroContext, ASTNode } from "core:compiler";
 import { println } from "std:io";
 
@@ -13,8 +14,9 @@ pub function Squared(ctx: MacroContext, input: ASTNode): ASTNode {
   ctx.parse_block("var " + t + " = " + a + "; " + t + " * " + t)
 }
 
-function main() {
+function main(): Future<null> async {
   var t = 5;
-  println(@Squared(t) as str);
-  println(t as str);
+  await println(@Squared(t) as str);
+  await println(t as str);
+  null
 }

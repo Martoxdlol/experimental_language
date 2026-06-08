@@ -4,8 +4,8 @@
 //@ stdout:
 //~ timeout = timed out
 //~ after timeout = 1
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { Shared, LockBusy } from "std:sync";
 import { sleep, timeout, TimedOut } from "std:async";
 
@@ -25,12 +25,13 @@ function main(): Future<null> async {
   var s: Shared<C> = state.clone();
   var fut: Future<i64> = spawn hold_lock(s);
   match await timeout(fut, 20) {
-    i64 n => println("timeout = value ${n }"),
-    TimedOut t => println("timeout = timed out"),
+    i64 n => await println("timeout = value ${n}"),
+    TimedOut t => await println("timeout = timed out"),
   };
   var _settle = await sleep(10);
   match await state.try_lock((c) => c.value) {
-    i64 n => println("after timeout = ${n }"),
-    LockBusy b => println("after timeout = still locked"),
+    i64 n => await println("after timeout = ${n}"),
+    LockBusy b => await println("after timeout = still locked"),
   };
+  null
 }

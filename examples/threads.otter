@@ -39,22 +39,23 @@ function gather(a: JoinHandle<i64>, b: JoinHandle<i64>, c: JoinHandle<i64>): Fut
   var va: i64 = result_of(ra);
   var vb: i64 = result_of(rb);
   var vc: i64 = result_of(rc);
-  println("worker a (sum 0..1000) = " + (va as str));
-  println("worker b (sum 0..2000) = " + (vb as str));
-  println("worker c (sum 0..3000) = " + (vc as str));
+  await println("worker a (sum 0..1000) = " + (va as str));
+  await println("worker b (sum 0..2000) = " + (vb as str));
+  await println("worker c (sum 0..3000) = " + (vc as str));
   va + vb + vc
 }
 
-// An async `main`: the runtime drives the root future automatically — no
-// `block_on` in user code.
+// An async `main`: the runtime polls the root future until it resolves — no
+// user-visible `block_on`.
 function main(): Future<null> async {
   // Spawn three workers; each computes independently on its own thread.
   var a: JoinHandle<i64> = Thread.spawn(() => sum_to(1000));
   var b: JoinHandle<i64> = Thread.spawn(() => sum_to(2000));
   var c: JoinHandle<i64> = Thread.spawn(() => sum_to(3000));
 
-  // Drive the async gatherer with a single `await`; the main task suspends
-  // (rather than parking the OS thread) between worker completions.
+  // Await the async gatherer; the main task suspends
+  // (rather than parking the OS thread) between worker results.
   var total: i64 = await gather(a, b, c);
-  println("total = " + (total as str));
+  await println("total = " + (total as str));
+  null
 }

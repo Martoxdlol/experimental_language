@@ -1,0 +1,15 @@
+//@ kind: compile-error
+//@ description: std:sync exports planned channel constructor names, but bounded/MPMC semantics are not implemented yet
+//@ stderr: `std:sync.channel_bounded` is planned but not implemented yet
+//@ stderr: `std:sync.channel_mpmc` is planned but not implemented yet
+//@ stderr: `std:sync.channel_mpmc_bounded` is planned but not implemented yet
+
+import { channel_bounded, channel_mpmc } from "std:sync";
+import "std:sync" as Sync;
+
+function main() {
+  var function_value = channel_mpmc;
+  var bounded = channel_bounded<i64>(4);
+  var mpmc = channel_mpmc<i64>();
+  var mpmc_bounded = Sync.channel_mpmc_bounded<i64>(4);
+}

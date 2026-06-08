@@ -3,9 +3,9 @@
 //@ description: the mutex is HELD ACROSS the body's `await` (docs/20 §4). Each worker reads the counter, suspends inside the critical section (await sleep), then writes back. If the lock were released at the suspension (the old footgun) the read-modify-write would race and lose updates; held-across-await serializes them, so 5 workers deterministically yield 5.
 //@ stdout:
 //~ total = 5
+import { Future } from "core:prelude";
 import { List } from "core:collections";
 import { println } from "std:io";
-import { Future } from "core:prelude";
 import { sleep } from "std:async";
 import { Shared } from "std:sync";
 struct Counter { value: i64 }
@@ -33,5 +33,6 @@ function main(): Future<null> async {
     await h;
   }
   var total: i64 = await state.lock((c) => c.value);
-  println("total = " + (total as str));
+  await println("total = " + (total as str));
+  null
 }

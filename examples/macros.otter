@@ -1,3 +1,4 @@
+import { Future } from "core:prelude";
 // Procedural macros (docs/22): functions written in the language itself,
 // marked @ProcMacro, run at compile time to transform the AST. They come in
 // three invocation forms — decorator, expression, and block.
@@ -40,15 +41,16 @@ pub function WithTotal(ctx: MacroContext, input: ASTNode): ASTNode {
   ctx.parse_block("var " + t + " = 3 + 4; " + t + " * 2")
 }
 
-function main() {
+function main(): Future<null> async {
   var p = Point { x: 1, y: 2 };
-  println(p.type_name()); // Point  (decorator-synthesised method)
+  await println(p.type_name()); // Point  (decorator-synthesised method)
 
-  println(@Square(5)as str); // 25     (expression macro)
-  println((@Square(3) + 1)as str); // 10     (nested in a larger expression)
+  await println(@Square(5) as str); // 25     (expression macro)
+  await println((@Square(3) + 1) as str); // 10     (nested in a larger expression)
 
   var total = 100; // caller's `total`
   var r = @WithTotal {}; // macro's hygienic `total` is distinct
-  println(r as str); // 14
-  println(total as str); // 100    (caller's `total` untouched)
+  await println(r as str); // 14
+  await println(total as str); // 100    (caller's `total` untouched)
+  null
 }

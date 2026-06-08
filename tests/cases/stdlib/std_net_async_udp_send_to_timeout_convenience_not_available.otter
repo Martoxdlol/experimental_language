@@ -1,0 +1,19 @@
+//@ kind: compile-error
+//@ description: AsyncUdpSocket address-aware send deadlines use std:async.timeout today; no copied send_to_timeout_async convenience exists
+//@ stderr: no method `send_to_timeout_async`
+
+import { Future } from "core:prelude";
+import { Bytes } from "std:bytes";
+import { AsyncUdpSocket } from "std:net";
+import { ip_v4, socket_addr } from "std:net/types";
+import { Duration } from "std:time";
+
+function main(): Future<null> async {
+  var addr = socket_addr(ip_v4(127u8, 0u8, 0u8, 1u8), 0u16);
+  var bound = await AsyncUdpSocket.bind(addr);
+  if bound is AsyncUdpSocket {
+    var socket = bound as AsyncUdpSocket;
+    var _sent = await socket.send_to_timeout_async(Bytes.from_str("x"), addr, Duration.from_millis(1));
+  }
+  null
+}

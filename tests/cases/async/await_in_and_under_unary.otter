@@ -2,8 +2,8 @@
 //@ description: the block ANF introduces for a nested-`await` short-circuit operand can sit under another operator (`!`); the suspend site is still discovered and every live local saved across it (docs/21)
 //@ stdout:
 //~ false
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { yield_now } from "std:async";
 function n(v: i64): Future<i64> async {
   await yield_now();
@@ -11,5 +11,6 @@ function n(v: i64): Future<i64> async {
 }
 function main(): Future<null> async {
   var z = !(true && ((await n(5)) > 0));
-  println("${z }");
+  await println("${z}");
+  null
 }

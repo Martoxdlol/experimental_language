@@ -5,15 +5,17 @@
 //~ to_str=otter fusion
 //~ as_cstr=otter fusion 12
 //~ from_ptr=otter fusion
+import { Future } from "core:prelude";
 import { println } from "std:io";
 import { CString, CStr } from "core:ffi";
 extern function strlen(s: *u8): u64;
-function main() {
+function main(): Future<null> async {
   var cs = CString.from_str("otter fusion");
-  println("len=${strlen(cs.as_ptr())} byte_len=${cs.byte_len()}");
-  println("to_str=${cs.to_str()}");
+  await println("len=${strlen(cs.as_ptr())} byte_len=${cs.byte_len()}");
+  await println("to_str=${cs.to_str()}");
   var v = cs.as_cstr();
-  println("as_cstr=${v.to_str()} ${v.byte_len()}");
+  await println("as_cstr=${v.to_str()} ${v.byte_len()}");
   var w = CStr.from_ptr(cs.as_ptr());
-  println("from_ptr=${w.to_str()}");
+  await println("from_ptr=${w.to_str()}");
+  null
 }

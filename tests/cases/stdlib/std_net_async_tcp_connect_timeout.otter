@@ -1,0 +1,122 @@
+//@ kind: run
+//@ serial
+//@ description: AsyncTcpStream.connect_timeout is an explicit timed async TCP connect adapter
+//@ stdout:
+//~ async-connect-timeout=true true pong 1 0
+
+import { Future } from "core:prelude";
+import { Bytes } from "std:bytes";
+import { println, IoError } from "std:io";
+import { AsyncTcpStream, TcpListener, TcpStream } from "std:net";
+import { SocketAddr, ip_v4, socket_addr } from "std:net/types";
+import { Duration } from "std:time";
+import { Thread, JoinHandle, Joined, Panicked } from "std:thread";
+
+function trim_read_buffer(buf: Bytes, request_len: i64): Bytes {
+  var i = 0;
+  while i < request_len {
+    var _ = buf.remove_at(0);
+    i = i + 1;
+  }
+  buf
+}
+
+function decode_appended(buf: Bytes, request_len: i64): str {
+  var decoded = trim_read_buffer(buf, request_len).decode_utf8();
+  if decoded is str { decoded as str } else { "utf8-error" }
+}
+
+function read_text(stream: TcpStream, len: i64): Future<str> async {
+  var buf = Bytes.new();
+  var i = 0;
+  while i < len {
+    buf.push(0u8);
+    i = i + 1;
+  }
+  var read = await stream.read(buf);
+  if read is IoError || (read as i64) != len {
+    "read-error"
+  } else {
+    decode_appended(buf, len)
+  }
+}
+
+function async_read_text(stream: AsyncTcpStream, len: i64): Future<str> async {
+  var buf = Bytes.new();
+  var i = 0;
+  while i < len {
+    buf.push(0u8);
+    i = i + 1;
+  }
+  var read = await stream.read_async(buf);
+  if read is IoError || (read as i64) != len {
+    "read-error"
+  } else {
+    decode_appended(buf, len)
+  }
+}
+
+function serve(listener: TcpListener): Future<i64> async {
+  var accepted = await listener.accept();
+  if accepted is IoError {
+    return -1;
+  }
+
+  var pair = accepted as (TcpStream, SocketAddr);
+  var stream = pair.0;
+  var request = await read_text(stream, 4);
+  var wrote = await stream.write_all(Bytes.from_str("pong"));
+  var flushed = await stream.flush();
+  var closed = await stream.close();
+  var listener_closed = await listener.close();
+  if request == "ping" && !(wrote is IoError) && !(flushed is IoError)
+    && !(closed is IoError) && !(listener_closed is IoError) {
+    1
+  } else {
+    -2
+  }
+}
+
+function joined_value(result: Joined<i64> | Panicked): i64 {
+  match result {
+    Joined<i64> joined => joined.value,
+    Panicked panic => -99,
+  }
+}
+
+function main(): Future<null> async {
+  var invalid = await AsyncTcpStream.connect_timeout(
+      socket_addr(ip_v4(127u8, 0u8, 0u8, 1u8), 9u16),
+      Duration.from_nanos(-1)
+    );
+  var invalid_ok = invalid is IoError;
+
+  var bound = await TcpListener.bind(socket_addr(ip_v4(127u8, 0u8, 0u8, 1u8), 0u16));
+  if bound is IoError {
+    await println("async-connect-timeout=false ${invalid_ok} bind-error -1 -1");
+    return null;
+  }
+
+  var listener = bound as TcpListener;
+  var local = await listener.local_addr();
+  if local is IoError {
+    await println("async-connect-timeout=false ${invalid_ok} local-error -1 -1");
+    return null;
+  }
+
+  var addr = local as SocketAddr;
+  var worker: JoinHandle<i64> = Thread.spawn(() async => await serve(listener.clone()));
+  var connected = await AsyncTcpStream.connect_timeout(addr, Duration.from_secs(1));
+  if connected is IoError {
+    await println("async-connect-timeout=false ${invalid_ok} connect-error -1 -1");
+    return null;
+  }
+
+  var client = connected as AsyncTcpStream;
+  var wrote = await client.write_async(Bytes.from_str("ping"));
+  var response = await async_read_text(client, 4);
+  var closed = await client.close();
+  var joined = await worker.join();
+  await println("async-connect-timeout=${wrote is i64 && (wrote as i64) == 4} ${invalid_ok} ${response} ${joined_value(joined)} ${if closed is IoError { 1 } else { 0 }}");
+  null
+}

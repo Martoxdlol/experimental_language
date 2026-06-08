@@ -5,8 +5,8 @@
 //@ stdout:
 //~ received=8386560 joined=8386560
 
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { List } from "core:collections";
 import { Task, JoinHandle, Joined, Panicked, Cancelled } from "std:task";
 import { Sender, Receiver, ChannelClosed, channel } from "std:sync";
@@ -58,5 +58,6 @@ function main(): Future<null> async {
     joined = joined + joined_value(await h.join());
   }
 
-  println("received=${received } joined=${joined }");
+  await println("received=${received} joined=${joined}");
+  null
 }

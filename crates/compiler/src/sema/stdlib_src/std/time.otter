@@ -2,17 +2,14 @@ struct Duration {
   nanos: i64,
 }
 
-function __otter_time_monotonic_nanos(): i64 { 0 }
-function __otter_time_system_nanos(): i64 { 0 }
-extern function lang_time_local_offset_seconds(unix_nanos: i64): i64;
-extern function lang_time_sleep_nanos(nanos: i64);
+extern function __otter_time_monotonic_nanos_async(): Future<str>;
+extern function __otter_time_system_nanos_async(): Future<str>;
+extern function __otter_time_local_offset_seconds_async(unix_nanos: i64): Future<str>;
 
-function sleep(duration: Duration): null {
-  if duration.as_nanos() > 0 {
-    lang_time_sleep_nanos(duration.as_nanos());
-  }
-  null
-}
+// Compiler-recognized marker stub. The checker/lowerer routes calls to the
+// runtime timer/reactor intrinsic; the source-level signature still spells the
+// public async contract as an explicit future-returning function.
+function sleep(duration: Duration): Future<null> async { null }
 
 extend Duration {
   function from_days(d: i64): Duration { Duration { nanos: d * 86400000000000 } }
@@ -76,11 +73,11 @@ extend Duration: Clone {
 }
 
 extend Duration: ToStr {
-  function to_str(self): str { "${self.nanos }ns" }
+  function to_str(self): str { "${self.nanos}ns" }
 }
 
 extend Duration: Debug {
-  function debug(self): str { "Duration { nanos: ${self.nanos } }" }
+  function debug(self): str { "Duration { nanos: ${self.nanos} }" }
 }
 
 struct Instant {
@@ -88,8 +85,9 @@ struct Instant {
 }
 
 extend Instant {
-  function now(): Instant {
-    Instant { nanos: __otter_time_monotonic_nanos() }
+  function now(): Future<Instant> async {
+    var raw = await __otter_time_monotonic_nanos_async();
+    Instant { nanos: __time_decode_i64_or_panic(raw) }
   }
 
   function from_nanos(nanos: i64): Instant {
@@ -102,8 +100,9 @@ extend Instant {
     Duration.from_nanos(self.nanos - earlier.nanos)
   }
 
-  function elapsed(self): Duration {
-    Instant.now().duration_since(self)
+  function elapsed(self): Future<Duration> async {
+    var now = await Instant.now();
+    now.duration_since(self)
   }
 
   function add_duration(self, duration: Duration): Instant {
@@ -305,20 +304,76 @@ function __time_nanos_per_minute(): i64 { 60000000000 }
 function __time_nanos_per_second(): i64 { 1000000000 }
 function __time_local_offset_error_sentinel(): i64 { (0 - 9223372036854775807) - 1 }
 
-function __time_local_offset_seconds(t: SystemTime): i32 | TimeError {
-  var offset = lang_time_local_offset_seconds(t.as_unix_nanos());
-  if offset == __time_local_offset_error_sentinel() {
-    TimeError { message: "local timezone lookup is unavailable for this target or timestamp" }
-  } else if offset < -2147483648 || offset > 2147483647 {
+function __time_status_payload(result: str): str {
+  if result.size() <= 1 { "" } else { result.substring(1, result.size()) }
+}
+
+function __time_status_is_error(result: str): bool {
+  result.size() == 0 || result.substring(0, 1) == "1"
+}
+
+function __time_parse_i64(text: str): i64 | TimeError {
+  if text.size() == 0 {
+    __time_parse_error("expected integer time payload")
+  } else {
+    var sign = 1;
+    var start = 0;
+    if text.substring(0, 1) == "-" {
+      sign = 0 - 1;
+      start = 1;
+    }
+    if start >= text.size() {
+      return __time_parse_error("expected integer time payload");
+    }
+    var value = 0;
+    var i = start;
+    while i < text.size() {
+      var digit = __time_parse_digits(text, i, 1, "expected integer time payload");
+      if digit is TimeError {
+        return digit as TimeError;
+      }
+      value = value * 10 + (digit as i64);
+      i = i + 1;
+    }
+    value * sign
+  }
+}
+
+function __time_decode_i64(result: str): i64 | TimeError {
+  if __time_status_is_error(result) {
+    TimeError { message: __time_status_payload(result) }
+  } else {
+    __time_parse_i64(__time_status_payload(result))
+  }
+}
+
+function __time_decode_i64_or_panic(result: str): i64 {
+  var decoded = __time_decode_i64(result);
+  if decoded is TimeError {
+    panic((decoded as TimeError).message());
+    0
+  } else {
+    decoded as i64
+  }
+}
+
+function __time_local_offset_seconds(t: SystemTime): Future<i32 | TimeError> async {
+  var unix_nanos = t.as_unix_nanos();
+  var raw = await __otter_time_local_offset_seconds_async(unix_nanos);
+  var offset = __time_decode_i64(raw);
+  if offset is TimeError {
+    offset as TimeError
+  } else if (offset as i64) < -2147483648 || (offset as i64) > 2147483647 {
     TimeError { message: "local timezone offset out of range" }
   } else {
-    offset as i32
+    (offset as i64) as i32
   }
 }
 
 extend SystemTime {
-  function now(): SystemTime {
-    SystemTime { nanos_since_unix_epoch: __otter_time_system_nanos() }
+  function now(): Future<SystemTime> async {
+    var raw = await __otter_time_system_nanos_async();
+    SystemTime { nanos_since_unix_epoch: __time_decode_i64_or_panic(raw) }
   }
 
   function unix_epoch(): SystemTime {
@@ -352,7 +407,8 @@ extend SystemTime {
     if offset is null {
       TimeError { message: "named timezone conversion requires timezone database" }
     } else {
-      var local_nanos = self.nanos_since_unix_epoch + ((offset as i32)as i64) * __time_nanos_per_second();
+      var local_nanos = self.nanos_since_unix_epoch
+        + ((offset as i32) as i64) * __time_nanos_per_second();
       var days = __time_floor_div(local_nanos, __time_nanos_per_day());
       var day_nanos = local_nanos - days * __time_nanos_per_day();
       var parts = __time_civil_from_days(days);
@@ -542,8 +598,9 @@ extend TimeZone: Debug {
 }
 
 extend DateTime {
-  function now_utc(): DateTime {
-    var value = SystemTime.now().to_datetime(utc());
+  function now_utc(): Future<DateTime> async {
+    var now = await SystemTime.now();
+    var value = now.to_datetime(utc());
     if value is TimeError {
       panic((value as TimeError).message());
       DateTime {
@@ -561,18 +618,28 @@ extend DateTime {
     }
   }
 
-  function now_local(): DateTime {
-    var value = DateTime.from_system_time_local(SystemTime.now());
+  function now_local(): Future<DateTime> async {
+    var now = await SystemTime.now();
+    var value = await DateTime.from_system_time_local(now);
     if value is TimeError {
       panic((value as TimeError).message());
-      DateTime.now_utc()
+      DateTime {
+        year: 1970i32,
+        month: 1u8,
+        day: 1u8,
+        hour: 0u8,
+        minute: 0u8,
+        second: 0u8,
+        nanos: 0u32,
+        tz: utc(),
+      }
     } else {
       value as DateTime
     }
   }
 
-  function from_system_time_local(t: SystemTime): DateTime | TimeError {
-    var offset = __time_local_offset_seconds(t);
+  function from_system_time_local(t: SystemTime): Future<DateTime | TimeError> async {
+    var offset = await __time_local_offset_seconds(t);
     if offset is TimeError {
       offset as TimeError
     } else {
@@ -723,9 +790,9 @@ extend DateTime {
       if oh > 23 || om > 59 {
         return __time_parse_error("timezone offset out of range");
       }
-      tz = fixed_offset((sign * (oh * 3600 + om * 60))as i32);
+      tz = fixed_offset((sign * (oh * 3600 + om * 60)) as i32);
     } else if s.substring(pos, pos + 1) == "[" {
-      if!s.ends_with("]") || pos + 1 >= s.size() - 1 {
+      if !s.ends_with("]") || pos + 1 >= s.size() - 1 {
         return __time_parse_error("expected timezone name");
       }
       tz = named_timezone(s.substring(pos + 1, s.size() - 1));
@@ -734,12 +801,12 @@ extend DateTime {
     }
 
     DateTime.new(
-      (year as i64)as i32,
-      (month as i64)as u8,
-      (day as i64)as u8,
-      (hour as i64)as u8,
-      (minute as i64)as u8,
-      (second as i64)as u8,
+      (year as i64) as i32,
+      (month as i64) as u8,
+      (day as i64) as u8,
+      (hour as i64) as u8,
+      (minute as i64) as u8,
+      (second as i64) as u8,
       nanos as u32,
       tz as TimeZone,
     )
@@ -778,7 +845,7 @@ extend DateTime {
       (self.minute as i64) * __time_nanos_per_minute() +
       (self.second as i64) * __time_nanos_per_second() +
       self.nanos as i64;
-      SystemTime.from_unix_nanos(local_nanos - ((offset as i32)as i64) * __time_nanos_per_second())
+      SystemTime.from_unix_nanos(local_nanos - ((offset as i32) as i64) * __time_nanos_per_second())
     }
   }
 

@@ -18,5 +18,6 @@ extend Once: Future<i64> {
 function main(): Future<null> async {
   var task = spawn Once { value: 9 };
   var value = await task;
-  println("spawned=${value}");
+  await println("spawned=${value}");
+  null
 }

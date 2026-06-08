@@ -1,5 +1,5 @@
-//! Typed message-passing channels (`docs/20` §2) — **async, non-blocking, and
-//! deterministically closeable**.
+//! Typed message-passing channels (`docs/20` §2) — async `recv`,
+//! non-blocking `send`/`try_recv`, and deterministic close.
 //!
 //! A channel is an unbounded FIFO queue shared between `Sender` and `Receiver`
 //! ends (the language-level structs carry only the integer channel id below).
@@ -23,10 +23,11 @@
 //! the underlying queue once both ends are unreachable.
 //!
 //! When the last **sender** is released the channel is *closed for receiving*:
-//! a drained `recv` resolves to `ChannelClosed` and a `Receiver: Iterator`
-//! (`for n in rx`) terminates, so we wake every parked receiver. When the last
-//! **receiver** is released the channel is *closed for sending*: `send` returns
-//! `ChannelClosed` instead of enqueuing (the message would never be observed).
+//! a drained `recv` resolves to `ChannelClosed`, and async receiver iteration
+//! (`for await n in rx`) terminates after the same close observation. When the
+//! last **receiver** is released the channel is *closed for sending*: `send`
+//! returns `ChannelClosed` instead of enqueuing (the message would never be
+//! observed).
 //!
 //! Queued values may be managed pointers that, while sitting in the queue, are
 //! not referenced by any thread stack — so each is pinned as a global GC root
@@ -104,9 +105,9 @@ struct Inner {
 
 struct Channel {
     inner: Mutex<Inner>,
-    /// Signalled when a message is enqueued or the channel becomes closed —
-    /// wakes a synchronous blocking receiver (`Receiver: Iterator`, `docs/20`
-    /// §2). The asynchronous future path uses `waiters` instead.
+    /// Signalled when a message is enqueued or the channel becomes closed.
+    /// Public Otter Fusion waits use `waiters`; this condvar is private runtime
+    /// machinery for host-side tests and cleanup paths.
     not_empty: Condvar,
 }
 
@@ -119,6 +120,7 @@ fn lock_unpoison<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|err| err.into_inner())
 }
 
+#[cfg(test)]
 fn wait_unpoison<'a, T>(cv: &Condvar, guard: MutexGuard<'a, T>) -> MutexGuard<'a, T> {
     cv.wait(guard).unwrap_or_else(|err| err.into_inner())
 }
@@ -165,8 +167,8 @@ pub unsafe extern "C" fn lang_chan_sender_acquire(id: u64) {
 }
 
 /// Release a live `Sender`. When the count reaches zero the channel is *closed
-/// for receiving*: a drained `recv` yields `ChannelClosed` and a blocking
-/// `Receiver: Iterator` terminates, so we wake every parked receiver.
+/// for receiving*: a drained `recv` yields `ChannelClosed`, async receiver
+/// iteration terminates, and any private host-side waiters are woken.
 ///
 /// # Safety
 /// `id` must be a live channel id; called once per acquired sender.
@@ -240,7 +242,7 @@ pub unsafe extern "C" fn lang_chan_send(id: u64, value: i64) -> i64 {
         // empty.
         drain_waiters(&mut g.waiters)
     };
-    // Wake a synchronous blocking receiver (`Receiver: Iterator`).
+    // Wake a private host-side waiter.
     ch.not_empty.notify_one();
     for (data, wake) in wakers {
         wake(data as *mut u8);
@@ -494,16 +496,19 @@ pub(crate) unsafe fn cancel_recv_future(fut: *mut u8) -> bool {
     true
 }
 
-/// Blocking receive for `Receiver: Iterator` (`for n in rx`, `docs/20` §2).
-/// Parks the calling OS thread (cooperating with the GC via `enter_native`)
+/// Private `cfg(test)` receive helper used by runtime tests. Public Otter Fusion
+/// source and generated code cannot call this path; receiver waits lower through
+/// async futures.
+/// Parks the private helper thread (cooperating with the GC via
+/// `gc::native_wait`)
 /// until a message is available or the channel is closed-and-drained. Writes
-/// `1` to `*got` and returns the value if one arrived, or writes `0` (the
-/// channel is closed and empty → the iterator yields `Done`).
+/// `1` to `*got` and returns the value if one arrived, or writes `0` when the
+/// channel is closed and empty.
 ///
 /// # Safety
 /// `id` must be a live channel id; `got` must point to a writable `i64`.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn lang_chan_recv_blocking(id: u64, got: *mut i64) -> i64 {
+#[cfg(test)]
+pub(crate) unsafe fn chan_recv_native_wait_for_runtime_tests(id: u64, got: *mut i64) -> i64 {
     let ch = channel(id);
     let mut g = lock_unpoison(&ch.inner);
     loop {
@@ -518,11 +523,9 @@ pub unsafe extern "C" fn lang_chan_recv_blocking(id: u64, got: *mut i64) -> i64 
             unsafe { got.write(0) };
             return 0;
         }
-        // Block until a send or the last-sender release notifies us. Tell the
-        // GC we are parked in native code so a collection can proceed.
-        gc::enter_native();
-        g = wait_unpoison(&ch.not_empty, g);
-        gc::leave_native();
+        // Wait until a send or the last-sender release notifies us. The
+        // helper marks this mutator as native only for the host wait.
+        g = gc::native_wait(|| wait_unpoison(&ch.not_empty, g));
     }
 }
 
@@ -573,7 +576,7 @@ mod tests {
     }
 
     /// Acquiring and releasing senders drives the close-for-receiving flag; a
-    /// drained blocking recv then terminates instead of parking forever.
+    /// drained private runtime-test receive then terminates instead of parking.
     #[test]
     fn last_sender_release_closes_for_receiving() {
         let id = lang_channel_new();
@@ -583,12 +586,12 @@ mod tests {
         // One producer drops — still open.
         unsafe { lang_chan_sender_release(id) };
         let mut got = 0i64;
-        let v = unsafe { lang_chan_recv_blocking(id, &mut got) };
+        let v = unsafe { chan_recv_native_wait_for_runtime_tests(id, &mut got) };
         assert_eq!((got, v), (1, 7), "drains the queued value");
-        // Last producer drops — closed; blocking recv now reports Done.
+        // Last producer drops; the private receive helper now reports Done.
         unsafe { lang_chan_sender_release(id) };
         let mut got2 = 0i64;
-        let _ = unsafe { lang_chan_recv_blocking(id, &mut got2) };
+        let _ = unsafe { chan_recv_native_wait_for_runtime_tests(id, &mut got2) };
         assert_eq!(got2, 0, "closed + drained → Done");
     }
 
@@ -601,11 +604,17 @@ mod tests {
         unsafe { lang_chan_send(id, 2) };
         unsafe { lang_chan_sender_release(id) }; // close while non-empty
         let mut g = 0i64;
-        assert_eq!(unsafe { lang_chan_recv_blocking(id, &mut g) }, 1);
+        assert_eq!(
+            unsafe { chan_recv_native_wait_for_runtime_tests(id, &mut g) },
+            1
+        );
         assert_eq!(g, 1);
-        assert_eq!(unsafe { lang_chan_recv_blocking(id, &mut g) }, 2);
+        assert_eq!(
+            unsafe { chan_recv_native_wait_for_runtime_tests(id, &mut g) },
+            2
+        );
         assert_eq!(g, 1);
-        let _ = unsafe { lang_chan_recv_blocking(id, &mut g) };
+        let _ = unsafe { chan_recv_native_wait_for_runtime_tests(id, &mut g) };
         assert_eq!(g, 0, "now drained and closed");
     }
 
@@ -619,20 +628,29 @@ mod tests {
         assert_eq!(unsafe { lang_chan_send(id, 2) }, 1, "closed: ChannelClosed");
     }
 
-    /// A blocking receiver parked on an empty channel is woken (and terminates)
-    /// when the last sender is released from another thread.
+    /// A private runtime-test receiver parked on an empty channel is woken and
+    /// terminates when the last sender is released from another thread.
     #[test]
-    fn blocking_recv_wakes_on_close() {
+    fn runtime_test_recv_wakes_on_close() {
         let id = lang_channel_new();
         let h = std::thread::spawn(move || {
             let mut got = 0i64;
-            let v = unsafe { lang_chan_recv_blocking(id, &mut got) };
+            let v = unsafe { chan_recv_native_wait_for_runtime_tests(id, &mut got) };
             (got, v)
         });
         // Give the receiver a moment to park, then close.
         std::thread::sleep(std::time::Duration::from_millis(20));
         unsafe { lang_chan_sender_release(id) };
         assert_eq!(h.join().unwrap().0, 0, "woken → Done on close");
+    }
+
+    #[test]
+    fn runtime_test_recv_wait_uses_gc_native_state_marker() {
+        let src = include_str!("channels.rs");
+        assert!(
+            src.contains("g = gc::native_wait(|| wait_unpoison(&ch.not_empty, g));"),
+            "private host-side channel waits must stay inside gc::native_wait(...)"
+        );
     }
 
     #[test]
@@ -662,10 +680,13 @@ mod tests {
 
         assert_eq!(unsafe { lang_chan_send(id, 23) }, 0);
         let mut got = 0i64;
-        assert_eq!(unsafe { lang_chan_recv_blocking(id, &mut got) }, 23);
+        assert_eq!(
+            unsafe { chan_recv_native_wait_for_runtime_tests(id, &mut got) },
+            23
+        );
         assert_eq!(got, 1);
         unsafe { lang_chan_sender_release(id) };
-        let _ = unsafe { lang_chan_recv_blocking(id, &mut got) };
+        let _ = unsafe { chan_recv_native_wait_for_runtime_tests(id, &mut got) };
         assert_eq!(got, 0);
     }
 
@@ -735,7 +756,10 @@ mod tests {
         assert!(channel(id).inner.lock().unwrap().waiters.is_empty());
 
         let mut got = 0;
-        assert_eq!(unsafe { lang_chan_recv_blocking(id, &mut got) }, 99);
+        assert_eq!(
+            unsafe { chan_recv_native_wait_for_runtime_tests(id, &mut got) },
+            99
+        );
         assert_eq!(got, 1);
     }
 
@@ -798,7 +822,10 @@ mod tests {
             "a cancelled recv future must not leave a stale live waiter behind"
         );
         let mut got = 0;
-        assert_eq!(unsafe { lang_chan_recv_blocking(id, &mut got) }, 99);
+        assert_eq!(
+            unsafe { chan_recv_native_wait_for_runtime_tests(id, &mut got) },
+            99
+        );
         assert_eq!(got, 1);
         unsafe { lang_chan_sender_release(id) };
     }

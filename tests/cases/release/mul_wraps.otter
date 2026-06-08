@@ -3,9 +3,11 @@
 //@ description: under --release, multiplication overflow wraps silently
 //@ stdout:
 //~ done
+import { Future } from "core:prelude";
 import { println } from "std:io";
-function main() {
+function main(): Future<null> async {
   var x = 9223372036854775807;
   var y = x * 4;
-  println("done");
+  await println("done");
+  null
 }

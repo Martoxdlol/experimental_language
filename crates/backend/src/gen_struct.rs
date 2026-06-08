@@ -320,7 +320,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     }
 
     /// Emit a strong-count release (`-1`); at zero this runs the type's `Drop`
-    /// synchronously and frees the object (`docs/16` §8.1).
+    /// immediately as non-waiting cleanup and frees the object (`docs/16` §8.1).
     pub(crate) fn emit_rc_release(&mut self, v: Value) {
         self.call_intrinsic("lang_rc_release", &[PTR], None, &[v]);
     }

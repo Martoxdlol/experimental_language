@@ -1,0 +1,12 @@
+//@ kind: compile-error
+//@ description: std:time target-backed clock reads return futures and must be awaited
+//@ stderr: expected `Instant`, found `Future<Instant>`
+//@ stderr: expected `SystemTime`, found `Future<SystemTime>`
+//@ stderr: expected `Duration`, found `Future<Duration>`
+import { Duration, Instant, SystemTime } from "std:time";
+
+function main() {
+  var instant: Instant = Instant.now();
+  var system: SystemTime = SystemTime.now();
+  var elapsed: Duration = Instant.from_nanos(0).elapsed();
+}

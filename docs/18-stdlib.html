@@ -149,9 +149,9 @@ three ways:</p>
 <table>
   <thead><tr><th>Kind</th><th>Meaning</th><th>Examples</th></tr></thead>
   <tbody>
-    <tr><td><code>Otter</code></td><td>API and behavior are authored in Otter Fusion source.</td><td><code>std:error</code>, <code>std:bytes</code>, <code>std:fmt</code>, <code>std:time.Duration</code>, <code>std:fs.Path</code>, <code>std:hash</code>, <code>std:http</code>, <code>std:rand.SeededRng</code></td></tr>
-    <tr><td><code>RustBacked</code></td><td>The importable surface is a marker or wrapper; behavior is supplied by Rust runtime/compiler intrinsics.</td><td><code>std:io.print</code>, <code>std:io.eprintln</code>, <code>core:prelude.panic</code>, <code>std:process.exit</code>/<code>abort</code>, future target-only hooks</td></tr>
-    <tr><td><code>Mixed</code></td><td>Otter Fusion definitions layer a safe API over Rust-backed runtime hooks.</td><td><code>std:io</code>, <code>std:time.Instant</code>/<code>SystemTime</code>, <code>std:fs.File</code> handles and file helpers, <code>std:process</code> host environment/execution/child helpers, <code>std:rand.OsRng</code>/<code>ThreadRng</code>, <code>core:ffi.CString</code>, channels, <code>Shared</code></td></tr>
+    <tr><td><code>Otter</code></td><td>API and behavior are authored in Otter Fusion source.</td><td><code>std:error</code>, <code>std:bytes</code>, <code>std:fmt</code>, <code>std:time.Duration</code>, <code>std:fs.Path</code>, <code>std:http</code>, <code>std:rand.SeededRng</code></td></tr>
+    <tr><td><code>RustBacked</code></td><td>The importable surface is a marker or wrapper; behavior is supplied by Rust runtime/compiler intrinsics.</td><td><code>core:prelude.panic</code>, <code>std:process.exit</code>/<code>abort</code>, future target-only hooks</td></tr>
+    <tr><td><code>Mixed</code></td><td>Otter Fusion definitions layer a safe API over Rust-backed runtime hooks.</td><td><code>std:io</code>, awaitable <code>std:hash.os_keyed_hasher</code>, awaitable <code>std:time.Instant</code>/<code>SystemTime</code> clock reads, awaitable <code>std:fs.File</code> handles and file helpers, awaitable <code>std:process</code> host environment/execution/child helpers, awaitable <code>std:rand.OsRng</code>/<code>ThreadRng</code>, <code>core:ffi.CString</code>, channels, <code>Shared</code></td></tr>
   </tbody>
 </table>
 
@@ -583,7 +583,7 @@ extend Range: Iterator&lt;i64&gt; {
 }
 
 for n in (Range { current: 0, end: 5 }) {
-  print(n as str)
+  await print(n as str)
 }</code></pre>
 
 <!-- =========================================================== -->
@@ -646,9 +646,16 @@ b.push(0x41u8)
 b.size()              // 1
 b.get(0)              // u8 | null
 b.set(0, 0x42u8)     // bool
+b.insert(0, 0x41u8)  // bool
 b.pop()               // u8 | null
 b.remove_at(0)        // u8 | null
+b.index_of(0x42u8)    // i64 | null
+b.last_index_of(0x42u8)
+b.index_of_bytes(b)   // i64 | null
+b.last_index_of_bytes(b)
 b.truncate(1)         // shrink in place
+b.resize(4, 0u8)      // grow with fill byte
+b.fill(0xffu8)        // overwrite all bytes
 b.clear()             // empty the buffer
 b.iter()              // Iterator&lt;u8&gt;
 b.cursor()            // BytesCursor snapshot</code></pre>
@@ -656,9 +663,11 @@ b.cursor()            // BytesCursor snapshot</code></pre>
 <p><code>Bytes</code> is an ordinary managed-heap library container, so it lives in
 <code>std:</code>, not <code>core:</code>. It currently provides <code>new</code>,
 <code>with_capacity</code>, <code>from_str</code> UTF-8 encoding, <code>size</code>,
-<code>is_empty</code>, <code>get</code>, <code>set</code>, <code>push</code>, <code>pop</code>,
+<code>is_empty</code>, <code>get</code>, <code>set</code>, <code>push</code>, <code>insert</code>, <code>pop</code>,
 <code>remove_at</code>,
-<code>append</code>, <code>truncate</code>, <code>clear</code>, <code>append_iter</code>,
+<code>append</code>, <code>truncate</code>, <code>resize</code>, <code>fill</code>, <code>clear</code>, <code>append_iter</code>,
+<code>index_of</code>, <code>last_index_of</code>, <code>contains</code>,
+<code>index_of_bytes</code>, <code>last_index_of_bytes</code>, <code>contains_bytes</code>,
 <code>slice</code>, <code>decode_utf8</code>, <code>iter</code>, and <code>cursor</code>.
 <code>Bytes</code> also implements <code>std:io.Writer</code> as an in-memory sink:
 <code>write</code> and <code>write_all</code> append bytes, and <code>flush</code> is a no-op.
@@ -674,14 +683,14 @@ Raw-buffer views remain planned.</p>
 <pre><code>import { Bytes } from "std:bytes"
 import { print, println, eprint, eprintln, stdin, stdout, stderr } from "std:io"
 
-print("hello")        // no trailing newline
-println("hello")      // appends '\n'
-eprint("warning")     // stderr, no trailing newline
-eprintln("warning")   // stderr, appends '\n'
+await print("hello")        // no trailing newline
+await println("hello")      // appends '\n'
+await eprint("warning")     // stderr, no trailing newline
+await eprintln("warning")   // stderr, appends '\n'
 
-stdout().write(Bytes.from_str("raw bytes"))
-stdin().read_to_end(Bytes.new())
-stderr().flush()
+await stdout().write(Bytes.from_str("raw bytes"))
+await stdin().read_to_end(Bytes.new())
+await stderr().flush()
 
 await stdout().write_all_async(Bytes.from_str("async bytes\n"))
 await stdin().read_async(Bytes.new())</code></pre>
@@ -703,24 +712,39 @@ interface Writer {
 }</code></pre>
 
 <p>The concrete <code>Stdin</code>, <code>Stdout</code>, and
-<code>Stderr</code> handles also expose async methods for executor code:
-<code>Stdin.read_async(buf)</code>, <code>Stdin.read_to_end_async(buf)</code>,
-<code>Stdout.write_async(buf)</code>, <code>Stdout.write_all_async(buf)</code>,
-<code>Stdout.flush_async()</code>, and the matching <code>Stderr</code> writer
-methods. These return <code>Future</code>s and wake through the async reactor, so
-polling them does not block an executor worker.</p>
+<code>Stderr</code> handles expose async methods for executor code:
+<code>Stdin.read(buf)</code>, <code>Stdin.read_async(buf)</code>,
+<code>Stdin.read_to_end(buf)</code>, <code>Stdin.read_to_end_async(buf)</code>,
+<code>Stdout.write(buf)</code>, <code>Stdout.write_async(buf)</code>,
+<code>Stdout.write_all(buf)</code>, <code>Stdout.write_all_async(buf)</code>,
+<code>Stdout.flush()</code>, <code>Stdout.flush_async()</code>, and the matching
+<code>Stderr</code> writer methods. These return <code>Future</code>s and wake through
+helper-backed async runtime futures, so polling them does not block an executor
+worker.</p>
+
+<p><code>Reader</code>, <code>Writer</code>, and <code>Seeker</code> themselves are ordinary
+value-returning contracts for non-waiting in-memory sources and adapters such as
+<code>Bytes</code>, <code>BytesCursor</code>, <code>BufReader</code>, and
+<code>BufWriter</code>. They are not target-stream protocols:
+<code>Stdin</code>, <code>Stdout</code>, <code>Stderr</code>, files, sockets, and child-process
+streams must not implement these ordinary contracts for wait-capable operations.
+Target-backed files, sockets, stdin, stdout, and stderr expose async concrete
+methods and/or <code>AsyncReader</code>/<code>AsyncWriter</code>; none expose target waits
+except through explicit <code>Future</code>-returning operations over helper-backed
+async paths.</p>
 
 <pre><code>
 interface Seeker {
   function seek(self, pos: SeekFrom): i64 | IoError
 }</code></pre>
 
-<p><code>std:io</code> is a mixed module: the shared contracts and
-<code>IoError</code> shape are authored in Otter Fusion, while <code>print</code>,
-<code>println</code>, <code>eprint</code>, and <code>eprintln</code> lower to runtime
-intrinsics. <code>stdin()</code>, <code>stdout()</code>, and <code>stderr()</code>
-return target-backed stream handles for byte-oriented reads, writes, and
-flushes, including reactor-backed async methods on the concrete stdio handles.
+<p><code>std:io</code> is a mixed module: the shared contracts,
+<code>IoError</code> shape, and async print helpers are authored in Otter Fusion, while
+private target-backed runtime hooks provide the concrete standard-stream futures.
+<code>stdin()</code>, <code>stdout()</code>, and <code>stderr()</code> return target-backed
+stream handles for byte-oriented reads, writes, and flushes, all through
+helper-backed async methods that wake through the reactor on the concrete stdio
+handles.
 <code>SeekFrom</code> and
 <code>IoErrorKind</code> provide direct <code>equals</code> / <code>eq</code>, overloaded
 <code>==</code>, clone, hash, stringification, and debug helpers; <code>IoError</code> implements
@@ -763,23 +787,23 @@ escapes.</p>
   <tbody>
     <tr><td><code>std:thread</code></td><td><code>Thread.spawn</code>, <code>JoinHandle</code>, <code>Joined&lt;R&gt;</code>, <code>Panicked</code>; <code>Panicked</code> has value semantics</td><td><a href="20-concurrency.html">20-concurrency</a></td></tr>
     <tr><td><code>std:task</code></td><td><code>Task.spawn</code>, executor <code>JoinHandle</code>, <code>Joined&lt;R&gt;</code>, <code>Panicked</code>, <code>Cancelled</code>; <code>Cancelled</code> has value semantics and task handles support cooperative <code>cancel()</code>/<code>abort()</code></td><td><a href="20-concurrency.html">20-concurrency</a></td></tr>
-    <tr><td><code>std:sync</code></td><td><code>Shared&lt;T&gt;</code>, <code>LockBusy</code>, channels, senders, receivers; <code>LockBusy</code>/<code>ChannelClosed</code> have value semantics</td><td><a href="20-concurrency.html">20-concurrency</a></td></tr>
+    <tr><td><code>std:sync</code></td><td><code>Shared&lt;T&gt;</code>, <code>LockBusy</code>, unbounded MPSC <code>channel</code>, senders, receivers with async <code>recv()</code> and immediate <code>try_recv()</code>; <code>LockBusy</code>/<code>ChannelClosed</code> have value semantics; bounded/MPMC constructors are reserved planned names that diagnose if called</td><td><a href="20-concurrency.html">20-concurrency</a></td></tr>
     <tr><td><code>core:sync/atomic</code></td><td><code>Ordering</code> memory-ordering value contract with equality, clone, hash, stringification, and debug rendering; runtime-backed <code>AtomicI32</code>, <code>AtomicI64</code>, <code>AtomicU32</code>, <code>AtomicU64</code>, <code>AtomicBool</code>, and <code>AtomicPtr&lt;T&gt;</code> handles with load/store/swap/compare-exchange operations and type-specific fetch operations</td><td><a href="24-stdlib-extended.html">24-stdlib-extended</a></td></tr>
-    <tr><td><code>std:async</code></td><td><code>yield_now</code>, <code>sleep</code>, <code>timeout</code>, executor/runtime adapters; <code>TimedOut</code> has value semantics</td><td><a href="21-async.html">21-async</a></td></tr>
+    <tr><td><code>std:async</code></td><td><code>yield_now</code>, <code>sleep</code>, and <code>timeout</code> as future-returning executor surfaces, executor/runtime helpers, and <code>TimedOut</code> value semantics</td><td><a href="21-async.html">21-async</a></td></tr>
     <tr><td><code>std:bytes</code></td><td><code>Bytes</code>, <code>BytesCursor</code>, <code>from_str</code> UTF-8 encoding, <code>decode_utf8</code> strict UTF-8 decoding, bytewise prefix/suffix checks, <code>Utf8Error</code> error/value semantics, byte/cursor clone/equality/hash/stringification/debug, in-memory <code>Writer</code>/<code>FmtSink</code>, and cursor-backed <code>Reader</code>/<code>Seeker</code></td><td><a href="24-stdlib-extended.html">24-stdlib-extended</a></td></tr>
-    <tr><td><code>std:io</code></td><td><code>print</code>, <code>println</code>, <code>eprint</code>, <code>eprintln</code>, <code>Reader</code>, <code>Writer</code>, <code>Seeker</code>, <code>SeekFrom</code>, <code>IoError</code>, stdin <code>Reader</code>, stdout/stderr <code>Writer</code> handles, and <code>BufReader</code>/<code>BufWriter</code> buffered adapters</td><td><a href="24-stdlib-extended.html">24-stdlib-extended</a></td></tr>
-    <tr><td><code>std:collections</code></td><td><code>Deque</code>, <code>deque&lt;T&gt;()</code>, and <code>deque_from_list&lt;T&gt;(List&lt;T&gt;)</code>; ordinary Otter-authored double-ended queue with bulk front/back extension, direct indexed reads/writes/removals, membership testing when <code>T: Eq</code>, equality, clone, hash, stringification, debug rendering, list snapshots, and iterator support</td><td><a href="24-stdlib-extended.html">24-stdlib-extended</a></td></tr>
+    <tr><td><code>std:io</code></td><td>async <code>print</code>, <code>println</code>, <code>eprint</code>, and <code>eprintln</code>, ordinary in-memory <code>Reader</code>, <code>Writer</code>, and <code>Seeker</code> contracts, explicit async byte-stream <code>AsyncReader</code>/<code>AsyncWriter</code> contracts, <code>SeekFrom</code>, <code>IoError</code>, stdin <code>AsyncReader</code>, stdout/stderr <code>AsyncWriter</code> handles with async concrete methods and <code>*_async</code> aliases, and ordinary in-memory <code>BufReader</code>/<code>BufWriter</code> buffered adapters</td><td><a href="24-stdlib-extended.html">24-stdlib-extended</a></td></tr>
+    <tr><td><code>std:collections</code></td><td><code>Deque</code>, <code>deque&lt;T&gt;()</code>, and <code>deque_from_list&lt;T&gt;(List&lt;T&gt;)</code>; ordinary Otter-authored double-ended queue with bulk front/back extension, direct indexed reads/writes/removals, membership testing when <code>T: Eq</code>, reverse/reversed helpers, equality, clone, hash, stringification, debug rendering, list snapshots, and iterator support</td><td><a href="24-stdlib-extended.html">24-stdlib-extended</a></td></tr>
     <tr><td><code>std:fmt</code></td><td><code>Display</code>, <code>Debug</code>, <code>FmtSink</code>, <code>FmtError</code>; <code>FmtError</code> value semantics, primitive/string <code>Debug</code> intrinsics, and <code>Debug</code> impls for pure stdlib values and renderable collections</td><td><a href="24-stdlib-extended.html">24-stdlib-extended</a></td></tr>
-    <tr><td><code>std:time</code></td><td><code>Duration</code> with unit conversions and subsecond component helpers, monotonic <code>Instant</code>, wall-clock <code>SystemTime</code>, <code>TimeZone</code>, <code>DateTime</code>, <code>TimeError</code>, value semantics, ISO-like formatting/parsing, timezone replacement, UTC/fixed-offset/local <code>SystemTime</code> conversion, <code>DateTime.now_utc()</code>, <code>DateTime.now_local()</code>, and <code>sleep(Duration)</code>; timezone databases and named-zone conversion remain planned</td><td><a href="24-stdlib-extended.html">24-stdlib-extended</a></td></tr>
-    <tr><td><code>std:fs</code></td><td><code>Path</code> value operations, lexical normalization, native separator conversion, components/counts, empty/root predicates, prefix/suffix checks, prefix stripping, hidden-file-aware stem/extension helpers, target-backed path existence/type/metadata/canonicalization queries, binary <code>Bytes</code> read/write, snapshot-backed <code>read_dir</code>, and non-recursive remove/rename/directory creation, portable <code>DirEntry</code>/<code>DirEntries</code>/<code>FileKind</code>, <code>Metadata</code>/<code>Permissions</code>, and <code>OpenOptions</code> value semantics and validation, plus target-backed text helpers and descriptor-backed <code>File</code> handles implementing <code>Reader</code>/<code>Writer</code>/<code>Seeker</code> with explicit open options and reactor-backed async methods</td><td><a href="24-stdlib-extended.html">24-stdlib-extended</a></td></tr>
-    <tr><td><code>std:hash</code></td><td><code>Hasher</code>, deterministic <code>DefaultHasher</code>, explicit <code>KeyedHasher</code> values, byte-stream writes, interface-level <code>Hash</code> writes, state value semantics, and helpers over <code>core:prelude.Hash</code>; keyed map/set construction is planned</td><td><a href="24-stdlib-extended.html">24-stdlib-extended</a></td></tr>
+    <tr><td><code>std:time</code></td><td><code>Duration</code> with unit conversions and subsecond component helpers, monotonic <code>Instant</code>, wall-clock <code>SystemTime</code>, <code>TimeZone</code>, <code>DateTime</code>, <code>TimeError</code>, value semantics, ISO-like formatting/parsing, timezone replacement, UTC/fixed-offset conversion, awaitable <code>Instant.now()</code>, <code>SystemTime.now()</code>, <code>DateTime.now_utc()</code>, <code>DateTime.now_local()</code>, <code>DateTime.from_system_time_local(t)</code>, and async non-blocking <code>sleep(Duration): Future&lt;null&gt;</code>; timezone databases and named-zone conversion remain planned</td><td><a href="24-stdlib-extended.html">24-stdlib-extended</a></td></tr>
+    <tr><td><code>std:fs</code></td><td><code>Path</code> value operations, lexical normalization, native separator conversion, components/counts, empty/root predicates, prefix/suffix checks, prefix stripping, hidden-file-aware stem/extension helpers, portable <code>DirEntry</code>/<code>DirEntries</code>/<code>FileKind</code>, <code>Metadata</code>/<code>Permissions</code>, and <code>OpenOptions</code> value semantics and validation, plus helper-backed, reactor-woken future-returning target-backed path existence/type/metadata/canonicalization queries, binary <code>Bytes</code> read/write, UTF-8 text helpers, snapshot-backed <code>read_dir</code>, non-recursive remove/rename/directory creation, and descriptor-backed <code>File</code> open/create/append/open-with, close, text helpers, byte IO, and seek methods plus byte-I/O <code>*_async</code> aliases</td><td><a href="24-stdlib-extended.html">24-stdlib-extended</a></td></tr>
+    <tr><td><code>std:hash</code></td><td><code>Hasher</code>, deterministic <code>DefaultHasher</code>, explicit <code>KeyedHasher</code> values, awaitable OS-seeded <code>os_keyed_hasher()</code> construction with <code>HashSeedError</code>, byte-stream writes, interface-level <code>Hash</code> writes, state value semantics, and helpers over <code>core:prelude.Hash</code>; keyed map/set construction is planned</td><td><a href="24-stdlib-extended.html">24-stdlib-extended</a></td></tr>
     <tr><td><code>std:http</code></td><td>Comparable <code>Method</code>/<code>HttpVersion</code>, standard <code>Status</code> helpers/reason phrases and reason builders, case-insensitive normalized <code>Headers</code> with name/value counts, clearing, and order-insensitive header-name hashing, <code>HeaderEntry</code>, <code>HttpRequest</code>, <code>HttpResponse</code>, value equality/clone/hash, flattened header entries, snapshot constructors/accessors/builders, diagnostic debug rendering, and request/response header builders; clients/servers/parsing are planned or package-tier</td><td><a href="24-stdlib-extended.html">24-stdlib-extended</a></td></tr>
     <tr><td><code>std:json</code></td><td><code>Json</code> value tree, scalar/container shape predicates, array/object length, object key/value snapshots, typed extractors with deep snapshots around mutable containers, immutable array/object builders, deep clone/equality/structural hash with order-insensitive object entries, escaped compact and pretty rendering, debug formatting; parsing is package-tier</td><td><a href="24-stdlib-extended.html">24-stdlib-extended</a></td></tr>
     <tr><td><code>std:net/types</code></td><td><code>IpAddr</code>, <code>SocketAddr</code>, <code>Uri</code>, <code>Url</code>, <code>ParseError</code>, constructors, IPv4 / IPv6 including dotted IPv4 tails and scoped zone IDs / socket / URI / URL parsers including bracketed IPv6 URL hosts, URI/URL accessors, immutable URL builders and query-entry updates with query-map snapshots, UTF-8 percent component helpers, lowercase hex IPv6 rendering, equality, order-insensitive URL query hashing, cloning, debug formatting; stricter URL canonicalization is planned</td><td><a href="24-stdlib-extended.html">24-stdlib-extended</a></td></tr>
-    <tr><td><code>std:process</code></td><td><code>Command</code>, live <code>Child</code>, <code>ExitStatus</code>, and captured <code>Output</code> value shapes with snapshotting builders/accessors plus direct arg/env inspection, validation, and structural equality/hash contracts for args/env/cwd value semantics; host <code>args</code>/<code>env</code>/<code>env_all</code>/<code>set_env</code>; process <code>exit</code>/<code>abort</code>; run-to-completion <code>Command.status()</code>/<code>output()</code>; <code>Command.spawn()</code> with child <code>id()</code>/<code>wait()</code>/<code>kill()</code>; streamed child stdio remains planned</td><td><a href="24-stdlib-extended.html">24-stdlib-extended</a></td></tr>
-    <tr><td><code>std:rand</code></td><td><code>Rng</code>, deterministic <code>SeededRng</code> with state value semantics, OS-backed <code>OsRng</code>, per-value <code>ThreadRng</code>, <code>RandomError</code>, signed/unsigned/f64 range helpers, exact byte-buffer helpers, ratio booleans, uniform index helpers, and choose/shuffle helpers; cryptographic-strength guarantees and richer statistical distributions are planned</td><td><a href="24-stdlib-extended.html">24-stdlib-extended</a></td></tr>
-    <tr><td><code>std:log</code></td><td><code>Level</code>, <code>Record</code>, <code>LoggerAlreadySet</code>, level constructors and severity filtering helpers, record accessors/builders including direct field lookup/count plus field add/remove/clear, field-map snapshots, field-order-independent equality/hash, default and structured line logging helpers, and value semantics; replaceable global loggers are planned</td><td><a href="24-stdlib-extended.html">24-stdlib-extended</a></td></tr>
-    <tr><td><code>std:net</code></td><td>Provider-backed <code>resolve(host): List&lt;IpAddr&gt; | IoError</code>; synchronous <code>TcpStream</code>/<code>TcpListener</code> handles with <code>Reader</code>/<code>Writer</code>, connect/bind/accept, local/peer addresses, nodelay, and explicit close; synchronous <code>UdpSocket</code> datagrams with bind/send_to/recv_from/local_addr/close; async network adapters, IDNA, and stricter URL canonicalization remain planned</td><td><a href="24-stdlib-extended.html">24-stdlib-extended</a></td></tr>
+    <tr><td><code>std:process</code></td><td><code>Command</code>, live <code>Child</code>, <code>ExitStatus</code>, and captured <code>Output</code> value shapes with snapshotting builders/accessors plus command-local arg/env snapshot inspection, validation, and structural equality/hash contracts for args/env/cwd value semantics; captured <code>Output.status()</code> is a non-waiting snapshot accessor over an already captured <code>ExitStatus</code>; async host <code>args(): Future&lt;List&lt;str&gt;&gt;</code>, <code>env</code>, <code>env_all</code>, and <code>set_env</code>; process <code>exit</code>/<code>abort</code>; awaitable process-exit status <code>Command.status(): Future&lt;ExitStatus | IoError&gt;</code> and awaitable output capture <code>Command.output(): Future&lt;Output | IoError&gt;</code> with exact stdout/stderr byte capture and code/signal/core-dump/stopped-signal/continued status details where the provider exposes them; async <code>Command.spawn(): Future&lt;Child | IoError&gt;</code> with child <code>id()</code> plus async <code>wait()</code>/<code>kill()</code>; streamed child stdio remains planned as async stream handles and currently returns <code>null</code></td><td><a href="24-stdlib-extended.html">24-stdlib-extended</a></td></tr>
+    <tr><td><code>std:rand</code></td><td><code>Rng</code>, deterministic <code>SeededRng</code> with state value semantics, awaitable OS-backed <code>OsRng</code> entropy methods and owned <code>os_bytes</code> entropy buffers, per-value <code>ThreadRng</code> seeded by awaiting <code>thread_rng()</code>, <code>RandomError</code>, signed/unsigned/f64 range helpers, symmetric triangular, Bates, Irwin-Hall, min/max order-statistic, midrange, and median f64 sampling, exact byte-buffer helpers, ratio booleans, binomial success counts, uniform index helpers, weighted index/choice helpers, index/value without-replacement sampling, and mutating/non-mutating shuffle helpers; cryptographic-strength guarantees and additional continuous distributions are planned</td><td><a href="24-stdlib-extended.html">24-stdlib-extended</a></td></tr>
+    <tr><td><code>std:log</code></td><td><code>Level</code>, <code>Record</code>, <code>Logger</code>, <code>LoggerAlreadySet</code>, level constructors and severity filtering helpers, awaitable <code>record(...): Future&lt;Record&gt;</code> timestamp construction, record accessors/builders including direct field lookup/count plus field add/remove/clear, field-map snapshots, field-order-independent equality/hash, awaitable default and structured line logging helpers that write through async stdio, and value semantics; global logger installation is planned as non-waiting registry work while logger emission remains awaitable</td><td><a href="24-stdlib-extended.html">24-stdlib-extended</a></td></tr>
+    <tr><td><code>std:net</code></td><td>Provider-backed async <code>resolve(host): Future&lt;List&lt;IpAddr&gt; | IoError&gt;</code>, <code>TcpStream.connect</code>/<code>connect_timeout</code>, <code>TcpStream</code> byte I/O plus metadata/control/close, <code>TcpListener.bind</code>/accept/setup/control/close, and future-returning <code>UdpSocket</code> bind/connect/datagrams/metadata/control/options/multicast/close over helper-backed futures with one-shot reactor wakeups; explicit <code>AsyncTcpStream</code> implementing <code>AsyncReader</code>/<code>AsyncWriter</code>, <code>AsyncTcpListener</code>, and datagram-shaped <code>AsyncUdpSocket</code> adapters with async TCP connect/connect_timeout/read/write/peek/stream metadata/control/listener bind/accept/listener setup/control and UDP bind/connect/send/recv/peek/send_to/recv_from/peek_from/metadata/control/options/multicast/close futures; network operation deadlines use <code>std:async.timeout(...)</code> around explicit async futures today except for the dedicated TCP connect-timeout constructors, so copied timeout method families such as TCP read/write/peek timeout names, listener accept timeout names, and connected or address-aware UDP timeout names are not current API; IDNA, stricter URL canonicalization, deeper readiness-native provider integration, richer timeout ergonomics after an Otter-specific API decision, and additional platform-specific socket options remain planned</td><td><a href="24-stdlib-extended.html">24-stdlib-extended</a></td></tr>
   </tbody>
 </table>
 
@@ -800,18 +824,18 @@ desugaring, but the importable protocol module is <code>core:async</code>. The
     <li>No regular expressions.</li>
     <li>No JSON parser or stricter canonical serializer in stdlib; <code>std:json</code> provides the shared value tree plus compact and pretty escaped rendering.</li>
     <li>No public keyed map/set hasher integration yet; <code>std:hash</code>
-      provides deterministic hasher and byte-stream helpers over the current <code>Hash</code> contract.</li>
-    <li>No cryptographic-strength RNG API guarantee or richer statistical distributions yet; <code>std:rand</code> provides
-      deterministic seeded RNGs, OS-backed entropy handles, per-value generators, and basic uniform distribution helpers.</li>
+      provides deterministic and OS-seeded keyed hasher helpers over the current <code>Hash</code> contract.</li>
+    <li>No cryptographic-strength RNG API guarantee or full advanced continuous-distribution family yet; <code>std:rand</code> provides
+      deterministic seeded RNGs, awaitable OS-backed entropy handles and owned byte buffers, per-value generators, uniform helpers, symmetric triangular, Bates, Irwin-Hall, min/max/midrange/median f64 sampling, ratio booleans, binomial success counts, weighted index/choice helpers, index/value without-replacement sampling, and mutating/non-mutating shuffle helpers.</li>
     <li>No HTTP client/server or wire parser yet; <code>std:http</code> provides
       shared request/response value types only.</li>
-    <li>No async network adapters, IDNA handling, or stricter URL canonicalizer yet; <code>std:net/types</code>
-      provides portable identifier values plus IPv4, IPv6 including scoped zone IDs, socket-address, URI, and URL parsing, while <code>std:net</code> provides provider-backed host/IP name resolution plus synchronous TCP streams/listeners and UDP datagrams.</li>
+    <li>No IDNA handling, stricter URL canonicalizer, or broader platform-specific socket-option surface yet; <code>std:net/types</code>
+      provides portable identifier values plus IPv4, IPv6 including scoped zone IDs, socket-address, URI, and URL parsing, while <code>std:net</code> provides provider-backed async host/IP name resolution, TCP connect, TCP stream byte I/O and metadata/control, TCP listener bind/accept/setup/control, and UDP bind/connect/datagrams/metadata/control/options/multicast/close futures, with explicit <code>AsyncTcpStream</code>, <code>AsyncTcpListener</code>, and <code>AsyncUdpSocket</code> adapters available for current async socket operations.</li>
     <li>No provider-backed timezone database, named-zone conversion, or leap-second policy yet; <code>std:time</code> currently provides
-      <code>Duration</code>, monotonic <code>Instant</code>, wall-clock <code>SystemTime</code>, timezone values, validated/parsed <code>DateTime</code> values, UTC/fixed-offset system-time conversion, and provider-backed local offset conversion to fixed-offset <code>DateTime</code> values.</li>
+      <code>Duration</code>, monotonic <code>Instant</code>, wall-clock <code>SystemTime</code>, timezone values, validated/parsed <code>DateTime</code> values, UTC/fixed-offset system-time conversion, and awaitable provider-backed local offset conversion to fixed-offset <code>DateTime</code> values.</li>
     <li>No <code>format!</code> macro or format-string language — <code>std:fmt</code> provides contracts only; interpolation remains the built-in formatting sugar.</li>
     <li>No blessed <code>Result&lt;T, E&gt;</code> alias — write <code>T | E</code> directly. Type aliases for project-local error types stay local.</li>
-    <li>No async networking adapters or generic async I/O protocols yet; concrete stdio and filesystem file handles expose reactor-backed async methods.</li>
+    <li><code>std:io.AsyncReader</code>/<code>AsyncWriter</code> cover async byte streams; concrete stdin/stdout/stderr handles use async methods, while generic <code>Reader</code>/<code>Writer</code>/<code>Seeker</code> are retained only for non-blocking in-memory contracts and must not be implemented by wait-capable target streams. UDP remains datagram-shaped instead of pretending to be a byte stream.</li>
   </ul>
   Surface kept small on purpose. These may land as separate <code>std:*</code> modules later.
 </div>

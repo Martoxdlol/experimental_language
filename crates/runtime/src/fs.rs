@@ -7,20 +7,22 @@
 //! ordinary stdlib values such as `Path | IoError`, `str | IoError`, or
 //! `null | IoError`.
 
-use crate::strings::{LangStr, lang_str_from_utf8, str_bytes};
+use crate::strings::{LangStr, lang_str_from_utf8};
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::{Read, Seek, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
-fn file_registry() -> &'static Mutex<HashMap<u64, std::fs::File>> {
-    static R: OnceLock<Mutex<HashMap<u64, std::fs::File>>> = OnceLock::new();
+type SharedFile = Arc<Mutex<std::fs::File>>;
+
+fn file_registry() -> &'static Mutex<HashMap<u64, SharedFile>> {
+    static R: OnceLock<Mutex<HashMap<u64, SharedFile>>> = OnceLock::new();
     R.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn lock_file_registry() -> MutexGuard<'static, HashMap<u64, std::fs::File>> {
+fn lock_file_registry() -> MutexGuard<'static, HashMap<u64, SharedFile>> {
     file_registry()
         .lock()
         .unwrap_or_else(|err| err.into_inner())
@@ -28,16 +30,8 @@ fn lock_file_registry() -> MutexGuard<'static, HashMap<u64, std::fs::File>> {
 
 static NEXT_FILE_ID: AtomicU64 = AtomicU64::new(1);
 
-unsafe fn read_lang_str(s: *const LangStr) -> String {
-    String::from_utf8_lossy(unsafe { str_bytes(s) }).into_owned()
-}
-
 fn make_lang_str(s: &str) -> *const LangStr {
     unsafe { lang_str_from_utf8(s.as_ptr(), s.len()) }
-}
-
-fn encode_success(payload: &str) -> *const LangStr {
-    make_lang_str(&encode_success_string(payload))
 }
 
 fn encode_success_string(payload: &str) -> String {
@@ -45,10 +39,6 @@ fn encode_success_string(payload: &str) -> String {
     out.push('0');
     out.push_str(payload);
     out
-}
-
-fn encode_error(error: impl std::fmt::Display) -> *const LangStr {
-    make_lang_str(&encode_error_string(error))
 }
 
 fn encode_error_string(error: impl std::fmt::Display) -> String {
@@ -59,12 +49,12 @@ fn encode_error_string(error: impl std::fmt::Display) -> String {
     out
 }
 
-fn encode_bool(value: bool) -> *const LangStr {
-    encode_success(if value { "1" } else { "0" })
+fn encode_bool_string(value: bool) -> String {
+    encode_success_string(if value { "1" } else { "0" })
 }
 
-fn encode_u64(value: u64) -> *const LangStr {
-    encode_success(&value.to_string())
+fn encode_u64_string(value: u64) -> String {
+    encode_success_string(&value.to_string())
 }
 
 fn bytes_hex_payload(bytes: &[u8]) -> String {
@@ -75,11 +65,6 @@ fn bytes_hex_payload(bytes: &[u8]) -> String {
         payload.push(HEX[(byte & 0x0f) as usize] as char);
     }
     payload
-}
-
-fn encode_bytes_hex(bytes: &[u8]) -> *const LangStr {
-    let payload = bytes_hex_payload(bytes);
-    encode_success(&payload)
 }
 
 fn decode_hex_digit(byte: u8) -> Option<u8> {
@@ -120,38 +105,31 @@ fn decode_hex_bytes(hex: &str) -> std::io::Result<Vec<u8>> {
     Ok(out)
 }
 
-fn path_query(
-    path: *const LangStr,
-    query: impl FnOnce(&Path) -> std::io::Result<bool>,
-) -> *const LangStr {
-    let path = unsafe { read_lang_str(path) };
-    match query(Path::new(&path)) {
-        Ok(value) => encode_bool(value),
-        Err(err) => encode_error(err),
+fn path_query_encoded(path: String, query: impl FnOnce(&Path) -> std::io::Result<bool>) -> String {
+    match crate::gc::native_wait(|| query(Path::new(&path))) {
+        Ok(value) => encode_bool_string(value),
+        Err(err) => encode_error_string(err),
     }
 }
 
-fn path_command(
-    path: *const LangStr,
+fn path_command_encoded(
+    path: String,
     command: impl FnOnce(&Path) -> std::io::Result<()>,
-) -> *const LangStr {
-    let path = unsafe { read_lang_str(path) };
-    match command(Path::new(&path)) {
-        Ok(()) => encode_success(""),
-        Err(err) => encode_error(err),
+) -> String {
+    match crate::gc::native_wait(|| command(Path::new(&path))) {
+        Ok(()) => encode_success_string(""),
+        Err(err) => encode_error_string(err),
     }
 }
 
-fn two_path_command(
-    from: *const LangStr,
-    to: *const LangStr,
+fn two_path_command_encoded(
+    from: String,
+    to: String,
     command: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
-) -> *const LangStr {
-    let from = unsafe { read_lang_str(from) };
-    let to = unsafe { read_lang_str(to) };
-    match command(Path::new(&from), Path::new(&to)) {
-        Ok(()) => encode_success(""),
-        Err(err) => encode_error(err),
+) -> String {
+    match crate::gc::native_wait(|| command(Path::new(&from), Path::new(&to))) {
+        Ok(()) => encode_success_string(""),
+        Err(err) => encode_error_string(err),
     }
 }
 
@@ -162,35 +140,30 @@ fn with_file_handle<T>(
     let id = u64::try_from(handle).map_err(|_| {
         std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid file handle")
     })?;
-    let mut files = lock_file_registry();
-    let file = files.get_mut(&id).ok_or_else(|| {
+    let file = lock_file_registry().get(&id).cloned().ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid file handle")
     })?;
-    f(file)
+    let mut file = file
+        .lock()
+        .map_err(|_| std::io::Error::other("file handle lock poisoned"))?;
+    crate::gc::native_wait(|| f(&mut file))
 }
 
-fn register_file(file: std::fs::File) -> *const LangStr {
+fn register_file(file: std::fs::File) -> String {
     let id = NEXT_FILE_ID.fetch_add(1, Ordering::Relaxed);
-    lock_file_registry().insert(id, file);
-    encode_u64(id)
+    lock_file_registry().insert(id, Arc::new(Mutex::new(file)));
+    encode_success_string(&id.to_string())
 }
 
-/// Read a UTF-8 text file.
-///
-/// # Safety
-/// `path` must be a valid runtime `str` pointer.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn lang_fs_read_text(path: *const LangStr) -> *const LangStr {
-    let path = unsafe { read_lang_str(path) };
-    match std::fs::read_to_string(&path) {
-        Ok(contents) => encode_success(&contents),
-        Err(err) => encode_error(err),
+pub(crate) fn fs_read_text_encoded(path: String) -> String {
+    let result = crate::gc::native_wait(|| std::fs::read_to_string(&path));
+    match result {
+        Ok(contents) => encode_success_string(&contents),
+        Err(err) => encode_error_string(err),
     }
 }
 
-fn write_text(path: *const LangStr, contents: *const LangStr, append: bool) -> *const LangStr {
-    let path = unsafe { read_lang_str(path) };
-    let contents = unsafe { str_bytes(contents) };
+fn write_text_encoded(path: String, contents: String, append: bool) -> String {
     let mut opts = OpenOptions::new();
     opts.create(true).write(true);
     if append {
@@ -198,66 +171,38 @@ fn write_text(path: *const LangStr, contents: *const LangStr, append: bool) -> *
     } else {
         opts.truncate(true);
     }
-    match opts
-        .open(&path)
-        .and_then(|mut file| file.write_all(contents))
-    {
-        Ok(()) => encode_success(""),
-        Err(err) => encode_error(err),
+    let result = crate::gc::native_wait(|| {
+        opts.open(&path)
+            .and_then(|mut file| file.write_all(contents.as_bytes()))
+    });
+    match result {
+        Ok(()) => encode_success_string(""),
+        Err(err) => encode_error_string(err),
     }
 }
 
-/// Create or truncate a UTF-8 text file and write `contents`.
-///
-/// # Safety
-/// `path` and `contents` must be valid runtime `str` pointers.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn lang_fs_write_text(
-    path: *const LangStr,
-    contents: *const LangStr,
-) -> *const LangStr {
-    write_text(path, contents, false)
+pub(crate) fn fs_write_text_encoded(path: String, contents: String) -> String {
+    write_text_encoded(path, contents, false)
 }
 
-/// Create or append to a UTF-8 text file.
-///
-/// # Safety
-/// `path` and `contents` must be valid runtime `str` pointers.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn lang_fs_append_text(
-    path: *const LangStr,
-    contents: *const LangStr,
-) -> *const LangStr {
-    write_text(path, contents, true)
+pub(crate) fn fs_append_text_encoded(path: String, contents: String) -> String {
+    write_text_encoded(path, contents, true)
 }
 
-/// Read a binary file and return an ASCII hex payload.
-///
-/// # Safety
-/// `path` must be a valid runtime `str` pointer.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn lang_fs_read_bytes(path: *const LangStr) -> *const LangStr {
-    let path = unsafe { read_lang_str(path) };
-    match std::fs::read(&path) {
-        Ok(contents) => encode_bytes_hex(&contents),
-        Err(err) => encode_error(err),
+pub(crate) fn fs_read_bytes_encoded(path: String) -> String {
+    let result = crate::gc::native_wait(|| std::fs::read(&path));
+    match result {
+        Ok(contents) => encode_success_string(&bytes_hex_payload(&contents)),
+        Err(err) => encode_error_string(err),
     }
 }
 
-/// Decode an ASCII hex payload and create or truncate a binary file.
-///
-/// # Safety
-/// `path` and `contents_hex` must be valid runtime `str` pointers.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn lang_fs_write_bytes(
-    path: *const LangStr,
-    contents_hex: *const LangStr,
-) -> *const LangStr {
-    let path = unsafe { read_lang_str(path) };
-    let contents_hex = unsafe { read_lang_str(contents_hex) };
-    match decode_hex_bytes(&contents_hex).and_then(|bytes| std::fs::write(&path, bytes)) {
-        Ok(()) => encode_success(""),
-        Err(err) => encode_error(err),
+pub(crate) fn fs_write_bytes_encoded(path: String, contents_hex: String) -> String {
+    let result = decode_hex_bytes(&contents_hex)
+        .and_then(|bytes| crate::gc::native_wait(|| std::fs::write(&path, bytes)));
+    match result {
+        Ok(()) => encode_success_string(""),
+        Err(err) => encode_error_string(err),
     }
 }
 
@@ -293,43 +238,41 @@ fn open_file(path: &str, mode: &str) -> std::io::Result<std::fs::File> {
     opts.open(path)
 }
 
-/// Open a descriptor-backed file and return a registry handle id.
-///
-/// # Safety
-/// `path` and `mode` must be valid runtime `str` pointers.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn lang_fs_file_open(
-    path: *const LangStr,
-    mode: *const LangStr,
-) -> *const LangStr {
-    let path = unsafe { read_lang_str(path) };
-    let mode = unsafe { read_lang_str(mode) };
-    match open_file(&path, &mode) {
+pub(crate) fn fs_file_open_encoded(path: String, mode: String) -> String {
+    let result = crate::gc::native_wait(|| open_file(&path, &mode));
+    match result {
         Ok(file) => register_file(file),
-        Err(err) => encode_error(err),
+        Err(err) => encode_error_string(err),
     }
-}
-
-/// Close a descriptor-backed file handle.
-#[unsafe(no_mangle)]
-pub extern "C" fn lang_fs_file_close(handle: i64) -> *const LangStr {
-    make_lang_str(&fs_file_close_encoded(handle))
 }
 
 pub(crate) fn fs_file_close_encoded(handle: i64) -> String {
     let Ok(id) = u64::try_from(handle) else {
         return encode_error_string("invalid file handle");
     };
-    match lock_file_registry().remove(&id) {
-        Some(_) => encode_success_string(""),
+    let removed = {
+        let mut registry = lock_file_registry();
+        registry.remove(&id)
+    };
+    match removed {
+        Some(file) => {
+            drop_file_handle_native_wait(file);
+            encode_success_string("")
+        }
         None => encode_error_string("invalid file handle"),
     }
 }
 
-/// Read up to `count` bytes from a descriptor-backed file handle.
-#[unsafe(no_mangle)]
-pub extern "C" fn lang_fs_file_read(handle: i64, count: i64) -> *const LangStr {
-    make_lang_str(&fs_file_read_encoded(handle, count))
+fn drop_file_handle_native_wait(file: SharedFile) {
+    crate::gc::native_wait(|| drop(file));
+}
+
+#[cfg(test)]
+pub(crate) fn test_file_handle_registered(handle: i64) -> bool {
+    let Ok(id) = u64::try_from(handle) else {
+        return false;
+    };
+    lock_file_registry().contains_key(&id)
 }
 
 pub(crate) fn fs_file_read_encoded(handle: i64, count: i64) -> String {
@@ -347,12 +290,6 @@ pub(crate) fn fs_file_read_encoded(handle: i64, count: i64) -> String {
     }
 }
 
-/// Read all remaining bytes from a descriptor-backed file handle.
-#[unsafe(no_mangle)]
-pub extern "C" fn lang_fs_file_read_to_end(handle: i64) -> *const LangStr {
-    make_lang_str(&fs_file_read_to_end_encoded(handle))
-}
-
 pub(crate) fn fs_file_read_to_end_encoded(handle: i64) -> String {
     match with_file_handle(handle, |file| {
         let mut buf = Vec::new();
@@ -364,19 +301,6 @@ pub(crate) fn fs_file_read_to_end_encoded(handle: i64) -> String {
     }
 }
 
-/// Write bytes to a descriptor-backed file handle.
-///
-/// # Safety
-/// `contents_hex` must be a valid runtime `str` pointer.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn lang_fs_file_write(
-    handle: i64,
-    contents_hex: *const LangStr,
-) -> *const LangStr {
-    let contents_hex = unsafe { read_lang_str(contents_hex) };
-    make_lang_str(&fs_file_write_encoded(handle, &contents_hex))
-}
-
 pub(crate) fn fs_file_write_encoded(handle: i64, contents_hex: &str) -> String {
     match decode_hex_bytes(contents_hex)
         .and_then(|bytes| with_file_handle(handle, |file| file.write(&bytes).map(|n| n as u64)))
@@ -386,31 +310,11 @@ pub(crate) fn fs_file_write_encoded(handle: i64, contents_hex: &str) -> String {
     }
 }
 
-/// Flush a descriptor-backed file handle.
-#[unsafe(no_mangle)]
-pub extern "C" fn lang_fs_file_flush(handle: i64) -> *const LangStr {
-    make_lang_str(&fs_file_flush_encoded(handle))
-}
-
 pub(crate) fn fs_file_flush_encoded(handle: i64) -> String {
     match with_file_handle(handle, |file| file.flush()) {
         Ok(()) => encode_success_string(""),
         Err(err) => encode_error_string(err),
     }
-}
-
-/// Seek a descriptor-backed file handle and return the new offset.
-///
-/// # Safety
-/// `mode` must be a valid runtime `str` pointer.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn lang_fs_file_seek(
-    handle: i64,
-    mode: *const LangStr,
-    offset: i64,
-) -> *const LangStr {
-    let mode = unsafe { read_lang_str(mode) };
-    make_lang_str(&fs_file_seek_encoded(handle, &mode, offset))
 }
 
 pub(crate) fn fs_file_seek_encoded(handle: i64, mode: &str, offset: i64) -> String {
@@ -429,14 +333,8 @@ pub(crate) fn fs_file_seek_encoded(handle: i64, mode: &str, offset: i64) -> Stri
     }
 }
 
-/// Return whether a path exists. Missing paths are `false`; other host errors
-/// are reported to the Otter layer as `IoError`.
-///
-/// # Safety
-/// `path` must be a valid runtime `str` pointer.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn lang_fs_exists(path: *const LangStr) -> *const LangStr {
-    path_query(path, |path| path.try_exists())
+pub(crate) fn fs_exists_encoded(path: String) -> String {
+    path_query_encoded(path, |path| path.try_exists())
 }
 
 fn metadata_kind_query(
@@ -450,87 +348,61 @@ fn metadata_kind_query(
     }
 }
 
-/// Return whether a path exists and is a regular file.
-///
-/// # Safety
-/// `path` must be a valid runtime `str` pointer.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn lang_fs_is_file(path: *const LangStr) -> *const LangStr {
-    path_query(path, |path| {
+pub(crate) fn fs_is_file_encoded(path: String) -> String {
+    path_query_encoded(path, |path| {
         metadata_kind_query(path, std::fs::Metadata::is_file)
     })
 }
 
-/// Return whether a path exists and is a directory.
-///
-/// # Safety
-/// `path` must be a valid runtime `str` pointer.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn lang_fs_is_dir(path: *const LangStr) -> *const LangStr {
-    path_query(path, |path| {
+pub(crate) fn fs_is_dir_encoded(path: String) -> String {
+    path_query_encoded(path, |path| {
         metadata_kind_query(path, std::fs::Metadata::is_dir)
     })
 }
 
-fn path_metadata_query<T>(
-    path: *const LangStr,
+fn path_metadata_query_encoded<T>(
+    path: String,
     query: impl FnOnce(&Path) -> std::io::Result<T>,
-    encode: impl FnOnce(T) -> *const LangStr,
-) -> *const LangStr {
-    let path = unsafe { read_lang_str(path) };
-    match query(Path::new(&path)) {
+    encode: impl FnOnce(T) -> String,
+) -> String {
+    match crate::gc::native_wait(|| query(Path::new(&path))) {
         Ok(value) => encode(value),
-        Err(err) => encode_error(err),
+        Err(err) => encode_error_string(err),
     }
 }
 
-/// Return a compact file-kind tag: `file`, `dir`, `symlink`, or `other`.
-///
-/// # Safety
-/// `path` must be a valid runtime `str` pointer.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn lang_fs_kind(path: *const LangStr) -> *const LangStr {
-    path_metadata_query(
+pub(crate) fn fs_kind_encoded(path: String) -> String {
+    path_metadata_query_encoded(
         path,
         |path| std::fs::symlink_metadata(path),
         |meta| {
             let ty = meta.file_type();
             if ty.is_symlink() {
-                encode_success("symlink")
+                encode_success_string("symlink")
             } else if ty.is_file() {
-                encode_success("file")
+                encode_success_string("file")
             } else if ty.is_dir() {
-                encode_success("dir")
+                encode_success_string("dir")
             } else {
-                encode_success("other")
+                encode_success_string("other")
             }
         },
     )
 }
 
-/// Return file length in bytes.
-///
-/// # Safety
-/// `path` must be a valid runtime `str` pointer.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn lang_fs_len(path: *const LangStr) -> *const LangStr {
-    path_metadata_query(
+pub(crate) fn fs_len_encoded(path: String) -> String {
+    path_metadata_query_encoded(
         path,
         |path| std::fs::metadata(path),
-        |meta| encode_u64(meta.len()),
+        |meta| encode_u64_string(meta.len()),
     )
 }
 
-/// Return whether the path's permissions are read-only.
-///
-/// # Safety
-/// `path` must be a valid runtime `str` pointer.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn lang_fs_read_only(path: *const LangStr) -> *const LangStr {
-    path_metadata_query(
+pub(crate) fn fs_read_only_encoded(path: String) -> String {
+    path_metadata_query_encoded(
         path,
         |path| std::fs::metadata(path),
-        |meta| encode_bool(meta.permissions().readonly()),
+        |meta| encode_bool_string(meta.permissions().readonly()),
     )
 }
 
@@ -545,17 +417,11 @@ fn is_executable(_meta: &std::fs::Metadata) -> bool {
     false
 }
 
-/// Return whether the path has any executable permission bit on Unix targets.
-/// Non-Unix providers currently report `false`.
-///
-/// # Safety
-/// `path` must be a valid runtime `str` pointer.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn lang_fs_executable(path: *const LangStr) -> *const LangStr {
-    path_metadata_query(
+pub(crate) fn fs_executable_encoded(path: String) -> String {
+    path_metadata_query_encoded(
         path,
         |path| std::fs::metadata(path),
-        |meta| encode_bool(is_executable(&meta)),
+        |meta| encode_bool_string(is_executable(&meta)),
     )
 }
 
@@ -568,55 +434,27 @@ fn remove_path(path: &Path) -> std::io::Result<()> {
     }
 }
 
-/// Remove a regular file, symlink, or empty directory.
-///
-/// # Safety
-/// `path` must be a valid runtime `str` pointer.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn lang_fs_remove(path: *const LangStr) -> *const LangStr {
-    path_command(path, remove_path)
+pub(crate) fn fs_remove_encoded(path: String) -> String {
+    path_command_encoded(path, remove_path)
 }
 
-/// Rename or move a path.
-///
-/// # Safety
-/// `from` and `to` must be valid runtime `str` pointers.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn lang_fs_rename(
-    from: *const LangStr,
-    to: *const LangStr,
-) -> *const LangStr {
-    two_path_command(from, to, |from, to| std::fs::rename(from, to))
+pub(crate) fn fs_rename_encoded(from: String, to: String) -> String {
+    two_path_command_encoded(from, to, |from, to| std::fs::rename(from, to))
 }
 
-/// Create a single directory.
-///
-/// # Safety
-/// `path` must be a valid runtime `str` pointer.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn lang_fs_create_dir(path: *const LangStr) -> *const LangStr {
-    path_command(path, |path| std::fs::create_dir(path))
+pub(crate) fn fs_create_dir_encoded(path: String) -> String {
+    path_command_encoded(path, |path| std::fs::create_dir(path))
 }
 
-/// Create a directory and all missing parents.
-///
-/// # Safety
-/// `path` must be a valid runtime `str` pointer.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn lang_fs_create_dir_all(path: *const LangStr) -> *const LangStr {
-    path_command(path, |path| std::fs::create_dir_all(path))
+pub(crate) fn fs_create_dir_all_encoded(path: String) -> String {
+    path_command_encoded(path, |path| std::fs::create_dir_all(path))
 }
 
-/// Resolve a path to the provider's canonical filesystem path.
-///
-/// # Safety
-/// `path` must be a valid runtime `str` pointer.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn lang_fs_canonicalize(path: *const LangStr) -> *const LangStr {
-    path_metadata_query(
+pub(crate) fn fs_canonicalize_encoded(path: String) -> String {
+    path_metadata_query_encoded(
         path,
         |path| std::fs::canonicalize(path),
-        |path| encode_success(&path.to_string_lossy()),
+        |path| encode_success_string(&path.to_string_lossy()),
     )
 }
 
@@ -653,14 +491,9 @@ fn encode_read_dir_entries(path: &Path) -> std::io::Result<String> {
     Ok(out)
 }
 
-/// Return a length-prefixed snapshot of directory entries.
-///
-/// # Safety
-/// `path` must be a valid runtime `str` pointer.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn lang_fs_read_dir(path: *const LangStr) -> *const LangStr {
-    path_metadata_query(path, encode_read_dir_entries, |payload| {
-        encode_success(&payload)
+pub(crate) fn fs_read_dir_encoded(path: String) -> String {
+    path_metadata_query_encoded(path, encode_read_dir_entries, |payload| {
+        encode_success_string(&payload)
     })
 }
 
@@ -684,64 +517,51 @@ mod tests {
         std::env::temp_dir().join(format!("otter_runtime_fs_dir_{n}"))
     }
 
-    fn lang(s: &str) -> *const LangStr {
-        unsafe { lang_str_from_utf8(s.as_ptr(), s.len()) }
-    }
-
     fn decode(s: *const LangStr) -> String {
-        String::from_utf8_lossy(unsafe { str_bytes(s) }).into_owned()
+        String::from_utf8_lossy(unsafe { crate::strings::str_bytes(s) }).into_owned()
     }
 
     #[test]
     fn text_round_trip_and_append() {
         let path = temp_path();
-        let p = lang(&path);
-        assert_eq!(decode(unsafe { lang_fs_write_text(p, lang("hi")) }), "0");
-        assert_eq!(decode(unsafe { lang_fs_append_text(p, lang("!")) }), "0");
-        assert_eq!(decode(unsafe { lang_fs_read_text(p) }), "0hi!");
+        assert_eq!(fs_write_text_encoded(path.clone(), "hi".to_string()), "0");
+        assert_eq!(fs_append_text_encoded(path.clone(), "!".to_string()), "0");
+        assert_eq!(fs_read_text_encoded(path.clone()), "0hi!");
         let _ = std::fs::remove_file(path);
     }
 
     #[test]
     fn binary_round_trip_uses_hex_payload() {
         let path = temp_path();
-        let p = lang(&path);
         assert_eq!(
-            decode(unsafe { lang_fs_write_bytes(p, lang("00ff4142")) }),
+            fs_write_bytes_encoded(path.clone(), "00ff4142".to_string()),
             "0"
         );
         assert_eq!(std::fs::read(&path).unwrap(), vec![0, 255, 65, 66]);
-        assert_eq!(decode(unsafe { lang_fs_read_bytes(p) }), "000ff4142");
-        assert!(decode(unsafe { lang_fs_write_bytes(p, lang("0x")) }).starts_with('1'));
+        assert_eq!(fs_read_bytes_encoded(path.clone()), "000ff4142");
+        assert!(fs_write_bytes_encoded(path.clone(), "0x".to_string()).starts_with('1'));
         let _ = std::fs::remove_file(path);
     }
 
     #[test]
-    fn file_handle_hooks_read_write_seek_and_close() {
+    fn file_handle_encoded_helpers_read_write_seek_and_close() {
         let path = temp_path();
-        let p = lang(&path);
 
-        let opened = decode(unsafe { lang_fs_file_open(p, lang("create")) });
+        let opened = fs_file_open_encoded(path.clone(), "create".to_string());
         assert!(
             opened.starts_with('0'),
             "expected handle success, got {opened:?}"
         );
         let handle: i64 = opened[1..].parse().unwrap();
 
-        assert_eq!(
-            decode(unsafe { lang_fs_file_write(handle, lang("00ff4142")) }),
-            "04"
-        );
-        assert_eq!(decode(lang_fs_file_flush(handle)), "0");
-        assert_eq!(
-            decode(unsafe { lang_fs_file_seek(handle, lang("start"), 0) }),
-            "00"
-        );
-        assert_eq!(decode(lang_fs_file_read(handle, 2)), "000ff");
-        assert_eq!(decode(lang_fs_file_read_to_end(handle)), "04142");
-        assert_eq!(decode(lang_fs_file_close(handle)), "0");
+        assert_eq!(fs_file_write_encoded(handle, "00ff4142"), "04");
+        assert_eq!(fs_file_flush_encoded(handle), "0");
+        assert_eq!(fs_file_seek_encoded(handle, "start", 0), "00");
+        assert_eq!(fs_file_read_encoded(handle, 2), "000ff");
+        assert_eq!(fs_file_read_to_end_encoded(handle), "04142");
+        assert_eq!(fs_file_close_encoded(handle), "0");
         assert!(
-            decode(lang_fs_file_read(handle, 1)).starts_with('1'),
+            fs_file_read_encoded(handle, 1).starts_with('1'),
             "closed handle should report an error"
         );
 
@@ -751,9 +571,8 @@ mod tests {
     #[test]
     fn encoded_file_helpers_match_descriptor_contract() {
         let path = temp_path();
-        let p = lang(&path);
 
-        let opened = decode(unsafe { lang_fs_file_open(p, lang("create")) });
+        let opened = fs_file_open_encoded(path.clone(), "create".to_string());
         assert!(
             opened.starts_with('0'),
             "expected handle success, got {opened:?}"
@@ -775,34 +594,71 @@ mod tests {
     }
 
     #[test]
+    fn file_descriptor_operation_does_not_hold_registry_lock() {
+        let path = temp_path();
+
+        let opened = fs_file_open_encoded(path.clone(), "create".to_string());
+        assert!(
+            opened.starts_with('0'),
+            "expected handle success, got {opened:?}"
+        );
+        let handle: i64 = opened[1..].parse().unwrap();
+
+        let result = with_file_handle(handle, |_file| {
+            assert_eq!(fs_file_close_encoded(handle), "0");
+            Ok(())
+        });
+        assert!(result.is_ok(), "descriptor operation failed: {result:?}");
+        assert!(
+            fs_file_flush_encoded(handle).starts_with('1'),
+            "closing during an in-flight descriptor operation should remove the handle"
+        );
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn file_close_drops_removed_handle_inside_native_state_marker() {
+        let path = temp_path();
+
+        let opened = fs_file_open_encoded(path.clone(), "create".to_string());
+        assert!(
+            opened.starts_with('0'),
+            "expected handle success, got {opened:?}"
+        );
+        let handle: i64 = opened[1..].parse().unwrap();
+
+        assert_eq!(fs_file_close_encoded(handle), "0");
+        assert!(
+            fs_file_close_encoded(handle).starts_with('1'),
+            "closing an already removed descriptor should report an error"
+        );
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn file_handle_open_options_payload_controls_creation_and_append() {
         let path = temp_path();
-        let p = lang(&path);
 
-        let opened = decode(unsafe { lang_fs_file_open(p, lang("110110")) });
+        let opened = fs_file_open_encoded(path.clone(), "110110".to_string());
         assert!(opened.starts_with('0'), "expected create success: {opened}");
         let handle: i64 = opened[1..].parse().unwrap();
-        assert_eq!(
-            decode(unsafe { lang_fs_file_write(handle, lang("4142")) }),
-            "02"
-        );
-        assert_eq!(decode(lang_fs_file_close(handle)), "0");
+        assert_eq!(fs_file_write_encoded(handle, "4142"), "02");
+        assert_eq!(fs_file_close_encoded(handle), "0");
 
-        let appended = decode(unsafe { lang_fs_file_open(p, lang("101010")) });
+        let appended = fs_file_open_encoded(path.clone(), "101010".to_string());
         assert!(
             appended.starts_with('0'),
             "expected append success: {appended}"
         );
         let append_handle: i64 = appended[1..].parse().unwrap();
-        assert_eq!(
-            decode(unsafe { lang_fs_file_write(append_handle, lang("43")) }),
-            "01"
-        );
-        assert_eq!(decode(lang_fs_file_close(append_handle)), "0");
+        assert_eq!(fs_file_write_encoded(append_handle, "43"), "01");
+        assert_eq!(fs_file_close_encoded(append_handle), "0");
         assert_eq!(std::fs::read(&path).unwrap(), b"ABC");
 
         assert!(
-            decode(unsafe { lang_fs_file_open(p, lang("010001")) }).starts_with('1'),
+            fs_file_open_encoded(path.clone(), "010001".to_string()).starts_with('1'),
             "create_new should fail for an existing path"
         );
 
@@ -824,14 +680,14 @@ mod tests {
             "test setup must leave the file registry poisoned"
         );
 
-        let opened = decode(unsafe { lang_fs_file_open(lang(&path), lang("open")) });
+        let opened = fs_file_open_encoded(path.clone(), "open".to_string());
         assert!(
             opened.starts_with('0'),
             "open should recover from registry poison, got {opened:?}"
         );
         let handle: i64 = opened[1..].parse().unwrap();
-        assert_eq!(decode(lang_fs_file_read_to_end(handle)), "0616263");
-        assert_eq!(decode(lang_fs_file_close(handle)), "0");
+        assert_eq!(fs_file_read_to_end_encoded(handle), "0616263");
+        assert_eq!(fs_file_close_encoded(handle), "0");
 
         let _ = std::fs::remove_file(path);
     }
@@ -839,7 +695,7 @@ mod tests {
     #[test]
     fn read_missing_file_reports_error() {
         let path = temp_path();
-        let out = decode(unsafe { lang_fs_read_text(lang(&path)) });
+        let out = fs_read_text_encoded(path);
         assert!(out.starts_with('1'), "expected error tag, got {out:?}");
     }
 
@@ -851,18 +707,18 @@ mod tests {
         std::fs::create_dir(&dir).unwrap();
         let missing = temp_path();
 
-        assert_eq!(decode(unsafe { lang_fs_exists(lang(&file)) }), "01");
-        assert_eq!(decode(unsafe { lang_fs_is_file(lang(&file)) }), "01");
-        assert_eq!(decode(unsafe { lang_fs_is_dir(lang(&file)) }), "00");
+        assert_eq!(fs_exists_encoded(file.clone()), "01");
+        assert_eq!(fs_is_file_encoded(file.clone()), "01");
+        assert_eq!(fs_is_dir_encoded(file.clone()), "00");
 
         let dir_s = dir.to_string_lossy();
-        assert_eq!(decode(unsafe { lang_fs_exists(lang(&dir_s)) }), "01");
-        assert_eq!(decode(unsafe { lang_fs_is_file(lang(&dir_s)) }), "00");
-        assert_eq!(decode(unsafe { lang_fs_is_dir(lang(&dir_s)) }), "01");
+        assert_eq!(fs_exists_encoded(dir_s.to_string()), "01");
+        assert_eq!(fs_is_file_encoded(dir_s.to_string()), "00");
+        assert_eq!(fs_is_dir_encoded(dir_s.to_string()), "01");
 
-        assert_eq!(decode(unsafe { lang_fs_exists(lang(&missing)) }), "00");
-        assert_eq!(decode(unsafe { lang_fs_is_file(lang(&missing)) }), "00");
-        assert_eq!(decode(unsafe { lang_fs_is_dir(lang(&missing)) }), "00");
+        assert_eq!(fs_exists_encoded(missing.clone()), "00");
+        assert_eq!(fs_is_file_encoded(missing.clone()), "00");
+        assert_eq!(fs_is_dir_encoded(missing), "00");
 
         let _ = std::fs::remove_file(file);
         let _ = std::fs::remove_dir(dir);
@@ -882,26 +738,23 @@ mod tests {
         let file_s = file.to_string_lossy();
         let renamed_s = renamed.to_string_lossy();
 
-        assert_eq!(decode(unsafe { lang_fs_create_dir(lang(&root_s)) }), "0");
+        assert_eq!(fs_create_dir_encoded(root_s.to_string()), "0");
+        assert_eq!(fs_create_dir_all_encoded(nested_s.to_string()), "0");
         assert_eq!(
-            decode(unsafe { lang_fs_create_dir_all(lang(&nested_s)) }),
+            fs_write_text_encoded(file_s.to_string(), "hi".to_string()),
             "0"
         );
         assert_eq!(
-            decode(unsafe { lang_fs_write_text(lang(&file_s), lang("hi")) }),
+            fs_rename_encoded(file_s.to_string(), renamed_s.to_string()),
             "0"
         );
-        assert_eq!(
-            decode(unsafe { lang_fs_rename(lang(&file_s), lang(&renamed_s)) }),
-            "0"
-        );
-        assert_eq!(decode(unsafe { lang_fs_exists(lang(&file_s)) }), "00");
-        assert_eq!(decode(unsafe { lang_fs_exists(lang(&renamed_s)) }), "01");
-        assert_eq!(decode(unsafe { lang_fs_remove(lang(&renamed_s)) }), "0");
-        assert_eq!(decode(unsafe { lang_fs_remove(lang(&nested_s)) }), "0");
-        assert_eq!(decode(unsafe { lang_fs_remove(lang(&parent_s)) }), "0");
-        assert_eq!(decode(unsafe { lang_fs_remove(lang(&root_s)) }), "0");
-        assert_eq!(decode(unsafe { lang_fs_exists(lang(&root_s)) }), "00");
+        assert_eq!(fs_exists_encoded(file_s.to_string()), "00");
+        assert_eq!(fs_exists_encoded(renamed_s.to_string()), "01");
+        assert_eq!(fs_remove_encoded(renamed_s.to_string()), "0");
+        assert_eq!(fs_remove_encoded(nested_s.to_string()), "0");
+        assert_eq!(fs_remove_encoded(parent_s.to_string()), "0");
+        assert_eq!(fs_remove_encoded(root_s.to_string()), "0");
+        assert_eq!(fs_exists_encoded(root_s.to_string()), "00");
 
         let _ = std::fs::remove_file(&renamed);
         let _ = std::fs::remove_file(&file);
@@ -917,7 +770,7 @@ mod tests {
         std::fs::write(&file, b"hi").unwrap();
 
         let file_s = file.to_string_lossy();
-        let canonical = decode(unsafe { lang_fs_canonicalize(lang(&file_s)) });
+        let canonical = fs_canonicalize_encoded(file_s.to_string());
         assert!(
             canonical.starts_with('0'),
             "expected success tag, got {canonical:?}"
@@ -929,7 +782,7 @@ mod tests {
 
         let missing = nested.join("missing.txt");
         let missing_s = missing.to_string_lossy();
-        let missing_out = decode(unsafe { lang_fs_canonicalize(lang(&missing_s)) });
+        let missing_out = fs_canonicalize_encoded(missing_s.to_string());
         assert!(
             missing_out.starts_with('1'),
             "expected missing-path error, got {missing_out:?}"
@@ -955,7 +808,7 @@ mod tests {
         std::fs::write(&file, b"hi").unwrap();
 
         let root_s = root.to_string_lossy();
-        let out = decode(unsafe { lang_fs_read_dir(lang(&root_s)) });
+        let out = fs_read_dir_encoded(root_s.to_string());
         assert!(out.starts_with('0'), "expected success tag, got {out:?}");
         assert!(out.contains('f'), "expected file entry tag, got {out:?}");
         assert!(
@@ -965,7 +818,7 @@ mod tests {
 
         let missing = root.join("missing");
         let missing_s = missing.to_string_lossy();
-        let missing_out = decode(unsafe { lang_fs_read_dir(lang(&missing_s)) });
+        let missing_out = fs_read_dir_encoded(missing_s.to_string());
         assert!(
             missing_out.starts_with('1'),
             "expected missing-directory error, got {missing_out:?}"
@@ -978,17 +831,16 @@ mod tests {
     fn metadata_hooks_report_kind_len_and_permissions() {
         let file = temp_path();
         std::fs::write(&file, b"hello").unwrap();
-        let p = lang(&file);
 
-        assert_eq!(decode(unsafe { lang_fs_kind(p) }), "0file");
-        assert_eq!(decode(unsafe { lang_fs_len(p) }), "05");
-        let read_only = decode(unsafe { lang_fs_read_only(p) });
+        assert_eq!(fs_kind_encoded(file.clone()), "0file");
+        assert_eq!(fs_len_encoded(file.clone()), "05");
+        let read_only = fs_read_only_encoded(file.clone());
         assert!(read_only == "00" || read_only == "01");
-        let executable = decode(unsafe { lang_fs_executable(p) });
+        let executable = fs_executable_encoded(file.clone());
         assert!(executable == "00" || executable == "01");
 
         let missing = temp_path();
-        assert!(decode(unsafe { lang_fs_kind(lang(&missing)) }).starts_with('1'));
+        assert!(fs_kind_encoded(missing).starts_with('1'));
 
         let _ = std::fs::remove_file(file);
     }

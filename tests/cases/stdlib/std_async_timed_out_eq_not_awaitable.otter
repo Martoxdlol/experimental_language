@@ -1,0 +1,12 @@
+//@ kind: compile-error
+//@ description: std:async TimedOut equality is an ordinary marker value comparison, not an async runtime operation
+//@ stderr: `await` requires a `Future`
+
+import { Eq, Future } from "core:prelude";
+import { TimedOut } from "std:async";
+
+function main(): Future<null> async {
+  var timed = TimedOut {};
+  var _same = await (timed == TimedOut {});
+  null
+}

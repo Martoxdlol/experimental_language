@@ -1,0 +1,9 @@
+//@ kind: compile-error
+//@ description: std:hash OS-seeded hasher returns a Future and must be awaited
+//@ stderr: expected `KeyedHasher | HashSeedError`, found `Future<KeyedHasher | HashSeedError>`
+
+import { HashSeedError, KeyedHasher, os_keyed_hasher } from "std:hash";
+
+function requires_await() {
+  var hasher: KeyedHasher | HashSeedError = os_keyed_hasher();
+}

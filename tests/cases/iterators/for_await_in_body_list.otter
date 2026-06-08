@@ -1,10 +1,10 @@
 //@ kind: run
-//@ description: a sync `for` over a List inside an async body, with an `await` in the loop body — the loop's iterable + index must survive each suspend (docs/21)
+//@ description: an ordinary `for` over a List inside an async body, with an `await` in the loop body — the loop's iterable + index must survive each suspend (docs/21)
 //@ stdout:
 //~ 100
+import { Future } from "core:prelude";
 import { List } from "core:collections";
 import { println } from "std:io";
-import { Future } from "core:prelude";
 import { yield_now } from "std:async";
 function sum(xs: List<i64>): Future<i64> async {
   var total = 0;
@@ -17,5 +17,6 @@ function sum(xs: List<i64>): Future<i64> async {
 function main(): Future<null> async {
   var xs = [10, 20, 30, 40];
   var s: i64 = await sum(xs);
-  println("${s}");
+  await println("${s}");
+  null
 }

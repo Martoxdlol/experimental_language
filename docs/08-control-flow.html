@@ -88,7 +88,7 @@
 
       <g transform="translate(20, 60)" font-size="11.5">
         <text y="0">for n in numbers {</text>
-        <text y="18">  print(n as str)</text>
+        <text y="18">  await print(n as str)</text>
         <text y="36">}</text>
       </g>
 
@@ -105,7 +105,7 @@
 
       <g transform="translate(20, 60)" font-size="11.5">
         <text y="0">while i &lt; 10 {</text>
-        <text y="18">  print(i as str)</text>
+        <text y="18">  await print(i as str)</text>
         <text y="36">  i = i + 1</text>
         <text y="54">}</text>
       </g>
@@ -141,15 +141,15 @@
 <p>Iterates over any value implementing <code>Iterator&lt;T&gt;</code> (see <a href="18-stdlib.html">18-stdlib</a>):</p>
 
 <pre><code>for n in numbers {
-  print(n as str)
+  await print(n as str)
 }
 
 for (k, v) in map_entries {        // Iterator&lt;(K, V)&gt;
-  print(k + ": " + (v as str))
+  await print(k + ": " + (v as str))
 }
 
 for Entry { key, value } in user_ages {
-  print(key + " -&gt; " + (value as str))
+  await print(key + " -&gt; " + (value as str))
 }</code></pre>
 
 <p>The pattern must be irrefutable (always matches the yielded type).</p>
@@ -169,7 +169,7 @@ for Entry { key, value } in user_ages {
 <div class="callout">
   <strong>Async iterators — <code>for await</code></strong>
   Inside an <code>async</code> body the loop accepts an async iterator:
-  <pre style="margin-top: 0.5rem;"><code>for await n in stream { print(n as str) }</code></pre>
+  <pre style="margin-top: 0.5rem;"><code>for await n in stream { await print(n as str) }</code></pre>
   This drives <code>AsyncIterator&lt;T&gt;.next_async()</code> and desugars to a polled
   loop. See <a href="21-async.html#asyncfor"><code>for await</code> in 21-async</a>.
 </div>
@@ -178,7 +178,7 @@ for Entry { key, value } in user_ages {
 <h2 id="while">2. <code>while</code> loop</h2>
 
 <pre><code>while i &lt; 10 {
-  print(i as str)
+  await print(i as str)
   i = i + 1
 }</code></pre>
 
@@ -270,7 +270,7 @@ var first_match = loop {
 
 for n in numbers {
   if n &lt; 0 { continue }
-  print(n as str)
+  await print(n as str)
 }</code></pre>
 
 <!-- =========================================================== -->
@@ -381,20 +381,20 @@ function find_first&lt;T&gt;(xs: List&lt;T&gt;, pred: (T) =&gt; bool): T | null 
   null
 }
 
-function countdown(from: i64) {
+function countdown(from: i64): Future&lt;null&gt; async {
   var n = from
   while n &gt; 0 {
-    print(n as str)
+    await print(n as str)
     n = n - 1
   }
-  print("liftoff")
+  await print("liftoff")
 }
 
-function poll_until_ready&lt;T&gt;(ch: Receiver&lt;T&gt;): T {
+function poll_until_ready&lt;T&gt;(ch: Receiver&lt;T&gt;): Future&lt;T&gt; async {
   loop {
     var msg = ch.try_recv()
     if msg is null {
-      sleep(10)
+      await sleep(10)
       continue
     }
     break msg as T

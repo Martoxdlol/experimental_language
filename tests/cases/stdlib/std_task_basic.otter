@@ -24,9 +24,9 @@ function render_debug(value: Debug): str {
 }
 
 function main(): Future<null> async {
-  var sync_h: JoinHandle<i64> = Task.spawn(() => 42);
+  var ordinary_h: JoinHandle<i64> = Task.spawn(() => 42);
   var async_h: JoinHandle<i64> = Task.spawn(() async => 7);
-  println("joins=${joined_value(await sync_h.join())}/${joined_value(await async_h.join())}");
+  await println("joins=${joined_value(await ordinary_h.join())}/${joined_value(await async_h.join())}");
 
   var cancel_h: JoinHandle<i64> = Task.spawn(() async => {
     var _ = await sleep(1000);
@@ -34,11 +34,12 @@ function main(): Future<null> async {
   });
   var _started = await sleep(20);
   cancel_h.cancel();
-  println("cancel=${joined_value(await cancel_h.join())}");
+  await println("cancel=${joined_value(await cancel_h.join())}");
 
   Task.spawn(() async => 1).detach();
 
   var cancelled = Cancelled {};
   var cancelled_copy = cancelled.clone();
-  println("cancelled=${cancelled == cancelled_copy} ${cancelled.hash() == cancelled_copy.hash()} ${cancelled.to_str()} ${render_debug(cancelled)}");
+  await println("cancelled=${cancelled == cancelled_copy} ${cancelled.hash() == cancelled_copy.hash()} ${cancelled.to_str()} ${render_debug(cancelled)}");
+  null
 }

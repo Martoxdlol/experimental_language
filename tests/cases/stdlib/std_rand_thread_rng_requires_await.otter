@@ -1,0 +1,9 @@
+//@ kind: compile-error
+//@ description: std:rand thread_rng seeds from OS entropy and must be awaited
+//@ stderr: expected `RandomError | ThreadRng`, found `Future<RandomError | ThreadRng>`
+
+import { RandomError, ThreadRng, thread_rng } from "std:rand";
+
+function requires_await() {
+  var rng: ThreadRng | RandomError = thread_rng();
+}

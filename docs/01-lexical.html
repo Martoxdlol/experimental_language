@@ -487,12 +487,12 @@ heap-allocated (see <a href="02-types.html">02-types</a> and <a href="18-stdlib.
 </div>
 
 <pre><code>var name = "Alice"
-print("Hello, $name")                  // Hello, Alice
+await print("Hello, $name")            // Hello, Alice
 
 var user = User { name: "Alice", age: 30 }
-print("Hello, ${user.name}, age ${user.age}")
+await print("Hello, ${user.name}, age ${user.age}")
 
-print("Total: ${items.size() + 1}")</code></pre>
+await print("Total: ${items.size() + 1}")</code></pre>
 
 <div class="callout">
   <strong>Stringification rule</strong>

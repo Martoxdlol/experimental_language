@@ -20,7 +20,8 @@ function main(): Future<null> async {
   var h: JoinHandle<i64> = Thread.spawn(() => work());
   var res: Joined<i64> | Panicked = await h.join();
   match res {
-    Joined<i64> j => println("worker ${j.value}"),
-    Panicked p => println("panic"),
+    Joined<i64> j => await println("worker ${j.value}"),
+    Panicked p => await println("panic"),
   }
+  null
 }

@@ -1,0 +1,11 @@
+//@ kind: compile-error
+//@ description: std:net AsyncUdpSocket.join_multicast_v4 returns a Future and must be awaited
+//@ stderr: found `Future<
+
+import { IoError } from "std:io";
+import { AsyncUdpSocket } from "std:net";
+import { SocketAddr, ip_v4, ip_v6, socket_addr } from "std:net/types";
+
+function requires_await(socket: AsyncUdpSocket) {
+  var _value: null | IoError = socket.join_multicast_v4(ip_v4(224u8, 0u8, 0u8, 251u8), ip_v4(0u8, 0u8, 0u8, 0u8));
+}

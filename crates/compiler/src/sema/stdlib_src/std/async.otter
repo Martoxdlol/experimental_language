@@ -20,6 +20,9 @@ extend TimedOut: Debug {
   function debug(self): str { "TimedOut" }
 }
 
-function yield_now() {}
-function sleep(ms: i64) {}
-function timeout() {}
+// Compiler-recognized marker stubs. The checker/lowerer routes calls to the
+// runtime intrinsics; the source-level signatures still spell the public async
+// contract as explicit future-returning functions.
+function yield_now(): Future<null> async { null }
+function sleep(ms: i64): Future<null> async { null }
+function timeout<T>(future: Future<T>, ms: i64): Future<T | TimedOut> async { TimedOut {} }

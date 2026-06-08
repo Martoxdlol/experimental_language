@@ -6,11 +6,13 @@
 //~ 6
 //~ 40
 //~ 2
+import { Future } from "core:prelude";
 import { println } from "std:io";
-function main() {
-  println("${12 & 9 }");
-  println("${12 | 2 }");
-  println("${5 ^ 3 }");
-  println("${5 << 3 }");
-  println("${20 >> 3 }");
+function main(): Future<null> async {
+  await println("${12 & 9}");
+  await println("${12 | 2}");
+  await println("${5 ^ 3}");
+  await println("${5 << 3}");
+  await println("${20 >> 3}");
+  null
 }

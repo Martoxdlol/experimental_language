@@ -4,8 +4,8 @@
 //@ description: Task.spawn async workers can all sleep concurrently on the shared timer/reactor and then join through executor JoinHandles
 //@ stdout:
 //~ total=523776
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { List } from "core:collections";
 import { Task, JoinHandle, Joined, Panicked, Cancelled } from "std:task";
 import { sleep } from "std:async";
@@ -37,5 +37,6 @@ function main(): Future<null> async {
     j = j + 1;
   }
 
-  println("total=${total }");
+  await println("total=${total}");
+  null
 }

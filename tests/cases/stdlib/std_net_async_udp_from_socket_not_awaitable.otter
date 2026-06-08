@@ -1,0 +1,15 @@
+//@ kind: compile-error
+//@ description: std:net AsyncUdpSocket.from_socket is an ordinary wrapper conversion, not an async datagram operation
+//@ stderr: `await` requires a `Future`
+
+import { Future } from "core:prelude";
+import { AsyncUdpSocket, UdpSocket } from "std:net";
+import { ip_v4, socket_addr } from "std:net/types";
+
+function main(): Future<null> async {
+  var bound = await UdpSocket.bind(socket_addr(ip_v4(127u8, 0u8, 0u8, 1u8), 0u16));
+  if bound is UdpSocket {
+    var _socket = await AsyncUdpSocket.from_socket(bound as UdpSocket);
+  }
+  null
+}

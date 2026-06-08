@@ -1,0 +1,11 @@
+//@ kind: compile-error
+//@ description: std:io stdout() constructs an ordinary Stdout handle; await the handle's write/write_all/flush methods instead
+//@ stderr: `await` requires a `Future`
+
+import { Future } from "core:prelude";
+import { stdout } from "std:io";
+
+function main(): Future<null> async {
+  var _output = await stdout();
+  null
+}

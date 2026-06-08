@@ -5,13 +5,14 @@
 //~ len 3
 //~ first 0
 //~ sum 3
+import { Future } from "core:prelude";
 import { println } from "std:io";
 import { List } from "core:collections";
 
 @RefCounted
 struct R { id: i64 }
 
-function main() {
+function main(): Future<null> async {
   var xs: List<R> = [];
   var i: i64 = 0;
   while i < 3 {
@@ -19,10 +20,11 @@ function main() {
     xs.push(r);               // ... but the list keeps it alive (retain on store)
     i = i + 1;
   }
-  println("len ${xs.size()}");
-  println("first ${xs[0].id}");   // safe read — not freed despite the local being gone
+  await println("len ${xs.size()}");
+  await println("first ${xs[0].id}");   // safe read — not freed despite the local being gone
   var sum: i64 = 0;
   var k: i64 = 0;
   while k < xs.size() { sum = sum + xs[k].id; k = k + 1; }
-  println("sum ${sum}");
+  await println("sum ${sum}");
+  null
 }

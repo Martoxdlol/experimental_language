@@ -1,0 +1,11 @@
+//@ kind: compile-error
+//@ description: std:process Command.arg_count is an immediate pure command value accessor
+//@ stderr: `await` requires a `Future`
+
+import { Future } from "core:prelude";
+import { Command } from "std:process";
+
+function main(): Future<null> async {
+  var _count = await Command.new("true").arg("x").arg_count();
+  null
+}

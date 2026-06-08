@@ -1,0 +1,13 @@
+//@ kind: compile-error
+//@ description: std:io BufReader.read_to_end is an ordinary in-memory buffered-reader boundary, not an async surface
+//@ stderr: `await` requires a `Future`
+
+import { Future } from "core:prelude";
+import { Bytes } from "std:bytes";
+import { buf_reader } from "std:io";
+
+function main(): Future<null> async {
+  var reader = buf_reader(Bytes.from_str("abc").cursor());
+  var _read = await reader.read_to_end(Bytes.new());
+  null
+}

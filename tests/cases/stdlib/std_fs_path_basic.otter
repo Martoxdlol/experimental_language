@@ -19,6 +19,7 @@
 //~ meta_eq=true hash_eq=true cloned=Metadata { kind: RegularFile, len: 1234, permissions: Permissions { read_only: true, executable: false } } snapshot=permissions(read_only=true, executable=false)
 //~ meta_builders=directory 4096 bytes permissions(read_only=false, executable=true) orig=file 1234 bytes permissions(read_only=true, executable=false) kind=directory len=4096 perms=permissions(read_only=false, executable=true)
 //~ native=true true true true
+import { Future } from "core:prelude";
 import { println } from "std:io";
 import { Debug } from "std:fmt";
 import { DirEntry, Metadata, Path, Permissions, directory, dir_entry, metadata, native_separator, other_kind, path_from_native, permissions, regular_file, symlink } from "std:fs";
@@ -35,65 +36,66 @@ function render(value: Debug): str {
   value.debug()
 }
 
-function main() {
+function main(): Future<null> async {
   var joined = Path.new("/tmp").join("otter").join("main.otter");
-  println("joined=${joined.as_str()} abs=${joined.is_absolute()}");
-  println("${show("parent", joined.parent())} ${show("file", joined.file_name())} ${show("ext", joined.extension())}");
+  await println("joined=${joined.as_str()} abs=${joined.is_absolute()}");
+  await println("${show("parent", joined.parent())} ${show("file", joined.file_name())} ${show("ext", joined.extension())}");
 
   var rel = Path.new("src").join("lib.otter");
-  println("rel=${rel.to_str()} ${show("parent", rel.parent())} ${show("file", rel.file_name())} ${show("ext", rel.extension())}");
-  println("${show("stem", joined.file_stem())} changed=${joined.with_extension("txt").as_str()} removed=${joined.with_extension("").as_str()}");
+  await println("rel=${rel.to_str()} ${show("parent", rel.parent())} ${show("file", rel.file_name())} ${show("ext", rel.extension())}");
+  await println("${show("stem", joined.file_stem())} changed=${joined.with_extension("txt").as_str()} removed=${joined.with_extension("").as_str()}");
 
   var generated = Path.new("generated").join("output.otter");
-  println("join_path=${Path.new("src").join_path(generated).as_str()} absolute=${Path.new("src").join_path(Path.new("/var/log/app.log")).as_str()} relative=${rel.is_relative()}");
+  await println("join_path=${Path.new("src").join_path(generated).as_str()} absolute=${Path.new("src").join_path(Path.new("/var/log/app.log")).as_str()} relative=${rel.is_relative()}");
 
   var root_parent = Path.new("/").parent();
   var no_ext = Path.new("Makefile").extension();
   var cloned = joined.clone();
-  println("root_parent=${root_parent is null} no_ext=${no_ext is null} clone_eq=${joined == cloned} hash_eq=${joined.hash() == cloned.hash()}");
+  await println("root_parent=${root_parent is null} no_ext=${no_ext is null} clone_eq=${joined == cloned} hash_eq=${joined.hash() == cloned.hash()}");
   var hidden = Path.new(".env");
   var multi_hidden = Path.new(".profile.bak");
-  println("${show("hidden stem", hidden.file_stem())} ext=${hidden.extension() is null} with_ext=${hidden.with_extension("txt").as_str()} ${show("multi_stem", multi_hidden.file_stem())} ${show("multi_ext", multi_hidden.extension())} multi_removed=${multi_hidden.with_extension("").as_str()}");
+  await println("${show("hidden stem", hidden.file_stem())} ext=${hidden.extension() is null} with_ext=${hidden.with_extension("txt").as_str()} ${show("multi_stem", multi_hidden.file_stem())} ${show("multi_ext", multi_hidden.extension())} multi_removed=${multi_hidden.with_extension("").as_str()}");
 
   var norm = Path.new("/tmp//otter/.././main.otter").normalize();
   var rel_norm = Path.new("src/../../assets/./img.png").normalize();
   var root_norm = Path.new("/../../").normalize();
   var empty_norm = Path.new("").normalize();
-  println("norm=${norm.as_str()} rel_norm=${rel_norm.as_str()} root_norm=${root_norm.as_str()} empty_norm=${empty_norm.as_str()}");
-  println("path-state empty=${Path.new("").is_empty()} root=${Path.new("/").is_root()}/${root_norm.is_root()} counts=${norm.component_count()}/${rel_norm.component_count()}/${Path.new("/").component_count()}/${Path.new("").component_count()}");
+  await println("norm=${norm.as_str()} rel_norm=${rel_norm.as_str()} root_norm=${root_norm.as_str()} empty_norm=${empty_norm.as_str()}");
+  await println("path-state empty=${Path.new("").is_empty()} root=${Path.new("/").is_root()}/${root_norm.is_root()} counts=${norm.component_count()}/${rel_norm.component_count()}/${Path.new("/").component_count()}/${Path.new("").component_count()}");
 
   var components = Path.new("/tmp//otter/../main.otter").components();
   var stripped = Path.new("/tmp/./main.otter").strip_prefix(Path.new("/tmp"));
   var missing = Path.new("/tmp/main.otter").strip_prefix(Path.new("/var"));
   var same = Path.new("/tmp").strip_prefix(Path.new("/tmp"));
   if stripped is Path && same is Path {
-    println("components=${components[0]}/${components[1]} starts=${Path.new("/tmp/main.otter").starts_with(Path.new("/tmp"))} ends=${Path.new("/tmp/main.otter").ends_with(Path.new("main.otter"))} stripped=${(stripped as Path).as_str()} miss=${missing is null} same=${(same as Path).as_str()}");
+    await println("components=${components[0]}/${components[1]} starts=${Path.new("/tmp/main.otter").starts_with(Path.new("/tmp"))} ends=${Path.new("/tmp/main.otter").ends_with(Path.new("main.otter"))} stripped=${(stripped as Path).as_str()} miss=${missing is null} same=${(same as Path).as_str()}");
   }
 
   var entry = DirEntry.new(rel, regular_file());
   var entry2 = dir_entry(Path.new("src").join("lib.otter"), regular_file());
-  println("entry=${entry.to_str()} ${entry.kind().to_str()} ${render(entry.path())}");
-  println("entry_eq=${entry == entry2} hash_eq=${entry.hash() == entry2.hash()} clone_kind=${entry.clone().kind().debug()} direct=${directory().debug()} symlink=${symlink().debug()} other=${other_kind().debug()}");
+  await println("entry=${entry.to_str()} ${entry.kind().to_str()} ${render(entry.path())}");
+  await println("entry_eq=${entry == entry2} hash_eq=${entry.hash() == entry2.hash()} clone_kind=${entry.clone().kind().debug()} direct=${directory().debug()} symlink=${symlink().debug()} other=${other_kind().debug()}");
   var moved_entry = entry.with_path(Path.new("src/main.otter")).with_kind(directory());
   var moved_path = moved_entry.path();
-  println("entry_builders=${moved_entry.to_str()} orig=${entry.to_str()} path_snapshot=${moved_path.as_str()} kind=${moved_entry.kind().to_str()}");
+  await println("entry_builders=${moved_entry.to_str()} orig=${entry.to_str()} path_snapshot=${moved_path.as_str()} kind=${moved_entry.kind().to_str()}");
 
   var perms = Permissions.new(true, false);
   var perms2 = permissions(true, false);
   var toggled = perms.with_read_only(false).with_executable(true);
-  println("perms=${perms.to_str()} toggled=${render(toggled)} eq=${perms == perms2} hash_eq=${perms.hash() == perms2.hash()}");
+  await println("perms=${perms.to_str()} toggled=${render(toggled)} eq=${perms == perms2} hash_eq=${perms.hash() == perms2.hash()}");
 
   var meta = Metadata.new(regular_file(), 1234u64, perms);
   var meta2 = metadata(regular_file(), 1234u64, permissions(true, false));
   var snapshot = meta.permissions();
-  println("meta=${meta.to_str()} kind=${meta.file_kind().to_str()} len=${meta.len()} file=${meta.is_file()} dir=${meta.is_dir()} symlink=${meta.is_symlink()}");
-  println("meta_eq=${meta == meta2} hash_eq=${meta.hash() == meta2.hash()} cloned=${render(meta.clone())} snapshot=${snapshot.to_str()}");
+  await println("meta=${meta.to_str()} kind=${meta.file_kind().to_str()} len=${meta.len()} file=${meta.is_file()} dir=${meta.is_dir()} symlink=${meta.is_symlink()}");
+  await println("meta_eq=${meta == meta2} hash_eq=${meta.hash() == meta2.hash()} cloned=${render(meta.clone())} snapshot=${snapshot.to_str()}");
   var meta_changed = meta.with_file_kind(directory()).with_len(4096u64).with_permissions(permissions(false, true));
-  println("meta_builders=${meta_changed.to_str()} orig=${meta.to_str()} kind=${meta_changed.file_kind().to_str()} len=${meta_changed.len()} perms=${meta_changed.permissions().to_str()}");
+  await println("meta_builders=${meta_changed.to_str()} orig=${meta.to_str()} kind=${meta_changed.file_kind().to_str()} len=${meta_changed.len()} perms=${meta_changed.permissions().to_str()}");
 
   var portable = Path.new("target").join("debug").join("otter");
   var native_text = portable.to_native_str();
   var from_static = Path.from_native(native_text);
   var from_function = path_from_native(native_text);
-  println("native=${native_separator().size() > 0} ${from_static.as_str() == portable.as_str()} ${from_function.as_str() == portable.as_str()} ${from_function.to_native_str() == native_text}");
+  await println("native=${native_separator().size() > 0} ${from_static.as_str() == portable.as_str()} ${from_function.as_str() == portable.as_str()} ${from_function.to_native_str() == native_text}");
+  null
 }

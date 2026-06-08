@@ -3,11 +3,13 @@
 //@ stdout:
 //~ 3
 //~ 5
+import { Future } from "core:prelude";
 import { println } from "std:io";
-function main() {
+function main(): Future<null> async {
   var parts = "a,b,c".split(",");
-  println("${parts.size()}");
+  await println("${parts.size()}");
   var n = 0;
   for ch in "otter" { n = n + 1; }
-  println("${n}");
+  await println("${n}");
+  null
 }

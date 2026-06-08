@@ -10,6 +10,8 @@
 //~ fields=[WARN] worker: retry attempt=2 count=1 has=false/true cleared=[WARN] worker: retry count=0 missing=true orig=[WARN] worker: retry request=42 attempt=2
 //~ helper-snapshot=[INFO] svc: helper request=42 source=changed replacement=[INFO] svc: helper source=external extra=1 source_fields=1 time=456000000000
 //~ field-order-eq=true hash=true render-left=[INFO] svc: order a=1 b=2 render-right=[INFO] svc: order a=1 b=2
+//~ TestLogger [ERROR] svc: order a=1 b=2
+//~ logger-enabled=false/true
 //~ marker=logger already set true true LoggerAlreadySet
 //~ [INFO] hello
 //~ [INFO] with-field request=42
@@ -17,6 +19,7 @@
 //~ [DEBUG] debug-field request=42
 //~ [WARN] warn-field request=42
 //~ [ERROR] error-field request=42
+import { Future } from "core:prelude";
 import { Map } from "core:collections";
 import { println } from "std:io";
 import { Debug } from "std:fmt";
@@ -25,6 +28,7 @@ import {
   Level,
   Record,
   LoggerAlreadySet,
+  Logger,
   level_trace,
   level_debug,
   level_info,
@@ -39,18 +43,41 @@ import {
   record,
 } from "std:log";
 
+struct TestLogger {
+  min: Level,
+}
+
+extend TestLogger: Logger {
+  function enabled(self, level: Level, module: str): bool {
+    level.is_at_least(self.min) && module == "svc"
+  }
+
+  function log(self, r: Record): Future<null> async {
+    await println("TestLogger ${r.to_str()}");
+    null
+  }
+}
+
 function render_debug(value: Debug): str {
   value.debug()
 }
 
-function main() {
+function emit_if_enabled(logger: Logger, r: Record): Future<bool> async {
+  var enabled = logger.enabled(r.level(), r.module());
+  if enabled {
+    await logger.log(r);
+  }
+  enabled
+}
+
+function main(): Future<null> async {
   var trace: Level = level_trace();
   var debug = level_debug();
   var info_level = level_info();
   var warn = level_warn();
   var error = level_error();
-  println("levels=${trace.to_str()} ${debug.to_str()} ${info_level.to_str()} ${warn.to_str()} ${error.to_str()} ${debug.equals(level_debug())}");
-  println("level-order=${trace.rank()}/${debug.rank()}/${info_level.rank()}/${warn.rank()}/${error.rank()} ${warn.is_at_least(info_level)} ${error.is_at_least(warn)} ${debug.is_at_least(warn)}");
+  await println("levels=${trace.to_str()} ${debug.to_str()} ${info_level.to_str()} ${warn.to_str()} ${error.to_str()} ${debug.equals(level_debug())}");
+  await println("level-order=${trace.rank()}/${debug.rank()}/${info_level.rank()}/${warn.rank()}/${error.rank()} ${warn.is_at_least(info_level)} ${error.is_at_least(warn)} ${debug.is_at_least(warn)}");
 
   var fields = Map.new<str, str>();
   fields["request"] = "42";
@@ -62,31 +89,31 @@ function main() {
     time: SystemTime.from_unix_nanos(123000000000),
   };
   var rec_copy = rec.clone();
-  println("record=${rec.to_str()} ${rec == rec_copy} ${rec.hash() == rec_copy.hash()}");
-  println(render_debug(rec));
+  await println("record=${rec.to_str()} ${rec == rec_copy} ${rec.hash() == rec_copy.hash()}");
+  await println(render_debug(rec));
   var field_snapshot = rec.fields();
   field_snapshot["request"] = "changed";
-  println("access=${rec.level().to_str()} ${rec.message()} ${rec.module()} ${rec.field_count()} ${rec.field("request") as str} ${rec.has_field("request")} ${rec.has_field("missing")} ${rec.time().as_unix_nanos()}");
+  await println("access=${rec.level().to_str()} ${rec.message()} ${rec.module()} ${rec.field_count()} ${rec.field("request") as str} ${rec.has_field("request")} ${rec.has_field("missing")} ${rec.time().as_unix_nanos()}");
   var built = rec
     .with_level(level_warn())
     .with_message("retry")
     .with_module("worker")
     .with_field("attempt", "2");
-  println("built=${built.to_str()} orig=${rec.to_str()} snap=${field_snapshot.size()}");
+  await println("built=${built.to_str()} orig=${rec.to_str()} snap=${field_snapshot.size()}");
   var without_request = built.without_field("request");
   var cleared = without_request.clear_fields();
-  println("fields=${without_request.to_str()} count=${without_request.field_count()} has=${without_request.has_field("request")}/${without_request.has_field("attempt")} cleared=${cleared.to_str()} count=${cleared.field_count()} missing=${cleared.field("attempt") is null} orig=${built.to_str()}");
+  await println("fields=${without_request.to_str()} count=${without_request.field_count()} has=${without_request.has_field("request")}/${without_request.has_field("attempt")} cleared=${cleared.to_str()} count=${cleared.field_count()} missing=${cleared.field("attempt") is null} orig=${built.to_str()}");
 
   var helper_fields = Map.new<str, str>();
   helper_fields["request"] = "42";
-  var helper = record(level_info(), "helper", "svc", helper_fields);
+  var helper = await record(level_info(), "helper", "svc", helper_fields);
   helper_fields["request"] = "changed";
   var replacement_fields = Map.new<str, str>();
   replacement_fields["source"] = "external";
   var replacement = helper.with_fields(replacement_fields).with_field("extra", "1");
   replacement_fields["source"] = "changed";
   var timed = replacement.with_time(SystemTime.from_unix_nanos(456000000000));
-  println("helper-snapshot=${helper.to_str()} source=${helper_fields["request"]} replacement=${replacement.to_str()} source_fields=${replacement_fields.size()} time=${timed.time().as_unix_nanos()}");
+  await println("helper-snapshot=${helper.to_str()} source=${helper_fields["request"]} replacement=${replacement.to_str()} source_fields=${replacement_fields.size()} time=${timed.time().as_unix_nanos()}");
 
   var left_fields = Map.new<str, str>();
   left_fields["a"] = "1";
@@ -94,18 +121,26 @@ function main() {
   var right_fields = Map.new<str, str>();
   right_fields["b"] = "2";
   right_fields["a"] = "1";
-  var left = record(level_info(), "order", "svc", left_fields).with_time(SystemTime.from_unix_nanos(789000000000));
-  var right = record(level_info(), "order", "svc", right_fields).with_time(SystemTime.from_unix_nanos(789000000000));
-  println("field-order-eq=${left == right} hash=${left.hash() == right.hash()} render-left=${left.to_str()} render-right=${right.to_str()}");
+  var left_base = await record(level_info(), "order", "svc", left_fields);
+  var right_base = await record(level_info(), "order", "svc", right_fields);
+  var left = left_base.with_time(SystemTime.from_unix_nanos(789000000000));
+  var right = right_base.with_time(SystemTime.from_unix_nanos(789000000000));
+  await println("field-order-eq=${left == right} hash=${left.hash() == right.hash()} render-left=${left.to_str()} render-right=${right.to_str()}");
+
+  var test_logger = TestLogger { min: level_warn() };
+  var ignored = await emit_if_enabled(test_logger, left);
+  var emitted = await emit_if_enabled(test_logger, right.with_level(level_error()));
+  await println("logger-enabled=${ignored}/${emitted}");
 
   var marker = LoggerAlreadySet {};
   var marker_copy = marker.clone();
-  println("marker=${marker.to_str()} ${marker == marker_copy} ${marker.hash() == marker_copy.hash()} ${render_debug(marker)}");
+  await println("marker=${marker.to_str()} ${marker == marker_copy} ${marker.hash() == marker_copy.hash()} ${render_debug(marker)}");
 
-  info("hello");
-  info_with("with-field", fields);
-  trace_with("trace-field", fields);
-  debug_with("debug-field", fields);
-  warn_with("warn-field", fields);
-  error_with("error-field", fields);
+  await info("hello");
+  await info_with("with-field", fields);
+  await trace_with("trace-field", fields);
+  await debug_with("debug-field", fields);
+  await warn_with("warn-field", fields);
+  await error_with("error-field", fields);
+  null
 }

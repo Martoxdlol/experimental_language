@@ -1,9 +1,11 @@
 //@ kind: panic
 //@ description: casting NaN to an integer panics
 //@ stderr: cast from float to integer is out of range or NaN
+import { Future } from "core:prelude";
 import { println } from "std:io";
-function main() {
+function main(): Future<null> async {
   var z = 0.0;
   var n = (z / z) as i64;
-  println("${n}");
+  await println("${n}");
+  null
 }

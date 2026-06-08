@@ -1,0 +1,52 @@
+import { Future } from "core:prelude";
+import { Bytes } from "std:bytes";
+import { File, Path, remove } from "std:fs";
+import { AsyncReader, AsyncWriter, IoError, Start, println } from "std:io";
+
+function write_bytes<T: AsyncWriter>(writer: T, data: Bytes): Future<i64 | IoError> async {
+  await writer.write_async(data)
+}
+
+function read_text<T: AsyncReader>(reader: T, len: i64): Future<str> async {
+  var buf = Bytes.new();
+  var i = 0;
+  while i < len {
+    buf.push(0u8);
+    i = i + 1;
+  }
+  var count = await reader.read_async(buf);
+  if count is IoError || (count as i64) != len {
+    "read-error"
+  } else {
+    var payload = buf.slice(len, buf.size());
+    var decoded = payload.decode_utf8();
+    if decoded is str { decoded as str } else { "utf8-error" }
+  }
+}
+
+function main(): Future<null> async {
+  var path = Path.new("/tmp/otter_fusion_async_io_contracts_example.txt");
+  await remove(path);
+
+  var opened = await File.create(path);
+  if opened is IoError {
+    await println("async-io-contracts=open-error");
+    return null;
+  }
+
+  var file = opened as File;
+  var written = await write_bytes(file, Bytes.from_str("otter-async"));
+  var flushed = await file.flush_async();
+  var seeked = await file.seek_async(Start { offset: 0u64 });
+  var text = await read_text(file, 11);
+  var closed = await file.close();
+  await remove(path);
+
+  var ok = written is i64
+    && (written as i64) == 11
+    && flushed is null
+    && seeked is i64
+    && closed is null;
+  await println("async-io-contracts=${text} ${ok}");
+  null
+}

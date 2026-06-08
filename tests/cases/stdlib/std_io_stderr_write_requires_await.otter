@@ -1,0 +1,10 @@
+//@ kind: compile-error
+//@ description: concrete std:io stderr().write returns Future<i64 | IoError> and must be awaited before use
+//@ stderr: expected `i64 | IoError`, found `Future<i64 | IoError>`
+
+import { Bytes } from "std:bytes";
+import { IoError, stderr } from "std:io";
+
+function main() {
+  var _written: i64 | IoError = stderr().write(Bytes.from_str("x"));
+}

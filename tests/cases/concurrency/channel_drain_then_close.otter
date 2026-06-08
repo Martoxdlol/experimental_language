@@ -1,14 +1,14 @@
 //@ kind: run
 //@ serial
-//@ description: drain-then-close — the producer sends every value and the channel is already CLOSED (last sender dropped) before the consumer starts; the `Receiver: Iterator` must still drain all buffered messages, then terminate (docs/20 §2, docs/16 §8)
+//@ description: drain-then-close — the producer sends every value and the channel is already CLOSED (last sender dropped) before the consumer starts; `for await` must still drain all buffered messages, then terminate (docs/20 §2, docs/16 §8)
 //@ stdout:
 //~ joined
 //~ got=10
 //~ got=20
 //~ got=30
 //~ count=3
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { Thread, JoinHandle, Joined, Panicked } from "std:thread";
 import { Sender, Receiver } from "std:sync";
 import { channel } from "std:sync";
@@ -29,13 +29,14 @@ function main(): Future<null> async {
   // Join FIRST: the worker has returned, so the last sender is already dropped
   // and the channel is closed — yet three values sit in the queue.
   var _r: Joined<i64> | Panicked = await worker.join();
-  println("joined");
-  // The closed-but-non-empty channel must drain every buffered value before the
-  // iterator observes the close and terminates.
+  await println("joined");
+  // The closed-but-non-empty channel must drain every buffered value before
+  // async iteration observes the close and terminates.
   var count = 0;
-  for n in rx {
+  for await n in rx {
     count = count + 1;
-    println("got=${n }");
+    await println("got=${n}");
   }
-  println("count=${count }");
+  await println("count=${count}");
+  null
 }

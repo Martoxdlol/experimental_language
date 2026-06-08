@@ -580,11 +580,11 @@ just not relocated first. See <a href="16-memory.html#pin">16-memory §14</a>.</
         <text y="54">h.release()</text>
       </g>
 
-      <text x="14" y="138" font-size="11" class="small">— call .release() explicitly; Drop is async</text>
+      <text x="14" y="138" font-size="11" class="small">— release explicitly; Drop never waits</text>
       <text x="14" y="156" font-size="11" class="small">— debug build warns on leak</text>
 
       <text x="14" y="200" font-size="11" font-weight="700">When to use</text>
-      <text x="14" y="218" font-size="11">Synchronous outparams that outlive a</text>
+      <text x="14" y="218" font-size="11">Foreign outparams that outlive a</text>
       <text x="14" y="234" font-size="11">single call. Prefer Handle for stored refs.</text>
     </g>
   </svg>
@@ -619,12 +619,12 @@ patterns, foreign data structures storing managed objects), use a <strong>handle
 opaque cookie that roots the object without blocking movement. The collector follows the handle
 table; on evacuation, it rewrites the table slot — the cookie value never changes.</p>
 
-<pre><code>pub struct Handle&lt;T&gt;;     // release explicitly; Drop is async best-effort
+<pre><code>pub struct Handle&lt;T&gt;;     // release explicitly; finalizer fallback never waits
 
 extend&lt;T&gt; Handle {
   function acquire(value: T): Handle&lt;T&gt;
   function raw(self): u64                          // opaque cookie for foreign storage
-  function release(self)                           // explicit release; also runs on Drop
+  function release(self)                           // explicit release; finalizer fallback is best-effort
 
   function resolve&lt;T&gt;(cookie: u64): T       // panics on stale cookie
 }</code></pre>
@@ -634,7 +634,7 @@ extend&lt;T&gt; Handle {
     <g transform="translate(20, 20)">
       <rect width="430" height="220" rx="8" fill="#eaf0f8" stroke="#1a4a8a" stroke-width="2"/>
       <text x="14" y="22" font-weight="700" fill="#1a4a8a">Pin — when foreign needs the bytes</text>
-      <text x="14" y="50" font-size="11">— Synchronous call: foreign reads/writes</text>
+      <text x="14" y="50" font-size="11">— Single foreign call: foreign accesses</text>
       <text x="14" y="68" font-size="11">  the object's memory directly.</text>
       <text x="14" y="86" font-size="11">— Foreign sees a raw <tspan font-family="SF Mono, Menlo, monospace">*T</tspan>.</text>
       <text x="14" y="104" font-size="11">— Movement blocked for pin lifetime.</text>
@@ -686,7 +686,8 @@ extern function on_native_event(cookie: u64) {
 
 <p>Every extern boundary is a <strong>safepoint</strong>: the mutator's live managed pointers
 are recorded in a precise stack map (see <a href="16-memory.html#safepoints">16-memory §6</a>),
-the thread is marked "blocked-in-foreign," and the foreign call runs without holding back GC.
+the thread is marked as private native-state foreign work, and the foreign call runs without
+holding back GC.
 On return, the thread re-acquires mutator state and re-reads any roots that may have moved while
 it was away.</p>
 

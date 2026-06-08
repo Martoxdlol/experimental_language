@@ -355,31 +355,6 @@ pub unsafe extern "C" fn lang_str_char_at(s: *const LangStr, i: i64) -> i64 {
     }
 }
 
-fn write_stream_str(s: *const LangStr, newline: bool, stderr: bool) {
-    let bytes = unsafe { str_bytes(s) };
-    if stderr {
-        let stderr = std::io::stderr();
-        let mut lock = stderr.lock();
-        let _ = lock.write_all(bytes);
-        if newline {
-            let _ = lock.write_all(b"\n");
-        }
-        let _ = lock.flush();
-    } else {
-        let stdout = std::io::stdout();
-        let mut lock = stdout.lock();
-        let _ = lock.write_all(bytes);
-        if newline {
-            let _ = lock.write_all(b"\n");
-        }
-        let _ = lock.flush();
-    }
-}
-
-fn make_io_result(payload: &str) -> *const LangStr {
-    unsafe { lang_str_from_utf8(payload.as_ptr(), payload.len()) }
-}
-
 fn encode_io_success_string(payload: &str) -> String {
     let mut out = String::with_capacity(payload.len() + 1);
     out.push('0');
@@ -442,42 +417,35 @@ pub(crate) fn io_write_stream_bytes_encoded(hex: &str, stderr: bool) -> String {
         Ok(bytes) => bytes,
         Err(error) => return encode_io_error_string(error),
     };
-    let result = if stderr {
-        let stream = std::io::stderr();
-        let mut lock = stream.lock();
-        lock.write_all(&bytes)
-    } else {
-        let stream = std::io::stdout();
-        let mut lock = stream.lock();
-        lock.write_all(&bytes)
-    };
+    let result = gc::native_wait(|| {
+        if stderr {
+            let stream = std::io::stderr();
+            let mut lock = stream.lock();
+            lock.write_all(&bytes)
+        } else {
+            let stream = std::io::stdout();
+            let mut lock = stream.lock();
+            lock.write_all(&bytes)
+        }
+    });
     match result {
         Ok(()) => encode_io_success_string(&bytes.len().to_string()),
         Err(error) => encode_io_error_string(error),
     }
 }
 
-fn write_stream_bytes(contents_hex: *const LangStr, stderr: bool) -> *const LangStr {
-    let hex = String::from_utf8_lossy(unsafe { str_bytes(contents_hex) });
-    let out = io_write_stream_bytes_encoded(&hex, stderr);
-    make_io_result(&out)
-}
-
 pub(crate) fn io_flush_stream_encoded(stderr: bool) -> String {
-    let result = if stderr {
-        std::io::stderr().lock().flush()
-    } else {
-        std::io::stdout().lock().flush()
-    };
+    let result = gc::native_wait(|| {
+        if stderr {
+            std::io::stderr().lock().flush()
+        } else {
+            std::io::stdout().lock().flush()
+        }
+    });
     match result {
         Ok(()) => encode_io_success_string(""),
         Err(error) => encode_io_error_string(error),
     }
-}
-
-fn flush_stream(stderr: bool) -> *const LangStr {
-    let out = io_flush_stream_encoded(stderr);
-    make_io_result(&out)
 }
 
 pub(crate) fn io_read_stdin_count_encoded(count: i64) -> String {
@@ -485,7 +453,7 @@ pub(crate) fn io_read_stdin_count_encoded(count: i64) -> String {
         return encode_io_error_string("negative stdin read size");
     }
     let mut buf = vec![0u8; count as usize];
-    let result = std::io::stdin().lock().read(&mut buf);
+    let result = gc::native_wait(|| std::io::stdin().lock().read(&mut buf));
     match result {
         Ok(n) => {
             buf.truncate(n);
@@ -495,100 +463,12 @@ pub(crate) fn io_read_stdin_count_encoded(count: i64) -> String {
     }
 }
 
-fn read_stdin_count(count: i64) -> *const LangStr {
-    let out = io_read_stdin_count_encoded(count);
-    make_io_result(&out)
-}
-
 pub(crate) fn io_read_stdin_to_end_encoded() -> String {
     let mut buf = Vec::new();
-    match std::io::stdin().lock().read_to_end(&mut buf) {
+    match gc::native_wait(|| std::io::stdin().lock().read_to_end(&mut buf)) {
         Ok(_) => encode_io_bytes_hex_string(&buf),
         Err(error) => encode_io_error_string(error),
     }
-}
-
-fn read_stdin_to_end() -> *const LangStr {
-    let out = io_read_stdin_to_end_encoded();
-    make_io_result(&out)
-}
-
-/// Write a `str` to stdout with no trailing newline.
-///
-/// # Safety
-/// `s` must be a valid `LangStr` pointer.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn lang_print(s: *const LangStr) {
-    write_stream_str(s, false, false);
-}
-
-/// Write a `str` to stdout followed by a newline.
-///
-/// # Safety
-/// `s` must be a valid `LangStr` pointer.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn lang_println(s: *const LangStr) {
-    write_stream_str(s, true, false);
-}
-
-/// Write a `str` to stderr with no trailing newline.
-///
-/// # Safety
-/// `s` must be a valid `LangStr` pointer.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn lang_eprint(s: *const LangStr) {
-    write_stream_str(s, false, true);
-}
-
-/// Write a `str` to stderr followed by a newline.
-///
-/// # Safety
-/// `s` must be a valid `LangStr` pointer.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn lang_eprintln(s: *const LangStr) {
-    write_stream_str(s, true, true);
-}
-
-/// Read up to `count` bytes from stdin.
-#[unsafe(no_mangle)]
-pub extern "C" fn lang_io_stdin_read(count: i64) -> *const LangStr {
-    read_stdin_count(count)
-}
-
-/// Read all remaining bytes from stdin.
-#[unsafe(no_mangle)]
-pub extern "C" fn lang_io_stdin_read_to_end() -> *const LangStr {
-    read_stdin_to_end()
-}
-
-/// Write raw bytes to stdout from a hex payload.
-///
-/// # Safety
-/// `contents_hex` must be a valid runtime `str` pointer.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn lang_io_stdout_write(contents_hex: *const LangStr) -> *const LangStr {
-    write_stream_bytes(contents_hex, false)
-}
-
-/// Write raw bytes to stderr from a hex payload.
-///
-/// # Safety
-/// `contents_hex` must be a valid runtime `str` pointer.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn lang_io_stderr_write(contents_hex: *const LangStr) -> *const LangStr {
-    write_stream_bytes(contents_hex, true)
-}
-
-/// Flush stdout.
-#[unsafe(no_mangle)]
-pub extern "C" fn lang_io_stdout_flush() -> *const LangStr {
-    flush_stream(false)
-}
-
-/// Flush stderr.
-#[unsafe(no_mangle)]
-pub extern "C" fn lang_io_stderr_flush() -> *const LangStr {
-    flush_stream(true)
 }
 
 #[cfg(test)]
@@ -605,14 +485,40 @@ mod tests {
 
     #[test]
     fn raw_stream_hooks_write_flush_and_report_bad_hex() {
-        assert_eq!(decode(unsafe { lang_io_stdout_write(lang("4f4b")) }), "02");
-        assert_eq!(
-            decode(unsafe { lang_io_stderr_write(lang("455252")) }),
-            "03"
+        assert_eq!(io_write_stream_bytes_encoded("4f4b", false), "02");
+        assert_eq!(io_write_stream_bytes_encoded("455252", true), "03");
+        assert_eq!(io_flush_stream_encoded(false), "0");
+        assert_eq!(io_flush_stream_encoded(true), "0");
+        assert!(io_write_stream_bytes_encoded("0x", false).starts_with('1'));
+    }
+
+    #[test]
+    fn concrete_stdio_hooks_use_native_state_marker() {
+        let source = include_str!("strings.rs");
+        assert!(
+            source.contains("pub(crate) fn io_write_stream_bytes_encoded(hex: &str, stderr: bool)")
+                && source.contains("let result = gc::native_wait(|| {\n        if stderr {"),
+            "stdout/stderr write helpers must mark host stream writes with gc::native_wait(...)"
         );
-        assert_eq!(decode(lang_io_stdout_flush()), "0");
-        assert_eq!(decode(lang_io_stderr_flush()), "0");
-        assert!(decode(unsafe { lang_io_stdout_write(lang("0x")) }).starts_with('1'));
+        assert!(
+            source.contains("pub(crate) fn io_flush_stream_encoded(stderr: bool)")
+                && source.contains("let result = gc::native_wait(|| {\n        if stderr {"),
+            "stdout/stderr flush helpers must mark host stream flushes with gc::native_wait(...)"
+        );
+        assert!(
+            source.contains("pub(crate) fn io_read_stdin_count_encoded(count: i64)")
+                && source.contains(
+                    "let result = gc::native_wait(|| std::io::stdin().lock().read(&mut buf));",
+                ),
+            "stdin read helper must mark host stream reads with gc::native_wait(...)"
+        );
+        assert!(
+            source.contains("pub(crate) fn io_read_stdin_to_end_encoded()")
+                && source.contains(
+                    "match gc::native_wait(|| std::io::stdin().lock().read_to_end(&mut buf))",
+                ),
+            "stdin read_to_end helper must mark host stream reads with gc::native_wait(...)"
+        );
     }
 
     #[test]

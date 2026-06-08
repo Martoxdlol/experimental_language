@@ -1,0 +1,13 @@
+//@ kind: compile-error
+//@ description: Sender.send is an immediate non-blocking enqueue, not an explicit async receive surface
+//@ stderr: `await` requires a `Future`
+
+import { Future } from "core:prelude";
+import { channel } from "std:sync";
+
+function main(): Future<null> async {
+  var ends = channel<i64>();
+  var tx = ends.0;
+  var _sent = await tx.send(7);
+  null
+}

@@ -1,0 +1,11 @@
+//@ kind: compile-error
+//@ description: std:net UdpSocket.connect returns a Future and must be awaited
+//@ stderr: found `Future<
+
+import { IoError } from "std:io";
+import { UdpSocket } from "std:net";
+import { SocketAddr, ip_v4, ip_v6, socket_addr } from "std:net/types";
+
+function requires_await(socket: UdpSocket) {
+  var _value: null | IoError = socket.connect(socket_addr(ip_v4(127u8, 0u8, 0u8, 1u8), 9u16));
+}

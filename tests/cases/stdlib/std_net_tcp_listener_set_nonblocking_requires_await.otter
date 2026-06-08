@@ -1,0 +1,10 @@
+//@ kind: compile-error
+//@ description: std:net TcpListener.set_nonblocking returns a Future and must be awaited
+//@ stderr: found `Future<
+
+import { IoError } from "std:io";
+import { TcpListener } from "std:net";
+
+function requires_await(listener: TcpListener) {
+  var _set: null | IoError = listener.set_nonblocking(true);
+}

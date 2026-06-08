@@ -4,10 +4,12 @@
 //~ -5
 //~ 5
 //~ -3.5
+import { Future } from "core:prelude";
 import { println } from "std:io";
-function main() {
+function main(): Future<null> async {
   var x = 5;
-  println("${0 - x }");
-  println("${0 - (0 - x) }");
-  println("${0.0 - 3.5 }");
+  await println("${0 - x}");
+  await println("${0 - (0 - x)}");
+  await println("${0.0 - 3.5}");
+  null
 }

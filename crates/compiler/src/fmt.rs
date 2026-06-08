@@ -45,8 +45,8 @@ pub fn format_source(src: &str) -> String {
             continue;
         }
 
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
+        let trimmed = line.trim_start();
+        if trimmed.trim().is_empty() {
             // Collapse 2+ consecutive blank lines into a single blank line.
             blank_run += 1;
             if blank_run == 1 {
@@ -60,7 +60,9 @@ pub fn format_source(src: &str) -> String {
         let first = trimmed.as_bytes()[0];
         let close_lead =
             matches!(first, b'}' | b')' | b']') || (first == b'>' && state.generic_angle_depth > 0);
-        let level = (state.bracket_depth
+        let level = (state
+            .bracket_depth
+            .saturating_sub(state.block_argument_suppression_depth)
             + state.generic_angle_depth
             + state.type_alias_union_depth
             + state.var_type_union_depth
@@ -124,6 +126,7 @@ pub fn format_source(src: &str) -> String {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct LineState {
     bracket_depth: usize,
+    block_argument_suppression_depth: usize,
     generic_angle_depth: usize,
     type_alias_union_depth: usize,
     var_type_union_depth: usize,
@@ -180,6 +183,7 @@ fn scan_line_state(src: &str) -> Vec<LineState> {
     // Record the state at the start of line 0.
     states.push(LineState {
         bracket_depth: depth,
+        block_argument_suppression_depth: 0,
         generic_angle_depth: 0,
         type_alias_union_depth: 0,
         var_type_union_depth: 0,
@@ -231,6 +235,7 @@ fn scan_line_state(src: &str) -> Vec<LineState> {
                 i += 1;
                 states.push(LineState {
                     bracket_depth: depth,
+                    block_argument_suppression_depth: 0,
                     generic_angle_depth: 0,
                     type_alias_union_depth: 0,
                     var_type_union_depth: 0,
@@ -294,6 +299,7 @@ fn scan_line_state(src: &str) -> Vec<LineState> {
                 i += 1;
                 states.push(LineState {
                     bracket_depth: depth,
+                    block_argument_suppression_depth: 0,
                     generic_angle_depth: 0,
                     type_alias_union_depth: 0,
                     var_type_union_depth: 0,
@@ -390,6 +396,7 @@ fn scan_line_state(src: &str) -> Vec<LineState> {
             _ => i += 1,
         }
     }
+    apply_block_argument_suppression_depths(src, &mut states);
     apply_generic_angle_line_depths(src, &mut states);
     apply_type_alias_union_line_depths(src, &mut states);
     apply_var_type_union_line_depths(src, &mut states);
@@ -434,6 +441,52 @@ fn scan_line_state(src: &str) -> Vec<LineState> {
     apply_bitwise_xor_chain_line_depths(src, &mut states);
     apply_bitwise_or_chain_line_depths(src, &mut states);
     states
+}
+
+fn apply_block_argument_suppression_depths(src: &str, states: &mut [LineState]) {
+    let (tokens, errors) = lex(src, FileId(0));
+    if !errors.is_empty() {
+        return;
+    }
+    let tokens = tokens
+        .iter()
+        .filter(|token| token.kind != TokenKind::Eof)
+        .collect::<Vec<_>>();
+    if tokens.is_empty() {
+        return;
+    }
+    let line_starts = line_starts(src);
+    let mut stack: Vec<(usize, usize)> = Vec::new();
+
+    for (idx, token) in tokens.iter().enumerate() {
+        match token.kind {
+            TokenKind::LBrace => {
+                stack.push((idx, unmatched_paren_or_bracket_depth(&tokens, idx)));
+            }
+            TokenKind::RBrace => {
+                let Some((open_idx, suppression_depth)) = stack.pop() else {
+                    continue;
+                };
+                if suppression_depth == 0 {
+                    continue;
+                }
+
+                let open_end = tokens[open_idx].span.range().end;
+                let close_start = token.span.range().start;
+                for (line_idx, line_start) in line_starts.iter().copied().enumerate().skip(1) {
+                    let first_non_ws = first_non_ws_from_line_start(src, line_start);
+                    if first_non_ws >= open_end && first_non_ws <= close_start {
+                        if let Some(state) = states.get_mut(line_idx) {
+                            state.block_argument_suppression_depth = state
+                                .block_argument_suppression_depth
+                                .max(suppression_depth);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 fn apply_generic_angle_line_depths(src: &str, states: &mut [LineState]) {
@@ -2161,6 +2214,48 @@ fn wrap_long_line(line: &str, base_indent: &str, state: LineState) -> String {
     if base_indent.len() + line.len() <= MAX_LINE_LENGTH {
         return line.to_string();
     }
+    if let Some((code, comment)) = split_trailing_comment_for_wrap(line) {
+        let wrapped = wrap_long_code_line(code, base_indent, state);
+        if wrapped != code {
+            return append_trailing_comment(wrapped, comment);
+        }
+    }
+    wrap_long_code_line(line, base_indent, state)
+}
+
+fn split_trailing_comment_for_wrap(line: &str) -> Option<(&str, &str)> {
+    let segments = split_comment_segments(line)?;
+    let mut segments = segments.as_slice();
+    if let Some((LineSegment::Code(tail), rest)) = segments.split_last()
+        && tail.trim().is_empty()
+    {
+        segments = rest;
+    }
+    let [LineSegment::Code(code), LineSegment::Comment(comment)] = segments else {
+        return None;
+    };
+    if code.trim().is_empty() {
+        return None;
+    }
+    if comment.starts_with("//") || is_balanced_block_comment_segment(comment) {
+        return Some((code.trim_end(), comment));
+    }
+    None
+}
+
+fn is_balanced_block_comment_segment(comment: &str) -> bool {
+    comment.starts_with("/*") && comment.ends_with("*/")
+}
+
+fn append_trailing_comment(mut wrapped: String, comment: &str) -> String {
+    if !wrapped.ends_with(' ') {
+        wrapped.push(' ');
+    }
+    wrapped.push_str(comment);
+    wrapped
+}
+
+fn wrap_long_code_line(line: &str, base_indent: &str, state: LineState) -> String {
     if state.type_alias_decl_header_depth > 0
         || state.interface_decl_header_depth > 0
         || state.struct_decl_header_depth > 0
@@ -2224,7 +2319,7 @@ fn wrap_long_line(line: &str, base_indent: &str, state: LineState) -> String {
     if let Some(header) = find_struct_decl_header_wrap(&tokens, &angle_roles) {
         return wrap_struct_decl_header_line(line, base_indent, &tokens, &header);
     }
-    if let Some(chain) = find_cast_chain_wrap(&tokens, &angle_roles) {
+    if let Some(chain) = find_cast_chain_wrap(line, &tokens, &angle_roles) {
         return wrap_cast_chain_line(line, base_indent, &tokens, &chain);
     }
     if let Some(chain) = find_method_chain_wrap(&tokens, &angle_roles) {
@@ -2289,6 +2384,12 @@ fn wrap_long_line(line: &str, base_indent: &str, state: LineState) -> String {
     }
     if let Some(attribute) = find_inline_attribute_item_wrap(line, &tokens) {
         return wrap_inline_attribute_item_line(line, base_indent, &attribute);
+    }
+    if let Some(body) = find_simple_block_expression_body_wrap(&tokens) {
+        return wrap_block_expression_body_line(line, base_indent, &tokens, &body);
+    }
+    if let Some(body) = find_block_expression_body_wrap(&tokens, &angle_roles) {
+        return wrap_block_expression_body_line(line, base_indent, &tokens, &body);
     }
     if let Some(pair) = find_delimited_wrap(&tokens, &angle_roles) {
         return wrap_delimited_line(line, base_indent, &tokens, &pair);
@@ -2358,9 +2459,6 @@ fn wrap_long_line(line: &str, base_indent: &str, state: LineState) -> String {
     }
     if let Some(body) = find_async_block_body_wrap(&tokens, &angle_roles) {
         return wrap_async_block_body_line(line, base_indent, &tokens, &body);
-    }
-    if let Some(body) = find_block_expression_body_wrap(&tokens, &angle_roles) {
-        return wrap_block_expression_body_line(line, base_indent, &tokens, &body);
     }
     if let Some(body) = find_loop_body_wrap(&tokens, &angle_roles) {
         return wrap_loop_body_line(line, base_indent, &tokens, &body);
@@ -3146,8 +3244,7 @@ fn wrap_for_body_line(
         return line.to_string();
     }
 
-    let prefix_depth = unmatched_paren_or_bracket_depth(tokens, body.lbrace_idx);
-    let continuation_indent = format!("{base_indent}{}", INDENT.repeat(prefix_depth + 1));
+    let continuation_indent = format!("{base_indent}{INDENT}");
     format!("{prefix}\n{continuation_indent}{rest}")
 }
 
@@ -3307,8 +3404,7 @@ fn wrap_async_block_body_line(
         return line.to_string();
     }
 
-    let prefix_depth = unmatched_paren_or_bracket_depth(tokens, body.lbrace_idx);
-    let continuation_indent = format!("{base_indent}{}", INDENT.repeat(prefix_depth + 1));
+    let continuation_indent = format!("{base_indent}{INDENT}");
     format!("{prefix}\n{continuation_indent}{rest}")
 }
 
@@ -3325,8 +3421,7 @@ fn wrap_block_expression_body_line(
         return line.to_string();
     }
 
-    let prefix_depth = unmatched_paren_or_bracket_depth(tokens, body.lbrace_idx);
-    let continuation_indent = format!("{base_indent}{}", INDENT.repeat(prefix_depth + 1));
+    let continuation_indent = format!("{base_indent}{INDENT}");
     format!("{prefix}\n{continuation_indent}{rest}")
 }
 
@@ -3343,8 +3438,7 @@ fn wrap_macro_block_body_line(
         return line.to_string();
     }
 
-    let prefix_depth = unmatched_paren_or_bracket_depth(tokens, body.lbrace_idx);
-    let continuation_indent = format!("{base_indent}{}", INDENT.repeat(prefix_depth + 1));
+    let continuation_indent = format!("{base_indent}{INDENT}");
     format!("{prefix}\n{continuation_indent}{rest}")
 }
 
@@ -6473,6 +6567,38 @@ fn find_block_expression_body_wrap(
     None
 }
 
+fn find_simple_block_expression_body_wrap(tokens: &[&Token]) -> Option<BlockExpressionBodyWrap> {
+    for idx in 0..tokens.len() {
+        if tokens[idx].kind != TokenKind::LBrace || !plausible_block_expression_open(tokens, idx) {
+            continue;
+        }
+        let close_idx = matching_brace_close(tokens, idx)?;
+        if idx + 1 >= close_idx {
+            continue;
+        }
+        let mut rejected = false;
+        for body_idx in (idx + 1)..close_idx {
+            if matches!(
+                tokens[body_idx].kind,
+                TokenKind::Colon
+                    | TokenKind::Comma
+                    | TokenKind::DotDot
+                    | TokenKind::FatArrow
+                    | TokenKind::LBrace
+                    | TokenKind::RBrace
+            ) {
+                rejected = true;
+                break;
+            }
+        }
+        if !rejected {
+            return Some(BlockExpressionBodyWrap { lbrace_idx: idx });
+        }
+    }
+
+    None
+}
+
 fn plausible_block_expression_open(tokens: &[&Token], open_idx: usize) -> bool {
     if open_idx == 0 {
         return true;
@@ -7767,12 +7893,36 @@ fn find_arrow_closure_return_union_wrap_from(
     })
 }
 
-fn find_cast_chain_wrap(tokens: &[&Token], angle_roles: &[AngleRole]) -> Option<CastChainWrap> {
+fn find_cast_chain_wrap(
+    line: &str,
+    tokens: &[&Token],
+    angle_roles: &[AngleRole],
+) -> Option<CastChainWrap> {
+    if find_import_path_wrap(tokens).is_some() || is_import_path_continuation_line(line, tokens) {
+        return None;
+    }
     if has_top_level_cast_chain_breaker(tokens, angle_roles) {
         return None;
     }
     let operator_indices = top_level_cast_chain_operators(tokens, angle_roles);
-    (operator_indices.len() >= 2).then_some(CastChainWrap { operator_indices })
+    (!operator_indices.is_empty()).then_some(CastChainWrap { operator_indices })
+}
+
+fn is_import_path_continuation_line(line: &str, tokens: &[&Token]) -> bool {
+    if tokens.first().map(|token| token.kind) != Some(TokenKind::StrStart) {
+        return false;
+    }
+    let trimmed = line.trim_start();
+    let has_import_scheme = [
+        "\"core:", "\"std:", "\"pkg:", "\"self:", "\"file:", "\"url:", "\"http:", "\"https:",
+    ]
+    .iter()
+    .any(|scheme| trimmed.starts_with(scheme));
+    has_import_scheme
+        && tokens
+            .iter()
+            .any(|token| token.kind == TokenKind::Kw(Keyword::As))
+        && tokens.iter().any(|token| token.kind == TokenKind::Semi)
 }
 
 fn top_level_cast_chain_operators(tokens: &[&Token], angle_roles: &[AngleRole]) -> Vec<usize> {
@@ -7898,7 +8048,7 @@ fn is_cast_type_start(kind: TokenKind) -> bool {
 
 fn find_method_chain_wrap(tokens: &[&Token], angle_roles: &[AngleRole]) -> Option<MethodChainWrap> {
     let dot_indices = top_level_method_chain_dots(tokens, angle_roles);
-    (dot_indices.len() >= 2).then_some(MethodChainWrap { dot_indices })
+    (!dot_indices.is_empty()).then_some(MethodChainWrap { dot_indices })
 }
 
 fn top_level_method_chain_dots(tokens: &[&Token], angle_roles: &[AngleRole]) -> Vec<usize> {
@@ -7959,7 +8109,8 @@ fn plausible_method_chain_dot(tokens: &[&Token], idx: usize) -> bool {
 fn is_method_chain_breaker(kind: TokenKind) -> bool {
     matches!(
         kind,
-        TokenKind::Comma
+        TokenKind::LBrace
+            | TokenKind::Comma
             | TokenKind::Colon
             | TokenKind::Eq
             | TokenKind::FatArrow
@@ -8760,7 +8911,7 @@ fn find_bitwise_xor_chain_wrap(
         return None;
     }
     let operator_indices = top_level_bitwise_xor_chain_operators(tokens, angle_roles);
-    (operator_indices.len() >= 2).then_some(BitwiseXorChainWrap { operator_indices })
+    (!operator_indices.is_empty()).then_some(BitwiseXorChainWrap { operator_indices })
 }
 
 fn top_level_bitwise_xor_chain_operators(
@@ -8899,7 +9050,7 @@ fn find_bitwise_or_chain_wrap(
         return None;
     }
     let operator_indices = top_level_bitwise_or_chain_operators(tokens, angle_roles);
-    (operator_indices.len() >= 2).then_some(BitwiseOrChainWrap { operator_indices })
+    (!operator_indices.is_empty()).then_some(BitwiseOrChainWrap { operator_indices })
 }
 
 fn top_level_bitwise_or_chain_operators(
@@ -9844,6 +9995,21 @@ fn spacing_between<'a>(
     {
         return " ";
     }
+    if curr_kind == TokenKind::LParen
+        && matches!(
+            prev_kind,
+            TokenKind::Kw(Keyword::If)
+                | TokenKind::Kw(Keyword::While)
+                | TokenKind::Kw(Keyword::For)
+                | TokenKind::Kw(Keyword::Match)
+                | TokenKind::Kw(Keyword::In)
+        )
+    {
+        return " ";
+    }
+    if is_expr_leading_keyword(prev_kind) && is_unary_expr_start(curr_kind) {
+        return " ";
+    }
 
     if curr_role == AngleRole::GenericOpen
         || prev_role == AngleRole::GenericOpen
@@ -9874,7 +10040,6 @@ fn spacing_between<'a>(
                 | TokenKind::Colon
                 | TokenKind::RParen
                 | TokenKind::RBracket
-                | TokenKind::RBrace
         ) {
             ""
         } else {
@@ -9891,6 +10056,9 @@ fn spacing_between<'a>(
     }
     if curr_kind == TokenKind::LBrace {
         return " ";
+    }
+    if curr_kind == TokenKind::RBrace && is_interpolation_close(tokens, curr_idx) {
+        return "";
     }
     if curr_kind == TokenKind::RBrace {
         return if prev_kind == TokenKind::LBrace {
@@ -10087,6 +10255,7 @@ fn plausible_generic_follow(tokens: &[&Token], open_idx: usize, close_idx: usize
         next,
         TokenKind::LParen
             | TokenKind::LBrace
+            | TokenKind::RBrace
             | TokenKind::RParen
             | TokenKind::RBracket
             | TokenKind::Comma
@@ -10143,6 +10312,7 @@ fn is_spaced_operator(
         | TokenKind::PipePipe
         | TokenKind::Pipe
         | TokenKind::FatArrow => angle_role == AngleRole::None,
+        TokenKind::Kw(Keyword::As | Keyword::Is) => true,
         TokenKind::Shl | TokenKind::Shr => angle_role == AngleRole::None,
         TokenKind::Plus
         | TokenKind::Minus
@@ -10162,6 +10332,39 @@ fn is_spaced_operator(
         }
         _ => false,
     }
+}
+
+fn is_interpolation_close(tokens: &[&Token], close_idx: usize) -> bool {
+    if tokens.get(close_idx).map(|token| token.kind) != Some(TokenKind::RBrace) {
+        return false;
+    }
+
+    let mut interpolation_brace_depths = Vec::<usize>::new();
+    for (idx, token) in tokens.iter().enumerate().take(close_idx + 1) {
+        match token.kind {
+            TokenKind::DollarLBrace => interpolation_brace_depths.push(0),
+            TokenKind::LBrace if !interpolation_brace_depths.is_empty() => {
+                if let Some(depth) = interpolation_brace_depths.last_mut() {
+                    *depth += 1;
+                }
+            }
+            TokenKind::RBrace if !interpolation_brace_depths.is_empty() => {
+                let depth = interpolation_brace_depths
+                    .last_mut()
+                    .expect("checked non-empty interpolation stack");
+                if *depth == 0 {
+                    if idx == close_idx {
+                        return true;
+                    }
+                    interpolation_brace_depths.pop();
+                    continue;
+                }
+                *depth -= 1;
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 fn is_value_end(kind: TokenKind) -> bool {
@@ -10201,6 +10404,27 @@ fn is_value_start(kind: TokenKind) -> bool {
             | TokenKind::Kw(Keyword::Null)
             | TokenKind::Kw(Keyword::SelfLower)
             | TokenKind::Kw(Keyword::SelfUpper)
+    )
+}
+
+fn is_expr_leading_keyword(kind: TokenKind) -> bool {
+    matches!(
+        kind,
+        TokenKind::Kw(Keyword::If)
+            | TokenKind::Kw(Keyword::While)
+            | TokenKind::Kw(Keyword::Match)
+            | TokenKind::Kw(Keyword::In)
+            | TokenKind::Kw(Keyword::Return)
+            | TokenKind::Kw(Keyword::Break)
+            | TokenKind::Kw(Keyword::Await)
+            | TokenKind::Kw(Keyword::Spawn)
+    )
+}
+
+fn is_unary_expr_start(kind: TokenKind) -> bool {
+    matches!(
+        kind,
+        TokenKind::Bang | TokenKind::Minus | TokenKind::Star | TokenKind::Amp
     )
 }
 
@@ -10365,11 +10589,47 @@ mod tests {
 
     #[test]
     fn normalizes_async_closure_and_null_generic_spacing() {
-        let src = "function value_of(r:Joined < i64 >|Panicked):i64{\nmatch r {Joined < i64 > j=>j.value,_=>-1}\n}\nfunction main():Future < null > async{\nvar h:JoinHandle < i64 > =Task.spawn(()async=>{null});\n}\n";
+        let src = "function value_of(r:Joined < i64 >|Panicked):i64{\nmatch r {Joined < i64 > j=>j.value,_=>-1}\n}\nstruct Holder { job:(i64)=>Future < i64 > }\nfunction main():Future < null > async{\nvar h:JoinHandle < i64 > =Task.spawn(()async=>{null});\n}\n";
         let out = format_source(src);
         assert_eq!(
             out,
-            "function value_of(r: Joined<i64> | Panicked): i64 {\n  match r { Joined<i64> j => j.value, _ => -1 }\n}\nfunction main(): Future<null> async {\n  var h: JoinHandle<i64> = Task.spawn(() async => { null });\n}\n"
+            "function value_of(r: Joined<i64> | Panicked): i64 {\n  match r { Joined<i64> j => j.value, _ => -1 }\n}\nstruct Holder { job: (i64) => Future<i64> }\nfunction main(): Future<null> async {\n  var h: JoinHandle<i64> = Task.spawn(() async => { null });\n}\n"
+        );
+        assert_eq!(format_source(&out), out);
+        assert!(token_stream_preserved(src, &out));
+    }
+
+    #[test]
+    fn normalizes_multiline_async_closure_block_indentation() {
+        let src = "function main():Future < null > async{\nTask.spawn(()async=>{\nif(true){\nnull\n}\n});\ndrive(async {\nif(false){\nnull\n}\n});\n}\n";
+        let out = format_source(src);
+        assert_eq!(
+            out,
+            "function main(): Future<null> async {\n  Task.spawn(() async => {\n    if (true) {\n      null\n    }\n  });\n  drive(async {\n    if (false) {\n      null\n    }\n  });\n}\n"
+        );
+        assert_eq!(format_source(&out), out);
+        assert!(token_stream_preserved(src, &out));
+    }
+
+    #[test]
+    fn normalizes_control_keyword_and_type_test_spacing() {
+        let src = "function f(i:i64){\nif(if(i&1)==0{i}else{null})is i64{return-1;}\nif!done{return;}\nwhile!done{i=i+1;}\nvar x=if(i&1)==0{i}else{null};\nwhile(i<10){i=i+1;}\nfor x in([1,2]){println(x as str);}\nmatch!done{true=>i,_=>0};\nmatch(i&1){0=>i,_=>0};\n}\n";
+        let out = format_source(src);
+        assert_eq!(
+            out,
+            "function f(i: i64) {\n  if (if (i & 1) == 0 { i } else { null }) is i64 { return -1; }\n  if !done { return; }\n  while !done { i = i + 1; }\n  var x = if (i & 1) == 0 { i } else { null };\n  while (i < 10) { i = i + 1; }\n  for x in ([1, 2]) { println(x as str); }\n  match !done { true => i, _ => 0 };\n  match (i & 1) { 0 => i, _ => 0 };\n}\n"
+        );
+        assert_eq!(format_source(&out), out);
+        assert!(token_stream_preserved(src, &out));
+    }
+
+    #[test]
+    fn normalizes_statement_keyword_unary_operand_spacing() {
+        let src = "function f(){\nreturn-1;\nbreak-2;\nawait!ready;\nspawn!ready;\n}\n";
+        let out = format_source(src);
+        assert_eq!(
+            out,
+            "function f() {\n  return -1;\n  break -2;\n  await !ready;\n  spawn !ready;\n}\n"
         );
         assert_eq!(format_source(&out), out);
         assert!(token_stream_preserved(src, &out));
@@ -10388,19 +10648,22 @@ mod tests {
 
     #[test]
     fn normalizes_code_before_line_comment_without_changing_comment_text() {
-        let src = "function f(){\nvar x=1;//keep  exact\n}\n";
+        let src = "function f(){\n//keep  exact   \nvar x=1;//keep  exact   \n}\n";
         let out = format_source(src);
-        assert_eq!(out, "function f() {\n  var x = 1; //keep  exact\n}\n");
+        assert_eq!(
+            out,
+            "function f() {\n  //keep  exact   \n  var x = 1; //keep  exact   \n}\n"
+        );
         assert!(token_stream_preserved(src, &out));
     }
 
     #[test]
     fn normalizes_string_and_char_adjacent_spacing() {
-        let src = "function f(){\nvar s=\"a+b\";\nvar c='+';\nvar url=\"http://host/a/*not comment*/\";//keep exact\nvar msg=\"value ${x+1}!\";\n}\n";
+        let src = "function f(){\nvar s=\"a+b\";\nvar c='+';\nvar url=\"http://host/a/*not comment*/\";//keep exact\nvar msg=\"value ${x+1}!\";\nvar many=\"${a+1}/${b+2}\";\n}\n";
         let out = format_source(src);
         assert_eq!(
             out,
-            "function f() {\n  var s = \"a+b\";\n  var c = '+';\n  var url = \"http://host/a/*not comment*/\"; //keep exact\n  var msg = \"value ${x + 1 }!\";\n}\n"
+            "function f() {\n  var s = \"a+b\";\n  var c = '+';\n  var url = \"http://host/a/*not comment*/\"; //keep exact\n  var msg = \"value ${x + 1}!\";\n  var many = \"${a + 1}/${b + 2}\";\n}\n"
         );
         assert_eq!(format_source(&out), out);
         assert!(token_stream_preserved(src, &out));
@@ -10448,6 +10711,30 @@ mod tests {
         assert_eq!(
             out,
             "function f() {\n  var total = combine(\n    alpha,\n    beta,\n    gamma,\n    delta,\n    epsilon,\n    zeta,\n    eta,\n    theta,\n    iota,\n    kappa,\n    lambda,\n    mu,\n    nu\n  );\n}\n"
+        );
+        assert_eq!(format_source(&out), out);
+        assert!(token_stream_preserved(src, &out));
+    }
+
+    #[test]
+    fn wraps_long_call_argument_lists_with_trailing_line_comments() {
+        let src = "function f(){\nvar total=combine(alpha,beta,gamma,delta,epsilon,zeta,eta,theta,iota,kappa,lambda,mu,nu); //keep exact\n}\n";
+        let out = format_source(src);
+        assert_eq!(
+            out,
+            "function f() {\n  var total = combine(\n    alpha,\n    beta,\n    gamma,\n    delta,\n    epsilon,\n    zeta,\n    eta,\n    theta,\n    iota,\n    kappa,\n    lambda,\n    mu,\n    nu\n  ); //keep exact\n}\n"
+        );
+        assert_eq!(format_source(&out), out);
+        assert!(token_stream_preserved(src, &out));
+    }
+
+    #[test]
+    fn wraps_long_call_argument_lists_with_trailing_block_comments() {
+        let src = "function f(){\nvar total=combine(alpha,beta,gamma,delta,epsilon,zeta,eta,theta,iota,kappa,lambda,mu,nu); /*keep  exact /* nested */ done*/\n}\n";
+        let out = format_source(src);
+        assert_eq!(
+            out,
+            "function f() {\n  var total = combine(\n    alpha,\n    beta,\n    gamma,\n    delta,\n    epsilon,\n    zeta,\n    eta,\n    theta,\n    iota,\n    kappa,\n    lambda,\n    mu,\n    nu\n  ); /*keep  exact /* nested */ done*/\n}\n"
         );
         assert_eq!(format_source(&out), out);
         assert!(token_stream_preserved(src, &out));
@@ -11222,6 +11509,30 @@ mod tests {
     }
 
     #[test]
+    fn wraps_single_long_cast_expressions() {
+        let src = "function f(){\nvar value=alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa as LambdaMuNuXiOmicronPiRhoSigmaTau;\n}\n";
+        let out = format_source(src);
+        assert_eq!(
+            out,
+            "function f() {\n  var value = alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa\n    as LambdaMuNuXiOmicronPiRhoSigmaTau;\n}\n"
+        );
+        assert_eq!(format_source(&out), out);
+        assert!(token_stream_preserved(src, &out));
+    }
+
+    #[test]
+    fn wraps_single_cast_expressions_without_splitting_generic_targets() {
+        let src = "function f(){\nvar ok=alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa is Result<Alpha<Beta,Gamma>,Delta<Epsilon,Zeta>>;\n}\n";
+        let out = format_source(src);
+        assert_eq!(
+            out,
+            "function f() {\n  var ok = alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa\n    is Result<Alpha<Beta, Gamma>, Delta<Epsilon, Zeta>>;\n}\n"
+        );
+        assert_eq!(format_source(&out), out);
+        assert!(token_stream_preserved(src, &out));
+    }
+
+    #[test]
     fn wraps_cast_chains_without_splitting_generic_targets() {
         let src = "function f(){\nvar value=source as Box<Alpha,Beta> as Result<Gamma<Delta,Epsilon>,Zeta> as Pair<Theta,Iota> as Omega<Kappa,Lambda>;\n}\n";
         let out = format_source(src);
@@ -11318,6 +11629,30 @@ mod tests {
     }
 
     #[test]
+    fn wraps_single_long_bitwise_xor_expressions() {
+        let src = "function f(){\nvar mask=alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa^lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n";
+        let out = format_source(src);
+        assert_eq!(
+            out,
+            "function f() {\n  var mask = alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa\n    ^ lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n"
+        );
+        assert_eq!(format_source(&out), out);
+        assert!(token_stream_preserved(src, &out));
+    }
+
+    #[test]
+    fn wraps_single_bitwise_xor_expressions_without_splitting_nested_operands() {
+        let src = "function f(){\nvar mask=alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu^combine<Mask>(beta^gamma);\n}\n";
+        let out = format_source(src);
+        assert_eq!(
+            out,
+            "function f() {\n  var mask = alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu\n    ^ combine<Mask>(beta ^ gamma);\n}\n"
+        );
+        assert_eq!(format_source(&out), out);
+        assert!(token_stream_preserved(src, &out));
+    }
+
+    #[test]
     fn wraps_bitwise_or_chains_before_bitwise_xor_operands() {
         let src = "function f(){\nvar mask=alpha^beta|gamma^delta|epsilon^zeta|eta^theta|iota^kappa|lambda^mu|nu^xi|omicron^pi;\n}\n";
         let out = format_source(src);
@@ -11330,12 +11665,60 @@ mod tests {
     }
 
     #[test]
+    fn wraps_single_long_bitwise_or_expressions() {
+        let src = "function f(){\nvar mask=alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa|lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n";
+        let out = format_source(src);
+        assert_eq!(
+            out,
+            "function f() {\n  var mask = alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa\n    | lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n"
+        );
+        assert_eq!(format_source(&out), out);
+        assert!(token_stream_preserved(src, &out));
+    }
+
+    #[test]
+    fn wraps_single_bitwise_or_expressions_without_splitting_nested_operands() {
+        let src = "function f(){\nvar mask=alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu|combine<Mask>(beta|gamma);\n}\n";
+        let out = format_source(src);
+        assert_eq!(
+            out,
+            "function f() {\n  var mask = alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu\n    | combine<Mask>(beta | gamma);\n}\n"
+        );
+        assert_eq!(format_source(&out), out);
+        assert!(token_stream_preserved(src, &out));
+    }
+
+    #[test]
     fn wraps_long_comparison_expressions_before_bitwise_operands() {
         let src = "function f(){\nvar ok=alpha|beta|gamma|delta|epsilon|zeta|eta|theta==iota|kappa|lambda|mu|nu|xi|omicron|pi;\n}\n";
         let out = format_source(src);
         assert_eq!(
             out,
             "function f() {\n  var ok = alpha | beta | gamma | delta | epsilon | zeta | eta | theta\n    == iota | kappa | lambda | mu | nu | xi | omicron | pi;\n}\n"
+        );
+        assert_eq!(format_source(&out), out);
+        assert!(token_stream_preserved(src, &out));
+    }
+
+    #[test]
+    fn wraps_single_long_comparison_expressions() {
+        let src = "function f(){\nvar ok=alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa==lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n";
+        let out = format_source(src);
+        assert_eq!(
+            out,
+            "function f() {\n  var ok = alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa\n    == lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n"
+        );
+        assert_eq!(format_source(&out), out);
+        assert!(token_stream_preserved(src, &out));
+    }
+
+    #[test]
+    fn wraps_single_comparison_expressions_without_splitting_nested_operands() {
+        let src = "function f(){\nvar ok=alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa==compare<Bool>(beta==gamma,delta<epsilon);\n}\n";
+        let out = format_source(src);
+        assert_eq!(
+            out,
+            "function f() {\n  var ok = alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa\n    == compare<Bool>(beta == gamma, delta < epsilon);\n}\n"
         );
         assert_eq!(format_source(&out), out);
         assert!(token_stream_preserved(src, &out));
@@ -11488,7 +11871,7 @@ mod tests {
         let out = format_source(src);
         assert_eq!(
             out,
-            "function f() {\n  drive(async {\n      generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; });\n}\n"
+            "function f() {\n  drive(async {\n    generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; });\n}\n"
         );
         assert_eq!(format_source(&out), out);
         assert!(token_stream_preserved(src, &out));
@@ -11500,7 +11883,7 @@ mod tests {
         let out = format_source(src);
         assert_eq!(
             out,
-            "function f() {\n  drive({\n      generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; });\n}\n"
+            "function f() {\n  drive({\n    generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; });\n}\n"
         );
         assert_eq!(format_source(&out), out);
         assert!(token_stream_preserved(src, &out));
@@ -11508,11 +11891,11 @@ mod tests {
 
     #[test]
     fn wraps_long_macro_block_bodies_as_fallback() {
-        let src = "function f(){\nvar x=@AsBlock { generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; };\nvar y=@Trace(\"op\") { generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; };\n}\n";
+        let src = "function f(){\nvar x=@AsBlock { generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; };\nvar y=@Trace(\"op\") { generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; };\ndrive(@Trace(\"op\") { generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; });\n}\n";
         let out = format_source(src);
         assert_eq!(
             out,
-            "function f() {\n  var x = @AsBlock {\n    generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; };\n  var y = @Trace(\"op\") {\n    generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; };\n}\n"
+            "function f() {\n  var x = @AsBlock {\n    generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; };\n  var y = @Trace(\"op\") {\n    generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; };\n  drive(@Trace(\"op\") {\n    generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; });\n}\n"
         );
         assert_eq!(format_source(&out), out);
         assert!(token_stream_preserved(src, &out));
@@ -12185,6 +12568,30 @@ mod tests {
         assert_eq!(
             out,
             "function f() {\n  var result = service\n    .alpha()\n    .beta(one, two)\n    .gamma<Delta, Epsilon>()\n    .delta()\n    .epsilon()\n    .zeta()\n    .eta()\n    .theta()\n    .iota()\n    .kappa()\n    .lambda();\n}\n"
+        );
+        assert_eq!(format_source(&out), out);
+        assert!(token_stream_preserved(src, &out));
+    }
+
+    #[test]
+    fn wraps_single_long_method_expressions() {
+        let src = "function f() {\nvar result=alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu.compute<Alpha,Beta>(one.two(),three.four());\n}\n";
+        let out = format_source(src);
+        assert_eq!(
+            out,
+            "function f() {\n  var result = alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu\n    .compute<Alpha, Beta>(one.two(), three.four());\n}\n"
+        );
+        assert_eq!(format_source(&out), out);
+        assert!(token_stream_preserved(src, &out));
+    }
+
+    #[test]
+    fn wraps_single_long_field_access_expressions() {
+        let src = "function f() {\nvar value=alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu.omega_sigma_tau_upsilon_phi_chi_psi;\n}\n";
+        let out = format_source(src);
+        assert_eq!(
+            out,
+            "function f() {\n  var value = alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu\n    .omega_sigma_tau_upsilon_phi_chi_psi;\n}\n"
         );
         assert_eq!(format_source(&out), out);
         assert!(token_stream_preserved(src, &out));

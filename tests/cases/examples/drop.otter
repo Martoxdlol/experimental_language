@@ -3,11 +3,12 @@
 //@ stdout:
 //~ done
 
+import { Future } from "core:prelude";
 // Drop (docs/10, docs/16 §8): a finalizer the runtime runs before reclaiming a
 // managed object. Implement `Drop` for a type and its `drop(self)` runs when the
-// collector observes the object as unreachable — asynchronously and best-effort
+// collector observes the object as unreachable — non-waiting and best-effort
 // (it is NOT a scope-exit hook; for deterministic release, call a method
-// explicitly).
+// explicitly and await it if that release may wait).
 
 import { println } from "std:io";
 import { Drop } from "core:prelude";
@@ -16,11 +17,11 @@ struct Resource { id: i64 }
 
 extend Resource: Drop {
   function drop(self) {
-    println("releasing resource " + (self.id as str));
+    null
   }
 }
 
-function main() {
+function main(): Future<null> async {
   // Each `r` becomes unreachable at the end of its iteration; the collector
   // finalizes it (run with OTTER_FUSION_GC=stress to see this happen promptly).
   var i: i64 = 0;
@@ -28,5 +29,6 @@ function main() {
     var r: Resource = Resource { id: i };
     i = i + 1;
   }
-  println("done");
+  await println("done");
+  null
 }

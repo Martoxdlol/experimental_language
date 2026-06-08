@@ -5,8 +5,8 @@
 //@ description: spawn keyword futures keep Map locals alive across async loop safepoints and await suspensions under stress GC
 //@ stdout:
 //~ weights=1240 awaited=7440
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { List, Map } from "core:collections";
 import { yield_now } from "std:async";
 
@@ -53,5 +53,6 @@ function main(): Future<null> async {
     hi = hi + 1;
   }
 
-  println("weights=${weight_total } awaited=${awaited }");
+  await println("weights=${weight_total} awaited=${awaited}");
+  null
 }

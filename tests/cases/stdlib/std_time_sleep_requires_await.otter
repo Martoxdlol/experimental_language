@@ -1,0 +1,9 @@
+//@ kind: compile-error
+//@ description: std:time sleep returns a Future and must be awaited before assigning to null
+//@ stderr: expected `null`, found `Future<null>`
+
+import { Duration, sleep } from "std:time";
+
+function main() {
+  var done: null = sleep(Duration.from_millis(1));
+}

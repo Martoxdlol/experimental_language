@@ -16,6 +16,7 @@
 //~ east?   = east
 //~ dirs    = 3
 
+import { Future } from "core:prelude";
 // Map<K, V> — a hash map. Built-in keys: primitives and `str`. User types
 // implementing `Eq + Hash` (typically via `@Derive`) also work as keys
 // (docs/18 §6, docs/15 §7).
@@ -24,50 +25,50 @@ import { Map, Entry } from "core:collections";
 import { println } from "std:io";
 import { Eq, Hash, Iterator } from "core:prelude";
 
-function main() {
+function main(): Future<null> async {
   // Map literal: keys commit the parse on the first `key:`.
   var inventory: Map<str, i64> = { "apples": 3, "pears": 7 };
   inventory.set("plums", 12);
   inventory.set("apples", 4);              // replaces, does not grow
 
-  println("kinds   = ${inventory.size()}");
+  await println("kinds   = ${inventory.size()}");
   match inventory.get("pears") {
-    i64 n => println("pears   = ${n}"),
-    null  => println("no pears"),
+    i64 n => await println("pears   = ${n}"),
+    null  => await println("no pears"),
   };
-  println("has plums: ${inventory.contains("plums")}");
+  await println("has plums: ${inventory.contains("plums")}");
 
   match inventory.remove("apples") {
-    i64 n => println("ate ${n} apples"),
-    null  => println("no apples"),
+    i64 n => await println("ate ${n} apples"),
+    null  => await println("no apples"),
   };
-  println("kinds   = ${inventory.size()}");
+  await println("kinds   = ${inventory.size()}");
 
   // keys()/values()/entries() return real Iterator objects (docs/18 §6).
   var scores: Map<i64, i64> = { 1: 10, 2: 20, 3: 30 };
   var total = 0;
   for v in scores.values() { total = total + v; }
-  println("total   = ${total}");
+  await println("total   = ${total}");
   // entries() yields Entry<K, V> values (same struct `for entry in map` uses).
   var pair_sum = 0;
   for e in scores.entries() { pair_sum = pair_sum + e.key + e.value; }
-  println("pairs   = ${pair_sum}");
+  await println("pairs   = ${pair_sum}");
 
   // `..spread` merges maps; the rightmost binding wins on collision.
   var defaults: Map<str, i64> = { "port": 8080, "tls": 0 };
   var override: Map<str, i64> = { "port": 9090 };
   var config: Map<str, i64> = { ..defaults, ..override };
-  println("port    = ${config.get("port") as i64}");
+  await println("port    = ${config.get("port") as i64}");
 
   // The empty-map constructor (a bare `{}` is a block, not a map).
   var seen = Map<str, i64>();
-  println("empty   = ${seen.is_empty()}");
+  await println("empty   = ${seen.is_empty()}");
 
   // Indexing: `map[k]` reads (panics on a missing key) and `map[k] = v` writes.
   var ages: Map<str, i64> = { "ada": 36 };
   ages["bob"] = 42;
   ages["ada"] = 37;
-  println("ada     = ${ages["ada"]}");
+  await println("ada     = ${ages["ada"]}");
 
   // `for entry in map` yields an `Entry<K, V>` with `key` and `value`.
   var names = "";
@@ -76,8 +77,8 @@ function main() {
     names = names + e.key + " ";
     sum = sum + e.value;
   }
-  println("names   = ${names}");
-  println("age sum = ${sum}");
+  await println("names   = ${names}");
+  await println("age sum = ${sum}");
 
   // User-typed keys: any type implementing `Eq + Hash`. `@Derive(Eq, Hash)`
   // synthesises both; `Map` then dispatches hashing/equality through the
@@ -88,10 +89,11 @@ function main() {
   dirs.set(Coord { x: 1, y: 0 }, "east");
   dirs.set(Coord { x: 0, y: 1 }, "north");
   match dirs.get(Coord { x: 1, y: 0 }) {
-    str s => println("east?   = ${s}"),
-    null  => println("missing east"),
+    str s => await println("east?   = ${s}"),
+    null  => await println("missing east"),
   };
-  println("dirs    = ${dirs.size()}");
+  await println("dirs    = ${dirs.size()}");
+  null
 }
 
 @Derive(Eq, Hash)

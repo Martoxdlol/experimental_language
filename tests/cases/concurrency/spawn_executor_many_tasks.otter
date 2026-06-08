@@ -3,8 +3,8 @@
 //@ description: the spawn keyword schedules many async tasks on the M:N executor and awaits their Future handles
 //@ stdout:
 //~ total=190
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { List } from "core:collections";
 import { yield_now } from "std:async";
 function work(n: i64): Future<i64> async {
@@ -24,5 +24,6 @@ function main(): Future<null> async {
     total = total+await handles[j];
     j = j + 1;
   }
-  println("total=${total }");
+  await println("total=${total}");
+  null
 }

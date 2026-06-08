@@ -49,7 +49,7 @@ extend MacroContext {
     var out = List<ASTNode>();
     var n = __mctx_arg_count(self.ctx);
     var i = 0;
-    while(i < n) {
+    while (i < n) {
       out.push(ASTNode { handle: __mctx_arg(self.ctx, i) });
       i = i + 1;
     }

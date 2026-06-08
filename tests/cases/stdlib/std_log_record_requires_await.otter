@@ -1,0 +1,8 @@
+//@ kind: compile-error
+//@ description: std:log record timestamps through an async SystemTime clock read and must be awaited
+//@ stderr: expected `Record`, found `Future<Record>`
+import { empty_fields, level_info, record, Record } from "std:log";
+
+function main() {
+  var rec: Record = record(level_info(), "msg", "module", empty_fields());
+}

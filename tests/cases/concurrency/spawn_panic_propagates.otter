@@ -15,5 +15,6 @@ function main(): Future<null> async {
   // The worker panicked; awaiting it re-raises the panic here. With no boundary
   // on main, the process exits 101 with the propagated message.
   var v: i64 = await h;
-  println("unreachable ${v }");
+  await println("unreachable ${v}");
+  null
 }

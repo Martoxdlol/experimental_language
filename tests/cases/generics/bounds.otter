@@ -2,6 +2,7 @@
 //@ description: generic bound calls an interface method monomorphically
 //@ stdout:
 //~ 6
+import { Future } from "core:prelude";
 import { println } from "std:io";
 import { Iterator, Item, Done } from "core:prelude";
 struct Range { cur: i64, end: i64 }
@@ -16,6 +17,7 @@ function sum_all<T: Iterator<i64>>(it: T): i64 {
   for x in it { total = total + x; }
   total
 }
-function main() {
-  println("${sum_all(Range { cur: 1, end: 4 })}");
+function main(): Future<null> async {
+  await println("${sum_all(Range { cur: 1, end: 4 })}");
+  null
 }

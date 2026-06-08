@@ -3,14 +3,16 @@
 //@ stdout:
 //~ 15
 //~ 77
+import { Future } from "core:prelude";
 import { println } from "std:io";
 function adder(by: i64): (i64) => i64 { (n: i64): i64 => n + by }
-function main() {
+function main(): Future<null> async {
   var add10 = adder(10);
-  println("${add10(5) }");
+  await println("${add10(5)}");
   var nums = [1, 2, 3, 4, 5, 6];
   var squares = nums.map { it * it };
   var bigs = squares.filter { it > 10 };
   var sum = bigs.fold(0, (acc: i64, x: i64): i64 => acc + x);
-  println("${sum }");
+  await println("${sum}");
+  null
 }

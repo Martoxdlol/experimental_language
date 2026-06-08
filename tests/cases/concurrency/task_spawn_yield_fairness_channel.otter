@@ -3,8 +3,8 @@
 //@ description: unevenly-yielding Task.spawn workers all make progress on the M:N executor, send through cloned channels, and join after channel fan-in
 //@ stdout:
 //~ received=4560 joined=9120
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { List } from "core:collections";
 import { Task, JoinHandle, Joined, Panicked, Cancelled } from "std:task";
 import { Sender, Receiver, ChannelClosed, channel } from "std:sync";
@@ -58,5 +58,6 @@ function main(): Future<null> async {
     j = j + 1;
   }
 
-  println("received=${received } joined=${joined }");
+  await println("received=${received} joined=${joined}");
+  null
 }

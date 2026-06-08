@@ -239,8 +239,8 @@ pub struct Wrapper&lt;T&gt;(T)
 var p = Pair(3, 4)
 var w = Wrapper(42)
 
-print(p.0 as str)
-print(p.1 as str)</code></pre>
+await print(p.0 as str)
+await print(p.1 as str)</code></pre>
 
 <div class="callout">
   <strong>Tuple struct ≠ anonymous tuple</strong>
@@ -381,7 +381,7 @@ var Person { name, age } = alice
 
 // In patterns — `..` ignores remaining fields
 match alice {
-  Person { name, .. } =&gt; print(name),
+  Person { name, .. } =&gt; await print(name),
 }
 
 // Tuple — destructure positionally

@@ -1,0 +1,13 @@
+//@ kind: compile-error
+//@ description: Shared.try_lock awaits the body until it resolves and produces a body-value-or-LockBusy union; awaiting that resolved union again is rejected
+//@ stderr: `await` requires a `Future`
+
+import { Future } from "core:prelude";
+import { Shared } from "std:sync";
+
+function main(): Future<null> async {
+  var state = Shared.new(1);
+  var result = await state.try_lock((current: i64): i64 => current + 1);
+  var _again = await result;
+  null
+}

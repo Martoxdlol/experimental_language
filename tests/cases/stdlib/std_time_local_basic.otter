@@ -5,6 +5,7 @@
 //~ epoch=true true true
 //~ fixed=true true true
 
+import { Future } from "core:prelude";
 import { DateTime, SystemTime, TimeError } from "std:time";
 import { println } from "std:io";
 
@@ -20,27 +21,30 @@ function status(value: DateTime | TimeError): str {
   }
 }
 
-function main() {
-  var before = SystemTime.now().as_unix_nanos();
-  var utc_now = DateTime.now_utc();
-  var local_now = DateTime.now_local();
-  var after = SystemTime.now().as_unix_nanos();
+function main(): Future<null> async {
+  var before_time = await SystemTime.now();
+  var before = before_time.as_unix_nanos();
+  var utc_now = await DateTime.now_utc();
+  var local_now = await DateTime.now_local();
+  var after_time = await SystemTime.now();
+  var after = after_time.as_unix_nanos();
 
   var utc_roundtrip = utc_now.to_system_time() as SystemTime;
   var local_roundtrip = local_now.to_system_time() as SystemTime;
-  println("now=${utc_now.timezone().is_utc()} ${local_now.timezone().is_fixed_offset()} ${in_range(utc_roundtrip.as_unix_nanos(), before, after)} ${in_range(local_roundtrip.as_unix_nanos(), before, after)}");
+  await println("now=${utc_now.timezone().is_utc()} ${local_now.timezone().is_fixed_offset()} ${in_range(utc_roundtrip.as_unix_nanos(), before, after)} ${in_range(local_roundtrip.as_unix_nanos(), before, after)}");
 
-  var epoch_local = DateTime.from_system_time_local(SystemTime.unix_epoch());
+  var epoch_local = await DateTime.from_system_time_local(SystemTime.unix_epoch());
   if epoch_local is DateTime {
     var dt = epoch_local as DateTime;
     var sys = dt.to_system_time() as SystemTime;
     var has_separator = dt.format_iso8601().contains("T");
-    println("epoch=${dt.timezone().is_fixed_offset()} ${sys.as_unix_nanos() == 0} ${has_separator}");
+    await println("epoch=${dt.timezone().is_fixed_offset()} ${sys.as_unix_nanos() == 0} ${has_separator}");
   } else {
-    println("epoch=false false false");
+    await println("epoch=false false false");
   }
 
-  var fixed = DateTime.from_system_time_local(SystemTime.from_unix_nanos(1234567890000000000));
+  var fixed = await DateTime.from_system_time_local(SystemTime.from_unix_nanos(1234567890000000000));
   var is_datetime = status(fixed) == "datetime";
-  println("fixed=${is_datetime} ${(fixed as DateTime).timezone().is_fixed_offset()} ${((fixed as DateTime).to_system_time() as SystemTime).as_unix_nanos() == 1234567890000000000}");
+  await println("fixed=${is_datetime} ${(fixed as DateTime).timezone().is_fixed_offset()} ${((fixed as DateTime).to_system_time() as SystemTime).as_unix_nanos() == 1234567890000000000}");
+  null
 }

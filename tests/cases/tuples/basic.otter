@@ -4,10 +4,12 @@
 //~ 1
 //~ hi
 //~ true
+import { Future } from "core:prelude";
 import { println } from "std:io";
-function main() {
+function main(): Future<null> async {
   var t = (1, "hi", true);
-  println("${t.0}");
-  println(t.1);
-  println("${t.2}");
+  await println("${t.0}");
+  await println(t.1);
+  await println("${t.2}");
+  null
 }

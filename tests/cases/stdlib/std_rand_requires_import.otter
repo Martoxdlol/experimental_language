@@ -8,20 +8,35 @@
 //@ stderr: cannot find value `SeededRng` in scope
 //@ stderr: cannot find value `random_error` in scope
 //@ stderr: cannot find value `os_rng` in scope
+//@ stderr: cannot find value `os_bytes` in scope
 //@ stderr: cannot find value `thread_rng` in scope
 //@ stderr: cannot find value `gen_range_i64` in scope
 //@ stderr: cannot find value `gen_range_u64` in scope
 //@ stderr: cannot find value `gen_f64` in scope
 //@ stderr: cannot find value `gen_range_f64` in scope
+//@ stderr: cannot find value `gen_triangular_f64` in scope
+//@ stderr: cannot find value `gen_bates_f64` in scope
+//@ stderr: cannot find value `gen_irwin_hall_f64` in scope
+//@ stderr: cannot find value `gen_min_f64` in scope
+//@ stderr: cannot find value `gen_max_f64` in scope
+//@ stderr: cannot find value `gen_midrange_f64` in scope
+//@ stderr: cannot find value `gen_median_f64` in scope
 //@ stderr: cannot find value `gen_bool` in scope
+//@ stderr: cannot find value `gen_binomial` in scope
 //@ stderr: cannot find value `gen_index` in scope
 //@ stderr: cannot find value `fill_bytes_n` in scope
 //@ stderr: cannot find value `gen_bytes` in scope
 //@ stderr: cannot find value `choose_index` in scope
 //@ stderr: cannot find value `choose` in scope
+//@ stderr: cannot find value `weighted_index` in scope
+//@ stderr: cannot find value `choose_weighted` in scope
+//@ stderr: cannot find value `sample_indices` in scope
+//@ stderr: cannot find value `sample` in scope
 //@ stderr: cannot find value `shuffle` in scope
+//@ stderr: cannot find value `shuffled` in scope
 
 import { List } from "core:collections";
+import { Future } from "core:prelude";
 import { Bytes } from "std:bytes";
 
 function takes_rng(rng: Rng): i64 {
@@ -36,11 +51,15 @@ function make_os(): OsRng {
   os_rng()
 }
 
+function make_os_bytes(): Future<Bytes | RandomError> {
+  os_bytes(4)
+}
+
 function make_seeded(): SeededRng {
   SeededRng.from_seed(42u64)
 }
 
-function make_thread(): ThreadRng {
+function make_thread(): Future<ThreadRng | RandomError> {
   thread_rng()
 }
 
@@ -53,11 +72,26 @@ function main() {
   gen_range_u64(rng, 1u64, 10u64);
   gen_f64(rng);
   gen_range_f64(rng, 0.0, 1.0);
+  gen_triangular_f64(rng, 0.0, 1.0);
+  gen_bates_f64(rng, 3, 0.0, 1.0);
+  gen_irwin_hall_f64(rng, 3, 0.0, 1.0);
+  gen_min_f64(rng, 3, 0.0, 1.0);
+  gen_max_f64(rng, 3, 0.0, 1.0);
+  gen_midrange_f64(rng, 3, 0.0, 1.0);
+  gen_median_f64(rng, 3, 0.0, 1.0);
   gen_bool(rng, 1, 2);
+  gen_binomial(rng, 5, 1, 2);
   gen_index(rng, values.size());
   fill_bytes_n(rng, Bytes.new(), 4);
   gen_bytes(rng, 4);
   choose_index(rng, values);
   choose(rng, values);
+  var weights = List<u64>();
+  weights.push(1u64);
+  weighted_index(rng, weights);
+  choose_weighted(rng, values, weights);
+  sample_indices(rng, values.size(), 1);
+  sample(rng, values, 1);
   shuffle(rng, values);
+  shuffled(rng, values);
 }

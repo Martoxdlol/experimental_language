@@ -50,5 +50,6 @@ function main(): Future<null> async {
     }
   }
 
-  println("count=${count } sum=${sum }");
+  await println("count=${count} sum=${sum}");
+  null
 }

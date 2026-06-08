@@ -702,9 +702,9 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
 
     /// `Thread.spawn` over an already-evaluated closure env value. Shared by the
     /// AST and HIR walks. When `is_async` the closure is `() => Future<R>`: the
-    /// worker drives the future to completion (`docs/20` §1), so we call
-    /// `lang_thread_spawn_async` (passing the `Pending` type id its `block_on`
-    /// needs) instead of `lang_thread_spawn`.
+    /// worker polls the future until it resolves (`docs/20` §1), so we call
+    /// `lang_thread_spawn_async` (passing the `Pending` type id its private
+    /// root driver needs) instead of `lang_thread_spawn`.
     pub(crate) fn emit_thread_spawn(
         &mut self,
         env: Value,
@@ -719,8 +719,9 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         // taken its own root.
         let env = self.pin_spawn_env_for_runtime_handoff(env);
         let id = if is_async {
-            // `block_on` carries the awaited `R` as its raw bits (a float is its
-            // own bit pattern), so no `float_kind` is needed here (`docs/20` §1).
+            // The private root driver carries the awaited `R` as its raw bits
+            // (a float is its own bit pattern), so no `float_kind` is needed
+            // here (`docs/20` §1).
             let pending_tid = 1000 + self.cx.analysis.program.pending_def.index() as i64;
             let pt = self.b.ins().iconst(types::I64, pending_tid);
             self.call_intrinsic(
@@ -891,7 +892,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         Ok(None)
     }
 
-    /// `std:task::JoinHandle<R>.join()` over an already-evaluated handle value.
+    /// `std:task` `JoinHandle<R>.join()` over an already-evaluated handle value.
     pub(crate) fn emit_task_join(
         &mut self,
         jh: Value,
@@ -940,7 +941,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         Ok(Some(fut))
     }
 
-    /// `std:task::JoinHandle<R>.detach()`.
+    /// `std:task` `JoinHandle<R>.detach()`.
     pub(crate) fn emit_task_detach(
         &mut self,
         jh: Value,
@@ -960,7 +961,7 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
         Ok(None)
     }
 
-    /// `std:task::JoinHandle<R>.cancel()` / `.abort()`.
+    /// `std:task` `JoinHandle<R>.cancel()` / `.abort()`.
     pub(crate) fn emit_task_cancel(
         &mut self,
         jh: Value,
@@ -1224,10 +1225,10 @@ impl<'a, 'b, 'f, M: Module> FnGen<'a, 'b, 'f, M> {
     /// lock future over an already-read mutex `id` and already-built body-closure
     /// `env`. The future acquires the lock (suspending the *task* — never the OS
     /// thread — while contended for `lock`; resolving to `LockBusy` on a failed
-    /// `try_lock`), runs the body under the lock — driving it to completion if
-    /// `body_is_async`, so the lock is HELD across the body's `await`s — clones the
+    /// `try_lock`), runs the body under the lock — awaiting it until it resolves
+    /// if `body_is_async`, so the lock is HELD across the body's `await`s — clones the
     /// result out *while held* (detachment rule), releases, and resolves to `R`
-    /// (or `R | LockBusy`). The caller's `await` drives the returned `Future`.
+    /// (or `R | LockBusy`). The caller awaits the returned `Future`.
     pub(crate) fn emit_shared_lock(
         &mut self,
         id: Value,

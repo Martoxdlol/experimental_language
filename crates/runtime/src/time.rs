@@ -1,16 +1,16 @@
-//! Runtime clock hooks for `std:time`.
+//! Runtime clock and local-offset hooks for `std:time`.
 //!
 //! The public Otter Fusion API is authored in `stdlib_src/std/time.otter`; this
-//! module supplies only the target-backed clock readings. Values cross the ABI
-//! as signed nanoseconds so `std:time` remains a normal value module above the
-//! provider boundary.
+//! module supplies private target-backed clock and local-offset helpers behind
+//! async public futures. Values cross the ABI as encoded strings so `std:time`
+//! remains a normal value module above the provider boundary. Public
+//! `std:time.sleep(Duration)` does not expose a runtime sleep hook here; it
+//! lowers to the reactor timer future in `async_rt`.
 
 use std::sync::OnceLock;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 const NANOS_PER_SECOND: i64 = 1_000_000_000;
-const LOCAL_OFFSET_ERROR: i64 = i64::MIN;
-
 fn clamp_nanos(nanos: i128) -> i64 {
     nanos.clamp(i64::MIN as i128, i64::MAX as i128) as i64
 }
@@ -79,45 +79,49 @@ fn local_offset_seconds_for_unix_nanos(_unix_nanos: i64) -> Option<i32> {
     None
 }
 
+fn local_offset_seconds_for_unix_nanos_native_wait(unix_nanos: i64) -> Option<i32> {
+    crate::gc::native_wait(|| local_offset_seconds_for_unix_nanos(unix_nanos))
+}
+
 /// Return nanoseconds elapsed from a process-local monotonic epoch.
-#[unsafe(no_mangle)]
-pub extern "C" fn lang_time_monotonic_nanos() -> i64 {
+fn monotonic_nanos() -> i64 {
     static START: OnceLock<Instant> = OnceLock::new();
     let start = START.get_or_init(Instant::now);
     clamp_nanos(duration_nanos(start.elapsed()))
 }
 
 /// Return nanoseconds since the Unix epoch according to the system clock.
-#[unsafe(no_mangle)]
-pub extern "C" fn lang_time_system_nanos() -> i64 {
+fn system_nanos() -> i64 {
     match SystemTime::now().duration_since(UNIX_EPOCH) {
         Ok(duration) => clamp_nanos(duration_nanos(duration)),
         Err(err) => -clamp_nanos(duration_nanos(err.duration())),
     }
 }
 
-/// Return the selected provider's local UTC offset, in seconds, for a Unix
-/// timestamp represented as nanoseconds.
-///
-/// `i64::MIN` is an error sentinel decoded by the Otter-authored `std:time`
-/// layer into `TimeError`.
-#[unsafe(no_mangle)]
-pub extern "C" fn lang_time_local_offset_seconds(unix_nanos: i64) -> i64 {
-    local_offset_seconds_for_unix_nanos(unix_nanos)
-        .map(i64::from)
-        .unwrap_or(LOCAL_OFFSET_ERROR)
+pub(crate) fn time_monotonic_nanos_encoded() -> String {
+    format!("0{}", crate::gc::native_wait(monotonic_nanos))
 }
 
-/// Block the current host thread for `nanos` nanoseconds.
-///
-/// Non-positive durations are a no-op. The public stdlib wrapper takes a
-/// `Duration`; the runtime hook remains a plain integer ABI boundary.
-#[unsafe(no_mangle)]
-pub extern "C" fn lang_time_sleep_nanos(nanos: i64) {
+pub(crate) fn time_system_nanos_encoded() -> String {
+    format!("0{}", crate::gc::native_wait(system_nanos))
+}
+
+/// Return the selected provider's local UTC offset, in seconds, for a Unix
+/// timestamp represented as nanoseconds. The payload is encoded as a success or
+/// error string decoded by the Otter-authored `std:time` layer.
+pub(crate) fn time_local_offset_seconds_encoded(unix_nanos: i64) -> String {
+    match local_offset_seconds_for_unix_nanos_native_wait(unix_nanos) {
+        Some(offset) => format!("0{offset}"),
+        None => "1local timezone lookup is unavailable for this target or timestamp".to_string(),
+    }
+}
+
+#[cfg(test)]
+fn sleep_nanos_native_wait(nanos: i64) {
     if nanos <= 0 {
         return;
     }
-    std::thread::sleep(std::time::Duration::from_nanos(nanos as u64));
+    crate::gc::native_wait(|| std::thread::sleep(std::time::Duration::from_nanos(nanos as u64)));
 }
 
 #[cfg(test)]
@@ -126,14 +130,20 @@ mod tests {
 
     #[test]
     fn monotonic_clock_is_non_decreasing() {
-        let a = lang_time_monotonic_nanos();
-        let b = lang_time_monotonic_nanos();
+        let a = monotonic_nanos();
+        let b = monotonic_nanos();
         assert!(b >= a, "monotonic clock moved backwards: {a} -> {b}");
     }
 
     #[test]
     fn system_clock_is_after_unix_epoch_on_supported_hosts() {
-        assert!(lang_time_system_nanos() > 0);
+        assert!(system_nanos() > 0);
+    }
+
+    #[test]
+    fn encoded_clock_hooks_return_success_payloads() {
+        assert!(time_monotonic_nanos_encoded().starts_with('0'));
+        assert!(time_system_nanos_encoded().starts_with('0'));
     }
 
     #[test]
@@ -144,27 +154,49 @@ mod tests {
 
     #[test]
     fn sleep_nanos_ignores_non_positive_durations() {
-        lang_time_sleep_nanos(0);
-        lang_time_sleep_nanos(-1);
+        sleep_nanos_native_wait(0);
+        sleep_nanos_native_wait(-1);
+    }
+
+    #[test]
+    fn sleep_nanos_accepts_positive_duration() {
+        sleep_nanos_native_wait(1);
     }
 
     #[test]
     fn local_offset_hook_returns_reasonable_offset_or_error_sentinel() {
-        let offset = lang_time_local_offset_seconds(lang_time_system_nanos());
-        if offset != LOCAL_OFFSET_ERROR {
+        let encoded = time_local_offset_seconds_encoded(system_nanos());
+        if let Some(payload) = encoded.strip_prefix('0') {
+            let offset = payload.parse::<i64>().expect("encoded offset is i64");
             assert!(
                 (-86_400..=86_400).contains(&offset),
                 "local UTC offset is out of the plausible one-day range: {offset}"
             );
+        } else {
+            assert!(encoded.starts_with('1'));
         }
     }
 
     #[test]
     fn unix_epoch_local_offset_matches_provider_shape() {
-        let offset = lang_time_local_offset_seconds(0);
-        if offset != LOCAL_OFFSET_ERROR {
+        let encoded = time_local_offset_seconds_encoded(0);
+        if let Some(payload) = encoded.strip_prefix('0') {
+            let offset = payload.parse::<i64>().expect("encoded offset is i64");
             assert!(
                 (-86_400..=86_400).contains(&offset),
+                "Unix epoch local UTC offset is out of range: {offset}"
+            );
+        } else {
+            assert!(encoded.starts_with('1'));
+        }
+    }
+
+    #[test]
+    fn local_offset_provider_lookup_uses_native_state_marker() {
+        let offset = local_offset_seconds_for_unix_nanos_native_wait(0);
+        if let Some(offset) = offset {
+            assert!(
+                (-86_400..=86_400).contains(&i64::from(offset)),
                 "Unix epoch local UTC offset is out of range: {offset}"
             );
         }

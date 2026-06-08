@@ -1,8 +1,10 @@
 //@ kind: panic
 //@ description: shift amount >= bit width panics in both profiles
 //@ stderr: shift amount >= bit width
+import { Future } from "core:prelude";
 import { println } from "std:io";
-function main() {
+function main(): Future<null> async {
   var x = 1;
-  println("${x << 64}");
+  await println("${x << 64}");
+  null
 }

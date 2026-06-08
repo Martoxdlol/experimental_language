@@ -3,8 +3,8 @@
 //@ description: Thread.spawn workers, await their joins in an async main (deterministic sum)
 //@ stdout:
 //~ 25
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { Thread, JoinHandle, Joined, Panicked } from "std:thread";
 function sq(n: i64): i64 { n * n }
 function value_of(r: Joined<i64> | Panicked): i64 {
@@ -15,5 +15,6 @@ function main(): Future<null> async {
   var b: JoinHandle<i64> = Thread.spawn(() => sq(4));
   var ra: Joined<i64> | Panicked = await a.join();
   var rb: Joined<i64> | Panicked = await b.join();
-  println("${value_of(ra) + value_of(rb) }");
+  await println("${value_of(ra) + value_of(rb)}");
+  null
 }

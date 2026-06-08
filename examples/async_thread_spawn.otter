@@ -1,8 +1,8 @@
 // Async `Thread.spawn` workers (docs/20 §1, docs/21 §6). `Thread.spawn` accepts
-// either a synchronous closure `() => R` or an *async* closure `() => Future<R>`
+// either an ordinary non-async closure `() => R` or an *async* closure `() => Future<R>`
 // and always returns `JoinHandle<R>` — joining on the *awaited* `R`. An async
-// worker drives its future to completion on its own OS thread, so it MAY
-// `await` and lock a `Shared<T>` (docs/20 §4), unlike a synchronous worker.
+// worker polls its future until it resolves on its own OS thread, so it MAY
+// `await` and lock a `Shared<T>` (docs/20 §4), unlike an ordinary non-async worker.
 
 import { println } from "std:io";
 import { Future } from "core:async";
@@ -27,17 +27,17 @@ function main(): Future<null> async {
   // thread. The handle joins on the awaited `i64`.
   var s: Shared<Counter> = state.clone();
   var worker: JoinHandle<i64> = Thread.spawn(() async => {
-      var i: i64 = 0;
-      while i < 100 {
-        await s.lock((c) => { c.value = c.value + 1; 0 });
-        i = i + 1;
-      }
-      await s.lock((c) => c.value)
-    });
+    var i: i64 = 0;
+    while i < 100 {
+      await s.lock((c) => { c.value = c.value + 1; 0 });
+      i = i + 1;
+    }
+    await s.lock((c) => c.value)
+  });
   var worker_saw: i64 = result_of(await worker.join());
 
   // A fire-and-forget *detached* async worker: it locks the same counter, then
-  // signals completion over a channel (detached workers have no JoinHandle, so
+  // signals its result over a channel (detached workers have no JoinHandle, so
   // we observe their effect another way). The trailing-closure spelling
   // `Thread.spawn { async => … }` is equivalent to `Thread.spawn(() async => …)`.
   var ends = channel<i64>();
@@ -54,6 +54,7 @@ function main(): Future<null> async {
   var _signal: i64 | ChannelClosed = await rx.recv();
 
   var total: i64 = await state.lock((c) => c.value);
-  println("worker observed: " + (worker_saw as str));
-  println("final total = " + (total as str));
+  await println("worker observed: " + (worker_saw as str));
+  await println("final total = " + (total as str));
+  null
 }

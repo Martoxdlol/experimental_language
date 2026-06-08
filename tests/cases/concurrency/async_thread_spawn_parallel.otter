@@ -3,9 +3,9 @@
 //@ description: four parallel async `Thread.spawn` workers each clone the handle and increment under the async lock 100 times; the mutex serializes every write so the joined total is exact with no lost updates (docs/20 §1/§4)
 //@ stdout:
 //~ total = 400
+import { Future } from "core:prelude";
 import { List } from "core:collections";
 import { println } from "std:io";
-import { Future } from "core:prelude";
 import { Shared } from "std:sync";
 import { Thread, JoinHandle, Joined, Panicked } from "std:thread";
 struct C { value: i64 }
@@ -15,7 +15,7 @@ function main(): Future<null> async {
   var t = 0;
   while t < 4 {
     var s: Shared<C> = state.clone();
-    // Each async worker drives its own future on its own OS thread.
+    // Each async worker polls its own future on its own OS thread.
     handles.push(Thread.spawn(() async => {
           var i: i64 = 0;
           while i < 100 {
@@ -30,5 +30,6 @@ function main(): Future<null> async {
     var _ = await h.join();
   }
   var total: i64 = await state.lock((c) => c.value);
-  println("total = ${total }");
+  await println("total = ${total}");
+  null
 }

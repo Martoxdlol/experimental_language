@@ -5,8 +5,8 @@
 //@ stdout:
 //~ received=2096128 awaited=2096128
 
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { List } from "core:collections";
 import { Sender, Receiver, ChannelClosed, channel } from "std:sync";
 import { yield_now } from "std:async";
@@ -51,5 +51,6 @@ function main(): Future<null> async {
     j = j + 1;
   }
 
-  println("received=${received } awaited=${awaited }");
+  await println("received=${received} awaited=${awaited}");
+  null
 }

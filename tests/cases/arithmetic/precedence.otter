@@ -5,10 +5,12 @@
 //~ 9
 //~ 1
 //~ 14
+import { Future } from "core:prelude";
 import { println } from "std:io";
-function main() {
-  println("${1 + 2 * 3 }");
-  println("${(1 + 2) * 3 }");
-  println("${7 % 3 }");
-  println("${2 * 3 + 4 * 2 }");
+function main(): Future<null> async {
+  await println("${1 + 2 * 3}");
+  await println("${(1 + 2) * 3}");
+  await println("${7 % 3}");
+  await println("${2 * 3 + 4 * 2}");
+  null
 }

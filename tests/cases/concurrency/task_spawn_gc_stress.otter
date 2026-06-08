@@ -4,9 +4,9 @@
 //@ description: Task.spawn workers allocate managed garbage and lock Shared while stress GC runs across executor worker safepoints
 //@ stdout:
 //~ total = 10
+import { Future } from "core:prelude";
 import { List } from "core:collections";
 import { println } from "std:io";
-import { Future } from "core:prelude";
 import { Shared } from "std:sync";
 import { Task, JoinHandle, Joined, Panicked, Cancelled } from "std:task";
 
@@ -41,5 +41,6 @@ function main(): Future<null> async {
     var _ = ok(await h.join());
   }
   var total: i64 = await state.lock((c) => c.value);
-  println("total = ${total }");
+  await println("total = ${total}");
+  null
 }

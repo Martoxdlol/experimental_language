@@ -1,0 +1,10 @@
+//@ kind: compile-error
+//@ description: concrete std:io stdout().write_all returns Future<null | IoError> and must be awaited before use
+//@ stderr: expected `null | IoError`, found `Future<null | IoError>`
+
+import { Bytes } from "std:bytes";
+import { IoError, stdout } from "std:io";
+
+function main() {
+  var _written: null | IoError = stdout().write_all(Bytes.from_str("x"));
+}

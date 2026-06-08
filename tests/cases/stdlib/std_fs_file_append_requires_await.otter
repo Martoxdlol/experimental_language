@@ -1,0 +1,10 @@
+//@ kind: compile-error
+//@ description: std:fs File.append returns Future<File | IoError> and must be awaited before use
+//@ stderr: found `Future<
+
+import { File, Path } from "std:fs";
+import { IoError } from "std:io";
+
+function main() {
+  var _file: File | IoError = File.append(Path.new("/tmp/otter_fusion_requires_await.txt"));
+}

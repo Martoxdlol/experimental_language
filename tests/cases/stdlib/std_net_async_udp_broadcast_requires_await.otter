@@ -1,0 +1,10 @@
+//@ kind: compile-error
+//@ description: std:net AsyncUdpSocket.broadcast returns a Future and must be awaited
+//@ stderr: found `Future<
+
+import { IoError } from "std:io";
+import { AsyncUdpSocket } from "std:net";
+
+function requires_await(socket: AsyncUdpSocket) {
+  var _value: bool | IoError = socket.broadcast();
+}

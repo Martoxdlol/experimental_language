@@ -4,8 +4,8 @@
 //@ description: many spawn-keyword executor tasks sleep concurrently and are woken by the shared timer/reactor driver
 //@ stdout:
 //~ total=523776
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { List } from "core:collections";
 import { sleep } from "std:async";
 
@@ -29,5 +29,6 @@ function main(): Future<null> async {
     j = j + 1;
   }
 
-  println("total=${total }");
+  await println("total=${total}");
+  null
 }

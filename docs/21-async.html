@@ -59,9 +59,11 @@
 <h1>21. Async</h1>
 <p class="lead">
   State-machine futures, JavaScript/Dart-style <code>async</code> / <code>await</code>,
-  a <code>spawn</code> keyword for parallel tasks. No user-visible blocking calls:
-  awaiting suspends the task, never the OS thread; <code>main</code> itself is
-  allowed to be <code>async</code> and the runtime drives the root future.
+  a <code>spawn</code> keyword for parallel tasks. <code>await</code> is the
+  non-blocking suspension boundary: awaiting suspends the task, never the OS thread;
+  <code>main</code> itself is
+  allowed to be <code>async</code> and the runtime polls the root future until it
+  resolves.
 </p>
 
 <div class="toc">
@@ -101,11 +103,11 @@
 
     <g transform="translate(470, 30)">
       <rect width="430" height="170" rx="8" fill="#eaf0f8" stroke="#1a4a8a" stroke-width="2"/>
-      <text x="14" y="22" font-weight="700" fill="#1a4a8a">runtime — drives futures</text>
+      <text x="14" y="22" font-weight="700" fill="#1a4a8a">runtime — polls futures</text>
       <text x="14" y="40" class="small">linked automatically · needs OS</text>
 
       <text x="14" y="68" font-size="11">— spawn EXPR (keyword)</text>
-      <text x="14" y="86" font-size="11">— async main &nbsp;(driven implicitly)</text>
+      <text x="14" y="86" font-size="11">— async main &nbsp;(polled internally)</text>
       <text x="14" y="104" font-size="11">— sleep(ms), yield_now()</text>
       <text x="14" y="122" font-size="11">— default work-stealing executor</text>
       <text x="14" y="146" font-size="11" class="small">freestanding targets need a custom executor</text>
@@ -127,8 +129,8 @@ pub interface Future&lt;Output&gt; {
 <div class="callout warn">
   <strong>A <code>Future&lt;T&gt;</code> is inert</strong>
   Calling <code>poll</code> advances it; a future that is never polled never runs. Construction
-  creates a state machine — execution happens only when something drives it. Awaiting
-  a future or <code>spawn</code>-ing it hands the driving job to the executor.
+  creates a state machine — execution happens only when something polls it. Awaiting
+  a future or <code>spawn</code>-ing it hands polling to the executor.
 </div>
 
 <p>Type ergonomics: <code>Future&lt;null&gt;</code> for "no useful return"; <code>Future&lt;T | E&gt;</code>
@@ -300,7 +302,7 @@ var ok = ready || await fetch();   // `fetch` is never awaited when `ready` is t
   <strong>Still async-only</strong>
   These positions do not relax the rule above: an <code>await</code> in an
   operand or a loop condition is still only legal inside an <code>async</code>
-  body. A sync function with <code>a &amp;&amp; await b()</code> is rejected.
+  body. A non-async function with <code>a &amp;&amp; await b()</code> is rejected.
 </div>
 
 <!-- =========================================================== -->
@@ -312,7 +314,7 @@ compiler errors when a future is produced as a statement and silently discarded
 anything, you have to do one of:</p>
 
 <ul>
-  <li><code>await</code> it from within another <code>async</code> body — drives it to completion;</li>
+  <li><code>await</code> it from within another <code>async</code> body — suspends until it resolves;</li>
   <li><code>spawn</code> it — hands it to a worker (and returns another <code>Future&lt;T&gt;</code>);</li>
   <li>bind it (<code>var f = …</code>) and pass it along, or explicitly discard with <code>var _ = …</code>.</li>
 </ul>
@@ -324,7 +326,7 @@ function main(): Future&lt;null&gt; async {
   spawn fetch_data()       // ERROR — spawn evaluates to a Future too; bind or await
   var h = spawn fetch_data()  // OK — bound
   var _ = fetch_data()     // OK — acknowledged discard
-  var s = await fetch_data()  // OK — driven to completion
+  var s = await fetch_data()  // OK — awaited until it resolves
 }</code></pre>
 
 <div class="callout good">
@@ -337,10 +339,12 @@ function main(): Future&lt;null&gt; async {
 <h2 id="exec">6. Async <code>main</code>, <code>spawn</code>, and the executor</h2>
 
 <p>The program entry can itself be an <code>async</code> function. The runtime
-detects an async <code>main</code> at startup and drives the root future on the
+detects an async <code>main</code> at startup and polls the root future on the
 default work-stealing executor. There is no user-visible <code>block_on</code>
-— sync code cannot "wait" on a future synchronously, because doing so would
-block the OS thread (which the language forbids).</p>
+— non-async code cannot wait on a future, because exposing that adapter would
+park the current OS thread and violate the public async contract. User code
+should <code>await</code> from async code; host/runtime waits belong behind
+private async/reactor-backed futures, not user-visible wait adapters.</p>
 
 <p>The default executor sizes its worker pool from hardware parallelism, capped
 to a small bounded pool for predictable resource use. Runtime deployments and
@@ -350,7 +354,7 @@ limit); this is a runtime tuning knob, not a language feature.</p>
 
 <pre><code>function main(): Future&lt;null&gt; async {
   var r = await some_top_level_task()
-  println(r)
+  await println(r)
 }</code></pre>
 
 <h3>The <code>spawn</code> keyword</h3>
@@ -362,27 +366,30 @@ var v: i64         = await f;</code></pre>
 future-producing expression — usually a call to an <code>async</code> function
 — hands it to the shared work-stealing executor, and itself evaluates to a fresh
 <code>Future&lt;T&gt;</code>. Awaiting that future resolves to the spawned task's
-result. This mirrors Tokio's <code>JoinHandle</code>, but typed as a
-<code>Future&lt;T&gt;</code> directly (in the JS/Dart spirit).</p>
+result. This is the lightweight fan-out form; use <code>Task.spawn</code> when
+you want a task handle with <code>join</code>/<code>detach</code>/<code>cancel</code>,
+and use <code>Thread.spawn</code> only when CPU-heavy or OS-thread-affine work
+needs one OS thread per worker.</p>
 
 <div class="callout">
   <strong><code>spawn EXPR</code> vs. an async <code>Thread.spawn</code> worker</strong>
   Both run an async task, but on different scheduling contracts:
   <code>spawn EXPR</code> uses the shared executor, while
-  <code>Thread.spawn</code> owns a dedicated OS thread. They differ also in the
+  <code>Thread.spawn</code> owns one OS thread per worker. They differ also in the
   handle: <code>spawn EXPR</code>
   yields a bare <code>Future&lt;T&gt;</code> you <code>await</code>;
   <code>Thread.spawn { async =&gt; … }</code> (<a href="20-concurrency.html">20-concurrency</a>
   §1) yields a <code>JoinHandle&lt;T&gt;</code> with <code>join</code>/<code>detach</code>
-  — reach for it when you want a fire-and-forget detached async worker or the
-  <code>Joined | Panicked</code> join result rather than a future to await.</div>
+  — reach for it when CPU-heavy or OS-thread-affine work needs its own OS
+  thread and you want the <code>Joined | Panicked</code> join result rather than
+  a future to await.</div>
 
 <div class="callout">
   <strong>Parallel fan-out</strong>
 <pre style="background: transparent; border: none; padding: 0;"><code>var a: Future&lt;i64&gt; = spawn work(1);
 var b: Future&lt;i64&gt; = spawn work(2);
 var c: Future&lt;i64&gt; = spawn work(3);
-// They all run in parallel. Joining is just awaiting each handle.
+// They all run in parallel. Collect results by awaiting each Future.
 var sum: i64 = (await a) + (await b) + (await c);</code></pre>
 </div>
 
@@ -390,19 +397,76 @@ var sum: i64 = (await a) + (await b) + (await c);</code></pre>
   <strong>Don't block the worker thread</strong>
   A future polled by the executor runs on the executor's worker. The
   <code>poll</code> body must not block the OS thread for long — return
-  <code>Pending</code> and rely on a waker. Synchronous blocking calls (sync
-  file I/O, sync DB) should go through a "blocking task" mechanism the executor
-  provides (implementation-defined).
+  <code>Pending</code> and rely on a waker. In-memory <code>std:io</code>
+  <code>Reader</code>/<code>Writer</code>/<code>Seeker</code>
+  methods and buffered adapter reads/writes are ordinary non-waiting value
+  contracts because they do not wait on target I/O. Wait-capable target
+  operations must be public async futures under the corrected contract. Do not
+  hide such waits behind a public <code>Thread.spawn</code> story; use documented
+  async surfaces such as
+  top-level <code>std:process</code> host helpers
+  <code>args()</code>/<code>env()</code>/<code>env_all()</code>/<code>set_env()</code>,
+  awaitable <code>std:process.Command.spawn()</code>/<code>status()</code>/<code>output()</code>
+  and <code>Child.wait()</code>/<code>kill()</code>,
+  <code>std:time.sleep</code> or <code>std:async.sleep</code> for timer suspension,
+  concrete stdio <code>read</code>/<code>read_async</code>,
+  <code>write</code>/<code>write_async</code>, and
+  <code>flush</code>/<code>flush_async</code> methods on stdin/stdout/stderr,
+  <code>std:fs.File.open</code>/<code>create</code>/<code>append</code>/<code>open_with</code>/<code>close</code>,
+  <code>std:fs</code> module text/binary helpers, directory snapshots/mutations,
+  target-backed <code>Path</code> queries, <code>File</code> text helpers, concrete
+  <code>File</code> byte IO/seek methods, and matching <code>*_async</code> aliases,
+  <code>std:net.TcpStream</code> or <code>std:net.AsyncTcpStream</code> future-returning operations for TCP stream connect/connect_timeout/read/write/peek and metadata/control,
+  <code>std:net.TcpListener.accept()</code> or <code>std:net.AsyncTcpListener.accept_async()</code> futures for TCP accept, or
+  future-returning <code>std:net.UdpSocket</code> and datagram-shaped <code>std:net.AsyncUdpSocket</code>
+  surfaces for UDP datagram send/recv/peek plus setup/control.
+  Apart from the TCP connect-timeout constructors
+  <code>TcpStream.connect_timeout</code> and
+  <code>AsyncTcpStream.connect_timeout</code>, per-operation async
+  timeout convenience names are not part of the current network API. That
+  covers TCP <code>read_timeout_async</code>/<code>write_timeout_async</code>/<code>peek_timeout_async</code>,
+  listener <code>accept_timeout_async</code>, connected UDP
+  <code>send_timeout_async</code>/<code>recv_timeout_async</code>/<code>peek_timeout_async</code>,
+  and address-aware UDP
+  <code>send_to_timeout_async</code>/<code>recv_from_timeout_async</code>/<code>peek_from_timeout_async</code>
+  shaped names. Use <code>std:async.timeout(...)</code> around the explicit async
+  operation until Otter Fusion deliberately designs a richer timeout surface;
+  do not infer Rust-style timeout method families.
+  Child metadata/current-stdio accessors such as <code>id()</code>,
+  <code>stdin()</code>, <code>stdout()</code>, and <code>stderr()</code> are
+  non-<code>Future</code> metadata/current-placeholder values too; current child
+  stdio accessors return <code>null</code>, and future streamed child stdio must expose
+  <code>AsyncReader</code>/<code>AsyncWriter</code> handles rather than ordinary
+  in-memory <code>Reader</code>/<code>Writer</code> contracts.
+  Generic async byte-stream code should depend on
+  <code>std:io.AsyncReader</code>/<code>AsyncWriter</code>, while UDP keeps its
+  explicit datagram API.
+  They are not made async merely by being called from an <code>async</code>
+  function.
+  Runtime-internal parks are a separate boundary: executor worker startup, idle
+  work-queue parks, root-future driver parks between <code>Pending</code> polls
+  while driving async <code>main</code> or async <code>Thread.spawn</code>,
+  timer-driver startup and parks, and
+  <code>Shared&lt;T&gt;</code> registry/cell bookkeeping publish GC
+  native or runtime-native/no-root state as documented in the memory chapter.
+  That does not permit any wait-capable stdlib operation to hide inside an
+  ordinary value-returning call in a task <code>poll</code> body, and it does not
+  change the public
+  <code>Shared.lock</code> contract: source-level contention suspends the task
+  through the FIFO waiter queue instead of parking an executor worker.
 </div>
 
 <div class="callout">
   <strong>Reactor handoff</strong>
   Timer futures and future I/O backends use the same shape: register the current
   <code>waker_data</code>/<code>wake_fn</code> pair, return <code>Pending</code>,
-  and let the timer driver or I/O readiness callback wake the task for a later
-  poll. Registrations are one-shot and cancellable, so losing
+  and let the timer driver or helper-backed I/O result callback wake the
+  task for a later poll. Registrations are one-shot and cancellable, so losing
   <code>timeout()</code>/<code>select</code>-style branches can release their
-  readiness interest promptly.
+  reactor registration promptly. Deeper readiness-native provider integration
+  remains planned work. The shared timer driver is one runtime thread,
+  registered with the GC because it invokes reactor wakers; while it parks
+  until a new timer or the next deadline, it is in native no-root state.
 </div>
 
 <!-- =========================================================== -->
@@ -441,7 +505,8 @@ is rejected just as an extern async closure would be.</p>
 <h2 id="cancel">8. Cancellation</h2>
 
 <p>Cancellation is <strong>explicit</strong>. A future exposes a <code>.cancel()</code> method
-that aborts the underlying state machine and releases I/O registrations synchronously.
+that aborts the underlying state machine and immediately unregisters I/O waiters
+without waiting on target I/O.
 <code>select!</code>-style combinators call <code>.cancel()</code> on the losing futures when a
 winner completes.</p>
 
@@ -497,8 +562,20 @@ winner completes.</p>
 pub struct TimedOut;</code></pre>
 
 <p>Races <code>fut</code> against a timer. Whichever finishes first wins; <code>.cancel()</code> is called on the loser.</p>
-<p>The runtime drives deadlines through the shared timer driver used by
-<code>sleep</code>; it does not create one OS thread per timer.</p>
+<p>Runtime-backed async I/O futures use that cancellation hook to remove their
+reactor registration. Helper-backed stdio, filesystem, and network futures
+discard late provider results; TCP futures additionally release any late stream
+handle created by a cancelled connect, connect_timeout, or accept. A timed-out
+filesystem or TCP/UDP read may still consume the provider data that satisfied
+the cancelled helper; the contract is that the late result is discarded, the
+waiter is unregistered, and the original handle remains usable for later
+operations unless user code closes it. Helper threads do not make executor polls
+block; the actual provider wait owns the GC native-state bracket, and result
+encoding happens only after that wait has ended.</p>
+<p>The runtime manages deadlines through the shared timer driver used by
+<code>sleep</code>; it does not create one OS thread per timer. That driver is
+GC-visible while waking tasks, and its startup path, concurrent startup waiters,
+idle waits, and deadline waits publish runtime-native/no-root state.</p>
 
 <!-- =========================================================== -->
 <h2 id="asynciter">10. <code>AsyncIterator&lt;T&gt;</code></h2>
@@ -509,7 +586,7 @@ pub struct TimedOut;</code></pre>
 
 function process(stream: AsyncIterator&lt;i64&gt;): Future&lt;null&gt; async {
   for await n in stream {
-    println(n as str)
+    await println(n as str)
   }
 }</code></pre>
 
@@ -583,9 +660,9 @@ additions, not core language. The minimum guarantees:</p>
 <div class="callout good">
   <ul>
     <li><code>Future&lt;T&gt;</code> is an inert state machine. JavaScript/Dart-style explicit syntax: <code>async</code> on the body, <code>await</code> at suspension points.</li>
-    <li>Postfix <code>async</code> on a function body produces a <code>Future&lt;T&gt;</code>; <code>await</code> drives one inside another. The return type is written explicitly as <code>Future&lt;T&gt;</code>.</li>
+    <li>Postfix <code>async</code> on a function body produces a <code>Future&lt;T&gt;</code>; <code>await</code> polls one inside another until it resolves. The return type is written explicitly as <code>Future&lt;T&gt;</code>.</li>
     <li>Futures must be captured — <code>await</code>ed, <code>spawn</code>ed, or bound; ignoring one is a compile error.</li>
-    <li><code>main</code> may itself be <code>async</code>; the runtime drives the root future. There is no user-visible <code>block_on</code> — no blocking calls.</li>
+    <li><code>main</code> may itself be <code>async</code>; the runtime polls the root future internally and parks the private root driver in GC native state between <code>Pending</code> polls. There is no user-visible <code>block_on</code>. <code>await</code> never blocks an OS thread, and every public stdlib operation that can wait on I/O, timers, processes, channels, locks, files, sockets, DNS, or OS coordination exposes an async surface.</li>
     <li><code>spawn EXPR</code> (keyword) schedules a future on a worker and itself returns a <code>Future&lt;T&gt;</code> — perfect for parallel fan-out.</li>
     <li><code>AsyncIterator&lt;T&gt;</code> + <code>for await</code> for async streams. No generator syntax.</li>
     <li>Cancellation via explicit <code>.cancel()</code>; timeouts via <code>timeout(...)</code>.</li>

@@ -5,10 +5,12 @@
 //~ true
 //~ true
 //~ false
+import { Future } from "core:prelude";
 import { println } from "std:io";
-function main() {
-  println("${true && false}");
-  println("${true || false}");
-  println("${false || true}");
-  println("${!true}");
+function main(): Future<null> async {
+  await println("${true && false}");
+  await println("${true || false}");
+  await println("${false || true}");
+  await println("${!true}");
+  null
 }

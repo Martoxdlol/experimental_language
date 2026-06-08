@@ -4,13 +4,15 @@
 //~ 10
 //~ 20
 //~ 10
+import { Future } from "core:prelude";
 import { println } from "std:io";
-function main() {
+function main(): Future<null> async {
   var x = 10;
-  println("${x}");
+  await println("${x}");
   if true {
     var x = 20;
-    println("${x}");
+    await println("${x}");
   }
-  println("${x}");
+  await println("${x}");
+  null
 }

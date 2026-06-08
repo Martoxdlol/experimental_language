@@ -1,0 +1,10 @@
+//@ kind: compile-error
+//@ description: std:net AsyncUdpSocket.set_multicast_loop_v4 returns a Future and must be awaited
+//@ stderr: found `Future<
+
+import { IoError } from "std:io";
+import { AsyncUdpSocket } from "std:net";
+
+function requires_await(socket: AsyncUdpSocket) {
+  var _value: null | IoError = socket.set_multicast_loop_v4(true);
+}

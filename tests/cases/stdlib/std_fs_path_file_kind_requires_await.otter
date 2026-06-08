@@ -1,0 +1,12 @@
+//@ kind: compile-error
+//@ description: std:fs Path.file_kind returns Future<FileKind | IoError> and must be awaited before use
+//@ stderr: found `Future<RegularFile | Directory | Symlink | OtherKind | IoError>`
+
+import { Future } from "core:prelude";
+import { IoError } from "std:io";
+import { FileKind, Path } from "std:fs";
+
+function main(): Future<null> async {
+  var _kind: FileKind | IoError = Path.new(".").file_kind();
+  null
+}

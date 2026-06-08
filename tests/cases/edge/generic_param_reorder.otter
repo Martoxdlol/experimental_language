@@ -2,13 +2,15 @@
 //@ description: a generic function returning a type with its parameters reordered (Pair<A,B> -> Pair<B,A>) — the monomorphizer must substitute A/B into the right positions
 //@ stdout:
 //~ x 1
+import { Future } from "core:prelude";
 import { println } from "std:io";
 struct Pair<A, B> { first: A, second: B }
 function swap<A, B>(p: Pair<A, B>): Pair<B, A> {
   Pair { first: p.second, second: p.first }
 }
-function main() {
+function main(): Future<null> async {
   var p = Pair { first: 1, second: "x" };
   var q = swap(p);
-  println("${q.first} ${q.second}");
+  await println("${q.first} ${q.second}");
+  null
 }

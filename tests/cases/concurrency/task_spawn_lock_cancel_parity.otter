@@ -1,0 +1,58 @@
+//@ kind: run
+//@ serial
+//@ description: Task.spawn ordinary and async workers compose with async Shared.lock, cancellation cleanup, and awaited stdio output
+//@ stdout:
+//~ ordinary=42
+//~ async=5 total=5
+//~ cancel=-2
+//~ after=99
+
+import { println } from "std:io";
+import { Future } from "core:prelude";
+import { Shared, LockBusy } from "std:sync";
+import { sleep } from "std:async";
+import { Task, JoinHandle, Joined, Panicked, Cancelled } from "std:task";
+
+struct C { value: i64 }
+
+function val(r: Joined<i64> | Panicked | Cancelled): i64 {
+  match r { Joined<i64> j => j.value, Panicked p => -1, Cancelled c => -2 }
+}
+
+function main(): Future<null> async {
+  var state: Shared<C> = Shared.new(C { value: 0 });
+  var ordinary_h: JoinHandle<i64> = Task.spawn(() => 42);
+  await println("ordinary=${val(await ordinary_h.join())}");
+
+  var s: Shared<C> = state.clone();
+  var async_h: JoinHandle<i64> = Task.spawn(() async => {
+      var i: i64 = 0;
+      while i < 5 {
+        await s.lock((c) => { c.value = c.value + 1; 0 });
+        i = i + 1;
+      }
+      await s.lock((c) => c.value)
+    });
+  var worker: i64 = val(await async_h.join());
+  var total: i64 = await state.lock((c) => c.value);
+  await println("async=${worker} total=${total}");
+
+  var s2: Shared<C> = state.clone();
+  var cancel_h: JoinHandle<i64> = Task.spawn(() async => {
+      await s2.lock((c) async => {
+        c.value = 99;
+        var _ = await sleep(1000);
+        c.value = 100;
+        c.value
+      })
+    });
+  var _started = await sleep(20);
+  cancel_h.cancel();
+  await println("cancel=${val(await cancel_h.join())}");
+
+  match await state.try_lock((c) => c.value) {
+    i64 n => await println("after=${n}"),
+    LockBusy busy => await println("after=busy"),
+  };
+  null
+}

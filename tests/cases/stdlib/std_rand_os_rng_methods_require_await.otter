@@ -1,0 +1,14 @@
+//@ kind: compile-error
+//@ description: std:rand OsRng entropy methods return futures and must be awaited
+//@ stderr: expected `u32 | RandomError`, found `Future<u32 | RandomError>`
+//@ stderr: expected `null | RandomError`, found `Future<null | RandomError>`
+
+import { Bytes } from "std:bytes";
+import { RandomError, os_rng } from "std:rand";
+
+function requires_await() {
+  var rng = os_rng();
+  var n: u32 | RandomError = rng.try_next_u32();
+  var bytes = Bytes.new();
+  var filled: null | RandomError = rng.try_fill_bytes(bytes);
+}

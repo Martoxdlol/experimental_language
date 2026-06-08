@@ -18,7 +18,7 @@ import { Shared, LockBusy } from "std:sync";
 struct Counter { value: i64 }
 
 // Lock-using workers must be async (`lock` is `await`-only), so this is an
-// `async` function driven by the `spawn` keyword (docs/20 §1/§4, docs/21).
+// `async` function scheduled by the `spawn` keyword (docs/20 §1/§4, docs/21).
 function bump(s: Shared<Counter>, times: i64): Future<null> async {
   var i: i64 = 0;
   while i < times {
@@ -46,11 +46,12 @@ function main(): Future<null> async {
 
   // No lost updates: the mutex serialized every increment.
   var total: i64 = await state.lock((c) => c.value);
-  println("counter after 2x5000 increments = " + (total as str));
+  await println("counter after 2x5000 increments = " + (total as str));
 
   // `try_lock` returns `R | LockBusy` without suspending on a contended lock.
   match await state.try_lock((c) => c.value) {
-    i64 n => println("snapshot = " + (n as str)),
-    LockBusy busy => println("was busy"),
+    i64 n => await println("snapshot = " + (n as str)),
+    LockBusy busy => await println("was busy"),
   }
+  null
 }

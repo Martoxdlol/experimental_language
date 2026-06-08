@@ -60,7 +60,7 @@ pub struct Checker<'a> {
     /// Transient hand-off slots: a check method stashes the datum it just
     /// computed for the expression node being checked, and `build_hir_node`
     /// consumes it the instant `check_expr_inner` returns for the same node.
-    /// Because construction is synchronous and depth-first (every child node is
+    /// Because construction is eager and depth-first (every child node is
     /// built — and its own slot consumed — before its parent's check method
     /// sets these), one slot per fact suffices and no persistent span-keyed side
     /// table is kept; the datum lives only on the resulting HIR node field.

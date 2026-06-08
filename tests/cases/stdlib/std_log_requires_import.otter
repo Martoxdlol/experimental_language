@@ -8,6 +8,7 @@
 //@ stderr: cannot find type `LogError`
 //@ stderr: cannot find type `Record`
 //@ stderr: cannot find type `LoggerAlreadySet`
+//@ stderr: cannot find type `Logger`
 //@ stderr: cannot find value `level_trace` in scope
 //@ stderr: cannot find value `level_debug` in scope
 //@ stderr: cannot find value `level_info` in scope
@@ -50,6 +51,10 @@ function make_level_variants(): Level {
 
 function make_marker(): LoggerAlreadySet {
   LoggerAlreadySet {}
+}
+
+function accepts_logger(logger: Logger) {
+  logger.enabled(level_info(), "module");
 }
 
 function main() {

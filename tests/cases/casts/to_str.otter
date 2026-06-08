@@ -5,10 +5,12 @@
 //~ true
 //~ 3.5
 //~ z
+import { Future } from "core:prelude";
 import { println } from "std:io";
-function main() {
-  println(42 as str);
-  println(true as str);
-  println(3.5 as str);
-  println('z'as str);
+function main(): Future<null> async {
+  await println(42 as str);
+  await println(true as str);
+  await println(3.5 as str);
+  await println('z'as str);
+  null
 }

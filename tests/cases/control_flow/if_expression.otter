@@ -3,10 +3,12 @@
 //@ stdout:
 //~ 100
 //~ 1
+import { Future } from "core:prelude";
 import { println } from "std:io";
-function main() {
+function main(): Future<null> async {
   var max = if 3 > 2 { 100 } else { 200 };
-  println("${max }");
+  await println("${max}");
   var min = if 3 < 2 { 100 } else { 1 };
-  println("${min }");
+  await println("${min}");
+  null
 }

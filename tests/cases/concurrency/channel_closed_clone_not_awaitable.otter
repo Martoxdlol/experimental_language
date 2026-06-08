@@ -1,0 +1,12 @@
+//@ kind: compile-error
+//@ description: std:sync ChannelClosed.clone is ordinary marker value cloning, not an async channel operation
+//@ stderr: `await` requires a `Future`
+
+import { Future } from "core:prelude";
+import { ChannelClosed } from "std:sync";
+
+function main(): Future<null> async {
+  var closed = ChannelClosed {};
+  var _copy = await closed.clone();
+  null
+}

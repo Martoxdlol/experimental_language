@@ -3,8 +3,8 @@
 //@ stdout:
 //~ returned = -1
 //~ shared = 5
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { Shared } from "std:sync";
 import { Clone } from "core:prelude";
 @Derive(Clone)
@@ -17,6 +17,7 @@ function main(): Future<null> async {
   var got: X = await state.lock((c) => { c.x.value = 5; c.x });
   got.value = -1;
   var snap: i64 = await state.lock((c) => c.x.value);
-  println("returned = " + (got.value as str));
-  println("shared = " + (snap as str));
+  await println("returned = " + (got.value as str));
+  await println("shared = " + (snap as str));
+  null
 }

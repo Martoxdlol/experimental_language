@@ -6,8 +6,14 @@
 //~ slice=2 second=66
 //~ slice-edges=bytes[65,66] bytes[66,67] bytes[] bytes[]
 //~ affix=true/true/true/true miss=false/false/false/false
+//~ search=0/2/true contains=true/false
+//~ search-bytes=1/0/0/true/true miss=true/false repeat=1
+//~ search-last=4/1/5/true bytes=2/0/5/true
 //~ append=bytes[65,66,67,90,91] self=10 cleared=0 true
 //~ mutate=bytes[65,120,67,90] set=true/false/false pop=91 empty=true trunc=bytes[65,120] grow=bytes[65,120] zero=0
+//~ resize=grow bytes[65,66,67,33,33] same bytes[65,66,67,33,33] shrink bytes[65,66] zero 0 neg 0
+//~ fill=bytes[7,7,7] empty=0
+//~ insert=bytes[64,65,120,66,67,90,91,91] ok=true/true/true bad=false/false
 //~ remove_at=66/65/true/true left=bytes[67,90,91]
 //~ iter=65/66/67
 //~ clone=true false
@@ -25,6 +31,7 @@
 //~ utf8=bad utf8 true true Utf8Error { message: "bad utf8" }
 //~ decode=Hié🙂
 //~ decode-errors=invalid utf8 leading byte|invalid utf8 continuation byte|truncated utf8 sequence|overlong utf8 sequence|utf8 surrogate code point|utf8 code point out of range
+import { Future } from "core:prelude";
 import { println } from "std:io";
 import { Reader, Seeker, Writer, IoError, SeekFrom, Start, Current, End } from "std:io";
 import { Error } from "std:error";
@@ -54,26 +61,51 @@ function decode_or_error(data: Bytes): str {
   }
 }
 
-function main() {
+function main(): Future<null> async {
   var b = Bytes.new();
   b.push(65u8);
   b.push(66u8);
   b.push(67u8);
-  println("size=${b.size()} empty=${b.is_empty()}");
+  await println("size=${b.size()} empty=${b.is_empty()}");
 
   var first = b.get(0);
   var missing = b.get(99);
   if first is u8 {
-    println("first=${first as u8} missing=${missing is null}");
+    await println("first=${first as u8} missing=${missing is null}");
   }
 
   var s = b.slice(1, 3);
   var second = s.get(0);
   if second is u8 {
-    println("slice=${s.size()} second=${second as u8}");
+    await println("slice=${s.size()} second=${second as u8}");
   }
-  println("slice-edges=${b.slice(-2, 2).to_str()} ${b.slice(1, 99).to_str()} ${b.slice(2, 1).to_str()} ${b.slice(99, 100).to_str()}");
-  println("affix=${b.starts_with(Bytes.from_str("AB"))}/${b.ends_with(Bytes.from_str("BC"))}/${b.starts_with(Bytes.new())}/${b.ends_with(Bytes.new())} miss=${b.starts_with(Bytes.from_str("AC"))}/${b.ends_with(Bytes.from_str("AC"))}/${b.starts_with(Bytes.from_str("ABCD"))}/${b.ends_with(Bytes.from_str("ABCD"))}");
+  await println("slice-edges=${b.slice(-2, 2).to_str()} ${b.slice(1, 99).to_str()} ${b.slice(2, 1).to_str()} ${b.slice(99, 100).to_str()}");
+  await println("affix=${b.starts_with(Bytes.from_str("AB"))}/${b.ends_with(Bytes.from_str("BC"))}/${b.starts_with(Bytes.new())}/${b.ends_with(Bytes.new())} miss=${b.starts_with(Bytes.from_str("AC"))}/${b.ends_with(Bytes.from_str("AC"))}/${b.starts_with(Bytes.from_str("ABCD"))}/${b.ends_with(Bytes.from_str("ABCD"))}");
+  var first_index = b.index_of(65u8);
+  var last_index = b.index_of(67u8);
+  var missing_index = b.index_of(90u8);
+  if first_index is i64 && last_index is i64 {
+    await println("search=${first_index as i64}/${last_index as i64}/${missing_index is null} contains=${b.contains(66u8)}/${b.contains(90u8)}");
+  }
+  var middle_bytes = b.index_of_bytes(Bytes.from_str("BC"));
+  var prefix_bytes = b.index_of_bytes(Bytes.from_str("AB"));
+  var empty_bytes = b.index_of_bytes(Bytes.new());
+  var missing_bytes = b.index_of_bytes(Bytes.from_str("CA"));
+  var repeated = Bytes.from_str("ababa");
+  var repeated_index = repeated.index_of_bytes(Bytes.from_str("bab"));
+  if middle_bytes is i64 && prefix_bytes is i64 && empty_bytes is i64 && repeated_index is i64 {
+    await println("search-bytes=${middle_bytes as i64}/${prefix_bytes as i64}/${empty_bytes as i64}/${b.contains_bytes(Bytes.from_str("BC"))}/${b.contains_bytes(Bytes.new())} miss=${missing_bytes is null}/${b.contains_bytes(Bytes.from_str("CA"))} repeat=${repeated_index as i64}");
+  }
+  var last_repeated_byte = repeated.last_index_of(97u8);
+  var first_repeated_byte = repeated.index_of(98u8);
+  var empty_last = Bytes.new().last_index_of_bytes(Bytes.new());
+  var missing_last = repeated.last_index_of(120u8);
+  var last_repeated_bytes = repeated.last_index_of_bytes(Bytes.from_str("ab"));
+  var empty_subseq_last = repeated.last_index_of_bytes(Bytes.new());
+  var missing_subseq_last = repeated.last_index_of_bytes(Bytes.from_str("baq"));
+  if last_repeated_byte is i64 && first_repeated_byte is i64 && empty_last is i64 && last_repeated_bytes is i64 && empty_subseq_last is i64 {
+    await println("search-last=${last_repeated_byte as i64}/${first_repeated_byte as i64}/${empty_subseq_last as i64}/${missing_last is null} bytes=${last_repeated_bytes as i64}/${empty_last as i64}/${empty_subseq_last as i64}/${missing_subseq_last is null}");
+  }
 
   var appended = b.clone();
   var suffix = Bytes.new();
@@ -84,7 +116,7 @@ function main() {
   appended.append(appended);
   var cleared = appended.clone();
   cleared.clear();
-  println("append=${appended_once} self=${appended.size()} cleared=${cleared.size()} ${cleared.is_empty()}");
+  await println("append=${appended_once} self=${appended.size()} cleared=${cleared.size()} ${cleared.is_empty()}");
 
   var mutated = Bytes.new();
   mutated.append(b);
@@ -101,8 +133,39 @@ function main() {
   mutated.truncate(0);
   var empty_pop = mutated.pop();
   if popped is u8 {
-    println("mutate=${mutate_snapshot} set=${set_ok}/${set_neg}/${set_oob} pop=${popped as u8} empty=${empty_pop is null} trunc=${trunc_snapshot} grow=${grow_snapshot} zero=${mutated.size()}");
+    await println("mutate=${mutate_snapshot} set=${set_ok}/${set_neg}/${set_oob} pop=${popped as u8} empty=${empty_pop is null} trunc=${trunc_snapshot} grow=${grow_snapshot} zero=${mutated.size()}");
   }
+
+  var resized = Bytes.new();
+  resized.append(b);
+  resized.resize(5, 33u8);
+  var resize_grow = resized.to_str();
+  resized.resize(5, 44u8);
+  var resize_same = resized.to_str();
+  resized.resize(2, 44u8);
+  var resize_shrink = resized.to_str();
+  resized.resize(0, 44u8);
+  var resize_zero = resized.size();
+  resized.append(b);
+  resized.resize(-1, 44u8);
+  await println("resize=grow ${resize_grow} same ${resize_same} shrink ${resize_shrink} zero ${resize_zero} neg ${resized.size()}");
+
+  var filled = Bytes.new();
+  filled.append(b);
+  filled.fill(7u8);
+  var empty_fill = Bytes.new();
+  empty_fill.fill(9u8);
+  await println("fill=${filled.to_str()} empty=${empty_fill.size()}");
+
+  var inserted = Bytes.new();
+  inserted.append(b);
+  inserted.append(suffix);
+  var insert_front = inserted.insert(0, 64u8);
+  var insert_middle = inserted.insert(2, 120u8);
+  var insert_end = inserted.insert(inserted.size(), 91u8);
+  var insert_neg = inserted.insert(-1, 99u8);
+  var insert_oob = inserted.insert(inserted.size() + 1, 99u8);
+  await println("insert=${inserted.to_str()} ok=${insert_front}/${insert_middle}/${insert_end} bad=${insert_neg}/${insert_oob}");
 
   var removed = Bytes.new();
   removed.append(b);
@@ -112,7 +175,7 @@ function main() {
   var removed_neg = removed.remove_at(-1);
   var removed_oob = removed.remove_at(99);
   if removed_middle is u8 && removed_front is u8 {
-    println("remove_at=${removed_middle as u8}/${removed_front as u8}/${removed_neg is null}/${removed_oob is null} left=${removed.to_str()}");
+    await println("remove_at=${removed_middle as u8}/${removed_front as u8}/${removed_neg is null}/${removed_oob is null} left=${removed.to_str()}");
   }
 
   var out = "";
@@ -123,40 +186,40 @@ function main() {
       out = out + "/" + "${byte}";
     }
   }
-  println("iter=${out}");
+  await println("iter=${out}");
 
   var copy = b.clone();
-  println("clone=${copy == b} ${copy == s}");
+  await println("clone=${copy == b} ${copy == s}");
   b.push(68u8);
-  println(copy.to_str());
-  println("${copy.hash() == copy.clone().hash()}");
+  await println(copy.to_str());
+  await println("${copy.hash() == copy.clone().hash()}");
 
   var more = Bytes.new();
   more.push(90u8);
   more.push(91u8);
   var wrote = b.write(more);
   if wrote is i64 {
-    println("writer=${wrote as i64} size=${b.size()} ${b.to_str()}");
+    await println("writer=${wrote as i64} size=${b.size()} ${b.to_str()}");
   }
 
   var via = write_via_interface(b, more);
   if via is i64 {
-    println("via=${via as i64} size=${b.size()}");
+    await println("via=${via as i64} size=${b.size()}");
   }
 
   var self_write = b.write_all(b);
   if self_write is null {
-    println("self=${b.size()}");
+    await println("self=${b.size()}");
   }
 
   var encoded = Bytes.from_str("Hié");
-  println("from_str=${encoded.size()} ${encoded.to_str()} ${encoded == Bytes.from_str("Hié")}");
+  await println("from_str=${encoded.size()} ${encoded.to_str()} ${encoded == Bytes.from_str("Hié")}");
 
   var cursor = b.cursor();
   var first_byte = cursor.read_byte();
   var chunk = cursor.read_bytes(2);
   if first_byte is u8 {
-    println("cursor=${first_byte as u8} pos=${cursor.position()} chunk=${chunk.to_str()} remaining=${cursor.remaining()}");
+    await println("cursor=${first_byte as u8} pos=${cursor.position()} chunk=${chunk.to_str()} remaining=${cursor.remaining()}");
   }
 
   var empty_cursor = Bytes.new().cursor();
@@ -164,7 +227,7 @@ function main() {
   var edge_cursor = b.cursor();
   edge_cursor.rewind();
   var oversized = edge_cursor.read_bytes(99);
-  println("cursor-edges empty=${empty_cursor.is_empty()} len=${empty_cursor.len()} read_null=${empty_read is null} rewind=${edge_cursor.remaining()} over=${oversized.to_str()} pos=${edge_cursor.position()}");
+  await println("cursor-edges empty=${empty_cursor.is_empty()} len=${empty_cursor.len()} read_null=${empty_read is null} rewind=${edge_cursor.remaining()} over=${oversized.to_str()} pos=${edge_cursor.position()}");
 
   var sink = Bytes.from_str("xx");
   var cursor_read = cursor.read(sink);
@@ -172,7 +235,7 @@ function main() {
   var via_end = read_via_interface(cursor, rest);
   var eof = cursor.read_byte();
   if cursor_read is i64 && via_end is i64 {
-    println("cursor_read=${cursor_read as i64} pos=${cursor.position()} sink=${sink.to_str()} via_end=${via_end as i64} rest=${rest.to_str()} eof=${eof is null}");
+    await println("cursor_read=${cursor_read as i64} pos=${cursor.position()} sink=${sink.to_str()} via_end=${via_end as i64} rest=${rest.to_str()} eof=${eof is null}");
   }
 
   var seeked = seek_via_interface(cursor, Start { offset: 2u64 });
@@ -184,21 +247,21 @@ function main() {
   var after_snapshot = snapshot.seek(Start { offset: 4u64 });
   var snap_byte = snapshot.read_byte();
   if seeked is i64 && back is i64 && ended is i64 && after_snapshot is i64 && snap_byte is u8 {
-    println("seek=${seeked as i64} back=${back as i64} end=${ended as i64} invalid=${invalid is IoError} snapshot=${snap_byte as u8} debug=${render_debug(cursor)}");
+    await println("seek=${seeked as i64} back=${back as i64} end=${ended as i64} invalid=${invalid is IoError} snapshot=${snap_byte as u8} debug=${render_debug(cursor)}");
   }
   var same_cursor = cursor.clone();
   var moved_cursor = cursor.clone();
   var moved_seek = moved_cursor.seek(Start { offset: 0u64 });
   if moved_seek is i64 {
-    println("cursor_value=${cursor == same_cursor} ${cursor.hash() == same_cursor.hash()} ${cursor != moved_cursor}");
+    await println("cursor_value=${cursor == same_cursor} ${cursor.hash() == same_cursor.hash()} ${cursor != moved_cursor}");
   }
 
   var utf8 = Utf8Error { message: "bad utf8" };
   var utf8_copy = utf8.clone();
   var utf8_error: Error = utf8;
-  println("utf8=${utf8_error.message()} ${utf8 == utf8_copy} ${utf8.hash() == utf8_copy.hash()} ${render_debug(utf8)}");
+  await println("utf8=${utf8_error.message()} ${utf8 == utf8_copy} ${utf8.hash() == utf8_copy.hash()} ${render_debug(utf8)}");
 
-  println("decode=${decode_or_error(Bytes.from_str("Hié🙂"))}");
+  await println("decode=${decode_or_error(Bytes.from_str("Hié🙂"))}");
 
   var bad_lead = Bytes.new();
   bad_lead.push(255u8);
@@ -221,5 +284,6 @@ function main() {
   out_of_range.push(144u8);
   out_of_range.push(128u8);
   out_of_range.push(128u8);
-  println("decode-errors=${decode_or_error(bad_lead)}|${decode_or_error(bad_cont)}|${decode_or_error(truncated)}|${decode_or_error(overlong)}|${decode_or_error(surrogate)}|${decode_or_error(out_of_range)}");
+  await println("decode-errors=${decode_or_error(bad_lead)}|${decode_or_error(bad_cont)}|${decode_or_error(truncated)}|${decode_or_error(overlong)}|${decode_or_error(surrogate)}|${decode_or_error(out_of_range)}");
+  null
 }

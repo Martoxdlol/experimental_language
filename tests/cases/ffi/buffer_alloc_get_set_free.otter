@@ -4,14 +4,15 @@
 //~ g0=65 g7=90 oob_null=true size=8
 //~ live=1
 //~ after free=0
+import { Future } from "core:prelude";
 import { println } from "std:io";
 import { Buffer } from "core:ffi";
 extern function lang_foreign_outstanding(): i64;
-function main() {
+function main(): Future<null> async {
   var base = lang_foreign_outstanding();
   var m = Buffer.alloc(8u64);
   if m is null {
-    println("oom");
+    await println("oom");
   } else {
     var b = m as Buffer;
     b.set(0u64, 65u8);
@@ -20,9 +21,10 @@ function main() {
     var g0 = b.get(0u64);
     var g7 = b.get(7u64);
     var oob = b.get(8u64);      // out of range — null
-    println("g0=${g0 as u8} g7=${g7 as u8} oob_null=${oob is null} size=${b.size}");
-    println("live=${lang_foreign_outstanding() - base}");
+    await println("g0=${g0 as u8} g7=${g7 as u8} oob_null=${oob is null} size=${b.size}");
+    await println("live=${lang_foreign_outstanding() - base}");
     b.free();
-    println("after free=${lang_foreign_outstanding() - base}");
+    await println("after free=${lang_foreign_outstanding() - base}");
   }
+  null
 }

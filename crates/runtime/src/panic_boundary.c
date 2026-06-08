@@ -8,7 +8,7 @@
  * — they never walk intervening frames — so they cross the C ABI / Cranelift
  * boundary soundly. The cost is that no destructors run for the abandoned
  * frames, which exactly matches the documented contract ("Panicked thread:
- * stack roots released; no synchronous drop on unwind", `docs/16`); the Rust
+ * stack roots released; no Drop calls while abandoning frames", `docs/16`); the Rust
  * side restores GC/lock invariants explicitly at the boundary instead.
  *
  * The boundary is installed once per worker OS thread, around the call into

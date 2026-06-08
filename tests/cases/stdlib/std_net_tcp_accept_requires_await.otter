@@ -1,0 +1,17 @@
+//@ kind: compile-error
+//@ description: std:net TcpListener.accept returns a Future and must be awaited before using the accepted stream
+//@ stderr: expected `IoError | (TcpStream, SocketAddr)`, found `Future<IoError | (TcpStream, SocketAddr)>`
+
+import { TcpListener, TcpStream } from "std:net";
+import { IoError } from "std:io";
+import { SocketAddr, ip_v4, socket_addr } from "std:net/types";
+import { Future } from "core:prelude";
+
+function main(): Future<null> async {
+  var addr = socket_addr(ip_v4(127u8, 0u8, 0u8, 1u8), 0u16);
+  var bound = await TcpListener.bind(addr);
+  if bound is TcpListener {
+    var _accepted: (TcpStream, SocketAddr) | IoError = (bound as TcpListener).accept();
+  }
+  null
+}

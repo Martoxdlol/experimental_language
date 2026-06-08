@@ -801,14 +801,17 @@ impl<'a> Checker<'a> {
             let head3 = &all[..3.min(all.len())];
             if let ExprKind::Ident(n) = &callee.kind {
                 match n.name.as_str() {
-                    "channel" if self.intr_fn_in("channel", &["std", "sync"]) => {
+                    _ if self.intr_local_fn_in(&n.name, "channel", &["std", "sync"]) => {
                         return intrinsic(Intrinsic::ChannelNew, &[]);
                     }
-                    "yield_now" if self.intr_fn_in("yield_now", &["std", "async"]) => {
+                    _ if self.intr_local_fn_in(&n.name, "yield_now", &["std", "async"]) => {
                         return intrinsic(Intrinsic::YieldNow, &[]);
                     }
-                    "sleep" if self.intr_fn_in("sleep", &["std", "async"]) => {
+                    _ if self.intr_local_fn_in(&n.name, "sleep", &["std", "async"]) => {
                         return intrinsic(Intrinsic::AsyncSleep, head1);
+                    }
+                    _ if self.intr_local_fn_in(&n.name, "sleep", &["std", "time"]) => {
+                        return intrinsic(Intrinsic::TimeSleep, head1);
                     }
                     "__otter_io_stdin_read_async"
                         if self.intr_fn("__otter_io_stdin_read_async") =>
@@ -840,6 +843,89 @@ impl<'a> Checker<'a> {
                     {
                         return intrinsic(Intrinsic::IoStderrFlushAsync, &[]);
                     }
+                    "__otter_rand_os_bytes_async"
+                        if self.intr_fn("__otter_rand_os_bytes_async") =>
+                    {
+                        return intrinsic(Intrinsic::RandOsBytesAsync, head1);
+                    }
+                    "__otter_fs_read_text_async" if self.intr_fn("__otter_fs_read_text_async") => {
+                        return intrinsic(Intrinsic::FsReadTextAsync, head1);
+                    }
+                    "__otter_fs_write_text_async"
+                        if self.intr_fn("__otter_fs_write_text_async") =>
+                    {
+                        return intrinsic(Intrinsic::FsWriteTextAsync, head2);
+                    }
+                    "__otter_fs_append_text_async"
+                        if self.intr_fn("__otter_fs_append_text_async") =>
+                    {
+                        return intrinsic(Intrinsic::FsAppendTextAsync, head2);
+                    }
+                    "__otter_fs_read_bytes_async"
+                        if self.intr_fn("__otter_fs_read_bytes_async") =>
+                    {
+                        return intrinsic(Intrinsic::FsReadBytesAsync, head1);
+                    }
+                    "__otter_fs_write_bytes_async"
+                        if self.intr_fn("__otter_fs_write_bytes_async") =>
+                    {
+                        return intrinsic(Intrinsic::FsWriteBytesAsync, head2);
+                    }
+                    "__otter_fs_exists_async" if self.intr_fn("__otter_fs_exists_async") => {
+                        return intrinsic(Intrinsic::FsExistsAsync, head1);
+                    }
+                    "__otter_fs_is_file_async" if self.intr_fn("__otter_fs_is_file_async") => {
+                        return intrinsic(Intrinsic::FsIsFileAsync, head1);
+                    }
+                    "__otter_fs_is_dir_async" if self.intr_fn("__otter_fs_is_dir_async") => {
+                        return intrinsic(Intrinsic::FsIsDirAsync, head1);
+                    }
+                    "__otter_fs_kind_async" if self.intr_fn("__otter_fs_kind_async") => {
+                        return intrinsic(Intrinsic::FsKindAsync, head1);
+                    }
+                    "__otter_fs_len_async" if self.intr_fn("__otter_fs_len_async") => {
+                        return intrinsic(Intrinsic::FsLenAsync, head1);
+                    }
+                    "__otter_fs_read_only_async" if self.intr_fn("__otter_fs_read_only_async") => {
+                        return intrinsic(Intrinsic::FsReadOnlyAsync, head1);
+                    }
+                    "__otter_fs_executable_async"
+                        if self.intr_fn("__otter_fs_executable_async") =>
+                    {
+                        return intrinsic(Intrinsic::FsExecutableAsync, head1);
+                    }
+                    "__otter_fs_remove_async" if self.intr_fn("__otter_fs_remove_async") => {
+                        return intrinsic(Intrinsic::FsRemoveAsync, head1);
+                    }
+                    "__otter_fs_rename_async" if self.intr_fn("__otter_fs_rename_async") => {
+                        return intrinsic(Intrinsic::FsRenameAsync, head2);
+                    }
+                    "__otter_fs_create_dir_async"
+                        if self.intr_fn("__otter_fs_create_dir_async") =>
+                    {
+                        return intrinsic(Intrinsic::FsCreateDirAsync, head1);
+                    }
+                    "__otter_fs_create_dir_all_async"
+                        if self.intr_fn("__otter_fs_create_dir_all_async") =>
+                    {
+                        return intrinsic(Intrinsic::FsCreateDirAllAsync, head1);
+                    }
+                    "__otter_fs_canonicalize_async"
+                        if self.intr_fn("__otter_fs_canonicalize_async") =>
+                    {
+                        return intrinsic(Intrinsic::FsCanonicalizeAsync, head1);
+                    }
+                    "__otter_fs_read_dir_async" if self.intr_fn("__otter_fs_read_dir_async") => {
+                        return intrinsic(Intrinsic::FsReadDirAsync, head1);
+                    }
+                    "__otter_fs_file_open_async" if self.intr_fn("__otter_fs_file_open_async") => {
+                        return intrinsic(Intrinsic::FsFileOpenAsync, head2);
+                    }
+                    "__otter_fs_file_close_async"
+                        if self.intr_fn("__otter_fs_file_close_async") =>
+                    {
+                        return intrinsic(Intrinsic::FsFileCloseAsync, head1);
+                    }
                     "__otter_fs_file_read_async" if self.intr_fn("__otter_fs_file_read_async") => {
                         return intrinsic(Intrinsic::FsFileReadAsync, head2);
                     }
@@ -861,15 +947,356 @@ impl<'a> Checker<'a> {
                     "__otter_fs_file_seek_async" if self.intr_fn("__otter_fs_file_seek_async") => {
                         return intrinsic(Intrinsic::FsFileSeekAsync, head3);
                     }
-                    "__otter_time_monotonic_nanos"
-                        if self.intr_fn("__otter_time_monotonic_nanos") =>
+                    "__otter_process_args_async" if self.intr_fn("__otter_process_args_async") => {
+                        return intrinsic(Intrinsic::ProcessArgsAsync, &[]);
+                    }
+                    "__otter_process_env_async" if self.intr_fn("__otter_process_env_async") => {
+                        return intrinsic(Intrinsic::ProcessEnvAsync, head1);
+                    }
+                    "__otter_process_env_all_async"
+                        if self.intr_fn("__otter_process_env_all_async") =>
                     {
-                        return intrinsic(Intrinsic::TimeMonotonicNanos, &[]);
+                        return intrinsic(Intrinsic::ProcessEnvAllAsync, &[]);
                     }
-                    "__otter_time_system_nanos" if self.intr_fn("__otter_time_system_nanos") => {
-                        return intrinsic(Intrinsic::TimeSystemNanos, &[]);
+                    "__otter_process_set_env_async"
+                        if self.intr_fn("__otter_process_set_env_async") =>
+                    {
+                        return intrinsic(Intrinsic::ProcessSetEnvAsync, head2);
                     }
-                    "timeout" if self.intr_fn_in("timeout", &["std", "async"]) => {
+                    "__otter_process_status_async"
+                        if self.intr_fn("__otter_process_status_async") =>
+                    {
+                        return intrinsic(Intrinsic::ProcessStatusAsync, head1);
+                    }
+                    "__otter_process_output_async"
+                        if self.intr_fn("__otter_process_output_async") =>
+                    {
+                        return intrinsic(Intrinsic::ProcessOutputAsync, head1);
+                    }
+                    "__otter_process_spawn_async"
+                        if self.intr_fn("__otter_process_spawn_async") =>
+                    {
+                        return intrinsic(Intrinsic::ProcessSpawnAsync, head1);
+                    }
+                    "__otter_process_child_wait_async"
+                        if self.intr_fn("__otter_process_child_wait_async") =>
+                    {
+                        return intrinsic(Intrinsic::ProcessChildWaitAsync, head1);
+                    }
+                    "__otter_process_child_kill_async"
+                        if self.intr_fn("__otter_process_child_kill_async") =>
+                    {
+                        return intrinsic(Intrinsic::ProcessChildKillAsync, head1);
+                    }
+                    "__otter_net_resolve_async" if self.intr_fn("__otter_net_resolve_async") => {
+                        return intrinsic(Intrinsic::NetResolveAsync, head1);
+                    }
+                    "__otter_net_tcp_connect_async"
+                        if self.intr_fn("__otter_net_tcp_connect_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetTcpConnectAsync, head1);
+                    }
+                    "__otter_net_tcp_connect_timeout_async"
+                        if self.intr_fn("__otter_net_tcp_connect_timeout_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetTcpConnectTimeoutAsync, head2);
+                    }
+                    "__otter_net_tcp_stream_read_async"
+                        if self.intr_fn("__otter_net_tcp_stream_read_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetTcpStreamReadAsync, head2);
+                    }
+                    "__otter_net_tcp_stream_read_to_end_async"
+                        if self.intr_fn("__otter_net_tcp_stream_read_to_end_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetTcpStreamReadToEndAsync, head1);
+                    }
+                    "__otter_net_tcp_stream_write_async"
+                        if self.intr_fn("__otter_net_tcp_stream_write_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetTcpStreamWriteAsync, head2);
+                    }
+                    "__otter_net_tcp_stream_write_all_async"
+                        if self.intr_fn("__otter_net_tcp_stream_write_all_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetTcpStreamWriteAllAsync, head2);
+                    }
+                    "__otter_net_tcp_stream_flush_async"
+                        if self.intr_fn("__otter_net_tcp_stream_flush_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetTcpStreamFlushAsync, head1);
+                    }
+                    "__otter_net_tcp_stream_peek_async"
+                        if self.intr_fn("__otter_net_tcp_stream_peek_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetTcpStreamPeekAsync, head2);
+                    }
+                    "__otter_net_tcp_stream_close_async"
+                        if self.intr_fn("__otter_net_tcp_stream_close_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetTcpStreamCloseAsync, head1);
+                    }
+                    "__otter_net_tcp_stream_peer_addr_async"
+                        if self.intr_fn("__otter_net_tcp_stream_peer_addr_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetTcpStreamPeerAddrAsync, head1);
+                    }
+                    "__otter_net_tcp_stream_local_addr_async"
+                        if self.intr_fn("__otter_net_tcp_stream_local_addr_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetTcpStreamLocalAddrAsync, head1);
+                    }
+                    "__otter_net_tcp_stream_take_error_async"
+                        if self.intr_fn("__otter_net_tcp_stream_take_error_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetTcpStreamTakeErrorAsync, head1);
+                    }
+                    "__otter_net_tcp_stream_nodelay_async"
+                        if self.intr_fn("__otter_net_tcp_stream_nodelay_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetTcpStreamNodelayAsync, head1);
+                    }
+                    "__otter_net_tcp_stream_set_nodelay_async"
+                        if self.intr_fn("__otter_net_tcp_stream_set_nodelay_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetTcpStreamSetNodelayAsync, head2);
+                    }
+                    "__otter_net_tcp_stream_set_nonblocking_async"
+                        if self.intr_fn("__otter_net_tcp_stream_set_nonblocking_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetTcpStreamSetNonblockingAsync, head2);
+                    }
+                    "__otter_net_tcp_stream_read_timeout_async"
+                        if self.intr_fn("__otter_net_tcp_stream_read_timeout_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetTcpStreamReadTimeoutAsync, head1);
+                    }
+                    "__otter_net_tcp_stream_set_read_timeout_async"
+                        if self.intr_fn("__otter_net_tcp_stream_set_read_timeout_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetTcpStreamSetReadTimeoutAsync, head3);
+                    }
+                    "__otter_net_tcp_stream_write_timeout_async"
+                        if self.intr_fn("__otter_net_tcp_stream_write_timeout_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetTcpStreamWriteTimeoutAsync, head1);
+                    }
+                    "__otter_net_tcp_stream_set_write_timeout_async"
+                        if self.intr_fn("__otter_net_tcp_stream_set_write_timeout_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetTcpStreamSetWriteTimeoutAsync, head3);
+                    }
+                    "__otter_net_tcp_stream_ttl_async"
+                        if self.intr_fn("__otter_net_tcp_stream_ttl_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetTcpStreamTtlAsync, head1);
+                    }
+                    "__otter_net_tcp_stream_set_ttl_async"
+                        if self.intr_fn("__otter_net_tcp_stream_set_ttl_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetTcpStreamSetTtlAsync, head2);
+                    }
+                    "__otter_net_tcp_listener_bind_async"
+                        if self.intr_fn("__otter_net_tcp_listener_bind_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetTcpListenerBindAsync, head1);
+                    }
+                    "__otter_net_tcp_listener_close_async"
+                        if self.intr_fn("__otter_net_tcp_listener_close_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetTcpListenerCloseAsync, head1);
+                    }
+                    "__otter_net_tcp_listener_accept_async"
+                        if self.intr_fn("__otter_net_tcp_listener_accept_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetTcpListenerAcceptAsync, head1);
+                    }
+                    "__otter_net_tcp_listener_local_addr_async"
+                        if self.intr_fn("__otter_net_tcp_listener_local_addr_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetTcpListenerLocalAddrAsync, head1);
+                    }
+                    "__otter_net_tcp_listener_take_error_async"
+                        if self.intr_fn("__otter_net_tcp_listener_take_error_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetTcpListenerTakeErrorAsync, head1);
+                    }
+                    "__otter_net_tcp_listener_set_nonblocking_async"
+                        if self.intr_fn("__otter_net_tcp_listener_set_nonblocking_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetTcpListenerSetNonblockingAsync, head2);
+                    }
+                    "__otter_net_tcp_listener_ttl_async"
+                        if self.intr_fn("__otter_net_tcp_listener_ttl_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetTcpListenerTtlAsync, head1);
+                    }
+                    "__otter_net_tcp_listener_set_ttl_async"
+                        if self.intr_fn("__otter_net_tcp_listener_set_ttl_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetTcpListenerSetTtlAsync, head2);
+                    }
+                    "__otter_net_udp_bind_async" if self.intr_fn("__otter_net_udp_bind_async") => {
+                        return intrinsic(Intrinsic::NetUdpBindAsync, head1);
+                    }
+                    "__otter_net_udp_close_async"
+                        if self.intr_fn("__otter_net_udp_close_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetUdpCloseAsync, head1);
+                    }
+                    "__otter_net_udp_connect_async"
+                        if self.intr_fn("__otter_net_udp_connect_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetUdpConnectAsync, head2);
+                    }
+                    "__otter_net_udp_local_addr_async"
+                        if self.intr_fn("__otter_net_udp_local_addr_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetUdpLocalAddrAsync, head1);
+                    }
+                    "__otter_net_udp_peer_addr_async"
+                        if self.intr_fn("__otter_net_udp_peer_addr_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetUdpPeerAddrAsync, head1);
+                    }
+                    "__otter_net_udp_take_error_async"
+                        if self.intr_fn("__otter_net_udp_take_error_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetUdpTakeErrorAsync, head1);
+                    }
+                    "__otter_net_udp_set_nonblocking_async"
+                        if self.intr_fn("__otter_net_udp_set_nonblocking_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetUdpSetNonblockingAsync, head2);
+                    }
+                    "__otter_net_udp_read_timeout_async"
+                        if self.intr_fn("__otter_net_udp_read_timeout_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetUdpReadTimeoutAsync, head1);
+                    }
+                    "__otter_net_udp_set_read_timeout_async"
+                        if self.intr_fn("__otter_net_udp_set_read_timeout_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetUdpSetReadTimeoutAsync, head3);
+                    }
+                    "__otter_net_udp_write_timeout_async"
+                        if self.intr_fn("__otter_net_udp_write_timeout_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetUdpWriteTimeoutAsync, head1);
+                    }
+                    "__otter_net_udp_set_write_timeout_async"
+                        if self.intr_fn("__otter_net_udp_set_write_timeout_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetUdpSetWriteTimeoutAsync, head3);
+                    }
+                    "__otter_net_udp_ttl_async" if self.intr_fn("__otter_net_udp_ttl_async") => {
+                        return intrinsic(Intrinsic::NetUdpTtlAsync, head1);
+                    }
+                    "__otter_net_udp_set_ttl_async"
+                        if self.intr_fn("__otter_net_udp_set_ttl_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetUdpSetTtlAsync, head2);
+                    }
+                    "__otter_net_udp_broadcast_async"
+                        if self.intr_fn("__otter_net_udp_broadcast_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetUdpBroadcastAsync, head1);
+                    }
+                    "__otter_net_udp_set_broadcast_async"
+                        if self.intr_fn("__otter_net_udp_set_broadcast_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetUdpSetBroadcastAsync, head2);
+                    }
+                    "__otter_net_udp_multicast_loop_v4_async"
+                        if self.intr_fn("__otter_net_udp_multicast_loop_v4_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetUdpMulticastLoopV4Async, head1);
+                    }
+                    "__otter_net_udp_set_multicast_loop_v4_async"
+                        if self.intr_fn("__otter_net_udp_set_multicast_loop_v4_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetUdpSetMulticastLoopV4Async, head2);
+                    }
+                    "__otter_net_udp_multicast_loop_v6_async"
+                        if self.intr_fn("__otter_net_udp_multicast_loop_v6_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetUdpMulticastLoopV6Async, head1);
+                    }
+                    "__otter_net_udp_set_multicast_loop_v6_async"
+                        if self.intr_fn("__otter_net_udp_set_multicast_loop_v6_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetUdpSetMulticastLoopV6Async, head2);
+                    }
+                    "__otter_net_udp_multicast_ttl_v4_async"
+                        if self.intr_fn("__otter_net_udp_multicast_ttl_v4_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetUdpMulticastTtlV4Async, head1);
+                    }
+                    "__otter_net_udp_set_multicast_ttl_v4_async"
+                        if self.intr_fn("__otter_net_udp_set_multicast_ttl_v4_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetUdpSetMulticastTtlV4Async, head2);
+                    }
+                    "__otter_net_udp_join_multicast_v4_async"
+                        if self.intr_fn("__otter_net_udp_join_multicast_v4_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetUdpJoinMulticastV4Async, head3);
+                    }
+                    "__otter_net_udp_leave_multicast_v4_async"
+                        if self.intr_fn("__otter_net_udp_leave_multicast_v4_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetUdpLeaveMulticastV4Async, head3);
+                    }
+                    "__otter_net_udp_join_multicast_v6_async"
+                        if self.intr_fn("__otter_net_udp_join_multicast_v6_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetUdpJoinMulticastV6Async, head3);
+                    }
+                    "__otter_net_udp_leave_multicast_v6_async"
+                        if self.intr_fn("__otter_net_udp_leave_multicast_v6_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetUdpLeaveMulticastV6Async, head3);
+                    }
+                    "__otter_net_udp_send_async" if self.intr_fn("__otter_net_udp_send_async") => {
+                        return intrinsic(Intrinsic::NetUdpSendAsync, head2);
+                    }
+                    "__otter_net_udp_recv_async" if self.intr_fn("__otter_net_udp_recv_async") => {
+                        return intrinsic(Intrinsic::NetUdpRecvAsync, head2);
+                    }
+                    "__otter_net_udp_peek_async" if self.intr_fn("__otter_net_udp_peek_async") => {
+                        return intrinsic(Intrinsic::NetUdpPeekAsync, head2);
+                    }
+                    "__otter_net_udp_send_to_async"
+                        if self.intr_fn("__otter_net_udp_send_to_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetUdpSendToAsync, head3);
+                    }
+                    "__otter_net_udp_recv_from_async"
+                        if self.intr_fn("__otter_net_udp_recv_from_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetUdpRecvFromAsync, head2);
+                    }
+                    "__otter_net_udp_peek_from_async"
+                        if self.intr_fn("__otter_net_udp_peek_from_async") =>
+                    {
+                        return intrinsic(Intrinsic::NetUdpPeekFromAsync, head2);
+                    }
+                    "__otter_time_monotonic_nanos_async"
+                        if self.intr_fn("__otter_time_monotonic_nanos_async") =>
+                    {
+                        return intrinsic(Intrinsic::TimeMonotonicNanosAsync, &[]);
+                    }
+                    "__otter_time_system_nanos_async"
+                        if self.intr_fn("__otter_time_system_nanos_async") =>
+                    {
+                        return intrinsic(Intrinsic::TimeSystemNanosAsync, &[]);
+                    }
+                    "__otter_time_local_offset_seconds_async"
+                        if self.intr_fn("__otter_time_local_offset_seconds_async") =>
+                    {
+                        return intrinsic(Intrinsic::TimeLocalOffsetSecondsAsync, head1);
+                    }
+                    _ if self.intr_local_fn_in(&n.name, "timeout", &["std", "async"]) => {
                         // `output` = the awaited future's `T` (read-only: the
                         // first arg is a `Future<T>`).
                         let out = all
@@ -928,8 +1355,8 @@ impl<'a> Checker<'a> {
                     // An async worker: the closure's value type is
                     // `() => Future<R>` (`docs/20` §1). Detect it from the
                     // closure argument's return type being the canonical
-                    // `Future<_>` interface object, so the backend drives the
-                    // future to completion instead of just calling the closure.
+                    // `Future<_>` interface object, so the backend polls the
+                    // future until it resolves instead of just calling the closure.
                     let is_async = all
                         .first()
                         .and_then(|a| self.expr_ty(a.span))
@@ -1031,7 +1458,7 @@ impl<'a> Checker<'a> {
                 }
             }
         }
-        // `std:task::JoinHandle<R>.cancel()` / `.abort()`.
+        // `std:task` `JoinHandle<R>.cancel()` / `.abort()`.
         if let ExprKind::Field { receiver, name } = &callee.kind {
             if matches!(name.name.as_str(), "cancel" | "abort")
                 && self.resolution(callee.span).is_none()
@@ -1381,6 +1808,19 @@ impl<'a> Checker<'a> {
                         let elem = info.elem;
                         (elem, Some(crate::hir::ForDriver::AsyncIter(info)))
                     }
+                    None if self.receiver_elem(ity).is_some() => {
+                        let elem = self.receiver_elem(ity).unwrap();
+                        let closed_ty = self.tcx.mk_named(self.prog.channel_closed_def, vec![]);
+                        let union_ty = self.tcx.mk_union([elem, closed_ty]);
+                        (
+                            elem,
+                            Some(crate::hir::ForDriver::ChannelAsync {
+                                elem,
+                                union_ty,
+                                closed_ty,
+                            }),
+                        )
+                    }
                     None => {
                         if !self.tcx.is_error(ity) {
                             self.emit(
@@ -1435,12 +1875,6 @@ impl<'a> Checker<'a> {
                     None if matches!(self.tcx.kind(ity), TyKind::Str) => {
                         // `for ch in s` ≡ `for ch in s.chars()` (docs/18 §4).
                         (self.tcx.char, Some(crate::hir::ForDriver::StrChars))
-                    }
-                    None if self.receiver_elem(ity).is_some() => {
-                        // `for n in rx` over a `Receiver<T>` (`docs/20` §2):
-                        // blocking-recv each message until the channel closes.
-                        let elem = self.receiver_elem(ity).unwrap();
-                        (elem, Some(crate::hir::ForDriver::Channel { elem }))
                     }
                     None => match self.iterator_elem(ity) {
                         Some((elem, next, next_targs, item_ty, done_ty)) => {
@@ -1843,8 +2277,11 @@ impl<'a> Checker<'a> {
         // A module-level value: function, var, or extern function/var.
         let module = self.current_module();
         if let Some(def) = self.prog.resolve_value_in(module, name) {
-            // A prelude marker function (`print`/`panic`/…, imported by name)
-            // lowers to its builtin intrinsic (`docs/17` §17.8).
+            if self.is_planned_sync_channel_constructor(def) {
+                return self.reject_planned_sync_channel_constructor(def, &[], None, span);
+            }
+            // A prelude marker function (`panic`/…, imported by name) lowers
+            // to its builtin intrinsic (`docs/17` §17.8).
             if let Some(b) = self.prog.builtin_of_def(def) {
                 let t = self.builtin_ty(b);
                 self.record_res(span, ValueRes::Builtin(b), t);
@@ -1866,11 +2303,6 @@ impl<'a> Checker<'a> {
 
     pub(crate) fn builtin_ty(&mut self, b: Builtin) -> Ty {
         match b {
-            Builtin::Print | Builtin::Println | Builtin::Eprint | Builtin::Eprintln => {
-                let str_ty = self.tcx.str;
-                let null = self.tcx.null;
-                self.tcx.mk_func(vec![str_ty], null, false)
-            }
             // Diverging builtins return `never` (`docs/14`, `docs/24`); a call
             // to one is well-typed wherever any value is expected.
             Builtin::Panic => {
@@ -2125,21 +2557,64 @@ impl<'a> Checker<'a> {
                 .is_some_and(|d| self.prog.is_builtin_def(d))
     }
 
-    fn intr_fn_in(&self, name: &str, path: &[&str]) -> bool {
-        if self.lookup(name).is_some() {
+    fn intr_local_fn_in(&self, local_name: &str, def_name: &str, path: &[&str]) -> bool {
+        if self.lookup(local_name).is_some() {
             return false;
         }
-        let Some(def) = self.prog.resolve_value_in(self.current_module(), name) else {
+        let Some(def) = self
+            .prog
+            .resolve_value_in(self.current_module(), local_name)
+        else {
             return false;
         };
+        self.builtin_fn_def_in(def, def_name, path)
+    }
+
+    fn builtin_fn_def_in(&self, def: DefId, name: &str, path: &[&str]) -> bool {
         if !self.prog.is_builtin_def(def) {
             return false;
         }
-        self.prog.module(self.prog.def(def).module).path
-            == path
-                .iter()
-                .map(|seg| (*seg).to_string())
-                .collect::<Vec<_>>()
+        self.prog.def(def).name == name
+            && self.prog.module(self.prog.def(def).module).path
+                == path
+                    .iter()
+                    .map(|seg| (*seg).to_string())
+                    .collect::<Vec<_>>()
+    }
+
+    fn is_planned_sync_channel_constructor(&self, def: DefId) -> bool {
+        if !self.prog.is_builtin_def(def) {
+            return false;
+        }
+        matches!(
+            self.prog.def(def).name.as_str(),
+            "channel_bounded" | "channel_mpmc" | "channel_mpmc_bounded"
+        ) && self.prog.module(self.prog.def(def).module).path
+            == vec!["std".to_string(), "sync".to_string()]
+    }
+
+    fn reject_planned_sync_channel_constructor(
+        &mut self,
+        def: DefId,
+        args: &[Expr],
+        trailing: Option<&Expr>,
+        span: Span,
+    ) -> Ty {
+        for arg in args {
+            self.check_expr(arg, None);
+        }
+        if let Some(tc) = trailing {
+            self.check_expr(tc, None);
+        }
+        let name = self.prog.def(def).name.clone();
+        self.emit(
+            span,
+            SemaErrorKind::Message(format!(
+                "`std:sync.{name}` is planned but not implemented yet; use unbounded \
+                 `channel<T>()` until the real bounded/MPMC runtime semantics land"
+            )),
+        );
+        self.tcx.error
     }
 
     /// As [`Self::intr_fn`], for an imported toolchain *namespace* type
@@ -2166,10 +2641,10 @@ impl<'a> Checker<'a> {
         if let Some(ty) = self.try_builtin_ctor(callee, _generics, args, span) {
             return ty;
         }
-        // A prelude marker function (`print`/`println`/`panic`/`panic_with`/
-        // `exit`/`abort`, imported by name) lowers to its builtin intrinsic
-        // (`docs/17` §17.8). Handled here so it takes priority over the generic-
-        // function path (`panic_with<T>` is generic), unless shadowed by a local.
+        // A prelude marker function (`panic`/`panic_with`/`exit`/`abort`,
+        // imported by name) lowers to its builtin intrinsic (`docs/17` §17.8).
+        // Handled here so it takes priority over the generic-function path
+        // (`panic_with<T>` is generic), unless shadowed by a local.
         if let ExprKind::Ident(name) = &callee.kind {
             if self.lookup(&name.name).is_none() {
                 if let Some(def) = self
@@ -2186,13 +2661,13 @@ impl<'a> Checker<'a> {
         }
         // `channel<T>()` (`docs/20` §2): construct a message-passing channel.
         if let ExprKind::Ident(name) = &callee.kind {
-            if name.name == "channel" && self.intr_fn_in("channel", &["std", "sync"]) {
+            if self.intr_local_fn_in(&name.name, "channel", &["std", "sync"]) {
                 return self.check_channel_new(_generics, args, span);
             }
         }
         // `yield_now()` (`docs/21`): a `Future<null>` that suspends once.
         if let ExprKind::Ident(name) = &callee.kind {
-            if name.name == "yield_now" && self.intr_fn_in("yield_now", &["std", "async"]) {
+            if self.intr_local_fn_in(&name.name, "yield_now", &["std", "async"]) {
                 if !args.is_empty() {
                     self.emit(
                         span,
@@ -2205,7 +2680,7 @@ impl<'a> Checker<'a> {
                 return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.null]);
             }
             // `sleep(ms)` (`docs/21` §9): a `Future<null>` completing after a delay.
-            if name.name == "sleep" && self.intr_fn_in("sleep", &["std", "async"]) {
+            if self.intr_local_fn_in(&name.name, "sleep", &["std", "async"]) {
                 if args.len() != 1 {
                     self.emit(
                         span,
@@ -2218,6 +2693,29 @@ impl<'a> Checker<'a> {
                     let i64t = self.tcx.int(IntTy::I64);
                     let a = self.check_expr(&args[0], Some(i64t));
                     self.expect(a, i64t, args[0].span);
+                }
+                return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.null]);
+            }
+            // `std:time.sleep(Duration)`: a duration-based `Future<null>` timer.
+            if self.intr_local_fn_in(&name.name, "sleep", &["std", "time"]) {
+                if args.len() != 1 {
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 1,
+                            found: args.len(),
+                        },
+                    );
+                } else {
+                    let duration_def = self
+                        .prog
+                        .builtin_modules
+                        .get(&vec!["std".to_string(), "time".to_string()])
+                        .and_then(|module| self.prog.resolve_pub_type_in(*module, "Duration"))
+                        .unwrap_or(DefId(0));
+                    let duration = self.tcx.mk_named(duration_def, vec![]);
+                    let a = self.check_expr(&args[0], Some(duration));
+                    self.expect(a, duration, args[0].span);
                 }
                 return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.null]);
             }
@@ -2288,10 +2786,96 @@ impl<'a> Checker<'a> {
                 }
                 return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.str]);
             }
+            if name.name == "__otter_rand_os_bytes_async"
+                && self.intr_fn("__otter_rand_os_bytes_async")
+            {
+                if args.len() != 1 {
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 1,
+                            found: args.len(),
+                        },
+                    );
+                } else {
+                    let i64t = self.tcx.int(IntTy::I64);
+                    let count = self.check_expr(&args[0], Some(i64t));
+                    self.expect(count, i64t, args[0].span);
+                }
+                return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.str]);
+            }
+            if (name.name == "__otter_fs_read_text_async"
+                && self.intr_fn("__otter_fs_read_text_async"))
+                || (name.name == "__otter_fs_read_bytes_async"
+                    && self.intr_fn("__otter_fs_read_bytes_async"))
+                || (name.name == "__otter_fs_exists_async"
+                    && self.intr_fn("__otter_fs_exists_async"))
+                || (name.name == "__otter_fs_is_file_async"
+                    && self.intr_fn("__otter_fs_is_file_async"))
+                || (name.name == "__otter_fs_is_dir_async"
+                    && self.intr_fn("__otter_fs_is_dir_async"))
+                || (name.name == "__otter_fs_kind_async" && self.intr_fn("__otter_fs_kind_async"))
+                || (name.name == "__otter_fs_len_async" && self.intr_fn("__otter_fs_len_async"))
+                || (name.name == "__otter_fs_read_only_async"
+                    && self.intr_fn("__otter_fs_read_only_async"))
+                || (name.name == "__otter_fs_executable_async"
+                    && self.intr_fn("__otter_fs_executable_async"))
+                || (name.name == "__otter_fs_remove_async"
+                    && self.intr_fn("__otter_fs_remove_async"))
+                || (name.name == "__otter_fs_create_dir_async"
+                    && self.intr_fn("__otter_fs_create_dir_async"))
+                || (name.name == "__otter_fs_create_dir_all_async"
+                    && self.intr_fn("__otter_fs_create_dir_all_async"))
+                || (name.name == "__otter_fs_canonicalize_async"
+                    && self.intr_fn("__otter_fs_canonicalize_async"))
+                || (name.name == "__otter_fs_read_dir_async"
+                    && self.intr_fn("__otter_fs_read_dir_async"))
+            {
+                if args.len() != 1 {
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 1,
+                            found: args.len(),
+                        },
+                    );
+                } else {
+                    let path = self.check_expr(&args[0], Some(self.tcx.str));
+                    self.expect(path, self.tcx.str, args[0].span);
+                }
+                return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.str]);
+            }
+            if (name.name == "__otter_fs_write_text_async"
+                && self.intr_fn("__otter_fs_write_text_async"))
+                || (name.name == "__otter_fs_append_text_async"
+                    && self.intr_fn("__otter_fs_append_text_async"))
+                || (name.name == "__otter_fs_write_bytes_async"
+                    && self.intr_fn("__otter_fs_write_bytes_async"))
+                || (name.name == "__otter_fs_rename_async"
+                    && self.intr_fn("__otter_fs_rename_async"))
+            {
+                if args.len() != 2 {
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 2,
+                            found: args.len(),
+                        },
+                    );
+                } else {
+                    let first = self.check_expr(&args[0], Some(self.tcx.str));
+                    self.expect(first, self.tcx.str, args[0].span);
+                    let second = self.check_expr(&args[1], Some(self.tcx.str));
+                    self.expect(second, self.tcx.str, args[1].span);
+                }
+                return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.str]);
+            }
             if (name.name == "__otter_fs_file_read_async"
                 && self.intr_fn("__otter_fs_file_read_async"))
                 || (name.name == "__otter_fs_file_write_async"
                     && self.intr_fn("__otter_fs_file_write_async"))
+                || (name.name == "__otter_fs_file_open_async"
+                    && self.intr_fn("__otter_fs_file_open_async"))
             {
                 if args.len() != 2 {
                     self.emit(
@@ -2303,15 +2887,22 @@ impl<'a> Checker<'a> {
                     );
                 } else {
                     let i64t = self.tcx.int(IntTy::I64);
-                    let handle = self.check_expr(&args[0], Some(i64t));
-                    self.expect(handle, i64t, args[0].span);
-                    let second_expected = if name.name == "__otter_fs_file_read_async" {
-                        i64t
+                    if name.name == "__otter_fs_file_open_async" {
+                        let path = self.check_expr(&args[0], Some(self.tcx.str));
+                        self.expect(path, self.tcx.str, args[0].span);
+                        let mode = self.check_expr(&args[1], Some(self.tcx.str));
+                        self.expect(mode, self.tcx.str, args[1].span);
                     } else {
-                        self.tcx.str
-                    };
-                    let second = self.check_expr(&args[1], Some(second_expected));
-                    self.expect(second, second_expected, args[1].span);
+                        let handle = self.check_expr(&args[0], Some(i64t));
+                        self.expect(handle, i64t, args[0].span);
+                        let second_expected = if name.name == "__otter_fs_file_read_async" {
+                            i64t
+                        } else {
+                            self.tcx.str
+                        };
+                        let second = self.check_expr(&args[1], Some(second_expected));
+                        self.expect(second, second_expected, args[1].span);
+                    }
                 }
                 return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.str]);
             }
@@ -2319,6 +2910,8 @@ impl<'a> Checker<'a> {
                 && self.intr_fn("__otter_fs_file_read_to_end_async"))
                 || (name.name == "__otter_fs_file_flush_async"
                     && self.intr_fn("__otter_fs_file_flush_async"))
+                || (name.name == "__otter_fs_file_close_async"
+                    && self.intr_fn("__otter_fs_file_close_async"))
             {
                 if args.len() != 1 {
                     self.emit(
@@ -2357,11 +2950,10 @@ impl<'a> Checker<'a> {
                 }
                 return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.str]);
             }
-            // Private `std:time` runtime hooks. Public callers use
-            // `Instant.now()` / `SystemTime.now()`; these marker functions are
-            // not catalog exports.
-            if name.name == "__otter_time_monotonic_nanos"
-                && self.intr_fn("__otter_time_monotonic_nanos")
+            if (name.name == "__otter_process_args_async"
+                && self.intr_fn("__otter_process_args_async"))
+                || (name.name == "__otter_process_env_all_async"
+                    && self.intr_fn("__otter_process_env_all_async"))
             {
                 if !args.is_empty() {
                     self.emit(
@@ -2372,9 +2964,588 @@ impl<'a> Checker<'a> {
                         },
                     );
                 }
-                return self.tcx.int(IntTy::I64);
+                return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.str]);
             }
-            if name.name == "__otter_time_system_nanos" && self.intr_fn("__otter_time_system_nanos")
+            if name.name == "__otter_process_env_async" && self.intr_fn("__otter_process_env_async")
+            {
+                if args.len() != 1 {
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 1,
+                            found: args.len(),
+                        },
+                    );
+                } else {
+                    let name_arg = self.check_expr(&args[0], Some(self.tcx.str));
+                    self.expect(name_arg, self.tcx.str, args[0].span);
+                }
+                return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.str]);
+            }
+            if name.name == "__otter_process_set_env_async"
+                && self.intr_fn("__otter_process_set_env_async")
+            {
+                if args.len() != 2 {
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 2,
+                            found: args.len(),
+                        },
+                    );
+                } else {
+                    let name_arg = self.check_expr(&args[0], Some(self.tcx.str));
+                    self.expect(name_arg, self.tcx.str, args[0].span);
+                    let value_arg = self.check_expr(&args[1], Some(self.tcx.str));
+                    self.expect(value_arg, self.tcx.str, args[1].span);
+                }
+                return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.str]);
+            }
+            if (name.name == "__otter_process_status_async"
+                && self.intr_fn("__otter_process_status_async"))
+                || (name.name == "__otter_process_output_async"
+                    && self.intr_fn("__otter_process_output_async"))
+                || (name.name == "__otter_process_spawn_async"
+                    && self.intr_fn("__otter_process_spawn_async"))
+            {
+                if args.len() != 1 {
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 1,
+                            found: args.len(),
+                        },
+                    );
+                } else {
+                    let payload = self.check_expr(&args[0], Some(self.tcx.str));
+                    self.expect(payload, self.tcx.str, args[0].span);
+                }
+                return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.str]);
+            }
+            if (name.name == "__otter_process_child_wait_async"
+                && self.intr_fn("__otter_process_child_wait_async"))
+                || (name.name == "__otter_process_child_kill_async"
+                    && self.intr_fn("__otter_process_child_kill_async"))
+            {
+                if args.len() != 1 {
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 1,
+                            found: args.len(),
+                        },
+                    );
+                } else {
+                    let i64t = self.tcx.int(IntTy::I64);
+                    let handle = self.check_expr(&args[0], Some(i64t));
+                    self.expect(handle, i64t, args[0].span);
+                }
+                return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.str]);
+            }
+            if name.name == "__otter_net_tcp_connect_async"
+                && self.intr_fn("__otter_net_tcp_connect_async")
+            {
+                if args.len() != 1 {
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 1,
+                            found: args.len(),
+                        },
+                    );
+                } else {
+                    let a = self.check_expr(&args[0], Some(self.tcx.str));
+                    self.expect(a, self.tcx.str, args[0].span);
+                }
+                return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.str]);
+            }
+            if name.name == "__otter_net_resolve_async" && self.intr_fn("__otter_net_resolve_async")
+            {
+                if args.len() != 1 {
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 1,
+                            found: args.len(),
+                        },
+                    );
+                } else {
+                    let host = self.check_expr(&args[0], Some(self.tcx.str));
+                    self.expect(host, self.tcx.str, args[0].span);
+                }
+                return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.str]);
+            }
+            if name.name == "__otter_net_tcp_connect_timeout_async"
+                && self.intr_fn("__otter_net_tcp_connect_timeout_async")
+            {
+                if args.len() != 2 {
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 2,
+                            found: args.len(),
+                        },
+                    );
+                } else {
+                    let addr = self.check_expr(&args[0], Some(self.tcx.str));
+                    self.expect(addr, self.tcx.str, args[0].span);
+                    let i64t = self.tcx.int(IntTy::I64);
+                    let nanos = self.check_expr(&args[1], Some(i64t));
+                    self.expect(nanos, i64t, args[1].span);
+                }
+                return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.str]);
+            }
+            if (name.name == "__otter_net_tcp_stream_read_async"
+                && self.intr_fn("__otter_net_tcp_stream_read_async"))
+                || (name.name == "__otter_net_tcp_stream_peek_async"
+                    && self.intr_fn("__otter_net_tcp_stream_peek_async"))
+            {
+                if args.len() != 2 {
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 2,
+                            found: args.len(),
+                        },
+                    );
+                } else {
+                    let i64t = self.tcx.int(IntTy::I64);
+                    let handle = self.check_expr(&args[0], Some(i64t));
+                    self.expect(handle, i64t, args[0].span);
+                    let count = self.check_expr(&args[1], Some(i64t));
+                    self.expect(count, i64t, args[1].span);
+                }
+                return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.str]);
+            }
+            if (name.name == "__otter_net_tcp_stream_read_to_end_async"
+                && self.intr_fn("__otter_net_tcp_stream_read_to_end_async"))
+                || (name.name == "__otter_net_tcp_stream_flush_async"
+                    && self.intr_fn("__otter_net_tcp_stream_flush_async"))
+            {
+                if args.len() != 1 {
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 1,
+                            found: args.len(),
+                        },
+                    );
+                } else {
+                    let i64t = self.tcx.int(IntTy::I64);
+                    let handle = self.check_expr(&args[0], Some(i64t));
+                    self.expect(handle, i64t, args[0].span);
+                }
+                return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.str]);
+            }
+            if (name.name == "__otter_net_tcp_stream_write_async"
+                && self.intr_fn("__otter_net_tcp_stream_write_async"))
+                || (name.name == "__otter_net_tcp_stream_write_all_async"
+                    && self.intr_fn("__otter_net_tcp_stream_write_all_async"))
+            {
+                if args.len() != 2 {
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 2,
+                            found: args.len(),
+                        },
+                    );
+                } else {
+                    let i64t = self.tcx.int(IntTy::I64);
+                    let handle = self.check_expr(&args[0], Some(i64t));
+                    self.expect(handle, i64t, args[0].span);
+                    let contents = self.check_expr(&args[1], Some(self.tcx.str));
+                    self.expect(contents, self.tcx.str, args[1].span);
+                }
+                return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.str]);
+            }
+            if (name.name == "__otter_net_tcp_stream_close_async"
+                && self.intr_fn("__otter_net_tcp_stream_close_async"))
+                || (name.name == "__otter_net_tcp_stream_peer_addr_async"
+                    && self.intr_fn("__otter_net_tcp_stream_peer_addr_async"))
+                || (name.name == "__otter_net_tcp_stream_local_addr_async"
+                    && self.intr_fn("__otter_net_tcp_stream_local_addr_async"))
+                || (name.name == "__otter_net_tcp_stream_take_error_async"
+                    && self.intr_fn("__otter_net_tcp_stream_take_error_async"))
+                || (name.name == "__otter_net_tcp_stream_nodelay_async"
+                    && self.intr_fn("__otter_net_tcp_stream_nodelay_async"))
+                || (name.name == "__otter_net_tcp_stream_read_timeout_async"
+                    && self.intr_fn("__otter_net_tcp_stream_read_timeout_async"))
+                || (name.name == "__otter_net_tcp_stream_write_timeout_async"
+                    && self.intr_fn("__otter_net_tcp_stream_write_timeout_async"))
+                || (name.name == "__otter_net_tcp_stream_ttl_async"
+                    && self.intr_fn("__otter_net_tcp_stream_ttl_async"))
+            {
+                if args.len() != 1 {
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 1,
+                            found: args.len(),
+                        },
+                    );
+                } else {
+                    let i64t = self.tcx.int(IntTy::I64);
+                    let handle = self.check_expr(&args[0], Some(i64t));
+                    self.expect(handle, i64t, args[0].span);
+                }
+                return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.str]);
+            }
+            if (name.name == "__otter_net_tcp_stream_set_nodelay_async"
+                && self.intr_fn("__otter_net_tcp_stream_set_nodelay_async"))
+                || (name.name == "__otter_net_tcp_stream_set_nonblocking_async"
+                    && self.intr_fn("__otter_net_tcp_stream_set_nonblocking_async"))
+                || (name.name == "__otter_net_tcp_stream_set_ttl_async"
+                    && self.intr_fn("__otter_net_tcp_stream_set_ttl_async"))
+            {
+                if args.len() != 2 {
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 2,
+                            found: args.len(),
+                        },
+                    );
+                } else {
+                    let i64t = self.tcx.int(IntTy::I64);
+                    let handle = self.check_expr(&args[0], Some(i64t));
+                    self.expect(handle, i64t, args[0].span);
+                    let value = self.check_expr(&args[1], Some(i64t));
+                    self.expect(value, i64t, args[1].span);
+                }
+                return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.str]);
+            }
+            if (name.name == "__otter_net_tcp_stream_set_read_timeout_async"
+                && self.intr_fn("__otter_net_tcp_stream_set_read_timeout_async"))
+                || (name.name == "__otter_net_tcp_stream_set_write_timeout_async"
+                    && self.intr_fn("__otter_net_tcp_stream_set_write_timeout_async"))
+            {
+                if args.len() != 3 {
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 3,
+                            found: args.len(),
+                        },
+                    );
+                } else {
+                    let i64t = self.tcx.int(IntTy::I64);
+                    let handle = self.check_expr(&args[0], Some(i64t));
+                    self.expect(handle, i64t, args[0].span);
+                    let nanos = self.check_expr(&args[1], Some(i64t));
+                    self.expect(nanos, i64t, args[1].span);
+                    let present = self.check_expr(&args[2], Some(i64t));
+                    self.expect(present, i64t, args[2].span);
+                }
+                return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.str]);
+            }
+            if name.name == "__otter_net_tcp_listener_bind_async"
+                && self.intr_fn("__otter_net_tcp_listener_bind_async")
+            {
+                if args.len() != 1 {
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 1,
+                            found: args.len(),
+                        },
+                    );
+                } else {
+                    let addr = self.check_expr(&args[0], Some(self.tcx.str));
+                    self.expect(addr, self.tcx.str, args[0].span);
+                }
+                return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.str]);
+            }
+            if (name.name == "__otter_net_tcp_listener_close_async"
+                && self.intr_fn("__otter_net_tcp_listener_close_async"))
+                || (name.name == "__otter_net_tcp_listener_accept_async"
+                    && self.intr_fn("__otter_net_tcp_listener_accept_async"))
+                || (name.name == "__otter_net_tcp_listener_local_addr_async"
+                    && self.intr_fn("__otter_net_tcp_listener_local_addr_async"))
+                || (name.name == "__otter_net_tcp_listener_take_error_async"
+                    && self.intr_fn("__otter_net_tcp_listener_take_error_async"))
+                || (name.name == "__otter_net_tcp_listener_ttl_async"
+                    && self.intr_fn("__otter_net_tcp_listener_ttl_async"))
+            {
+                if args.len() != 1 {
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 1,
+                            found: args.len(),
+                        },
+                    );
+                } else {
+                    let i64t = self.tcx.int(IntTy::I64);
+                    let handle = self.check_expr(&args[0], Some(i64t));
+                    self.expect(handle, i64t, args[0].span);
+                }
+                return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.str]);
+            }
+            if (name.name == "__otter_net_tcp_listener_set_nonblocking_async"
+                && self.intr_fn("__otter_net_tcp_listener_set_nonblocking_async"))
+                || (name.name == "__otter_net_tcp_listener_set_ttl_async"
+                    && self.intr_fn("__otter_net_tcp_listener_set_ttl_async"))
+            {
+                if args.len() != 2 {
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 2,
+                            found: args.len(),
+                        },
+                    );
+                } else {
+                    let i64t = self.tcx.int(IntTy::I64);
+                    let handle = self.check_expr(&args[0], Some(i64t));
+                    self.expect(handle, i64t, args[0].span);
+                    let value = self.check_expr(&args[1], Some(i64t));
+                    self.expect(value, i64t, args[1].span);
+                }
+                return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.str]);
+            }
+            if name.name == "__otter_net_udp_bind_async"
+                && self.intr_fn("__otter_net_udp_bind_async")
+            {
+                if args.len() != 1 {
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 1,
+                            found: args.len(),
+                        },
+                    );
+                } else {
+                    let addr = self.check_expr(&args[0], Some(self.tcx.str));
+                    self.expect(addr, self.tcx.str, args[0].span);
+                }
+                return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.str]);
+            }
+            if (name.name == "__otter_net_udp_close_async"
+                && self.intr_fn("__otter_net_udp_close_async"))
+                || (name.name == "__otter_net_udp_local_addr_async"
+                    && self.intr_fn("__otter_net_udp_local_addr_async"))
+                || (name.name == "__otter_net_udp_peer_addr_async"
+                    && self.intr_fn("__otter_net_udp_peer_addr_async"))
+                || (name.name == "__otter_net_udp_take_error_async"
+                    && self.intr_fn("__otter_net_udp_take_error_async"))
+                || (name.name == "__otter_net_udp_read_timeout_async"
+                    && self.intr_fn("__otter_net_udp_read_timeout_async"))
+                || (name.name == "__otter_net_udp_write_timeout_async"
+                    && self.intr_fn("__otter_net_udp_write_timeout_async"))
+                || (name.name == "__otter_net_udp_ttl_async"
+                    && self.intr_fn("__otter_net_udp_ttl_async"))
+                || (name.name == "__otter_net_udp_broadcast_async"
+                    && self.intr_fn("__otter_net_udp_broadcast_async"))
+                || (name.name == "__otter_net_udp_multicast_loop_v4_async"
+                    && self.intr_fn("__otter_net_udp_multicast_loop_v4_async"))
+                || (name.name == "__otter_net_udp_multicast_loop_v6_async"
+                    && self.intr_fn("__otter_net_udp_multicast_loop_v6_async"))
+                || (name.name == "__otter_net_udp_multicast_ttl_v4_async"
+                    && self.intr_fn("__otter_net_udp_multicast_ttl_v4_async"))
+            {
+                if args.len() != 1 {
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 1,
+                            found: args.len(),
+                        },
+                    );
+                } else {
+                    let i64t = self.tcx.int(IntTy::I64);
+                    let handle = self.check_expr(&args[0], Some(i64t));
+                    self.expect(handle, i64t, args[0].span);
+                }
+                return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.str]);
+            }
+            if (name.name == "__otter_net_udp_connect_async"
+                && self.intr_fn("__otter_net_udp_connect_async"))
+                || (name.name == "__otter_net_udp_join_multicast_v6_async"
+                    && self.intr_fn("__otter_net_udp_join_multicast_v6_async"))
+                || (name.name == "__otter_net_udp_leave_multicast_v6_async"
+                    && self.intr_fn("__otter_net_udp_leave_multicast_v6_async"))
+            {
+                if args.len() != 2 && name.name == "__otter_net_udp_connect_async" {
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 2,
+                            found: args.len(),
+                        },
+                    );
+                } else if args.len() != 3 && name.name != "__otter_net_udp_connect_async" {
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 3,
+                            found: args.len(),
+                        },
+                    );
+                } else {
+                    let i64t = self.tcx.int(IntTy::I64);
+                    let handle = self.check_expr(&args[0], Some(i64t));
+                    self.expect(handle, i64t, args[0].span);
+                    let text = self.check_expr(&args[1], Some(self.tcx.str));
+                    self.expect(text, self.tcx.str, args[1].span);
+                    if name.name != "__otter_net_udp_connect_async" {
+                        let iface = self.check_expr(&args[2], Some(i64t));
+                        self.expect(iface, i64t, args[2].span);
+                    }
+                }
+                return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.str]);
+            }
+            if (name.name == "__otter_net_udp_set_nonblocking_async"
+                && self.intr_fn("__otter_net_udp_set_nonblocking_async"))
+                || (name.name == "__otter_net_udp_set_ttl_async"
+                    && self.intr_fn("__otter_net_udp_set_ttl_async"))
+                || (name.name == "__otter_net_udp_set_broadcast_async"
+                    && self.intr_fn("__otter_net_udp_set_broadcast_async"))
+                || (name.name == "__otter_net_udp_set_multicast_loop_v4_async"
+                    && self.intr_fn("__otter_net_udp_set_multicast_loop_v4_async"))
+                || (name.name == "__otter_net_udp_set_multicast_loop_v6_async"
+                    && self.intr_fn("__otter_net_udp_set_multicast_loop_v6_async"))
+                || (name.name == "__otter_net_udp_set_multicast_ttl_v4_async"
+                    && self.intr_fn("__otter_net_udp_set_multicast_ttl_v4_async"))
+            {
+                if args.len() != 2 {
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 2,
+                            found: args.len(),
+                        },
+                    );
+                } else {
+                    let i64t = self.tcx.int(IntTy::I64);
+                    let handle = self.check_expr(&args[0], Some(i64t));
+                    self.expect(handle, i64t, args[0].span);
+                    let value = self.check_expr(&args[1], Some(i64t));
+                    self.expect(value, i64t, args[1].span);
+                }
+                return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.str]);
+            }
+            if (name.name == "__otter_net_udp_set_read_timeout_async"
+                && self.intr_fn("__otter_net_udp_set_read_timeout_async"))
+                || (name.name == "__otter_net_udp_set_write_timeout_async"
+                    && self.intr_fn("__otter_net_udp_set_write_timeout_async"))
+            {
+                if args.len() != 3 {
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 3,
+                            found: args.len(),
+                        },
+                    );
+                } else {
+                    let i64t = self.tcx.int(IntTy::I64);
+                    for arg in args {
+                        let value = self.check_expr(arg, Some(i64t));
+                        self.expect(value, i64t, arg.span);
+                    }
+                }
+                return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.str]);
+            }
+            if (name.name == "__otter_net_udp_join_multicast_v4_async"
+                && self.intr_fn("__otter_net_udp_join_multicast_v4_async"))
+                || (name.name == "__otter_net_udp_leave_multicast_v4_async"
+                    && self.intr_fn("__otter_net_udp_leave_multicast_v4_async"))
+            {
+                if args.len() != 3 {
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 3,
+                            found: args.len(),
+                        },
+                    );
+                } else {
+                    let i64t = self.tcx.int(IntTy::I64);
+                    let handle = self.check_expr(&args[0], Some(i64t));
+                    self.expect(handle, i64t, args[0].span);
+                    let group = self.check_expr(&args[1], Some(self.tcx.str));
+                    self.expect(group, self.tcx.str, args[1].span);
+                    let iface = self.check_expr(&args[2], Some(self.tcx.str));
+                    self.expect(iface, self.tcx.str, args[2].span);
+                }
+                return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.str]);
+            }
+            if (name.name == "__otter_net_udp_recv_async"
+                && self.intr_fn("__otter_net_udp_recv_async"))
+                || (name.name == "__otter_net_udp_peek_async"
+                    && self.intr_fn("__otter_net_udp_peek_async"))
+                || (name.name == "__otter_net_udp_recv_from_async"
+                    && self.intr_fn("__otter_net_udp_recv_from_async"))
+                || (name.name == "__otter_net_udp_peek_from_async"
+                    && self.intr_fn("__otter_net_udp_peek_from_async"))
+            {
+                if args.len() != 2 {
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 2,
+                            found: args.len(),
+                        },
+                    );
+                } else {
+                    let i64t = self.tcx.int(IntTy::I64);
+                    let handle = self.check_expr(&args[0], Some(i64t));
+                    self.expect(handle, i64t, args[0].span);
+                    let count = self.check_expr(&args[1], Some(i64t));
+                    self.expect(count, i64t, args[1].span);
+                }
+                return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.str]);
+            }
+            if name.name == "__otter_net_udp_send_async"
+                && self.intr_fn("__otter_net_udp_send_async")
+            {
+                if args.len() != 2 {
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 2,
+                            found: args.len(),
+                        },
+                    );
+                } else {
+                    let i64t = self.tcx.int(IntTy::I64);
+                    let handle = self.check_expr(&args[0], Some(i64t));
+                    self.expect(handle, i64t, args[0].span);
+                    let contents = self.check_expr(&args[1], Some(self.tcx.str));
+                    self.expect(contents, self.tcx.str, args[1].span);
+                }
+                return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.str]);
+            }
+            if name.name == "__otter_net_udp_send_to_async"
+                && self.intr_fn("__otter_net_udp_send_to_async")
+            {
+                if args.len() != 3 {
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 3,
+                            found: args.len(),
+                        },
+                    );
+                } else {
+                    let i64t = self.tcx.int(IntTy::I64);
+                    let handle = self.check_expr(&args[0], Some(i64t));
+                    self.expect(handle, i64t, args[0].span);
+                    let contents = self.check_expr(&args[1], Some(self.tcx.str));
+                    self.expect(contents, self.tcx.str, args[1].span);
+                    let addr = self.check_expr(&args[2], Some(self.tcx.str));
+                    self.expect(addr, self.tcx.str, args[2].span);
+                }
+                return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.str]);
+            }
+            // Private `std:time` runtime hooks. Public callers use awaitable
+            // `Instant.now()` / `SystemTime.now()` / local conversion helpers;
+            // these marker functions are not catalog exports.
+            if (name.name == "__otter_time_monotonic_nanos_async"
+                && self.intr_fn("__otter_time_monotonic_nanos_async"))
+                || (name.name == "__otter_time_system_nanos_async"
+                    && self.intr_fn("__otter_time_system_nanos_async"))
             {
                 if !args.is_empty() {
                     self.emit(
@@ -2385,11 +3556,29 @@ impl<'a> Checker<'a> {
                         },
                     );
                 }
-                return self.tcx.int(IntTy::I64);
+                return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.str]);
+            }
+            if name.name == "__otter_time_local_offset_seconds_async"
+                && self.intr_fn("__otter_time_local_offset_seconds_async")
+            {
+                if args.len() != 1 {
+                    self.emit(
+                        span,
+                        SemaErrorKind::ArgCount {
+                            expected: 1,
+                            found: args.len(),
+                        },
+                    );
+                } else {
+                    let i64t = self.tcx.int(IntTy::I64);
+                    let unix_nanos = self.check_expr(&args[0], Some(i64t));
+                    self.expect(unix_nanos, i64t, args[0].span);
+                }
+                return self.tcx.mk_named(self.prog.future_def, vec![self.tcx.str]);
             }
             // `timeout(fut, ms): Future<T | TimedOut>` (`docs/21` §9): race a
             // future against a deadline.
-            if name.name == "timeout" && self.intr_fn_in("timeout", &["std", "async"]) {
+            if self.intr_local_fn_in(&name.name, "timeout", &["std", "async"]) {
                 if args.len() != 2 {
                     self.emit(
                         span,
@@ -2453,18 +3642,13 @@ impl<'a> Checker<'a> {
                 }
             }
         }
-        // `M.foo(args)` where `M` is an `import … as M` namespace alias (and not
-        // shadowed by a local) — resolve `foo` in the aliased module.
+        // `M.foo(args)` where `M` is an `import … as M` namespace alias, and
+        // `Facade.M.foo(args)` where `M` is publicly re-exported by `Facade`.
         if let ExprKind::Field { receiver, name } = &callee.kind {
-            if let ExprKind::Ident(m) = &receiver.kind {
-                if self.lookup(&m.name).is_none() {
-                    if let Some(target) = self.prog.namespace_target(self.current_module(), &m.name)
-                    {
-                        return self.check_namespaced_call(
-                            target, &m.name, callee, name, args, _generics, trailing, span,
-                        );
-                    }
-                }
+            if let Some((target, alias)) = self.namespace_expr_target(receiver) {
+                return self.check_namespaced_call(
+                    target, &alias, callee, name, args, _generics, trailing, span,
+                );
             }
         }
         // `Thread.spawn { … }` / `Task.spawn { … }`: builtin spawn namespaces.
@@ -2538,6 +3722,10 @@ impl<'a> Checker<'a> {
                 }
                 // A generic free function: infer/substitute its type arguments.
                 if let Some(def) = self.prog.resolve_value_in(module, &name.name) {
+                    if self.is_planned_sync_channel_constructor(def) {
+                        return self
+                            .reject_planned_sync_channel_constructor(def, args, trailing, span);
+                    }
                     if matches!(
                         self.prog.def(def).kind,
                         DefKind::Function | DefKind::ExternFunction
@@ -2760,6 +3948,9 @@ impl<'a> Checker<'a> {
             );
             return self.tcx.error;
         };
+        if self.is_planned_sync_channel_constructor(def) {
+            return self.reject_planned_sync_channel_constructor(def, args, trailing, span);
+        }
         // A generic free function: infer/substitute its type arguments.
         if matches!(
             self.prog.def(def).kind,
@@ -2771,5 +3962,24 @@ impl<'a> Checker<'a> {
         self.record_res(callee.span, self.value_res(def), self.tcx.error);
         let callee_ty = self.value_def_ty(def);
         self.check_args_against(callee_ty, args, trailing, span)
+    }
+
+    fn namespace_expr_target(&self, expr: &Expr) -> Option<(ModId, String)> {
+        match &expr.kind {
+            ExprKind::Ident(alias) => {
+                if self.lookup(&alias.name).is_some() {
+                    return None;
+                }
+                self.prog
+                    .namespace_target(self.current_module(), &alias.name)
+                    .map(|target| (target, alias.name.clone()))
+            }
+            ExprKind::Field { receiver, name } => {
+                let (module, path) = self.namespace_expr_target(receiver)?;
+                let target = self.prog.public_namespace_target(module, &name.name)?;
+                Some((target, format!("{path}.{}", name.name)))
+            }
+            _ => None,
+        }
     }
 }

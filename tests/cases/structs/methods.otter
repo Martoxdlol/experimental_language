@@ -3,6 +3,7 @@
 //@ stdout:
 //~ 7
 //~ 5
+import { Future } from "core:prelude";
 import { println } from "std:io";
 struct Point { x: i64, y: i64 }
 extend Point {
@@ -11,8 +12,9 @@ extend Point {
     Point { x: self.x + dx, y: self.y + dy }
   }
 }
-function main() {
+function main(): Future<null> async {
   var p = Point { x: 3, y: 4 };
-  println("${p.sum()}");
-  println("${p.shifted(1, -3).sum()}");
+  await println("${p.sum()}");
+  await println("${p.shifted(1, -3).sum()}");
+  null
 }

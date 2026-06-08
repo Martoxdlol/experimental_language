@@ -4,8 +4,8 @@
 //@ stdout:
 //~ join = cancelled
 //~ after abort = 1
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { Task, JoinHandle, Joined, Panicked, Cancelled } from "std:task";
 import { Shared, LockBusy } from "std:sync";
 import { sleep } from "std:async";
@@ -27,12 +27,13 @@ function main(): Future<null> async {
   var _started = await sleep(20);
   h.abort();
   match await h.join() {
-    Joined<i64> j => println("join = joined ${j.value }"),
-    Panicked p => println("join = panicked"),
-    Cancelled c => println("join = cancelled"),
+    Joined<i64> j => await println("join = joined ${j.value}"),
+    Panicked p => await println("join = panicked"),
+    Cancelled c => await println("join = cancelled"),
   };
   match await state.try_lock((c) => c.value) {
-    i64 n => println("after abort = ${n }"),
-    LockBusy b => println("after abort = still locked"),
+    i64 n => await println("after abort = ${n}"),
+    LockBusy b => await println("after abort = still locked"),
   };
+  null
 }

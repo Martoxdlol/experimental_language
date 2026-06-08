@@ -3,6 +3,7 @@
 //@ stdout:
 //~ Hello, world
 //~ Bonjour, monde
+import { Future } from "core:prelude";
 import { println } from "std:io";
 interface Greet {
   function name(self): str;
@@ -15,9 +16,10 @@ extend Fr: Greet {
   function name(self): str { "monde" }
   function hello(self): str { "Bonjour, " + self.name() }
 }
-function main() {
+function main(): Future<null> async {
   var a: Greet = En {};
   var b: Greet = Fr {};
-  println(a.hello());
-  println(b.hello());
+  await println(a.hello());
+  await println(b.hello());
+  null
 }

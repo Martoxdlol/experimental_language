@@ -3,6 +3,7 @@
 //@ description: docs/19 §6 — churning many CStrings frees every foreign buffer under GC stress (loop intermediates via the GC backstop, the last via deterministic scope-exit Drop); no leak
 //@ stdout:
 //~ sum=4890 leak=0
+import { Future } from "core:prelude";
 import { println } from "std:io";
 import { CString } from "core:ffi";
 extern function lang_foreign_outstanding(): i64;
@@ -16,8 +17,9 @@ function churn(): i64 {
   }
   n
 }
-function main() {
+function main(): Future<null> async {
   var base = lang_foreign_outstanding();
   var n = churn();
-  println("sum=${n} leak=${lang_foreign_outstanding() - base}");
+  await println("sum=${n} leak=${lang_foreign_outstanding() - base}");
+  null
 }

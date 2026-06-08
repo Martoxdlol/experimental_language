@@ -29,7 +29,8 @@ function main(): Future<null> async {
     }).detach();
 
   match await rx.recv() {
-    i64 n => println("sibling=${n }"),
-    ChannelClosed c => println("sibling=closed"),
+    i64 n => await println("sibling=${n}"),
+    ChannelClosed c => await println("sibling=closed"),
   }
+  null
 }

@@ -1,0 +1,74 @@
+//@ kind: run
+//@ serial
+//@ description: example program - AsyncUdpSocket keeps UDP datagram operations explicit and awaitable
+//@ stdout:
+//~ async-udp=ping 4
+
+import { Future } from "core:prelude";
+import { Bytes } from "std:bytes";
+import { println, IoError } from "std:io";
+import { AsyncUdpSocket } from "std:net";
+import { SocketAddr, ip_v4, socket_addr } from "std:net/types";
+
+// AsyncUdpSocket is intentionally datagram-shaped. Binding, address lookup,
+// datagram send/receive, and close are all awaited futures; the `*_async`
+// suffix marks datagram operations that would otherwise look like byte-stream
+// Reader/Writer methods.
+
+function trim_read_buffer(buf: Bytes, request_len: i64): Bytes {
+  var i = 0;
+  while i < request_len {
+    var _ = buf.remove_at(0);
+    i = i + 1;
+  }
+  buf
+}
+
+function decode_appended(buf: Bytes, request_len: i64): str {
+  var decoded = trim_read_buffer(buf, request_len).decode_utf8();
+  if decoded is str { decoded as str } else { "utf8-error" }
+}
+
+function filled_buffer(len: i64): Bytes {
+  var buf = Bytes.new();
+  var i = 0;
+  while i < len {
+    buf.push(0u8);
+    i = i + 1;
+  }
+  buf
+}
+
+function main(): Future<null> async {
+  var left_bound = await AsyncUdpSocket.bind(socket_addr(ip_v4(127u8, 0u8, 0u8, 1u8), 0u16));
+  var right_bound = await AsyncUdpSocket.bind(socket_addr(ip_v4(127u8, 0u8, 0u8, 1u8), 0u16));
+  if left_bound is IoError || right_bound is IoError {
+    await println("async-udp=false bind-error");
+    return null;
+  }
+
+  var left = left_bound as AsyncUdpSocket;
+  var right = right_bound as AsyncUdpSocket;
+  var right_addr = await right.local_addr();
+  if right_addr is IoError {
+    await println("async-udp=false addr-error");
+    return null;
+  }
+
+  var sent = await left.send_to_async(Bytes.from_str("ping"), right_addr as SocketAddr);
+  var buf = filled_buffer(4);
+  var received = if sent is i64 {
+    await right.recv_from_async(buf)
+  } else {
+    sent
+  };
+  var text = if received is (i64, SocketAddr) {
+    decode_appended(buf, 4)
+  } else {
+    "recv-error"
+  };
+  var _left_close = await left.close();
+  var _right_close = await right.close();
+  await println("async-udp=${text} ${if sent is i64 { sent as i64 } else { -1 }}");
+  null
+}

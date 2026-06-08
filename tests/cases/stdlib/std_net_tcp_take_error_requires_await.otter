@@ -1,0 +1,10 @@
+//@ kind: compile-error
+//@ description: std:net TcpStream.take_error returns a Future and must be awaited
+//@ stderr: found `Future<
+
+import { IoError } from "std:io";
+import { TcpStream } from "std:net";
+
+function requires_await(stream: TcpStream) {
+  var _error: IoError | null = stream.take_error();
+}

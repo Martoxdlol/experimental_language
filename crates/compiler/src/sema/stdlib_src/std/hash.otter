@@ -14,6 +14,10 @@ struct KeyedHasher {
   state: u64,
 }
 
+struct HashSeedError {}
+
+extern function __otter_rand_os_bytes_async(count: i64): Future<str>;
+
 function hash_value<T: Hash>(value: T): u64 {
   value.hash()
 }
@@ -34,6 +38,76 @@ function __hash_seeded_state(seed: u64): u64 {
 
 function keyed_hasher(seed: u64): KeyedHasher {
   KeyedHasher.new(seed)
+}
+
+function __hash_status_is_error(result: str): bool {
+  result.size() == 0 || result.substring(0, 1) == "1"
+}
+
+function __hash_status_payload(result: str): str {
+  if result.size() <= 1 { "" } else { result.substring(1, result.size()) }
+}
+
+function __hash_hex_value(ch: char): u64 | HashSeedError {
+  var cp = ch as i64;
+  if cp >= 48 && cp <= 57 {
+    (cp - 48) as u64
+  } else if cp >= 97 && cp <= 102 {
+    (cp - 87) as u64
+  } else if cp >= 65 && cp <= 70 {
+    (cp - 55) as u64
+  } else {
+    HashSeedError {}
+  }
+}
+
+function __hash_hex_at(text: str, index: i64): u64 | HashSeedError {
+  var result: u64 | HashSeedError = HashSeedError {};
+  for ch in text.substring(index, index + 1).chars() {
+    result = __hash_hex_value(ch);
+  }
+  result
+}
+
+function __hash_seed_from_hex(hex: str): u64 | HashSeedError {
+  if hex.size() != 16 {
+    HashSeedError {}
+  } else {
+    var seed = 0u64;
+    var i = 0;
+    var factor = 1u64;
+    while i < 16 {
+      var digit = __hash_hex_at(hex, i);
+      match digit {
+        u64 => {
+          seed = seed + (digit as u64) * factor;
+          if i < 15 {
+            factor = factor * 16u64;
+          }
+        },
+        HashSeedError => return digit as HashSeedError,
+      }
+      i = i + 1;
+    }
+    seed
+  }
+}
+
+function __hash_decode_seed(result: str): u64 | HashSeedError {
+  if __hash_status_is_error(result) {
+    HashSeedError {}
+  } else {
+    __hash_seed_from_hex(__hash_status_payload(result))
+  }
+}
+
+function os_keyed_hasher(): Future<KeyedHasher | HashSeedError> async {
+  var raw = await __otter_rand_os_bytes_async(8);
+  var seed = __hash_decode_seed(raw);
+  match seed {
+    u64 => KeyedHasher.new(seed as u64),
+    HashSeedError => seed as HashSeedError,
+  }
 }
 
 extend DefaultHasher {
@@ -176,4 +250,28 @@ extend KeyedHasher: Debug {
   function debug(self): str {
     "KeyedHasher { seed: " + (self.seed as str) + ", state: " + (self.state as str) + " }"
   }
+}
+
+extend HashSeedError: Error {
+  function message(self): str { "OS hash seed unavailable" }
+}
+
+extend HashSeedError: Eq {
+  function eq(self, other: HashSeedError): bool { true }
+}
+
+extend HashSeedError: Clone {
+  function clone(self): HashSeedError { HashSeedError {} }
+}
+
+extend HashSeedError: Hash {
+  function hash(self): u64 { 1048583u64 }
+}
+
+extend HashSeedError: ToStr {
+  function to_str(self): str { self.message() }
+}
+
+extend HashSeedError: Debug {
+  function debug(self): str { "HashSeedError { message: \"" + self.message() + "\" }" }
 }

@@ -1,0 +1,14 @@
+//@ kind: compile-error
+//@ description: std:process Command.with_env is an immediate pure command value builder
+//@ stderr: `await` requires a `Future`
+
+import { Future } from "core:prelude";
+import { Map } from "core:collections";
+import { Command } from "std:process";
+
+function main(): Future<null> async {
+  var env = Map.new<str, str>();
+  env["MODE"] = "test";
+  var _command = await Command.new("true").with_env(env);
+  null
+}

@@ -3,6 +3,7 @@
 //@ stdout:
 //~ 12.56636
 //~ 12
+import { Future } from "core:prelude";
 import { println } from "std:io";
 struct Circle { radius: f64 }
 struct Rect { w: f64, h: f64 }
@@ -13,7 +14,8 @@ function area(s: Shape): f64 {
     Rect { w, h } => w * h,
   }
 }
-function main() {
-  println("${area(Circle { radius: 2.0 })}");
-  println("${area(Rect { w: 3.0, h: 4.0 })}");
+function main(): Future<null> async {
+  await println("${area(Circle { radius: 2.0 })}");
+  await println("${area(Rect { w: 3.0, h: 4.0 })}");
+  null
 }

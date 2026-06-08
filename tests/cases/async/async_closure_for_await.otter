@@ -3,7 +3,7 @@
 //@ stdout:
 //~ t=1010
 import { println } from "std:io";
-import { Item, Done, Future } from "core:prelude";
+import { Future, Item, Done } from "core:prelude";
 import { AsyncIterator } from "core:async";
 import { sleep } from "std:async";
 struct Range { current: i64, end: i64 }
@@ -23,5 +23,6 @@ function main(): Future<null> async {
     for await x in r { total = total + x; }
     total
   };
-  println("t=${await run(5) }");
+  await println("t=${await run(5)}");
+  null
 }

@@ -1,0 +1,10 @@
+//@ kind: compile-error
+//@ description: std:net UdpSocket.take_error returns a Future and must be awaited
+//@ stderr: found `Future<
+
+import { IoError } from "std:io";
+import { UdpSocket } from "std:net";
+
+function requires_await(socket: UdpSocket) {
+  var _value: IoError | null = socket.take_error();
+}

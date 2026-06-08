@@ -66,6 +66,7 @@
 //~ bad-url6-delim=expected URL host/port delimiter at 13
 //~ bad-url6-host=expected IPv6 hex digit at 12
 
+import { Future } from "core:prelude";
 import { Map } from "core:collections";
 import { Clone, Eq, Hash, ToStr } from "core:prelude";
 import { Error } from "std:error";
@@ -77,208 +78,208 @@ function debug(value: Debug): str {
   value.debug()
 }
 
-function main() {
+function main(): Future<null> async {
   var loopback = ip_v4(127u8, 0u8, 0u8, 1u8);
-  println(loopback.to_str());
-  println("${loopback.is_v4()}");
+  await println(loopback.to_str());
+  await println("${loopback.is_v4()}");
 
   var loop6 = ip_v6(0u16, 0u16, 0u16, 0u16, 0u16, 0u16, 0u16, 1u16);
   var socket = socket_addr(loop6, 443u16);
-  println(socket.to_str());
+  await println(socket.to_str());
 
   var docs = uri("otter", "docs.example", "/guide", "q=stdlib", "net");
-  println(docs.to_str());
+  await println(docs.to_str());
 
   var query = Map.new<str, str>();
   query.set("q", "otter");
   var link = url("https", "ada", "example.com", 8443u16, "/search", query, null);
   var copy = link.clone();
-  println(link.to_str());
-  println("${copy == link}");
+  await println(link.to_str());
+  await println("${copy == link}");
   query.set("q", "fusion");
-  println("${copy == link}");
-  println("url-snapshot=${link.to_str()} source=${query["q"]}");
-  println(copy.to_str());
-  println(debug(loopback));
-  println(debug(socket));
-  println(debug(docs));
-  println(debug(copy));
+  await println("${copy == link}");
+  await println("url-snapshot=${link.to_str()} source=${query["q"]}");
+  await println(copy.to_str());
+  await println(debug(loopback));
+  await println(debug(socket));
+  await println(debug(docs));
+  await println(debug(copy));
 
   var parse = ParseError { message: "bad uri", position: 4 };
   var parse_copy = parse.clone();
   var err: Error = parse;
-  println("parse=${err.to_str()} ${parse == parse_copy} ${parse.hash() == parse_copy.hash()} ${debug(parse)}");
+  await println("parse=${err.to_str()} ${parse == parse_copy} ${parse.hash() == parse_copy.hash()} ${debug(parse)}");
 
   match parse_ip_v4("192.168.0.1") {
-    IpAddr ip => println("parsed-ip=${ip.to_str()} ${ip.is_v4()}"),
-    ParseError e => println("bad parsed-ip ${e.to_str()}"),
+    IpAddr ip => await println("parsed-ip=${ip.to_str()} ${ip.is_v4()}"),
+    ParseError e => await println("bad parsed-ip ${e.to_str()}"),
   }
 
   match parse_ip_v6("2001:db8::1") {
-    IpAddr ip => println("parsed-ip6=${ip.to_str()} ${ip.is_v6()}"),
-    ParseError e => println("bad parsed-ip6 ${e.to_str()}"),
+    IpAddr ip => await println("parsed-ip6=${ip.to_str()} ${ip.is_v6()}"),
+    ParseError e => await println("bad parsed-ip6 ${e.to_str()}"),
   }
 
   var scoped = ip_v6_scoped(0xfe80u16, 0u16, 0u16, 0u16, 0u16, 0u16, 0u16, 1u16, "eth0");
   match scoped.zone_id() {
-    str zone => println("scoped=${scoped.to_str()} ${zone}"),
-    null => println("scoped=${scoped.to_str()} none"),
+    str zone => await println("scoped=${scoped.to_str()} ${zone}"),
+    null => await println("scoped=${scoped.to_str()} none"),
   }
 
   match parse_ip_v6("0:0:0:0:0:0:0:1") {
-    IpAddr ip => println("parsed-ip6-full=${ip.to_str()}"),
-    ParseError e => println("bad parsed-ip6-full ${e.to_str()}"),
+    IpAddr ip => await println("parsed-ip6-full=${ip.to_str()}"),
+    ParseError e => await println("bad parsed-ip6-full ${e.to_str()}"),
   }
 
   match parse_ip_v6("::ffff:192.0.2.128") {
-    IpAddr ip => println("parsed-ip6-v4tail=${ip.to_str()}"),
-    ParseError e => println("bad parsed-ip6-v4tail ${e.to_str()}"),
+    IpAddr ip => await println("parsed-ip6-v4tail=${ip.to_str()}"),
+    ParseError e => await println("bad parsed-ip6-v4tail ${e.to_str()}"),
   }
 
   match parse_ip_v6("2001:db8:0:0:0:0:192.0.2.128") {
-    IpAddr ip => println("parsed-ip6-v4tail-full=${ip.to_str()}"),
-    ParseError e => println("bad parsed-ip6-v4tail-full ${e.to_str()}"),
+    IpAddr ip => await println("parsed-ip6-v4tail-full=${ip.to_str()}"),
+    ParseError e => await println("bad parsed-ip6-v4tail-full ${e.to_str()}"),
   }
 
   match parse_ip_v6("2001:db8") {
-    IpAddr ip => println("unexpected ${ip.to_str()}"),
-    ParseError e => println("bad-ip6=${e.to_str()}"),
+    IpAddr ip => await println("unexpected ${ip.to_str()}"),
+    ParseError e => await println("bad-ip6=${e.to_str()}"),
   }
 
   match parse_ip_v6("1::2::3") {
-    IpAddr ip => println("unexpected ${ip.to_str()}"),
-    ParseError e => println("bad-ip6-multi=${e.to_str()}"),
+    IpAddr ip => await println("unexpected ${ip.to_str()}"),
+    ParseError e => await println("bad-ip6-multi=${e.to_str()}"),
   }
 
   match parse_ip_v6("200g::1") {
-    IpAddr ip => println("unexpected ${ip.to_str()}"),
-    ParseError e => println("bad-ip6-hex=${e.to_str()}"),
+    IpAddr ip => await println("unexpected ${ip.to_str()}"),
+    ParseError e => await println("bad-ip6-hex=${e.to_str()}"),
   }
 
   match parse_ip_v6("2001:192.0.2.128:1") {
-    IpAddr ip => println("unexpected ${ip.to_str()}"),
-    ParseError e => println("bad-ip6-v4tail-order=${e.to_str()}"),
+    IpAddr ip => await println("unexpected ${ip.to_str()}"),
+    ParseError e => await println("bad-ip6-v4tail-order=${e.to_str()}"),
   }
 
   match parse_ip_v6("::ffff:999.0.2.128") {
-    IpAddr ip => println("unexpected ${ip.to_str()}"),
-    ParseError e => println("bad-ip6-v4tail-decimal=${e.to_str()}"),
+    IpAddr ip => await println("unexpected ${ip.to_str()}"),
+    ParseError e => await println("bad-ip6-v4tail-decimal=${e.to_str()}"),
   }
 
   match parse_ip_v6("fe80::1%") {
-    IpAddr ip => println("unexpected ${ip.to_str()}"),
-    ParseError e => println("bad-ip6-zone=${e.to_str()}"),
+    IpAddr ip => await println("unexpected ${ip.to_str()}"),
+    ParseError e => await println("bad-ip6-zone=${e.to_str()}"),
   }
 
   match parse_ipv4_socket_addr("10.0.0.1:8080") {
-    SocketAddr addr => println("parsed-socket=${addr.to_str()} ${addr.port()}"),
-    ParseError e => println("bad parsed-socket ${e.to_str()}"),
+    SocketAddr addr => await println("parsed-socket=${addr.to_str()} ${addr.port()}"),
+    ParseError e => await println("bad parsed-socket ${e.to_str()}"),
   }
 
   match parse_socket_addr("10.0.0.1:8080") {
-    SocketAddr addr => println("parsed-socket-general=${addr.to_str()}"),
-    ParseError e => println("bad parsed-socket-general ${e.to_str()}"),
+    SocketAddr addr => await println("parsed-socket-general=${addr.to_str()}"),
+    ParseError e => await println("bad parsed-socket-general ${e.to_str()}"),
   }
 
   match parse_socket_addr("[2001:db8::1]:443") {
-    SocketAddr addr => println("parsed-socket6=${addr.to_str()} ${addr.ip().is_v6()} ${addr.port()}"),
-    ParseError e => println("bad parsed-socket6 ${e.to_str()}"),
+    SocketAddr addr => await println("parsed-socket6=${addr.to_str()} ${addr.ip().is_v6()} ${addr.port()}"),
+    ParseError e => await println("bad parsed-socket6 ${e.to_str()}"),
   }
 
   match parse_socket_addr("[fe80::1%en0]:5353") {
     SocketAddr addr => {
       match addr.ip().zone_id() {
-        str zone => println("parsed-socket6-zone=${addr.to_str()} ${zone}"),
-        null => println("parsed-socket6-zone=${addr.to_str()} none"),
+        str zone => await println("parsed-socket6-zone=${addr.to_str()} ${zone}"),
+        null => await println("parsed-socket6-zone=${addr.to_str()} none"),
       }
     },
-    ParseError e => println("bad parsed-socket6-zone ${e.to_str()}"),
+    ParseError e => await println("bad parsed-socket6-zone ${e.to_str()}"),
   }
 
   match parse_socket_addr("[2001::1") {
-    SocketAddr addr => println("unexpected ${addr.to_str()}"),
-    ParseError e => println("bad-socket6-bracket=${e.to_str()}"),
+    SocketAddr addr => await println("unexpected ${addr.to_str()}"),
+    ParseError e => await println("bad-socket6-bracket=${e.to_str()}"),
   }
 
   match parse_socket_addr("[::1]443") {
-    SocketAddr addr => println("unexpected ${addr.to_str()}"),
-    ParseError e => println("bad-socket6-delim=${e.to_str()}"),
+    SocketAddr addr => await println("unexpected ${addr.to_str()}"),
+    ParseError e => await println("bad-socket6-delim=${e.to_str()}"),
   }
 
   match parse_socket_addr("[::1]:") {
-    SocketAddr addr => println("unexpected ${addr.to_str()}"),
-    ParseError e => println("bad-socket6-port=${e.to_str()}"),
+    SocketAddr addr => await println("unexpected ${addr.to_str()}"),
+    ParseError e => await println("bad-socket6-port=${e.to_str()}"),
   }
 
   match parse_socket_addr("[200g::1]:80") {
-    SocketAddr addr => println("unexpected ${addr.to_str()}"),
-    ParseError e => println("bad-socket6-host=${e.to_str()}"),
+    SocketAddr addr => await println("unexpected ${addr.to_str()}"),
+    ParseError e => await println("bad-socket6-host=${e.to_str()}"),
   }
 
   match parse_ip_v4("999.1.1.1") {
-    IpAddr ip => println("unexpected ${ip.to_str()}"),
-    ParseError e => println("bad-ip=${e.to_str()}"),
+    IpAddr ip => await println("unexpected ${ip.to_str()}"),
+    ParseError e => await println("bad-ip=${e.to_str()}"),
   }
 
   match parse_ipv4_socket_addr("10.0.0.1:") {
-    SocketAddr addr => println("unexpected ${addr.to_str()}"),
-    ParseError e => println("bad-socket=${e.to_str()}"),
+    SocketAddr addr => await println("unexpected ${addr.to_str()}"),
+    ParseError e => await println("bad-socket=${e.to_str()}"),
   }
 
   match parse_uri("otter://docs.example/guide?q=stdlib#net") {
     Uri u => {
-      println("parsed-uri=${u.to_str()} ${u.to_str() == docs.to_str()}");
+      await println("parsed-uri=${u.to_str()} ${u.to_str() == docs.to_str()}");
       match u.authority() {
         str authority => {
           match u.query() {
             str q => {
               match u.fragment() {
-                str f => println("uri-access=${u.scheme()} ${authority} ${u.path()} ${q} ${f}"),
-                null => println("uri-access=${u.scheme()} ${authority} ${u.path()} ${q} none"),
+                str f => await println("uri-access=${u.scheme()} ${authority} ${u.path()} ${q} ${f}"),
+                null => await println("uri-access=${u.scheme()} ${authority} ${u.path()} ${q} none"),
               }
             },
-            null => println("uri-access=${u.scheme()} ${authority} ${u.path()} none none"),
+            null => await println("uri-access=${u.scheme()} ${authority} ${u.path()} none none"),
           }
         },
-        null => println("uri-access=${u.scheme()} none ${u.path()} none none"),
+        null => await println("uri-access=${u.scheme()} none ${u.path()} none none"),
       }
     },
-    ParseError e => println("bad parsed-uri ${e.to_str()}"),
+    ParseError e => await println("bad parsed-uri ${e.to_str()}"),
   }
 
   match parse_uri("urn:otter:fusion") {
-    Uri u => println("urn=${u.to_str()}"),
-    ParseError e => println("bad urn ${e.to_str()}"),
+    Uri u => await println("urn=${u.to_str()}"),
+    ParseError e => await println("bad urn ${e.to_str()}"),
   }
 
   match parse_uri("nocolons") {
-    Uri u => println("unexpected ${u.to_str()}"),
-    ParseError e => println("bad-uri=${e.to_str()}"),
+    Uri u => await println("unexpected ${u.to_str()}"),
+    ParseError e => await println("bad-uri=${e.to_str()}"),
   }
 
   match parse_uri("otter:///missing-authority") {
-    Uri u => println("unexpected ${u.to_str()}"),
-    ParseError e => println("bad-authority=${e.to_str()}"),
+    Uri u => await println("unexpected ${u.to_str()}"),
+    ParseError e => await println("bad-authority=${e.to_str()}"),
   }
 
   match parse_url("https://ada@example.com:8443/search?q=otter") {
-    Url u => println("parsed-url=${u.to_str()} ${u.to_str() == copy.to_str()} ${u.query_string() == "q=otter"}"),
-    ParseError e => println("bad parsed-url ${e.to_str()}"),
+    Url u => await println("parsed-url=${u.to_str()} ${u.to_str() == copy.to_str()} ${u.query_string() == "q=otter"}"),
+    ParseError e => await println("bad parsed-url ${e.to_str()}"),
   }
 
   match parse_url("https://example.com") {
-    Url u => println("no-path=${u.to_str()}"),
-    ParseError e => println("bad no-path ${e.to_str()}"),
+    Url u => await println("no-path=${u.to_str()}"),
+    ParseError e => await println("bad no-path ${e.to_str()}"),
   }
 
   match parse_url("https://[2001:db8::1]:8443/search") {
-    Url u => println("parsed-url6=${u.to_str()}"),
-    ParseError e => println("bad parsed-url6 ${e.to_str()}"),
+    Url u => await println("parsed-url6=${u.to_str()}"),
+    ParseError e => await println("bad parsed-url6 ${e.to_str()}"),
   }
 
   match parse_url("http://[fe80::1%en0]/") {
-    Url u => println("parsed-url6-zone=${u.to_str()}"),
-    ParseError e => println("bad parsed-url6-zone ${e.to_str()}"),
+    Url u => await println("parsed-url6-zone=${u.to_str()}"),
+    ParseError e => await println("bad parsed-url6-zone ${e.to_str()}"),
   }
 
   var parsed = parse_url("https://ada@example.com:8443/search?q=otter#net");
@@ -297,15 +298,15 @@ function main() {
       null => "none",
     };
     var snap = u.query();
-    println("url-access=${u.scheme()} ${user_text} ${u.host()} ${port_text} ${u.path()} ${fragment_text} ${snap["q"]}");
+    await println("url-access=${u.scheme()} ${user_text} ${u.host()} ${port_text} ${u.path()} ${fragment_text} ${snap["q"]}");
     snap.set("q", "changed");
-    println("url-query-snapshot=${u.query_string()} mutated=${snap["q"]}");
+    await println("url-query-snapshot=${u.query_string()} mutated=${snap["q"]}");
 
     var replacement = Map.new<str, str>();
     replacement.set("q", "docs");
     var rebuilt = u.with_host("docs.example").with_port(443u16).with_path("/docs").with_query(replacement).with_fragment("top");
     replacement.set("q", "later");
-    println("url-builder=${rebuilt.to_str()} q=${rebuilt.query()["q"]} source=${replacement["q"]}");
+    await println("url-builder=${rebuilt.to_str()} q=${rebuilt.query()["q"]} source=${replacement["q"]}");
     var query_built = rebuilt.with_query_param("page", "1").with_query_param("q", "override");
     var removed_query = query_built.without_query_param("q").without_query_param("missing");
     var cleared_query = query_built.clear_query();
@@ -321,7 +322,7 @@ function main() {
       str value => value,
       null => "none",
     };
-    println("url-query-build=${query_built.to_str()} get=${query_q}/${query_page}/${query_missing} removed=${removed_query.to_str()} cleared=${cleared_query.to_str()} original=${rebuilt.to_str()}");
+    await println("url-query-build=${query_built.to_str()} get=${query_q}/${query_page}/${query_missing} removed=${removed_query.to_str()} cleared=${cleared_query.to_str()} original=${rebuilt.to_str()}");
     var ordered_a = Map.new<str, str>();
     ordered_a.set("a", "1");
     ordered_a.set("b", "2");
@@ -330,7 +331,7 @@ function main() {
     ordered_b.set("a", "1");
     var url_a = url("https", null, "example.com", null, "/search", ordered_a, null);
     var url_b = url("https", null, "example.com", null, "/search", ordered_b, null);
-    println("url-hash-order=${url_a.eq(url_b)} ${url_a.hash() == url_b.hash()}");
+    await println("url-hash-order=${url_a.eq(url_b)} ${url_a.hash() == url_b.hash()}");
     var cleared = rebuilt.with_scheme("http").with_user(null).with_port(null).with_fragment(null);
     var cleared_user = match cleared.user() {
       str value => value,
@@ -340,72 +341,73 @@ function main() {
       str value => value,
       null => "none",
     };
-    println("url-clear=${cleared.to_str()} ${cleared_user} ${cleared_fragment}");
+    await println("url-clear=${cleared.to_str()} ${cleared_user} ${cleared_fragment}");
   }
 
   var encoded = percent_encode_component("Otter Fusion/café~");
   match percent_decode_component(encoded) {
-    str decoded => println("percent=${encoded} decoded=${decoded}"),
-    ParseError e => println("bad percent decode ${e.to_str()}"),
+    str decoded => await println("percent=${encoded} decoded=${decoded}"),
+    ParseError e => await println("bad percent decode ${e.to_str()}"),
   }
 
   match percent_decode_component("raw café") {
-    str decoded => println("percent-raw=${decoded}"),
-    ParseError e => println("bad percent raw ${e.to_str()}"),
+    str decoded => await println("percent-raw=${decoded}"),
+    ParseError e => await println("bad percent raw ${e.to_str()}"),
   }
 
   match percent_decode_component("bad%") {
-    str decoded => println("unexpected ${decoded}"),
-    ParseError e => println("bad-percent=${e.to_str()}"),
+    str decoded => await println("unexpected ${decoded}"),
+    ParseError e => await println("bad-percent=${e.to_str()}"),
   }
 
   match percent_decode_component("%G0") {
-    str decoded => println("unexpected ${decoded}"),
-    ParseError e => println("bad-percent-hex=${e.to_str()}"),
+    str decoded => await println("unexpected ${decoded}"),
+    ParseError e => await println("bad-percent-hex=${e.to_str()}"),
   }
 
   match percent_decode_component("%80") {
-    str decoded => println("unexpected ${decoded}"),
-    ParseError e => println("bad-percent-utf8=${e.to_str()}"),
+    str decoded => await println("unexpected ${decoded}"),
+    ParseError e => await println("bad-percent-utf8=${e.to_str()}"),
   }
 
   match percent_decode_component("%F0%9F%A6") {
-    str decoded => println("unexpected ${decoded}"),
-    ParseError e => println("bad-percent-trunc=utf-8"),
+    str decoded => await println("unexpected ${decoded}"),
+    ParseError e => await println("bad-percent-trunc=utf-8"),
   }
 
   match parse_url("https:/example") {
-    Url u => println("unexpected ${u.to_str()}"),
-    ParseError e => println("bad-url=${e.to_str()}"),
+    Url u => await println("unexpected ${u.to_str()}"),
+    ParseError e => await println("bad-url=${e.to_str()}"),
   }
 
   match parse_url("https://:443/path") {
-    Url u => println("unexpected ${u.to_str()}"),
-    ParseError e => println("bad-host=${e.to_str()}"),
+    Url u => await println("unexpected ${u.to_str()}"),
+    ParseError e => await println("bad-host=${e.to_str()}"),
   }
 
   match parse_url("https://example.com:bad/path") {
-    Url u => println("unexpected ${u.to_str()}"),
-    ParseError e => println("bad-port=${e.to_str()}"),
+    Url u => await println("unexpected ${u.to_str()}"),
+    ParseError e => await println("bad-port=${e.to_str()}"),
   }
 
   match parse_url("https://example.com/search?bad") {
-    Url u => println("unexpected ${u.to_str()}"),
-    ParseError e => println("bad-query=${e.to_str()}"),
+    Url u => await println("unexpected ${u.to_str()}"),
+    ParseError e => await println("bad-query=${e.to_str()}"),
   }
 
   match parse_url("https://[2001::1") {
-    Url u => println("unexpected ${u.to_str()}"),
-    ParseError e => println("bad-url6-bracket=${e.to_str()}"),
+    Url u => await println("unexpected ${u.to_str()}"),
+    ParseError e => await println("bad-url6-bracket=${e.to_str()}"),
   }
 
   match parse_url("https://[::1]bad") {
-    Url u => println("unexpected ${u.to_str()}"),
-    ParseError e => println("bad-url6-delim=${e.to_str()}"),
+    Url u => await println("unexpected ${u.to_str()}"),
+    ParseError e => await println("bad-url6-delim=${e.to_str()}"),
   }
 
   match parse_url("https://[200g::1]/") {
-    Url u => println("unexpected ${u.to_str()}"),
-    ParseError e => println("bad-url6-host=${e.to_str()}"),
+    Url u => await println("unexpected ${u.to_str()}"),
+    ParseError e => await println("bad-url6-host=${e.to_str()}"),
   }
+  null
 }

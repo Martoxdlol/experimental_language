@@ -4,9 +4,11 @@
 //~ true
 //~ true
 //~ true
+import { Future } from "core:prelude";
 import { println } from "std:io";
-function main() {
-  println("${true && false || true}");
-  println("${false || false || true}");
-  println("${!(1 > 2) && (3 >= 3)}");
+function main(): Future<null> async {
+  await println("${true && false || true}");
+  await println("${false || false || true}");
+  await println("${!(1 > 2) && (3 >= 3)}");
+  null
 }

@@ -150,10 +150,10 @@ var grade =
 <p>Without <code>else</code>, the value is <code>null</code> and the type of both branches must unify:</p>
 
 <pre><code>if x &gt; 0 {
-  print("positive")
+  await print("positive")
 }
 // Same as:
-//   if x &gt; 0 { print("positive") } else { null }</code></pre>
+//   if x &gt; 0 { await print("positive") } else { null }</code></pre>
 
 <div class="callout">
   <strong>Condition must be <code>bool</code></strong>
@@ -177,15 +177,15 @@ can't tell where the header ends and the body begins — so both forms must be w
 
       <text x="14" y="68" font-weight="700" font-size="12">Struct literal</text>
       <rect x="14" y="76" width="870" height="32" rx="4" fill="#fbf3ec" stroke="#b54708"/>
-      <text x="22" y="96" font-size="11" fill="#b54708">✗  for n in Range { current: 0, end: 5 } { print(n as str) }</text>
+      <text x="22" y="96" font-size="11" fill="#b54708">✗  for n in Range { current: 0, end: 5 } { await print(n as str) }</text>
       <rect x="14" y="112" width="870" height="32" rx="4" fill="#eef6f1" stroke="#2a6f4d"/>
-      <text x="22" y="132" font-size="11" fill="#2a6f4d">✓  for n in (Range { current: 0, end: 5 }) { print(n as str) }</text>
+      <text x="22" y="132" font-size="11" fill="#2a6f4d">✓  for n in (Range { current: 0, end: 5 }) { await print(n as str) }</text>
 
       <text x="14" y="170" font-weight="700" font-size="12">Trailing closure</text>
       <rect x="14" y="178" width="870" height="32" rx="4" fill="#fbf3ec" stroke="#b54708"/>
-      <text x="22" y="198" font-size="11" fill="#b54708">✗  for n in xs.map { it * 2 } { print(n as str) }</text>
+      <text x="22" y="198" font-size="11" fill="#b54708">✗  for n in xs.map { it * 2 } { await print(n as str) }</text>
       <rect x="14" y="214" width="870" height="32" rx="4" fill="#eef6f1" stroke="#2a6f4d"/>
-      <text x="22" y="234" font-size="11" fill="#2a6f4d">✓  for n in (xs.map { it * 2 }) { print(n as str) }</text>
+      <text x="22" y="234" font-size="11" fill="#2a6f4d">✓  for n in (xs.map { it * 2 }) { await print(n as str) }</text>
 
       <text x="14" y="266" font-size="11" class="small">Only the bare top-level expression of <tspan font-family="SF Mono, Menlo, monospace">if / while / for / match</tspan> headers needs this; nested struct literals and nested trailing closures are unaffected.</text>
     </g>

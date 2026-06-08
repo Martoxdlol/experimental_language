@@ -6,16 +6,18 @@
 //~ true
 //~ 2
 //~ 42
+import { Future } from "core:prelude";
 import { Map } from "core:collections";
 import { println } from "std:io";
-function main() {
+function main(): Future<null> async {
   var m: Map<str, i64> = { "a": 1, "b": 2 };
   m.set("c", 3);
-  println("${m.size() }");
-  match m.get("c") { i64 n => println("${n }"), null => println("none") };
-  println("${m.contains("a") }");
+  await println("${m.size()}");
+  match m.get("c") { i64 n => await println("${n}"), null => await println("none") };
+  await println("${m.contains("a")}");
   m.remove("a");
-  println("${m.size() }");
+  await println("${m.size()}");
   m["d"] = 42;
-  println("${m["d"] }");
+  await println("${m["d"]}");
+  null
 }

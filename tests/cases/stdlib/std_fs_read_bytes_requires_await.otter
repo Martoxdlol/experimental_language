@@ -1,0 +1,13 @@
+//@ kind: compile-error
+//@ description: std:fs read returns Future<Bytes | IoError> and must be awaited before use
+//@ stderr: found `Future<Bytes | IoError>`
+
+import { Future } from "core:prelude";
+import { Bytes } from "std:bytes";
+import { IoError } from "std:io";
+import { Path, read } from "std:fs";
+
+function main(): Future<null> async {
+  var _bytes: Bytes | IoError = read(Path.new("/tmp/otter_fusion_requires_await.bin"));
+  null
+}

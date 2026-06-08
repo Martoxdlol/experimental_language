@@ -4,8 +4,8 @@
 //@ description: hundreds of Task.spawn async workers yield, contend on Shared, send over channels, and join deterministically on the M:N executor
 //@ stdout:
 //~ shared=3072 received=784896 joined=784896
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { List } from "core:collections";
 import { Task, JoinHandle, Joined, Panicked, Cancelled } from "std:task";
 import { Shared, Sender, Receiver, ChannelClosed, channel } from "std:sync";
@@ -65,5 +65,6 @@ function main(): Future<null> async {
   }
 
   var shared_total: i64 = await state.lock((c) => c.value);
-  println("shared=${shared_total } received=${received } joined=${joined }");
+  await println("shared=${shared_total} received=${received} joined=${joined}");
+  null
 }

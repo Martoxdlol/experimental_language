@@ -1,0 +1,15 @@
+//@ kind: compile-error
+//@ description: std:fs File.seek returns Future<i64 | IoError> and must be awaited before use
+//@ stderr: expected `i64 | IoError`, found `Future<i64 | IoError>`
+
+import { File, Path } from "std:fs";
+import { Future } from "core:prelude";
+import { IoError, Start } from "std:io";
+
+function main(): Future<null> async {
+  var opened = await File.open(Path.new("missing.txt"));
+  if opened is File {
+    var _pos: i64 | IoError = (opened as File).seek(Start { offset: 0u64 });
+  }
+  null
+}

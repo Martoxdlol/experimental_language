@@ -1,0 +1,12 @@
+//@ kind: compile-error
+//@ description: std:async TimedOut.hash is ordinary marker value hashing, not an async runtime operation
+//@ stderr: `await` requires a `Future`
+
+import { Future, Hash } from "core:prelude";
+import { TimedOut } from "std:async";
+
+function main(): Future<null> async {
+  var timed = TimedOut {};
+  var _hash = await timed.hash();
+  null
+}

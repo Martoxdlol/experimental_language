@@ -3,8 +3,8 @@
 //@ description: cancelling a spawn EXPR future stops the executor task and releases a Shared lock held across an await
 //@ stdout:
 //~ after cancel = 1
-import { println } from "std:io";
 import { Future } from "core:prelude";
+import { println } from "std:io";
 import { Shared, LockBusy } from "std:sync";
 import { sleep } from "std:async";
 struct C { value: i64 }
@@ -25,7 +25,8 @@ function main(): Future<null> async {
   fut.cancel();
   var _ = await sleep(5);
   match await state.try_lock((c) => c.value) {
-    i64 n => println("after cancel = ${n }"),
-    LockBusy b => println("after cancel = still locked"),
+    i64 n => await println("after cancel = ${n}"),
+    LockBusy b => await println("after cancel = still locked"),
   };
+  null
 }

@@ -3,12 +3,13 @@
 //@ description: a @RefCounted reference cycle leaks the count but is reclaimed by the tracing GC backstop (no crash, no leak-abort)
 //@ stdout:
 //~ done
+import { Future } from "core:prelude";
 import { println } from "std:io";
 
 @RefCounted
 struct Node { id: i64, peer: Node | null }
 
-function main() {
+function main(): Future<null> async {
   var i: i64 = 0;
   // Build many short-lived a<->b cycles; refcounting alone would leak them all,
   // but the tracing GC reclaims the unreachable cycles under stress.
@@ -18,5 +19,6 @@ function main() {
     a.peer = b;          // a <-> b cycle
     i = i + 1;
   }
-  println("done");
+  await println("done");
+  null
 }

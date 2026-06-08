@@ -1301,8 +1301,8 @@ fn native_build_gc_stress_keeps_live_roots() {
 
 #[test]
 fn native_build_async_thread_spawn_matches_jit() {
-    // An async `Thread.spawn` worker (`() => Future<R>`) drives its future to
-    // completion on its own OS thread, awaiting and locking a `Shared<T>`
+    // An async `Thread.spawn` worker (`() => Future<R>`) polls its future until
+    // it resolves on its own OS thread, awaiting and locking a `Shared<T>`
     // (docs/20 §1/§4). The handle joins on the awaited `R`. The result must be
     // identical whether JIT-run or compiled to a native executable.
     let src = "struct C { value: i64 }\n\
@@ -1785,28 +1785,29 @@ fn shared_try_lock_returns_value_or_lock_busy() {
 }
 
 #[test]
-fn channel_iterator_terminates_on_last_sender_drop() {
+fn channel_async_iteration_terminates_on_last_sender_drop() {
     // `docs/20` §2 / `docs/16` §8 — the headline: a worker thread sends, then
     // its captured `Sender` is *deterministically released* when the worker
-    // returns, closing the channel. The consumer's `for n in rx` (a synchronous
-    // `Receiver: Iterator`) drains the queue and then **terminates** on close —
-    // no GC collection required for the close to happen.
+    // returns, closing the channel. The consumer's `for await n in rx` drains
+    // the queue and then **terminates** on close — no GC collection required
+    // for the close to happen.
     let src = "function produce(tx: Sender<i64>) {\n\
                  var i: i64 = 1;\n\
                  while i <= 5 { tx.send(i * 10); i = i + 1; }\n\
                }\n\
-               function consume(rx: Receiver<i64>): i64 {\n\
+               function consume(rx: Receiver<i64>): Future<i64> async {\n\
                  var total: i64 = 0;\n\
-                 for n in rx { total = total + n; }\n\
+                 for await n in rx { total = total + n; }\n\
                  total\n\
                }\n\
-               function main() {\n\
+               function main(): Future<null> async {\n\
                  var pair: (Sender<i64>, Receiver<i64>) = channel<i64>();\n\
                  var tx: Sender<i64> = pair.0;\n\
                  var rx: Receiver<i64> = pair.1;\n\
                  var h: JoinHandle<i64> = Thread.spawn(() => { produce(tx); 0 });\n\
-                 var total: i64 = consume(rx);\n\
+                 var total: i64 = await consume(rx);\n\
                  println(total as str);\n\
+                 null\n\
                }";
     let (out1, err, ok) = lang("run", src);
     assert!(ok, "stderr: {err}");
@@ -1851,13 +1852,13 @@ fn channel_recv_surfaces_channel_closed() {
 fn channel_multiple_senders_close_after_all_dropped() {
     // `docs/20` §2: a cloned `Sender` is another producer. The channel closes
     // only once *every* sender (the original captured into one worker, the
-    // clone into another) has been released. The iterator drains all messages
-    // from both workers before terminating.
+    // clone into another) has been released. Async iteration drains all
+    // messages from both workers before terminating.
     let src = "function produce(tx: Sender<i64>, base: i64) {\n\
                  var i: i64 = 0;\n\
                  while i < 3 { tx.send(base + i); i = i + 1; }\n\
                }\n\
-               function main() {\n\
+               function main(): Future<null> async {\n\
                  var pair: (Sender<i64>, Receiver<i64>) = channel<i64>();\n\
                  var tx: Sender<i64> = pair.0;\n\
                  var rx: Receiver<i64> = pair.1;\n\
@@ -1866,9 +1867,10 @@ fn channel_multiple_senders_close_after_all_dropped() {
                  var h2: JoinHandle<i64> = Thread.spawn(() => { produce(tx2, 200); 0 });\n\
                  var count: i64 = 0;\n\
                  var total: i64 = 0;\n\
-                 for n in rx { count = count + 1; total = total + n; }\n\
+                 for await n in rx { count = count + 1; total = total + n; }\n\
                  println(count as str);\n\
                  println(total as str);\n\
+                 null\n\
                }";
     let (out1, err, ok) = lang("run", src);
     assert!(ok, "stderr: {err}");
@@ -1907,23 +1909,24 @@ fn channel_send_after_receiver_dropped_is_channel_closed() {
 #[test]
 fn channel_recv_of_managed_element_survives_gc_stress() {
     // `docs/20` §2: a managed element (`str`) flows over the channel; the
-    // `for s in rx` iterator drains it. The message rides the queue (pinned as
-    // a GC root) and is unpinned into the result on recv — a collection in the
-    // hand-off must not free it. The worker drops the sender → iterator ends.
+    // `for await s in rx` loop drains it. The message rides the queue (pinned
+    // as a GC root) and is unpinned into the result on recv — a collection in
+    // the hand-off must not free it. The worker drops the sender → iteration ends.
     let src = "function produce(tx: Sender<str>) {\n\
                  tx.send(\"a\"); tx.send(\"b\"); tx.send(\"c\");\n\
                }\n\
-               function consume(rx: Receiver<str>): str {\n\
+               function consume(rx: Receiver<str>): Future<str> async {\n\
                  var acc: str = \"\";\n\
-                 for s in rx { acc = acc + s; }\n\
+                 for await s in rx { acc = acc + s; }\n\
                  acc\n\
                }\n\
-               function main() {\n\
+               function main(): Future<null> async {\n\
                  var pair: (Sender<str>, Receiver<str>) = channel<str>();\n\
                  var tx: Sender<str> = pair.0;\n\
                  var rx: Receiver<str> = pair.1;\n\
                  var h: JoinHandle<i64> = Thread.spawn(() => { produce(tx); 0 });\n\
-                 println(consume(rx));\n\
+                 println(await consume(rx));\n\
+                 null\n\
                }";
     let (out1, err, ok) = lang("run", src);
     assert!(ok, "stderr: {err}");
@@ -1934,20 +1937,21 @@ fn channel_recv_of_managed_element_survives_gc_stress() {
 }
 
 #[test]
-fn channel_iterator_native_build_matches_jit() {
-    // The deterministic close + `Receiver: Iterator` must behave identically
+fn channel_async_iteration_native_build_matches_jit() {
+    // The deterministic close + async receiver iteration must behave identically
     // under `otter_fusion build` (native object + linked runtime) and the JIT.
     let src = "function produce(tx: Sender<i64>) {\n\
                  var i: i64 = 1; while i <= 4 { tx.send(i); i = i + 1; }\n\
                }\n\
-               function main() {\n\
+               function main(): Future<null> async {\n\
                  var pair: (Sender<i64>, Receiver<i64>) = channel<i64>();\n\
                  var tx: Sender<i64> = pair.0;\n\
                  var rx: Receiver<i64> = pair.1;\n\
                  var h: JoinHandle<i64> = Thread.spawn(() => { produce(tx); 0 });\n\
                  var total: i64 = 0;\n\
-                 for n in rx { total = total + n; }\n\
+                 for await n in rx { total = total + n; }\n\
                  println(total as str);\n\
+                 null\n\
                }";
     let (jit_out, err, ok) = lang("run", src);
     assert!(ok, "stderr: {err}");
@@ -2000,6 +2004,40 @@ fn static_method_through_generic_bound() {
     let (out, err, ok) = lang("run", src);
     assert!(ok, "stderr: {err}");
     assert_eq!(out, "42\n");
+}
+
+#[test]
+fn static_method_on_primitive_type_matches_native() {
+    // `docs/10` §1/§6: primitive names are extendable type names too, so static
+    // methods declared on them can be called as `i32.default()`.
+    let src = "interface Default { function default(): Self; }\n\
+               extend i32: Default { function default(): i32 { 0 } }\n\
+               extend bool { function truth(): bool { true } }\n\
+               function make<T: Default>(): T { T.default() }\n\
+               function main() {\n\
+                 var a: i32 = i32.default();\n\
+                 var b: i32 = make<i32>();\n\
+                 println(\"${a} ${b} ${bool.truth()}\");\n\
+               }";
+    let (jit, jerr, jok) = lang("run", src);
+    assert!(jok, "JIT stderr: {jerr}");
+    assert_eq!(jit, "0 0 true\n");
+    let (native, nerr, nok) = lang_build_run(src, &[]);
+    assert!(nok, "native stderr: {nerr}");
+    assert_eq!(native, jit);
+}
+
+#[test]
+fn primitive_static_method_missing_is_diagnostic() {
+    // Once primitive names enter the static-call path, unknown methods should
+    // produce the same type-anchored diagnostic as nominal static calls.
+    let src = "function main() { i32.missing(); }";
+    let (_, err, ok) = lang("check", src);
+    assert!(!ok);
+    assert!(
+        err.contains("type `i32` has no static method `missing`"),
+        "stderr: {err}"
+    );
 }
 
 #[test]
@@ -3629,7 +3667,8 @@ fn async_timeout_managed_value_survives_gc() {
 fn async_closure_captures_and_suspends() {
     // `docs/21` §7: `(p) async => E` is a closure that returns a future. It
     // captures the outer environment and may `await` inside; calling it builds
-    // the future, `await` drives it. GC-stress exercises managed state.
+    // the future, and `await` polls it until it resolves. GC-stress exercises
+    // managed state.
     let src = "function id(x: i64): Future<i64> async { x }\n\
                function main(): Future<null> async {\n\
                  var base = 100;\n\
@@ -4171,7 +4210,7 @@ fn async_await_in_short_circuit_operand_under_unary() {
 }
 
 #[test]
-fn async_await_in_sync_function_still_rejected() {
+fn async_await_in_non_async_function_still_rejected() {
     // `await` is still only legal inside an async body — a short-circuit operand
     // does not change that.
     let src = "function tf(): Future<bool> async { true }\n\
@@ -4189,7 +4228,7 @@ fn async_await_in_sync_function_still_rejected() {
 fn async_await_in_and_preserves_evaluation_order() {
     // The left operand of `&&` is unconditional and evaluated *first*; the right
     // operand (carrying the `await`) runs only afterwards, and only when the left
-    // is `true` (`docs/21` §4). An effectful sync left operand must therefore
+    // is `true` (`docs/21` §4). An effectful non-awaiting left operand must therefore
     // print before the awaited side effect, and not at all when it short-circuits.
     let src = "function mark(tag: str, b: bool): bool { print(tag); b }\n\
                function side(tag: str, b: bool): Future<bool> async {\n\
@@ -5512,10 +5551,46 @@ fn check_clean_program_succeeds() {
     assert!(out.contains("ok"));
 }
 
+#[test]
+fn clean_dry_run_reports_without_removing_target() {
+    let root = write_tree(&[
+        (
+            "project.toml",
+            "[package]\nname = \"app\"\nkind = \"binary\"\n",
+        ),
+        ("src/main.otter", "function main() {}"),
+        ("target/debug/marker.txt", "keep"),
+    ]);
+    let marker = root.join("target/debug/marker.txt");
+
+    let (out, err, ok) = lang_in_dir(&root, &["clean", "--dry-run"]);
+    assert!(ok, "stderr: {err}");
+    assert!(out.contains("would remove"), "stdout: {out}");
+    assert!(out.contains("target"), "stdout: {out}");
+    assert!(
+        marker.exists(),
+        "`clean --dry-run` must not remove target artifacts"
+    );
+
+    let (out, err, ok) = lang_in_dir(&root, &["clean"]);
+    assert!(ok, "stderr: {err}");
+    assert!(out.contains("removed"), "stdout: {out}");
+    assert!(
+        !root.join("target").exists(),
+        "`clean` must remove the project target directory"
+    );
+
+    let (out, err, ok) = lang_in_dir(&root, &["clean"]);
+    assert!(ok, "stderr: {err}");
+    assert!(out.contains("nothing to clean"), "stdout: {out}");
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 // -- async (docs/21) ---------------------------------------------------------
 
 #[test]
-fn async_fn_driven_by_async_main() {
+fn async_fn_polled_by_async_main() {
     // An async function lowers to a Future state machine; an async main awaits
     // it directly. (No `await` in `answer`'s body — the core pipeline slice.)
     let src = "function answer(): Future<i64> async { 40 + 2 }\n\
@@ -5648,7 +5723,7 @@ fn await_genuine_suspension_via_yield_under_gc_stress() {
 #[test]
 fn await_inside_async_block() {
     // An async main awaits an inline `async { await … }` block — the
-    // root future is driven by the internal executor entry.
+    // root future is polled by the internal executor entry until it resolves.
     let src = "function tick(): Future<i64> async { var _ = await yield_now(); 7 }\n\
                function main(): Future<null> async {\n\
                  var r: i64 = await async {\n\
@@ -5683,7 +5758,7 @@ fn async_spawn_drives_futures_on_workers() {
 
 #[test]
 fn for_await_over_async_iterator() {
-    // `for await` drives an `AsyncIterator` whose `next_async` returns an
+    // `for await` polls an `AsyncIterator` whose `next_async` returns an
     // `async { … }` future that suspends (yield_now) and mutates captured `self`.
     let src = "struct Counter { current: i64, end: i64 }\n\
                extend Counter: AsyncIterator<i64> {\n\
@@ -5731,9 +5806,8 @@ fn async_sleep_completes_after_delay() {
 #[test]
 fn native_build_async_stdio_write_matches_jit() {
     // Async stdio writes are runtime-built futures: poll registers a reactor
-    // waiter, a helper performs the blocking stream operation, and readiness
-    // wakes the executor task. Cover both JIT symbol registration and native
-    // linking.
+    // waiter, a helper performs the private provider wait, and readiness wakes
+    // the executor task. Cover both JIT symbol registration and native linking.
     let src = "import { Bytes } from \"std:bytes\";\n\
                import { stdout, stderr } from \"std:io\";\n\
                function main(): Future<null> async {\n\
@@ -5808,6 +5882,29 @@ fn dep_add_and_remove_edit_the_manifest() {
     assert!(ok, "stderr: {e}");
     let manifest = std::fs::read_to_string(root.join("project.toml")).unwrap();
     assert!(!manifest.contains("leftpad"), "manifest: {manifest}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn dep_remove_dry_run_reports_without_editing_manifest() {
+    let root = write_tree(&[(
+        "project.toml",
+        "[package]\nname = \"app\"\nkind = \"binary\"\n[dependencies]\nleftpad = \"1.2\"\n",
+    )]);
+    let manifest_before = std::fs::read_to_string(root.join("project.toml")).unwrap();
+
+    let (out, e, ok) = lang_in_dir(&root, &["remove", "leftpad", "--dry-run"]);
+    assert!(ok, "stderr: {e}");
+    assert!(
+        out.contains("would remove dependency `leftpad`"),
+        "stdout: {out}"
+    );
+    let manifest_after = std::fs::read_to_string(root.join("project.toml")).unwrap();
+    assert_eq!(
+        manifest_after, manifest_before,
+        "--dry-run must not modify project.toml"
+    );
+
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -5998,6 +6095,39 @@ fn dep_lock_check_detects_drift() {
 }
 
 #[test]
+fn dep_update_dry_run_verbose_reports_lock_diff_without_writing() {
+    let root = write_tree(&[
+        (
+            "app/project.toml",
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nkind = \"binary\"\n\
+             [dependencies]\nmylib = { path = \"../mylib\" }\n",
+        ),
+        ("app/src/main.otter", "function main() {}"),
+        (
+            "mylib/project.toml",
+            "[package]\nname = \"mylib\"\nversion = \"0.4.2\"\nkind = \"library\"\n",
+        ),
+        ("mylib/src/lib.otter", "pub function f(): i64 { 1 }"),
+    ]);
+    let app = root.join("app");
+
+    let (out, e, ok) = lang_in_dir(&app, &["update", "--dry-run", "--verbose"]);
+    assert!(ok, "stderr: {e}");
+    assert!(out.contains("would update"), "stdout: {out}");
+    assert!(out.contains("+++ project.lock (resolved)"), "stdout: {out}");
+    assert!(out.contains("+name     = \"mylib\""), "stdout: {out}");
+    assert!(
+        !app.join("project.lock").exists(),
+        "--dry-run must not write project.lock"
+    );
+
+    let (_out, e, ok) = lang_in_dir(&app, &["update"]);
+    assert!(ok, "stderr: {e}");
+    assert!(app.join("project.lock").exists());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn pkg_import_from_a_path_dependency_runs_end_to_end() {
     // `app` depends on the sibling library `greeter`; `pkg:greeter` binds its
     // public `greet` and the program runs (`docs/17` §17.4).
@@ -6024,6 +6154,171 @@ fn pkg_import_from_a_path_dependency_runs_end_to_end() {
     let (out, err, ok) = lang_in_dir(&root.join("app"), &["run"]);
     assert!(ok, "stderr: {err}");
     assert_eq!(out, "42\n");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn ambient_import_activates_extension_methods() {
+    // docs/17 §17.5: an ambient import binds no names, but it imports the
+    // module for extension-method visibility.
+    let root = write_tree(&[
+        (
+            "app/project.toml",
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nkind = \"binary\"\n",
+        ),
+        (
+            "app/src/main.otter",
+            "mod model;\n\
+             mod ext;\n\
+             import { Box } from \"self:model\";\n\
+             import \"self:ext\";\n\
+             function main() {\n\
+               var b = Box { value: 21 };\n\
+               println(\"${b.double()}\");\n\
+             }",
+        ),
+        ("app/src/model.otter", "pub struct Box { pub value: i64 }\n"),
+        (
+            "app/src/ext.otter",
+            "import { Box } from \"self:model\";\n\
+             extend Box { function double(self): i64 { self.value * 2 } }\n",
+        ),
+    ]);
+    let (out, err, ok) = lang_in_dir(&root.join("app"), &["run"]);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "42\n");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn pub_ambient_import_reexports_extension_methods() {
+    // docs/17 §17.10: `pub import "..."` re-exports extension activation, so
+    // importers of an umbrella module see those extension methods transitively.
+    let root = write_tree(&[
+        (
+            "app/project.toml",
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nkind = \"binary\"\n",
+        ),
+        (
+            "app/src/main.otter",
+            "mod model;\n\
+             mod ext;\n\
+             mod umbrella;\n\
+             import { Box } from \"self:model\";\n\
+             import \"self:umbrella\";\n\
+             function main() {\n\
+               var b = Box { value: 21 };\n\
+               println(\"${b.double()}\");\n\
+             }",
+        ),
+        ("app/src/model.otter", "pub struct Box { pub value: i64 }\n"),
+        (
+            "app/src/ext.otter",
+            "import { Box } from \"self:model\";\n\
+             extend Box { function double(self): i64 { self.value * 2 } }\n",
+        ),
+        ("app/src/umbrella.otter", "pub import \"self:ext\";\n"),
+    ]);
+    let (out, err, ok) = lang_in_dir(&root.join("app"), &["run"]);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "42\n");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn pub_named_import_reexports_items() {
+    // docs/17 §17.10: a public named import lifts the selected names into the
+    // facade module's public API without exposing the original module path.
+    let root = write_tree(&[
+        (
+            "app/project.toml",
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nkind = \"binary\"\n",
+        ),
+        (
+            "app/src/main.otter",
+            "mod model;\n\
+             mod facade;\n\
+             import { CrateBox, make_box } from \"self:facade\";\n\
+             function main() {\n\
+               var a = make_box(42);\n\
+               var b = CrateBox { value: 7 };\n\
+               println(\"${a.value}\");\n\
+               println(\"${b.value}\");\n\
+             }",
+        ),
+        (
+            "app/src/model.otter",
+            "pub struct Box { pub value: i64 }\n\
+             pub function make_box(value: i64): Box { Box { value } }\n",
+        ),
+        (
+            "app/src/facade.otter",
+            "pub import { Box as CrateBox, make_box } from \"self:model\";\n",
+        ),
+    ]);
+    let (out, err, ok) = lang_in_dir(&root.join("app"), &["run"]);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "42\n7\n");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn pub_namespace_import_reexports_namespace_calls() {
+    // docs/17 §17.10: `pub import "..." as Name` exposes a namespace through
+    // the facade's public API for qualified calls.
+    let root = write_tree(&[
+        (
+            "app/project.toml",
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nkind = \"binary\"\n",
+        ),
+        (
+            "app/src/main.otter",
+            "mod util;\n\
+             mod facade;\n\
+             import \"self:facade\" as Facade;\n\
+             function main() {\n\
+               println(\"${Facade.Util.answer()}\");\n\
+             }",
+        ),
+        ("app/src/util.otter", "pub function answer(): i64 { 42 }\n"),
+        (
+            "app/src/facade.otter",
+            "pub import \"self:util\" as Util;\n",
+        ),
+    ]);
+    let (out, err, ok) = lang_in_dir(&root.join("app"), &["run"]);
+    assert!(ok, "stderr: {err}");
+    assert_eq!(out, "42\n");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn private_namespace_import_is_not_reexported() {
+    let root = write_tree(&[
+        (
+            "app/project.toml",
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nkind = \"binary\"\n",
+        ),
+        (
+            "app/src/main.otter",
+            "mod util;\n\
+             mod facade;\n\
+             import \"self:facade\" as Facade;\n\
+             function main() {\n\
+               println(\"${Facade.Util.answer()}\");\n\
+             }",
+        ),
+        ("app/src/util.otter", "pub function answer(): i64 { 42 }\n"),
+        ("app/src/facade.otter", "import \"self:util\" as Util;\n"),
+    ]);
+    let (_out, err, ok) = lang_in_dir(&root.join("app"), &["check"]);
+    assert!(!ok);
+    assert!(
+        err.contains("no public value `answer` in module `Facade.Util`")
+            || err.contains("no field `Util`")
+            || err.contains("cannot find value `Facade` in scope"),
+        "stderr: {err}"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -6216,6 +6511,42 @@ fn vendor_copies_a_path_dependency() {
     assert!(ok, "stderr: {e}");
     assert!(out.contains("vendored 1 package"), "out: {out}");
     assert!(root.join("app/vendor/mylib/src/lib.otter").exists());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn vendor_dry_run_reports_without_touching_vendor_dir() {
+    let root = write_tree(&[
+        (
+            "app/project.toml",
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nkind = \"binary\"\n\
+             [dependencies]\nmylib = { path = \"../mylib\" }\n",
+        ),
+        ("app/src/main.otter", "function main() {}"),
+        (
+            "app/vendor/mylib/marker.txt",
+            "existing vendor contents must survive dry-run\n",
+        ),
+        (
+            "mylib/project.toml",
+            "[package]\nname = \"mylib\"\nversion = \"0.1.0\"\nkind = \"library\"\n",
+        ),
+        ("mylib/src/lib.otter", "pub function f(): i64 { 1 }"),
+    ]);
+    let app = root.join("app");
+
+    let (out, e, ok) = lang_in_dir(&app, &["vendor", "--dry-run"]);
+    assert!(ok, "stderr: {e}");
+    assert!(out.contains("would vendor 1 package"), "out: {out}");
+    assert!(
+        app.join("vendor/mylib/marker.txt").exists(),
+        "--dry-run must not remove existing vendor contents"
+    );
+    assert!(
+        !app.join("vendor/mylib/src/lib.otter").exists(),
+        "--dry-run must not copy dependency sources"
+    );
+
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -6516,7 +6847,7 @@ fn fmt_reindents_and_check_gates() {
     assert_eq!(
         after,
         "import {\n  Clone,\n  ToStr,\n  Eq,\n  Ord,\n  Hash,\n  Iterator,\n  Item,\n  Done,\n  Try,\n  FromResidual,\n  Drop,\n  Future,\n  Ready,\n  Pending,\n  Context\n} from \"core:prelude\";\ntype Many = Result<\n  Alpha,\n  Beta,\n  Gamma,\n  Delta,\n  Epsilon,\n  Zeta,\n  Eta,\n  Theta,\n  Iota,\n  Kappa,\n  Lambda,\n  Mu,\n  Nu\n>;\ntype Value =\n  Alpha |\n  Beta |\n  Gamma |\n  Delta |\n  Epsilon |\n  Zeta |\n  Eta |\n  Theta |\n  Iota |\n  Kappa |\n  Lambda |\n  Mu |\n  Nu |\n  Xi |\n  Omicron;\ninterface Renderable:\n  Alpha +\n  Beta +\n  Gamma +\n  Delta +\n  Epsilon +\n  Zeta +\n  Eta +\n  Theta +\n  Iota +\n  Kappa +\n  Lambda +\n  Mu {\n  function render(self): str;\n}
-interface Service {\n  function start(self): i64;\n  function stop(self): i64;\n  function reset(self): i64;\n  function status(self): i64;\n  function configure(self, alpha: Alpha, beta: Beta): i64;\n}\nfunction dump<T:\n  Alpha +\n  Beta +\n  Gamma +\n  Delta +\n  Epsilon +\n  Zeta +\n  Eta +\n  Theta +\n  Iota +\n  Kappa +\n  Lambda +\n  Mu>(x: T): T { x }\nfunction choose():\n  Alpha |\n  Beta |\n  Gamma |\n  Delta |\n  Epsilon |\n  Zeta |\n  Eta |\n  Theta |\n  Iota |\n  Kappa |\n  Lambda |\n  Mu |\n  Nu |\n  Xi |\n  Omicron { return alpha; }\npub struct Packet {\n  pub alpha: Alpha,\n  beta: Beta,\n  gamma: Gamma,\n  delta: Delta,\n  epsilon: Epsilon,\n  zeta: Zeta,\n  eta: Eta,\n  theta: Theta,\n  iota: Iota\n}\nfunction main<T>() {\n  var xs: List<Map<str, List<T>>> = List<Map<str, List<T>>>();\n  var y = 1; /*keep  exact*/ var z = y + 2;\n  var a = 1; /* open\n  keep interior\n*/ var b = a + 2;\n  var total = combine(\n    alpha,\n    beta,\n    gamma,\n    delta,\n    epsilon,\n    zeta,\n    eta,\n    theta,\n    iota,\n    kappa,\n    lambda,\n    mu,\n    nu\n  );\n  var list = [\n    alpha,\n    beta,\n    gamma,\n    delta,\n    epsilon,\n    zeta,\n    eta,\n    theta,\n    iota,\n    kappa,\n    lambda,\n    mu,\n    nu,\n    xi,\n    omicron,\n    pi,\n    rho\n  ];\n  var map = {\n    \"alpha\": alpha,\n    \"beta\": beta,\n    \"gamma\": gamma,\n    \"delta\": delta,\n    \"epsilon\": epsilon,\n    \"zeta\": zeta,\n    \"eta\": eta,\n    \"theta\": theta\n  };\n  var point = Point {\n    x: alpha,\n    y: beta,\n    z: gamma,\n    w: delta,\n    a: epsilon,\n    b: zeta,\n    c: eta,\n    d: theta,\n    e: iota,\n    f: kappa,\n    g: lambda\n  };\n  var arm = match classify(input) {\n    0 => alpha,\n    1 => beta,\n    2 => gamma,\n    3 => delta,\n    4 => epsilon,\n    5 => zeta,\n    6 => eta,\n    7 => theta,\n    _ => omega\n  };\n  var classify = (x: i64):\n    Alpha |\n    Beta |\n    Gamma |\n    Delta |\n    Epsilon |\n    Zeta |\n    Eta |\n    Theta |\n    Iota |\n    Kappa |\n    Lambda |\n    Mu |\n    Nu |\n    Xi |\n    Omicron => alpha;\n  var url = \"http://host/a/*not comment*/\";\n  var c = '+';\n  var msg = \"value ${x + 1 }!\";\n  var x = 1;\n  if x > 0 {\n    x = 2;\n  }\n}\n",
+interface Service {\n  function start(self): i64;\n  function stop(self): i64;\n  function reset(self): i64;\n  function status(self): i64;\n  function configure(self, alpha: Alpha, beta: Beta): i64;\n}\nfunction dump<T:\n  Alpha +\n  Beta +\n  Gamma +\n  Delta +\n  Epsilon +\n  Zeta +\n  Eta +\n  Theta +\n  Iota +\n  Kappa +\n  Lambda +\n  Mu>(x: T): T { x }\nfunction choose():\n  Alpha |\n  Beta |\n  Gamma |\n  Delta |\n  Epsilon |\n  Zeta |\n  Eta |\n  Theta |\n  Iota |\n  Kappa |\n  Lambda |\n  Mu |\n  Nu |\n  Xi |\n  Omicron { return alpha; }\npub struct Packet {\n  pub alpha: Alpha,\n  beta: Beta,\n  gamma: Gamma,\n  delta: Delta,\n  epsilon: Epsilon,\n  zeta: Zeta,\n  eta: Eta,\n  theta: Theta,\n  iota: Iota\n}\nfunction main<T>() {\n  var xs: List<Map<str, List<T>>> = List<Map<str, List<T>>>();\n  var y = 1; /*keep  exact*/ var z = y + 2;\n  var a = 1; /* open\n  keep interior\n*/ var b = a + 2;\n  var total = combine(\n    alpha,\n    beta,\n    gamma,\n    delta,\n    epsilon,\n    zeta,\n    eta,\n    theta,\n    iota,\n    kappa,\n    lambda,\n    mu,\n    nu\n  );\n  var list = [\n    alpha,\n    beta,\n    gamma,\n    delta,\n    epsilon,\n    zeta,\n    eta,\n    theta,\n    iota,\n    kappa,\n    lambda,\n    mu,\n    nu,\n    xi,\n    omicron,\n    pi,\n    rho\n  ];\n  var map = {\n    \"alpha\": alpha,\n    \"beta\": beta,\n    \"gamma\": gamma,\n    \"delta\": delta,\n    \"epsilon\": epsilon,\n    \"zeta\": zeta,\n    \"eta\": eta,\n    \"theta\": theta\n  };\n  var point = Point {\n    x: alpha,\n    y: beta,\n    z: gamma,\n    w: delta,\n    a: epsilon,\n    b: zeta,\n    c: eta,\n    d: theta,\n    e: iota,\n    f: kappa,\n    g: lambda\n  };\n  var arm = match classify(input) {\n    0 => alpha,\n    1 => beta,\n    2 => gamma,\n    3 => delta,\n    4 => epsilon,\n    5 => zeta,\n    6 => eta,\n    7 => theta,\n    _ => omega\n  };\n  var classify = (x: i64):\n    Alpha |\n    Beta |\n    Gamma |\n    Delta |\n    Epsilon |\n    Zeta |\n    Eta |\n    Theta |\n    Iota |\n    Kappa |\n    Lambda |\n    Mu |\n    Nu |\n    Xi |\n    Omicron => alpha;\n  var url = \"http://host/a/*not comment*/\";\n  var c = '+';\n  var msg = \"value ${x + 1}!\";\n  var x = 1;\n  if x > 0 {\n    x = 2;\n  }\n}\n",
         "got:\n{after}"
     );
 
@@ -6585,6 +6916,266 @@ fn fmt_preserves_async_closure_and_null_generic_spacing() {
     assert_eq!(
         after,
         "function value_of(r: Joined<i64> | Panicked): i64 {\n  match r { Joined<i64> j => j.value, _ => -1 }\n}\nfunction main(): Future<null> async {\n  var h: JoinHandle<i64> = Task.spawn(() async => { null });\n}\n"
+    );
+
+    let mut chk2_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk2_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk2 = output_with_timeout(&mut chk2_cmd, cli_test_timeout()).unwrap();
+    assert!(chk2.status.success());
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn fmt_emit_stdout_prints_formatted_source_without_writing() {
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!("lang_fmt_emit_stdout_{}.otter", nonce()));
+    let unformatted = "function main():Future < null > async{\nTask.spawn(()async=>{null});\n}\n";
+    std::fs::write(&path, unformatted).unwrap();
+
+    let mut emit_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    emit_cmd.arg("fmt").arg(&path).arg("--emit").arg("stdout");
+    let emit = output_with_timeout(&mut emit_cmd, cli_test_timeout()).unwrap();
+    assert!(emit.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&emit.stdout),
+        "function main(): Future<null> async {\n  Task.spawn(() async => { null });\n}\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        unformatted,
+        "--emit stdout must not rewrite the source file"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn fmt_emit_stdout_rejects_check_mode() {
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!("lang_fmt_emit_stdout_check_{}.otter", nonce()));
+    std::fs::write(&path, "function main(){\nnull\n}\n").unwrap();
+
+    let mut emit_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    emit_cmd
+        .arg("fmt")
+        .arg(&path)
+        .arg("--emit")
+        .arg("stdout")
+        .arg("--check");
+    let emit = output_with_timeout(&mut emit_cmd, cli_test_timeout()).unwrap();
+    assert!(!emit.status.success());
+    assert!(String::from_utf8_lossy(&emit.stderr).contains("cannot be combined with `--check`"));
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "function main(){\nnull\n}\n"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn fmt_normalizes_multiline_async_closure_block_indentation() {
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!("lang_fmt_async_block_indent_{}.otter", nonce()));
+    std::fs::write(
+        &path,
+        "function main():Future < null > async{\nTask.spawn(()async=>{\nif(true){\nnull\n}\n});\ndrive(async {\nif(false){\nnull\n}\n});\n}\n",
+    )
+    .unwrap();
+
+    let mut chk_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk = output_with_timeout(&mut chk_cmd, cli_test_timeout()).unwrap();
+    assert!(!chk.status.success());
+
+    let mut fix_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    fix_cmd.arg("fmt").arg(&path);
+    let fix = output_with_timeout(&mut fix_cmd, cli_test_timeout()).unwrap();
+    assert!(fix.status.success());
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        after,
+        "function main(): Future<null> async {\n  Task.spawn(() async => {\n    if (true) {\n      null\n    }\n  });\n  drive(async {\n    if (false) {\n      null\n    }\n  });\n}\n"
+    );
+
+    let mut chk2_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk2_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk2 = output_with_timeout(&mut chk2_cmd, cli_test_timeout()).unwrap();
+    assert!(chk2.status.success());
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn fmt_normalizes_control_keyword_and_type_test_spacing() {
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!("lang_fmt_control_type_spacing_{}.otter", nonce()));
+    std::fs::write(
+        &path,
+        "function main(){\nif(if(i&1)==0{i}else{null})is i64{return-1;}\nif!done{return;}\nwhile!done{i=i+1;}\nvar x=if(i&1)==0{i}else{null};\nwhile(i<10){i=i+1;}\nfor x in([1,2]){println(x as str);}\nmatch!done{true=>i,_=>0};\nmatch(i&1){0=>i,_=>0};\n}\n",
+    )
+    .unwrap();
+
+    let mut chk_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk = output_with_timeout(&mut chk_cmd, cli_test_timeout()).unwrap();
+    assert!(!chk.status.success());
+
+    let mut fix_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    fix_cmd.arg("fmt").arg(&path);
+    let fix = output_with_timeout(&mut fix_cmd, cli_test_timeout()).unwrap();
+    assert!(fix.status.success());
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        after,
+        "function main() {\n  if (if (i & 1) == 0 { i } else { null }) is i64 { return -1; }\n  if !done { return; }\n  while !done { i = i + 1; }\n  var x = if (i & 1) == 0 { i } else { null };\n  while (i < 10) { i = i + 1; }\n  for x in ([1, 2]) { println(x as str); }\n  match !done { true => i, _ => 0 };\n  match (i & 1) { 0 => i, _ => 0 };\n}\n"
+    );
+
+    let mut chk2_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk2_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk2 = output_with_timeout(&mut chk2_cmd, cli_test_timeout()).unwrap();
+    assert!(chk2.status.success());
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn fmt_normalizes_statement_keyword_unary_operand_spacing() {
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!("lang_fmt_stmt_unary_spacing_{}.otter", nonce()));
+    std::fs::write(
+        &path,
+        "function main(){\nreturn-1;\nbreak-2;\nawait!ready;\nspawn!ready;\n}\n",
+    )
+    .unwrap();
+
+    let mut chk_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk = output_with_timeout(&mut chk_cmd, cli_test_timeout()).unwrap();
+    assert!(!chk.status.success());
+
+    let mut fix_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    fix_cmd.arg("fmt").arg(&path);
+    let fix = output_with_timeout(&mut fix_cmd, cli_test_timeout()).unwrap();
+    assert!(fix.status.success());
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        after,
+        "function main() {\n  return -1;\n  break -2;\n  await !ready;\n  spawn !ready;\n}\n"
+    );
+
+    let mut chk2_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk2_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk2 = output_with_timeout(&mut chk2_cmd, cli_test_timeout()).unwrap();
+    assert!(chk2.status.success());
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn fmt_preserves_trailing_line_comment_text() {
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!("lang_fmt_comment_text_{}.otter", nonce()));
+    let src = concat!(
+        "function main(){\n",
+        "//~ output",
+        "   ",
+        "\n",
+        "var x=1;//keep",
+        "   ",
+        "\n",
+        "}\n"
+    );
+    std::fs::write(&path, src).unwrap();
+
+    let mut fix_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    fix_cmd.arg("fmt").arg(&path);
+    let fix = output_with_timeout(&mut fix_cmd, cli_test_timeout()).unwrap();
+    assert!(
+        fix.status.success(),
+        "fmt should preserve comment trivia; stderr: {}",
+        String::from_utf8_lossy(&fix.stderr)
+    );
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        after,
+        concat!(
+            "function main() {\n",
+            "  //~ output",
+            "   ",
+            "\n",
+            "  var x = 1; //keep",
+            "   ",
+            "\n",
+            "}\n"
+        )
+    );
+
+    let mut chk_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk = output_with_timeout(&mut chk_cmd, cli_test_timeout()).unwrap();
+    assert!(chk.status.success(), "formatted file must pass --check");
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn fmt_wraps_long_call_arguments_with_trailing_line_comment() {
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!("lang_fmt_wrapped_line_comment_{}.otter", nonce()));
+    std::fs::write(
+        &path,
+        "function main(){\nvar total=combine(alpha,beta,gamma,delta,epsilon,zeta,eta,theta,iota,kappa,lambda,mu,nu); //keep exact\n}\n",
+    )
+    .unwrap();
+
+    let mut chk_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk = output_with_timeout(&mut chk_cmd, cli_test_timeout()).unwrap();
+    assert!(!chk.status.success());
+
+    let mut fix_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    fix_cmd.arg("fmt").arg(&path);
+    let fix = output_with_timeout(&mut fix_cmd, cli_test_timeout()).unwrap();
+    assert!(fix.status.success());
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        after,
+        "function main() {\n  var total = combine(\n    alpha,\n    beta,\n    gamma,\n    delta,\n    epsilon,\n    zeta,\n    eta,\n    theta,\n    iota,\n    kappa,\n    lambda,\n    mu,\n    nu\n  ); //keep exact\n}\n"
+    );
+
+    let mut chk2_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk2_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk2 = output_with_timeout(&mut chk2_cmd, cli_test_timeout()).unwrap();
+    assert!(chk2.status.success());
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn fmt_wraps_long_call_arguments_with_trailing_block_comment() {
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!("lang_fmt_wrapped_block_comment_{}.otter", nonce()));
+    std::fs::write(
+        &path,
+        "function main(){\nvar total=combine(alpha,beta,gamma,delta,epsilon,zeta,eta,theta,iota,kappa,lambda,mu,nu); /*keep  exact /* nested */ done*/\n}\n",
+    )
+    .unwrap();
+
+    let mut chk_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk = output_with_timeout(&mut chk_cmd, cli_test_timeout()).unwrap();
+    assert!(!chk.status.success());
+
+    let mut fix_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    fix_cmd.arg("fmt").arg(&path);
+    let fix = output_with_timeout(&mut fix_cmd, cli_test_timeout()).unwrap();
+    assert!(fix.status.success());
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        after,
+        "function main() {\n  var total = combine(\n    alpha,\n    beta,\n    gamma,\n    delta,\n    epsilon,\n    zeta,\n    eta,\n    theta,\n    iota,\n    kappa,\n    lambda,\n    mu,\n    nu\n  ); /*keep  exact /* nested */ done*/\n}\n"
     );
 
     let mut chk2_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
@@ -6761,6 +7352,39 @@ fn fmt_wraps_method_chains() {
 }
 
 #[test]
+fn fmt_wraps_single_method_expressions() {
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!("lang_fmt_single_method_expr_{}.otter", nonce()));
+    std::fs::write(
+        &path,
+        "function f() {\nvar result=alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu.compute<Alpha,Beta>(one.two(),three.four());\n}\n",
+    )
+    .unwrap();
+
+    let mut chk_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk = output_with_timeout(&mut chk_cmd, cli_test_timeout()).unwrap();
+    assert!(!chk.status.success());
+
+    let mut fix_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    fix_cmd.arg("fmt").arg(&path);
+    let fix = output_with_timeout(&mut fix_cmd, cli_test_timeout()).unwrap();
+    assert!(fix.status.success());
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        after,
+        "function f() {\n  var result = alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu\n    .compute<Alpha, Beta>(one.two(), three.four());\n}\n"
+    );
+
+    let mut chk2_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk2_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk2 = output_with_timeout(&mut chk2_cmd, cli_test_timeout()).unwrap();
+    assert!(chk2.status.success());
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn fmt_wraps_logical_chains() {
     let dir = std::env::temp_dir();
     let path = dir.join(format!("lang_fmt_logical_chain_{}.otter", nonce()));
@@ -6849,6 +7473,75 @@ fn fmt_wraps_comparison_expressions() {
     assert_eq!(
         after,
         "function f() {\n  var ok = compute<Alpha, Beta>(first_value, second_value, third_value)\n    > other<Gamma, Delta>(fourth_value, fifth_value, sixth_value);\n}\n"
+    );
+
+    let mut chk2_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk2_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk2 = output_with_timeout(&mut chk2_cmd, cli_test_timeout()).unwrap();
+    assert!(chk2.status.success());
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn fmt_wraps_single_comparison_expressions() {
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!("lang_fmt_single_comparison_expr_{}.otter", nonce()));
+    std::fs::write(
+        &path,
+        "function f() {\nvar ok=alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa==lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n",
+    )
+    .unwrap();
+
+    let mut chk_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk = output_with_timeout(&mut chk_cmd, cli_test_timeout()).unwrap();
+    assert!(!chk.status.success());
+
+    let mut fix_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    fix_cmd.arg("fmt").arg(&path);
+    let fix = output_with_timeout(&mut fix_cmd, cli_test_timeout()).unwrap();
+    assert!(fix.status.success());
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        after,
+        "function f() {\n  var ok = alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa\n    == lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n"
+    );
+
+    let mut chk2_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk2_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk2 = output_with_timeout(&mut chk2_cmd, cli_test_timeout()).unwrap();
+    assert!(chk2.status.success());
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn fmt_wraps_single_comparison_expressions_with_nested_operands() {
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!(
+        "lang_fmt_single_comparison_nested_expr_{}.otter",
+        nonce()
+    ));
+    std::fs::write(
+        &path,
+        "function f() {\nvar ok=alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa==compare<Bool>(beta==gamma,delta<epsilon);\n}\n",
+    )
+    .unwrap();
+
+    let mut chk_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk = output_with_timeout(&mut chk_cmd, cli_test_timeout()).unwrap();
+    assert!(!chk.status.success());
+
+    let mut fix_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    fix_cmd.arg("fmt").arg(&path);
+    let fix = output_with_timeout(&mut fix_cmd, cli_test_timeout()).unwrap();
+    assert!(fix.status.success());
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        after,
+        "function f() {\n  var ok = alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa\n    == compare<Bool>(beta == gamma, delta < epsilon);\n}\n"
     );
 
     let mut chk2_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
@@ -7346,7 +8039,7 @@ fn fmt_wraps_async_block_bodies() {
     let after = std::fs::read_to_string(&path).unwrap();
     assert_eq!(
         after,
-        "function f() {\n  drive(async {\n      generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; });\n}\n"
+        "function f() {\n  drive(async {\n    generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; });\n}\n"
     );
 
     let mut chk2_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
@@ -7379,7 +8072,7 @@ fn fmt_wraps_block_expression_bodies() {
     let after = std::fs::read_to_string(&path).unwrap();
     assert_eq!(
         after,
-        "function f() {\n  drive({\n      generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; });\n}\n"
+        "function f() {\n  drive({\n    generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; });\n}\n"
     );
 
     let mut chk2_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
@@ -7396,7 +8089,7 @@ fn fmt_wraps_macro_block_bodies() {
     let path = dir.join(format!("lang_fmt_macro_block_body_{}.otter", nonce()));
     std::fs::write(
         &path,
-        "function f() {\nvar x=@AsBlock { generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; };\nvar y=@Trace(\"op\") { generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; };\n}\n",
+        "function f() {\nvar x=@AsBlock { generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; };\nvar y=@Trace(\"op\") { generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; };\ndrive(@Trace(\"op\") { generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; });\n}\n",
     )
     .unwrap();
 
@@ -7412,7 +8105,7 @@ fn fmt_wraps_macro_block_bodies() {
     let after = std::fs::read_to_string(&path).unwrap();
     assert_eq!(
         after,
-        "function f() {\n  var x = @AsBlock {\n    generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; };\n  var y = @Trace(\"op\") {\n    generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; };\n}\n"
+        "function f() {\n  var x = @AsBlock {\n    generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; };\n  var y = @Trace(\"op\") {\n    generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; };\n  drive(@Trace(\"op\") {\n    generated_value_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron; });\n}\n"
     );
 
     let mut chk2_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
@@ -7743,6 +8436,59 @@ fn fmt_wraps_await_and_spawn_operands() {
     assert_eq!(
         after,
         "function f() {\n  await\n    generated_future_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron;\n  spawn\n    generated_worker_alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_omicron;\n}\n"
+    );
+
+    let mut chk2_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk2_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk2 = output_with_timeout(&mut chk2_cmd, cli_test_timeout()).unwrap();
+    assert!(chk2.status.success());
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn fmt_normalizes_async_generic_spacing_from_cli() {
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!("lang_fmt_async_generic_spacing_{}.otter", nonce()));
+    std::fs::write(
+        &path,
+        "import { Future } from \"core:prelude\";\n\
+import { Task, JoinHandle, Joined, Panicked, Cancelled } from \"std:task\";\n\
+function value_of(r:Joined < i64 >|Panicked|Cancelled):i64{\n\
+match r {Joined < i64 > j=>j.value,Panicked p=>-1,Cancelled c=>-2}\n\
+}\n\
+struct Holder { job:(i64)=>Future < i64 > }\n\
+function main():Future < null > async{\n\
+var h:JoinHandle < i64 > =Task.spawn(()async=>{null});\n\
+if(true){null}\n\
+}\n",
+    )
+    .unwrap();
+
+    let mut chk_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk = output_with_timeout(&mut chk_cmd, cli_test_timeout()).unwrap();
+    assert!(!chk.status.success());
+
+    let mut fix_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    fix_cmd.arg("fmt").arg(&path);
+    let fix = output_with_timeout(&mut fix_cmd, cli_test_timeout()).unwrap();
+    assert!(fix.status.success());
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        after,
+        concat!(
+            "import { Future } from \"core:prelude\";\n",
+            "import { Task, JoinHandle, Joined, Panicked, Cancelled } from \"std:task\";\n",
+            "function value_of(r: Joined<i64> | Panicked | Cancelled): i64 {\n",
+            "  match r { Joined<i64> j => j.value, Panicked p => -1, Cancelled c => -2 }\n",
+            "}\n",
+            "struct Holder { job: (i64) => Future<i64> }\n",
+            "function main(): Future<null> async {\n",
+            "  var h: JoinHandle<i64> = Task.spawn(() async => { null });\n",
+            "  if (true) { null }\n",
+            "}\n",
+        )
     );
 
     let mut chk2_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
@@ -8528,6 +9274,39 @@ fn fmt_wraps_cast_chains() {
 }
 
 #[test]
+fn fmt_wraps_single_cast_expressions() {
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!("lang_fmt_single_cast_expr_{}.otter", nonce()));
+    std::fs::write(
+        &path,
+        "function f() {\nvar value=alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa as LambdaMuNuXiOmicronPiRhoSigmaTau;\n}\n",
+    )
+    .unwrap();
+
+    let mut chk_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk = output_with_timeout(&mut chk_cmd, cli_test_timeout()).unwrap();
+    assert!(!chk.status.success());
+
+    let mut fix_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    fix_cmd.arg("fmt").arg(&path);
+    let fix = output_with_timeout(&mut fix_cmd, cli_test_timeout()).unwrap();
+    assert!(fix.status.success());
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        after,
+        "function f() {\n  var value = alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa\n    as LambdaMuNuXiOmicronPiRhoSigmaTau;\n}\n"
+    );
+
+    let mut chk2_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk2_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk2 = output_with_timeout(&mut chk2_cmd, cli_test_timeout()).unwrap();
+    assert!(chk2.status.success());
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn fmt_wraps_bitwise_and_chains() {
     let dir = std::env::temp_dir();
     let path = dir.join(format!("lang_fmt_bitwise_and_chain_{}.otter", nonce()));
@@ -8630,6 +9409,42 @@ fn fmt_wraps_bitwise_xor_chains() {
 }
 
 #[test]
+fn fmt_wraps_single_bitwise_xor_expressions() {
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!(
+        "lang_fmt_single_bitwise_xor_expr_{}.otter",
+        nonce()
+    ));
+    std::fs::write(
+        &path,
+        "function f() {\nvar mask=alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa^lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n",
+    )
+    .unwrap();
+
+    let mut chk_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk = output_with_timeout(&mut chk_cmd, cli_test_timeout()).unwrap();
+    assert!(!chk.status.success());
+
+    let mut fix_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    fix_cmd.arg("fmt").arg(&path);
+    let fix = output_with_timeout(&mut fix_cmd, cli_test_timeout()).unwrap();
+    assert!(fix.status.success());
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        after,
+        "function f() {\n  var mask = alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa\n    ^ lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n"
+    );
+
+    let mut chk2_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk2_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk2 = output_with_timeout(&mut chk2_cmd, cli_test_timeout()).unwrap();
+    assert!(chk2.status.success());
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn fmt_wraps_bitwise_or_chains() {
     let dir = std::env::temp_dir();
     let path = dir.join(format!("lang_fmt_bitwise_or_chain_{}.otter", nonce()));
@@ -8652,6 +9467,39 @@ fn fmt_wraps_bitwise_or_chains() {
     assert_eq!(
         after,
         "function f() {\n  var mask = alpha\n    | beta\n    | gamma\n    | delta\n    | epsilon\n    | zeta\n    | eta\n    | theta\n    | iota\n    | kappa\n    | lambda\n    | mu\n    | nu\n    | xi\n    | omicron;\n}\n"
+    );
+
+    let mut chk2_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk2_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk2 = output_with_timeout(&mut chk2_cmd, cli_test_timeout()).unwrap();
+    assert!(chk2.status.success());
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn fmt_wraps_single_bitwise_or_expressions() {
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!("lang_fmt_single_bitwise_or_expr_{}.otter", nonce()));
+    std::fs::write(
+        &path,
+        "function f() {\nvar mask=alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa|lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n",
+    )
+    .unwrap();
+
+    let mut chk_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    chk_cmd.arg("fmt").arg(&path).arg("--check");
+    let chk = output_with_timeout(&mut chk_cmd, cli_test_timeout()).unwrap();
+    assert!(!chk.status.success());
+
+    let mut fix_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
+    fix_cmd.arg("fmt").arg(&path);
+    let fix = output_with_timeout(&mut fix_cmd, cli_test_timeout()).unwrap();
+    assert!(fix.status.success());
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        after,
+        "function f() {\n  var mask = alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa\n    | lambda_mu_nu_xi_omicron_pi_rho_sigma_tau;\n}\n"
     );
 
     let mut chk2_cmd = Command::new(env!("CARGO_BIN_EXE_otter_fusion"));
@@ -9203,8 +10051,8 @@ fn macro_generated_parse_error_is_reported() {
 
 // ===========================================================================
 // Async closures (`docs/21` §7). An async closure `(p) async => E` /
-// `function(p): Future<T> async { … }` is desugared by `sema::anf` into a sync
-// closure returning a bare async block — `(p) => async { E }` — so it reuses
+// `function(p): Future<T> async { … }` is desugared by `sema::anf` into an
+// ordinary closure returning a bare async block — `(p) => async { E }` — so it reuses
 // the closure-environment + async-block state-machine codegen verbatim. Calling
 // it builds an inert `Future<T>` capturing `p` + the outer environment; `await`
 // (or `spawn`) drives it. These tests pin every surface: arrow + `function`
@@ -9299,9 +10147,9 @@ fn extern_async_function_rejected() {
 }
 
 #[test]
-fn async_closure_stored_in_struct_and_driven() {
+fn async_closure_stored_in_struct_and_awaited() {
     // An async closure stored in a struct field (`(i64) => Future<i64>`), read
-    // back out, and driven with `await`.
+    // back out, and awaited until it resolves.
     let src = "struct Holder { job: (i64) => Future<i64> }\n\
                function main(): Future<null> async {\n\
                  var k: i64 = 7;\n\
@@ -9317,8 +10165,8 @@ fn async_closure_stored_in_struct_and_driven() {
 }
 
 #[test]
-fn async_closure_stored_in_list_and_driven() {
-    // A list of async closures, each driven in turn. The first suspends on
+fn async_closure_stored_in_list_and_awaited() {
+    // A list of async closures, each awaited in turn. The first suspends on
     // `await sleep`; the second is immediately ready. base + 2 = 102, base * 2 = 200.
     let src = "function main(): Future<null> async {\n\
                  var base: i64 = 100;\n\
@@ -9399,51 +10247,7 @@ fn native_build_async_closure_matches_jit() {
 
 #[test]
 fn native_build_task_spawn_matches_jit() {
-    // `std:task::Task.spawn` is separate from `std:thread::Thread.spawn`; run
-    // this without the test prelude so the task JoinHandle/Joined/Cancelled
-    // names are imported exactly as a real program writes them.
-    let src = "import { println } from \"std:io\";\n\
-               import { Future } from \"core:prelude\";\n\
-               import { Shared, LockBusy } from \"std:sync\";\n\
-               import { sleep } from \"std:async\";\n\
-               import { Task, JoinHandle, Joined, Panicked, Cancelled } from \"std:task\";\n\
-               struct C { value: i64 }\n\
-               function val(r: Joined<i64> | Panicked | Cancelled): i64 {\n\
-                 match r { Joined<i64> j => j.value, Panicked p => -1, Cancelled c => -2 }\n\
-               }\n\
-               function main(): Future<null> async {\n\
-                 var state: Shared<C> = Shared.new(C { value: 0 });\n\
-                 var sync_h: JoinHandle<i64> = Task.spawn(() => 42);\n\
-                 println(\"sync=${val(await sync_h.join())}\");\n\
-                 var s: Shared<C> = state.clone();\n\
-                 var async_h: JoinHandle<i64> = Task.spawn(() async => {\n\
-                   var i: i64 = 0;\n\
-                   while i < 5 {\n\
-                     await s.lock((c) => { c.value = c.value + 1; 0 });\n\
-                     i = i + 1;\n\
-                   }\n\
-                   await s.lock((c) => c.value)\n\
-                 });\n\
-                 var worker: i64 = val(await async_h.join());\n\
-                 var total: i64 = await state.lock((c) => c.value);\n\
-                 println(\"async=${worker} total=${total}\");\n\
-                 var s2: Shared<C> = state.clone();\n\
-                 var cancel_h: JoinHandle<i64> = Task.spawn(() async => {\n\
-                   await s2.lock((c) async => {\n\
-                     c.value = 99;\n\
-                     var _ = await sleep(1000);\n\
-                     c.value = 100;\n\
-                     c.value\n\
-                   })\n\
-                 });\n\
-                 var _started = await sleep(20);\n\
-                 cancel_h.cancel();\n\
-                 println(\"cancel=${val(await cancel_h.join())}\");\n\
-                 match await state.try_lock((c) => c.value) {\n\
-                   i64 n => println(\"after=${n}\"),\n\
-                   LockBusy busy => println(\"after=busy\"),\n\
-                 };\n\
-               }";
+    let src = include_str!("../../../tests/cases/concurrency/task_spawn_lock_cancel_parity.otter");
     let (jit_out, jerr, jok) = lang_raw("run", src);
     assert!(jok, "jit stderr: {jerr}");
     let (nat_out, nerr, nok) = lang_build_run_raw(src, &[]);
@@ -9452,7 +10256,10 @@ fn native_build_task_spawn_matches_jit() {
         jit_out, nat_out,
         "native Task.spawn output diverged from JIT"
     );
-    assert_eq!(nat_out, "sync=42\nasync=5 total=5\ncancel=-2\nafter=99\n");
+    assert_eq!(
+        nat_out,
+        "ordinary=42\nasync=5 total=5\ncancel=-2\nafter=99\n"
+    );
 }
 
 #[test]
@@ -9469,7 +10276,7 @@ fn native_build_task_spawn_panic_join_matches_jit() {
     );
     assert_eq!(
         nat_out,
-        "sync panic: sync boom\nasync panic: async boom\nok joined: 99\n"
+        "ordinary panic: ordinary boom\nasync panic: async boom\nok joined: 99\n"
     );
 }
 
@@ -10450,7 +11257,7 @@ fn native_build_task_cancel_repeated_wave_gc_stress_matches_jit() {
 fn async_closure_gc_stress_keeps_captures_live() {
     // Under `OTTER_FUSION_GC=stress` (collect on every allocation), the captured
     // cell and the state machine's saved slots must stay live across the
-    // suspends — the closure's repeated drives still see the shared counter.
+    // suspends — repeated awaits still see the shared counter.
     let src = "function main(): Future<null> async {\n\
                  var counter: i64 = 0;\n\
                  var s: str = \"seed\";\n\

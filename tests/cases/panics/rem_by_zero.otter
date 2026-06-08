@@ -1,8 +1,10 @@
 //@ kind: panic
 //@ description: integer remainder by zero panics
 //@ stderr: divide by zero
+import { Future } from "core:prelude";
 import { println } from "std:io";
-function main() {
+function main(): Future<null> async {
   var z = 0;
-  println("${10 % z}");
+  await println("${10 % z}");
+  null
 }

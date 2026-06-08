@@ -1,0 +1,73 @@
+//@ kind: run
+//@ serial
+//@ env: OTTER_FUSION_GC=stress
+//@ description: AsyncUdpSocket keeps managed state rooted across a helper-backed network await while stress GC runs
+//@ stdout:
+//~ async-net-stress=seed:fish 4 0 0
+
+import { Future } from "core:prelude";
+import { List } from "core:collections";
+import { Bytes } from "std:bytes";
+import { println, IoError } from "std:io";
+import { AsyncUdpSocket } from "std:net";
+import { SocketAddr, ip_v4, socket_addr } from "std:net/types";
+
+function trim_read_buffer(buf: Bytes, request_len: i64): Bytes {
+  var i = 0;
+  while i < request_len {
+    var _ = buf.remove_at(0);
+    i = i + 1;
+  }
+  buf
+}
+
+function decode_appended(buf: Bytes, request_len: i64): str {
+  var decoded = trim_read_buffer(buf, request_len).decode_utf8();
+  if decoded is str { decoded as str } else { "utf8-error" }
+}
+
+function filled_buffer(len: i64): Bytes {
+  var buf = Bytes.new();
+  var i = 0;
+  while i < len {
+    buf.push(0u8);
+    i = i + 1;
+  }
+  buf
+}
+
+function recv_seed(socket: AsyncUdpSocket, len: i64, seed: str): Future<str | IoError> async {
+  var roots: List<str> = [];
+  roots.push(seed);
+  var buf = filled_buffer(len);
+  var received = await socket.recv_from_async(buf);
+  if received is IoError {
+    received as IoError
+  } else {
+    roots[0] + ":" + decode_appended(buf, len)
+  }
+}
+
+function main(): Future<null> async {
+  var bound_receiver = await AsyncUdpSocket.bind(socket_addr(ip_v4(127u8, 0u8, 0u8, 1u8), 0u16));
+  var bound_sender = await AsyncUdpSocket.bind(socket_addr(ip_v4(127u8, 0u8, 0u8, 1u8), 0u16));
+  if bound_receiver is IoError || bound_sender is IoError {
+    await println("async-net-stress=bind-error -1 -1 -1");
+    return null;
+  }
+
+  var receiver = bound_receiver as AsyncUdpSocket;
+  var sender = bound_sender as AsyncUdpSocket;
+  var receiver_addr = await receiver.local_addr();
+  if receiver_addr is IoError {
+    await println("async-net-stress=addr-error -1 -1 -1");
+    return null;
+  }
+
+  var sent = await sender.send_to_async(Bytes.from_str("fish"), receiver_addr as SocketAddr);
+  var received = await recv_seed(receiver, 4, "seed");
+  var close_sender = await sender.close();
+  var close_receiver = await receiver.close();
+  await println("async-net-stress=${if received is str { received as str } else { "recv-error" }} ${if sent is i64 { sent as i64 } else { -1 }} ${if close_sender is IoError { 1 } else { 0 }} ${if close_receiver is IoError { 1 } else { 0 }}");
+  null
+}

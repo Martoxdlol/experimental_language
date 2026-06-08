@@ -3,12 +3,14 @@
 //@ stdout:
 //~ Point { x: 3, y: 4 }
 //~ p = Point { x: 3, y: 4 }
+import { Future } from "core:prelude";
 import { println } from "std:io";
 import { ToStr } from "core:prelude";
 @Derive(ToStr)
 struct Point { x: i64, y: i64 }
-function main() {
+function main(): Future<null> async {
   var p = Point { x: 3, y: 4 };
-  println(p.to_str());
-  println("p = ${p}");
+  await println(p.to_str());
+  await println("p = ${p}");
+  null
 }

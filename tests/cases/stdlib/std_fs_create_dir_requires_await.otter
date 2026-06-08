@@ -1,0 +1,12 @@
+//@ kind: compile-error
+//@ description: std:fs create_dir returns Future<null | IoError> and must be awaited before use
+//@ stderr: expected `null | IoError`, found `Future<null | IoError>`
+
+import { Future } from "core:prelude";
+import { IoError } from "std:io";
+import { Path, create_dir } from "std:fs";
+
+function main(): Future<null> async {
+  var _created: null | IoError = create_dir(Path.new("/tmp/otter_fusion_requires_await_dir"));
+  null
+}

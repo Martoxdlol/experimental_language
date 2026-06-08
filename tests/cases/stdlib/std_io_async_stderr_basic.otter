@@ -1,0 +1,17 @@
+//@ kind: run
+//@ description: std:io stderr concrete async writer methods use helper-backed, reactor-woken futures
+//@ stdout:
+//~ async-stderr=true
+//@ stderr: async-err
+
+import { Future } from "core:prelude";
+import { Bytes } from "std:bytes";
+import { println, stderr } from "std:io";
+
+function main(): Future<null> async {
+  var err = stderr();
+  var wrote = await err.write_all_async(Bytes.from_str("async-err\n"));
+  var flushed = await err.flush_async();
+  await println("async-stderr=${wrote is null && flushed is null}");
+  null
+}

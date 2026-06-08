@@ -1,0 +1,9 @@
+//@ kind: compile-error
+//@ description: std:async sleep keeps its Future<null> contract when imported through an alias
+//@ stderr: expected `null`, found `Future<null>`
+
+import { sleep as async_sleep } from "std:async";
+
+function main() {
+  var done: null = async_sleep(1);
+}

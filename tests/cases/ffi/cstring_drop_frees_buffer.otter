@@ -3,16 +3,18 @@
 //@ stdout:
 //~ after scope leak=0
 //~ two live=2
+import { Future } from "core:prelude";
 import { println } from "std:io";
 import { CString } from "core:ffi";
 extern function lang_foreign_outstanding(): i64;
 function scope() { var cs = CString.from_str("freed on scope exit"); }
-function main() {
+function main(): Future<null> async {
   var base = lang_foreign_outstanding();
   scope();
   // The CString in `scope` dropped at its scope exit, freeing its buffer.
-  println("after scope leak=${lang_foreign_outstanding() - base}");
+  await println("after scope leak=${lang_foreign_outstanding() - base}");
   var a = CString.from_str("a");
   var b = CString.from_str("b");
-  println("two live=${lang_foreign_outstanding() - base}");
+  await println("two live=${lang_foreign_outstanding() - base}");
+  null
 }

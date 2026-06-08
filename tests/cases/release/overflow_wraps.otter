@@ -3,8 +3,10 @@
 //@ description: under --release, integer overflow wraps (two's complement)
 //@ stdout:
 //~ -9223372036854775808
+import { Future } from "core:prelude";
 import { println } from "std:io";
-function main() {
+function main(): Future<null> async {
   var x = 9223372036854775807;
-  println("${x + 1}");
+  await println("${x + 1}");
+  null
 }
