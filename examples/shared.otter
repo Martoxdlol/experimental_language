@@ -31,15 +31,15 @@ function main(): Future<null> async {
   var a: Shared<Counter> = state.clone();
   var b: Shared<Counter> = state.clone();
   // `spawn` schedules each async worker on the executor, yielding a Future.
-  var h1: Future<null> = spawn bump(a, 5000);
-  var h2: Future<null> = spawn bump(b, 5000);
+  var h1: Future<null> = spawn bump(a, 1000);
+  var h2: Future<null> = spawn bump(b, 1000);
   // Awaiting each spawn handle suspends the joiner task until the worker ends.
   await h1;
   await h2;
 
   // No lost updates: the mutex serialized every increment.
   var total: i64 = await state.lock((c) => c.value);
-  await println("counter after 2x5000 increments = " + (total as str));
+  await println("counter after 2x1000 increments = " + (total as str));
 
   // `try_lock` returns `R | LockBusy` without suspending on a contended lock.
   match await state.try_lock((c) => c.value) {

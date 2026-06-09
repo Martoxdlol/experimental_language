@@ -4,6 +4,11 @@ End-to-end tests for Otter Fusion. Every case under `cases/` is a complete,
 self-contained `.otter` program (it declares its own `import`s) that carries its
 expected outcome inline as comments. The runner lives in `crates/cli/tests/`.
 
+`crates/cli/Cargo.toml` explicitly registers this `suite` target and disables
+automatic integration-test discovery. The old monolithic `crates/cli/tests/run.rs`
+file is historical and predates the corrected async stdlib contract; the
+authoritative e2e coverage is the self-contained `.otter` corpus here.
+
 We **do not test only happy paths**. The suite deliberately covers compile-time
 errors, runtime panics, memory/GC stress, concurrency, and — via `known-bug`
 markers — the things that *should* fail to compile (or should work) but

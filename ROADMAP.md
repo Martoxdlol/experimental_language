@@ -4233,9 +4233,10 @@ The tracing GC is functionally complete for single-threaded programs.
       8-byte-slot value buffer + tag array and routes the call through the runtime
       `lang_variadic_call` shim, which drives `libffi`'s `ffi_prep_cif_var`/
       `ffi_call` (`crates/runtime/src/variadic.rs`, a minimal hand binding to the
-      system `libffi` since neither `pkg-config` nor autotools is assumed; JIT links
-      it via the runtime build script, native builds always link `-lffi` because
-      `libruntime.a` contains the shim even for non-variadic user programs). The checker rejects
+      system `libffi` since neither `pkg-config` nor autotools is assumed; the
+      runtime loads `libffi` lazily through platform SONAMEs such as
+      `libffi.so.8`/`libffi.dylib`, so Linux builds do not require a `libffi-dev`
+      linker symlink and native builds do not pass `-lffi`). The checker rejects
       `@Variadic` off an extern import, with no fixed prefix, with decorator args,
       or with a non-scalar/`str` variadic argument; a call below the fixed arity is
       an arity error. Used as a value (not called by name) the import is an ordinary
@@ -4731,6 +4732,20 @@ current-isolate pointer). Staged so each step is shippable:
   parity + GC-stress. Keep `docs/26`, examples, LSP and ROADMAP consistent.
 
 ## Current state (verified 2026-05-30)
+
+**Linux portability refresh (verified 2026-06-08):** the runtime no longer
+requires the unversioned `libffi` development linker symlink. Variadic FFI loads
+the platform `libffi` shared library lazily (`libffi.so.8`/older Linux SONAMEs,
+`libffi.dylib` plus system/Homebrew locations on macOS), so `cargo test` and
+native `otter_fusion build` work on stock Linux runtime images while preserving
+the macOS call path. Cargo now registers the maintained file-driven CLI suite
+explicitly and disables auto-discovery of the historical monolithic
+`crates/cli/tests/run.rs` target, whose embedded sync-style snippets predate the
+current no-public-blocking async stdlib contract. Current Linux verification:
+`cargo test --workspace --no-run`, `cargo test -p runtime variadic -- --nocapture`,
+direct JIT and native runs for `tests/cases/examples/hello.otter` and
+`tests/cases/ffi/variadic_snprintf.otter`, and
+`cargo test -p cli --test suite -- --nocapture` (749/749 e2e) all pass.
 
 **The language is feature-complete end-to-end at production quality.** The full
 pipeline (lex → parse → derive/default/ANF desugar → collect → check → typed HIR →

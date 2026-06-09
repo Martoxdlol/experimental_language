@@ -24,16 +24,18 @@
 //! We bind the small, stable public `libffi` C surface directly (rather than via
 //! the `libffi-sys` crate) because this environment has neither `pkg-config`
 //! (needed by `libffi-sys`'s `system` feature) nor autotools (needed by its
-//! vendored build), while the *system* `libffi` links cleanly with `-lffi` on
-//! both macOS and Linux. The binding is deliberately minimal: we never construct
-//! an `ffi_type` or read an `ffi_cif` field — we only pass pointers to `libffi`'s
-//! exported `ffi_type_*` objects and an opaque, over-aligned, over-sized `ffi_cif`
-//! scratch buffer that `ffi_prep_cif_var` fills in. The only target-specific
-//! constant is [`FFI_DEFAULT_ABI`], verified against `libffi`'s `ffitarget.h`
-//! (and a wrong value is caught at runtime: `ffi_prep_cif_var` returns
-//! `FFI_BAD_ABI`).
+//! vendored build). The binding is deliberately minimal and resolved lazily with
+//! `dlopen`/`dlsym`: Linux distributions often ship the runtime SONAME
+//! (`libffi.so.8`) without the unversioned development symlink required by
+//! `-lffi`. We never construct an `ffi_type` or read an `ffi_cif` field — we
+//! only pass pointers to `libffi`'s exported `ffi_type_*` objects and an opaque,
+//! over-aligned, over-sized `ffi_cif` scratch buffer that `ffi_prep_cif_var`
+//! fills in. The only target-specific constant is [`FFI_DEFAULT_ABI`], verified
+//! against `libffi`'s `ffitarget.h` (and a wrong value is caught at runtime:
+//! `ffi_prep_cif_var` returns `FFI_BAD_ABI`).
 
-use std::ffi::c_void;
+use std::ffi::{c_void, CStr};
+use std::sync::OnceLock;
 
 // -- argument/return type tags -----------------------------------------------
 //
@@ -84,69 +86,179 @@ const FFI_DEFAULT_ABI: u32 = 2; // FFI_WIN64
 /// `FFI_OK` — the success status returned by `ffi_prep_cif_var`.
 const FFI_OK: i32 = 0;
 
-unsafe extern "C" {
-    // `libffi`'s exported `ffi_type` description objects. We only ever take
-    // their addresses (to fill the `arg_types` array), so an opaque byte type
-    // suffices — we never read their fields.
-    static ffi_type_void: u8;
-    static ffi_type_uint8: u8;
-    static ffi_type_sint8: u8;
-    static ffi_type_uint16: u8;
-    static ffi_type_sint16: u8;
-    static ffi_type_uint32: u8;
-    static ffi_type_sint32: u8;
-    static ffi_type_uint64: u8;
-    static ffi_type_sint64: u8;
-    static ffi_type_float: u8;
-    static ffi_type_double: u8;
-    static ffi_type_pointer: u8;
+type FfiPrepCifVar = unsafe extern "C" fn(
+    cif: *mut c_void,
+    abi: u32,
+    nfixed: u32,
+    ntotal: u32,
+    rtype: *const c_void,
+    atypes: *mut *const c_void,
+) -> i32;
 
-    /// Prepare a call interface for a variadic function (`docs/19` §13). `cif`
-    /// is filled in; `nfixed` (> 0) is the count of named parameters and
-    /// `ntotal` the count of all arguments. `atypes` lists the `ffi_type` of
-    /// every argument (named + variadic); variadic entries must already be
-    /// promoted. Returns `FFI_OK` on success.
-    fn ffi_prep_cif_var(
-        cif: *mut c_void,
-        abi: u32,
-        nfixed: u32,
-        ntotal: u32,
-        rtype: *const c_void,
-        atypes: *mut *const c_void,
-    ) -> i32;
+type FfiCall = unsafe extern "C" fn(
+    cif: *mut c_void,
+    func: *const c_void,
+    rvalue: *mut c_void,
+    avalue: *mut *const c_void,
+);
 
-    /// Invoke `func` through the prepared `cif`. `avalue[i]` points at the
-    /// storage for argument `i`; the return value is written to `rvalue` (which
-    /// must be at least `sizeof(ffi_arg)` for integral returns).
-    fn ffi_call(
-        cif: *mut c_void,
-        func: *const c_void,
-        rvalue: *mut c_void,
-        avalue: *mut *const c_void,
+struct LibFfi {
+    _handle: *mut c_void,
+    ffi_prep_cif_var: FfiPrepCifVar,
+    ffi_call: FfiCall,
+    ffi_type_void: *const c_void,
+    ffi_type_uint8: *const c_void,
+    ffi_type_sint8: *const c_void,
+    ffi_type_uint16: *const c_void,
+    ffi_type_sint16: *const c_void,
+    ffi_type_uint32: *const c_void,
+    ffi_type_sint32: *const c_void,
+    ffi_type_uint64: *const c_void,
+    ffi_type_sint64: *const c_void,
+    ffi_type_float: *const c_void,
+    ffi_type_double: *const c_void,
+    ffi_type_pointer: *const c_void,
+}
+
+// The handle is intentionally leaked for process lifetime; libffi's data-symbol
+// addresses must remain valid for every later variadic call.
+unsafe impl Send for LibFfi {}
+unsafe impl Sync for LibFfi {}
+
+static LIBFFI: OnceLock<LibFfi> = OnceLock::new();
+
+#[cfg(target_os = "linux")]
+const LIBFFI_CANDIDATES: &[&[u8]] = &[
+    b"libffi.so.8\0",
+    b"libffi.so.7\0",
+    b"libffi.so.6\0",
+    b"libffi.so\0",
+];
+
+#[cfg(target_os = "macos")]
+const LIBFFI_CANDIDATES: &[&[u8]] = &[
+    b"libffi.dylib\0",
+    b"/usr/lib/libffi.dylib\0",
+    b"/opt/homebrew/opt/libffi/lib/libffi.dylib\0",
+    b"/usr/local/opt/libffi/lib/libffi.dylib\0",
+];
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+const LIBFFI_CANDIDATES: &[&[u8]] = &[b"libffi.so\0", b"libffi.so.8\0"];
+
+fn libffi() -> &'static LibFfi {
+    LIBFFI.get_or_init(load_libffi)
+}
+
+#[cfg(unix)]
+fn load_libffi() -> LibFfi {
+    let mut failures = Vec::new();
+    for candidate in LIBFFI_CANDIDATES {
+        // SAFETY: `candidate` is a static NUL-terminated byte string.
+        unsafe {
+            let _ = libc::dlerror();
+            let handle = libc::dlopen(candidate.as_ptr().cast(), libc::RTLD_NOW | libc::RTLD_LOCAL);
+            if !handle.is_null() {
+                return load_libffi_symbols(handle);
+            }
+            let err = dlerror_string().unwrap_or_else(|| "unknown loader error".to_string());
+            failures.push(format!("{} ({err})", c_name(candidate)));
+        }
+    }
+    panic!(
+        "lang_variadic_call: could not load libffi; tried {}",
+        failures.join(", ")
     );
+}
+
+#[cfg(not(unix))]
+fn load_libffi() -> LibFfi {
+    panic!("lang_variadic_call: dynamic libffi loading is not implemented on this platform");
+}
+
+#[cfg(unix)]
+unsafe fn load_libffi_symbols(handle: *mut c_void) -> LibFfi {
+    LibFfi {
+        _handle: handle,
+        // SAFETY: `dlsym` returned callable addresses for libffi's stable C API.
+        ffi_prep_cif_var: unsafe {
+            std::mem::transmute::<*mut c_void, FfiPrepCifVar>(lookup_raw(
+                handle,
+                b"ffi_prep_cif_var\0",
+            ))
+        },
+        ffi_call: unsafe {
+            std::mem::transmute::<*mut c_void, FfiCall>(lookup_raw(handle, b"ffi_call\0"))
+        },
+        ffi_type_void: unsafe { lookup_raw(handle, b"ffi_type_void\0").cast_const() },
+        ffi_type_uint8: unsafe { lookup_raw(handle, b"ffi_type_uint8\0").cast_const() },
+        ffi_type_sint8: unsafe { lookup_raw(handle, b"ffi_type_sint8\0").cast_const() },
+        ffi_type_uint16: unsafe { lookup_raw(handle, b"ffi_type_uint16\0").cast_const() },
+        ffi_type_sint16: unsafe { lookup_raw(handle, b"ffi_type_sint16\0").cast_const() },
+        ffi_type_uint32: unsafe { lookup_raw(handle, b"ffi_type_uint32\0").cast_const() },
+        ffi_type_sint32: unsafe { lookup_raw(handle, b"ffi_type_sint32\0").cast_const() },
+        ffi_type_uint64: unsafe { lookup_raw(handle, b"ffi_type_uint64\0").cast_const() },
+        ffi_type_sint64: unsafe { lookup_raw(handle, b"ffi_type_sint64\0").cast_const() },
+        ffi_type_float: unsafe { lookup_raw(handle, b"ffi_type_float\0").cast_const() },
+        ffi_type_double: unsafe { lookup_raw(handle, b"ffi_type_double\0").cast_const() },
+        ffi_type_pointer: unsafe { lookup_raw(handle, b"ffi_type_pointer\0").cast_const() },
+    }
+}
+
+#[cfg(unix)]
+unsafe fn lookup_raw(handle: *mut c_void, symbol: &'static [u8]) -> *mut c_void {
+    // SAFETY: `symbol` is a static NUL-terminated byte string and `handle` is a
+    // successful `dlopen` result kept alive by `LibFfi`.
+    let ptr = unsafe { libc::dlsym(handle, symbol.as_ptr().cast()) };
+    if ptr.is_null() {
+        let err = dlerror_string().unwrap_or_else(|| "unknown symbol lookup error".to_string());
+        panic!(
+            "lang_variadic_call: libffi missing symbol {} ({err})",
+            c_name(symbol)
+        );
+    }
+    ptr
+}
+
+#[cfg(unix)]
+fn dlerror_string() -> Option<String> {
+    // SAFETY: `dlerror` returns either null or a process-owned NUL-terminated
+    // diagnostic string valid until the next dynamic-loader call.
+    let err = unsafe { libc::dlerror() };
+    if err.is_null() {
+        None
+    } else {
+        Some(
+            unsafe { CStr::from_ptr(err) }
+                .to_string_lossy()
+                .into_owned(),
+        )
+    }
+}
+
+fn c_name(bytes: &'static [u8]) -> &'static str {
+    std::str::from_utf8(&bytes[..bytes.len().saturating_sub(1)]).unwrap_or("<invalid>")
 }
 
 /// Map an argument/return tag to the address of `libffi`'s corresponding
 /// `ffi_type` object.
 fn ffi_type_for(tag: u8) -> *const c_void {
-    // SAFETY: each arm takes the address of a `libffi`-exported static; the
-    // address is read by `libffi` only.
-    let p: *const u8 = match tag {
-        VTAG_VOID => &raw const ffi_type_void,
-        VTAG_I8 => &raw const ffi_type_sint8,
-        VTAG_U8 => &raw const ffi_type_uint8,
-        VTAG_I16 => &raw const ffi_type_sint16,
-        VTAG_U16 => &raw const ffi_type_uint16,
-        VTAG_I32 => &raw const ffi_type_sint32,
-        VTAG_U32 => &raw const ffi_type_uint32,
-        VTAG_I64 => &raw const ffi_type_sint64,
-        VTAG_U64 => &raw const ffi_type_uint64,
-        VTAG_F32 => &raw const ffi_type_float,
-        VTAG_F64 => &raw const ffi_type_double,
-        VTAG_PTR => &raw const ffi_type_pointer,
+    let ffi = libffi();
+    match tag {
+        VTAG_VOID => ffi.ffi_type_void,
+        VTAG_I8 => ffi.ffi_type_sint8,
+        VTAG_U8 => ffi.ffi_type_uint8,
+        VTAG_I16 => ffi.ffi_type_sint16,
+        VTAG_U16 => ffi.ffi_type_uint16,
+        VTAG_I32 => ffi.ffi_type_sint32,
+        VTAG_U32 => ffi.ffi_type_uint32,
+        VTAG_I64 => ffi.ffi_type_sint64,
+        VTAG_U64 => ffi.ffi_type_uint64,
+        VTAG_F32 => ffi.ffi_type_float,
+        VTAG_F64 => ffi.ffi_type_double,
+        VTAG_PTR => ffi.ffi_type_pointer,
         other => panic!("lang_variadic_call: invalid type tag {other}"),
-    };
-    p.cast()
+    }
 }
 
 /// An opaque, over-aligned, over-sized scratch buffer for one `ffi_cif`.
@@ -181,6 +293,7 @@ pub unsafe extern "C" fn lang_variadic_call(
     ret_tag: u8,
     ret_slot: *mut u8,
 ) {
+    let ffi = libffi();
     let n = n_total as usize;
     let mut atypes: Vec<*const c_void> = Vec::with_capacity(n);
     let mut avalues: Vec<*const c_void> = Vec::with_capacity(n);
@@ -198,7 +311,7 @@ pub unsafe extern "C" fn lang_variadic_call(
     // `atypes`/`rtype` are valid `ffi_type` pointers; counts come from the
     // caller (the checker enforces `0 < n_fixed <= n_total`).
     let status = unsafe {
-        ffi_prep_cif_var(
+        (ffi.ffi_prep_cif_var)(
             cif_ptr,
             FFI_DEFAULT_ABI,
             n_fixed,
@@ -211,7 +324,7 @@ pub unsafe extern "C" fn lang_variadic_call(
     // SAFETY: the cif is prepared; `fn_ptr` matches it; `ret_slot` has >= 8
     // bytes; `avalues` point into the live `values` buffer.
     unsafe {
-        ffi_call(
+        (ffi.ffi_call)(
             cif_ptr,
             fn_ptr,
             ret_slot.cast::<c_void>(),

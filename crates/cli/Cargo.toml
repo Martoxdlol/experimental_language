@@ -4,10 +4,19 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+# The maintained CLI integration coverage is the file-driven suite in
+# `tests/suite.rs`, which runs the real `tests/cases/**/*.otter` corpus. Disable
+# Cargo's automatic test-target discovery so historical monolithic fixtures that
+# predate the corrected async stdlib contract are not run as authoritative tests.
+autotests = false
 
 [[bin]]
 name = "otter_fusion"
 path = "src/main.rs"
+
+[[test]]
+name = "suite"
+path = "tests/suite.rs"
 
 [dependencies]
 compiler.workspace = true

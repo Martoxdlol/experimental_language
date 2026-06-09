@@ -21,7 +21,7 @@ use compiler::ast::{Item, ItemKind, Module, Visibility};
 use compiler::lexer::lex;
 use compiler::sema::resolve_ctx::normalize;
 use compiler::sema::symbols::Externals;
-use compiler::sema::{Analysis, ResolveContext, analyze_multi_ctx};
+use compiler::sema::{analyze_multi_ctx, Analysis, ResolveContext};
 use compiler::span::{FileId, SourceMap, Span};
 use pkg::loader::{self, LoadDiag};
 use pkg::project::ProjectContext;
@@ -1400,11 +1400,8 @@ fn build_executable(map: &SourceMap, analysis: &Analysis, exe: &Path) -> ExitCod
     for lib in &analysis.hir.link_libs {
         cmd.arg(format!("-l{lib}"));
     }
-    // The runtime static library always contains the variadic-call shim, which
-    // references `libffi` even when the user program does not declare a
-    // `@Variadic` extern. A `staticlib` does not bundle native library edges, so
-    // native builds must link the system `libffi` explicitly here.
-    cmd.arg("-lffi");
+    // Variadic `extern function` calls load `libffi` lazily inside the runtime,
+    // so native builds do not require the Linux `libffi-dev` linker symlink.
 
     match cmd.status() {
         Ok(s) if s.success() => {
@@ -1717,7 +1714,7 @@ mod deps {
     use pkg::lockfile::Lockfile;
     use pkg::project::ProjectContext;
     use pkg::registry::{HttpRegistry, Registry};
-    use pkg::resolve::{Registries, Resolved, resolve};
+    use pkg::resolve::{resolve, Registries, Resolved};
     use pkg::store::Store;
 
     /// Discover the project rooted at (or above) the current directory.

@@ -1252,7 +1252,7 @@ fn native_build_variadic_ffi_matches_jit() {
     // A `@Variadic` extern (`docs/19` §13) is lowered through `libffi`, never as
     // a plain Cranelift call. The marshalled int/string/double/char arguments —
     // with the C default promotions applied — must produce identical output in
-    // the JIT and in the linked native executable (which links `-lffi`).
+    // the JIT and in the linked native executable (which resolves libffi lazily).
     let src = "@Variadic\n\
                extern function snprintf(buf: *u8, size: u64, fmt: *u8): i32;\n\
                function main() {\n\

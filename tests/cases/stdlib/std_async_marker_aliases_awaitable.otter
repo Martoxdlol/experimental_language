@@ -1,6 +1,7 @@
 //@ kind: run
 //@ description: std:async marker aliases await and lower through the async runtime intrinsics
-//@ stdout: async-aliases=7
+//@ stdout:
+//~ async-aliases=7
 
 import { println } from "std:io";
 import { Future } from "core:async";

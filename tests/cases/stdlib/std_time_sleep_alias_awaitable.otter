@@ -1,6 +1,7 @@
 //@ kind: run
 //@ description: std:time sleep aliases await and lower through the duration timer intrinsic
-//@ stdout: time-sleep-alias=ok
+//@ stdout:
+//~ time-sleep-alias=ok
 
 import { println } from "std:io";
 import { Future } from "core:async";

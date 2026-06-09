@@ -486,8 +486,9 @@ value as variadic arguments.</p>
   duplicates floats into general-purpose registers. The compiler therefore marshals the
   (already promoted) arguments into a flat value buffer and routes the call through
   <code>libffi</code>'s <code>ffi_prep_cif_var</code>/<code>ffi_call</code>, which apply the
-  correct per-target variadic ABI. JIT and native output behave identically; native
-  executables link the system <code>libffi</code> (<code>-lffi</code>). Used as a
+  correct per-target variadic ABI. JIT and native output behave identically; the
+  runtime loads the system <code>libffi</code> lazily at the call site, so Linux
+  builds do not require the unversioned development linker symlink. Used as a
   <em>value</em> rather than called by name, a <code>@Variadic</code> import is an ordinary
   non-variadic function pointer over its fixed prefix.
 </div>
